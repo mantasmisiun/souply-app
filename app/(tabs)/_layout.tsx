@@ -13,6 +13,7 @@ export default function TabLayout() {
                 name="browse"
                 options={{
                     title: 'Naršyti',
+                    headerShown: false,
                     tabBarIcon: ({ focused, color, size }) => (
                         <Ionicons name={focused ? 'search' : 'search-outline'} size={size} color={color} />
                     ),
