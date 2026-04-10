@@ -1,35 +1,50 @@
 import { Tabs } from 'expo-router';
-import React from 'react';
-
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
+import { Ionicons } from '@expo/vector-icons';
 
 export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
-  return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
-        }}
-      />
-      <Tabs.Screen
-        name="explore"
-        options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
-        }}
-      />
-    </Tabs>
-  );
+    return (
+        <Tabs
+            screenOptions={{
+                tabBarActiveTintColor: '#2e7d32',
+                tabBarInactiveTintColor: 'gray',
+            }}
+        >
+            <Tabs.Screen
+                name="browse"
+                options={{
+                    title: 'Naršyti',
+                    tabBarIcon: ({ focused, color, size }) => (
+                        <Ionicons name={focused ? 'search' : 'search-outline'} size={size} color={color} />
+                    ),
+                }}
+            />
+            <Tabs.Screen
+                name="basket"
+                options={{
+                    title: 'Krepšelis',
+                    tabBarIcon: ({ focused, color, size }) => (
+                        <Ionicons name={focused ? 'cart' : 'cart-outline'} size={size} color={color} />
+                    ),
+                }}
+            />
+            <Tabs.Screen
+                name="shoppingList"
+                options={{
+                    title: 'Pirkinių sąrašas',
+                    tabBarIcon: ({ focused, color, size }) => (
+                        <Ionicons name={focused ? 'list' : 'list-outline'} size={size} color={color} />
+                    ),
+                }}
+            />
+            <Tabs.Screen
+                name="receipts"
+                options={{
+                    title: 'Kvitai',
+                    tabBarIcon: ({ focused, color, size }) => (
+                        <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />
+                    ),
+                }}
+            />
+        </Tabs>
+    );
 }
