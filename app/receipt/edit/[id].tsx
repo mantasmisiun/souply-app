@@ -39,7 +39,8 @@ export default function ReceiptEditScreen() {
     const setPendingSelection = useReceiptEditStore(s => s.setPendingSelection);
     const [chainId, setChainId] = useState<number | null>(null);
     const [nameSuggestions, setNameSuggestions] = useState<{id: number, storeProductName: string, productId: number}[]>([]);
-
+    const [storeName, setStoreName] = useState('');
+    const [storeAddress, setStoreAddress] = useState('');
     useFocusEffect(
         useCallback(() => {
             if (pendingSelection) {
@@ -70,6 +71,8 @@ export default function ReceiptEditScreen() {
                 if (chainData.length > 0) setChainId(chainData[0].id);
                 setReceiptNo(parsed.receiptNo || '');
                 setDate(parsed.date || '');
+                setStoreName(parsed.storeName || '');
+                setStoreAddress(parsed.storeAddress || '');
                 setItems(parsed.items.map((item: any) => ({
                     ...item,
                     categoryId: null,
@@ -107,7 +110,7 @@ export default function ReceiptEditScreen() {
     };
 
     const handleSave = async () => {
-        const invalidItems = items.filter(item => !item.price || item.price <= 0);
+        const invalidItems = items.filter(item => !item.price || parseFloat(String(item.price)) <= 0);
         if (invalidItems.length > 0) {
             Alert.alert('Klaida', `Šie produktai neturi kainos:\n${invalidItems.map(i => i.name).join('\n')}`);
             return;
@@ -117,7 +120,7 @@ export default function ReceiptEditScreen() {
             const response = await fetch(`${API_BASE_URL}/api/receipts/${id}/process`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chainName, receiptNo, date, items }),
+                body: JSON.stringify({ chainName, receiptNo, date, items, storeName, storeAddress }),
             });
             const data = await response.json();
             if (data.error) {

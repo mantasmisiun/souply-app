@@ -1,11 +1,10 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
-import { useEffect, useState } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { useCallback, useEffect, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
-import * as DocumentPicker from 'expo-document-picker';
 
 interface Receipt {
     id: number;
@@ -20,13 +19,20 @@ export default function ReceiptsScreen() {
     const [receipts, setReceipts] = useState<Receipt[]>([]);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
+    const [uploading, setUploading] = useState(false);
 
-    const fetchReceipts = async () => {
+    const fetchReceipts = async (removePlaceholder = false) => {
         try {
             const userId = await getUserId();
             const response = await fetch(`${API_BASE_URL}/api/users/${userId}/receipts`);
             const data = await response.json();
-            setReceipts(data);
+            setReceipts(prev => {
+                const hasPlaceholder = prev.some(r => r.id === -1);
+                if (hasPlaceholder && !removePlaceholder) {
+                    return [prev.find(r => r.id === -1)!, ...data];
+                }
+                return data;
+            });
         } catch (error) {
             console.error('Failed to fetch receipts:', error);
         } finally {
@@ -44,9 +50,11 @@ export default function ReceiptsScreen() {
 
         return () => clearInterval(interval);
     }, [receipts]);
-    useEffect(() => {
-        fetchReceipts();
-    }   , []);
+    useFocusEffect(
+        useCallback(() => {
+            fetchReceipts();
+        }, [])
+    );
 
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -88,6 +96,9 @@ export default function ReceiptsScreen() {
         const imageBase64 = asset.base64;
         const userId = await getUserId();
 
+        const placeholder = { id: -1, filePath: '', fileType: '', processingStatus: 'uploading', receiptDate: null, receiptNo: null };
+        setReceipts(prev => [placeholder, ...prev]);
+
         try {
             const response = await fetch(`${API_BASE_URL}/api/receipts/upload`, {
                 method: 'POST',
@@ -96,10 +107,12 @@ export default function ReceiptsScreen() {
             });
             const data = await response.json();
             if (data.receiptId) {
-                fetchReceipts();
+                await fetchReceipts(true);
             }
         } catch (error) {
             console.error('Upload failed:', error);
+            Alert.alert('Klaida', 'Nepavyko įkelti kvito');
+            setReceipts(prev => prev.filter(r => r.id !== -1));
         }
     };
 
@@ -114,35 +127,48 @@ export default function ReceiptsScreen() {
                         <Text style={styles.emptyText}>Kvitų nėra</Text>
                     </View>
                 }
-                renderItem={({ item }) => (
-                    <TouchableOpacity style={styles.card} onPress={() => {
-                        if (item.processingStatus === 'failed' || item.processingStatus === 'pending') {
-                            router.push(`/receipt/edit/${item.id}`);
-                        } else {
-                            router.push(`/receipt/${item.id}`);
-                        }
-                    }}>
-                        <View style={styles.cardLeft}>
-                            <Ionicons name="receipt-outline" size={28} color="#2e7d32" />
-                        </View>
-                        <View style={styles.cardContent}>
-                            <Text style={styles.cardTitle}>
-                                {item.receiptNo ? `Kvitas Nr. ${item.receiptNo}` : 'Kvitas'}
-                            </Text>
-                            <Text style={styles.cardDate}>
-                                {item.receiptDate
-                                    ? new Date(item.receiptDate).toLocaleDateString('lt-LT')
-                                    : 'Data nenurodyta'}
-                            </Text>
-                        </View>
-                        <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.processingStatus) }]}>
-                            <Text style={styles.statusText}>{getStatusText(item.processingStatus)}</Text>
-                        </View>
-                    </TouchableOpacity>
-                )}
+                renderItem={({ item }) => {
+                    if (item.id === -1) {
+                        return (
+                            <View style={[styles.card, styles.placeholderCard]}>
+                                <ActivityIndicator size="small" color="#2e7d32" style={{ marginRight: 12 }} />
+                                <Text style={styles.placeholderText}>Kvitas įkeliamas...</Text>
+                            </View>
+                        );
+                    }
+                    return (
+                        <TouchableOpacity style={styles.card} onPress={() => {
+                            if (item.processingStatus === 'failed' || item.processingStatus === 'pending') {
+                                router.push(`/receipt/edit/${item.id}`);
+                            } else {
+                                router.push(`/receipt/${item.id}`);
+                            }
+                        }}>
+                            <View style={styles.cardLeft}>
+                                <Ionicons name="receipt-outline" size={28} color="#2e7d32" />
+                            </View>
+                            <View style={styles.cardContent}>
+                                <Text style={styles.cardTitle}>
+                                    {item.receiptNo ? `Kvitas Nr. ${item.receiptNo}` : 'Kvitas'}
+                                </Text>
+                                <Text style={styles.cardDate}>
+                                    {item.receiptDate
+                                        ? new Date(item.receiptDate).toLocaleDateString('lt-LT')
+                                        : 'Data nenurodyta'}
+                                </Text>
+                            </View>
+                            <View style={[styles.statusBadge, { backgroundColor: getStatusColor(item.processingStatus) }]}>
+                                <Text style={styles.statusText}>{getStatusText(item.processingStatus)}</Text>
+                            </View>
+                        </TouchableOpacity>
+                    );
+                }}
             />
-            <TouchableOpacity style={styles.fab} onPress={handleUpload}>
-                <Ionicons name="add" size={28} color="white" />
+            <TouchableOpacity style={styles.fab} onPress={handleUpload} disabled={uploading}>
+                {uploading
+                    ? <ActivityIndicator size="small" color="white" />
+                    : <Ionicons name="add" size={28} color="white" />
+                }
             </TouchableOpacity>
         </View>
     );
@@ -187,5 +213,14 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         elevation: 4,
+    },
+    placeholderCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    opacity: 0.7,
+    },
+    placeholderText: {
+        fontSize: 14,
+        color: '#757575',
     },
 });
