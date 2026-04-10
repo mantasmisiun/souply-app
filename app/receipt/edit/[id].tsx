@@ -38,7 +38,7 @@ export default function ReceiptEditScreen() {
     const pendingSelection = useReceiptEditStore(s => s.pendingSelection);
     const setPendingSelection = useReceiptEditStore(s => s.setPendingSelection);
     const [chainId, setChainId] = useState<number | null>(null);
-    const [nameSuggestions, setNameSuggestions] = useState<{id: number, storeProductName: string}[]>([]);
+    const [nameSuggestions, setNameSuggestions] = useState<{id: number, storeProductName: string, productId: number}[]>([]);
 
     useFocusEffect(
         useCallback(() => {
@@ -221,10 +221,23 @@ export default function ReceiptEditScreen() {
                                             <TouchableOpacity
                                                 key={s.id}
                                                 style={styles.suggestionItem}
-                                                onPress={() => {
+                                                onPress={async () => {
                                                     updateItem('name', s.storeProductName);
                                                     setNameSuggestions([]);
                                                     Keyboard.dismiss();
+
+                                                    try {
+                                                        const prodRes = await fetch(`${API_BASE_URL}/api/products/${s.productId}`);
+                                                        const product = await prodRes.json();
+                                                        if (product.categoryId) {
+                                                            const pathRes = await fetch(`${API_BASE_URL}/api/categories/${product.categoryId}`);
+                                                            const categoryData = await pathRes.json();
+                                                            updateItem('categoryId', product.categoryId);
+                                                            updateItem('categoryName', categoryData.name);
+                                                        }
+                                                    } catch (error) {
+                                                        console.error('Failed to fetch product category:', error);
+                                                    }
                                                 }}
                                             >
                                                 <Text style={styles.suggestionText}>{s.storeProductName}</Text>
