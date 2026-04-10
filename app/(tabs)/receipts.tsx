@@ -35,8 +35,18 @@ export default function ReceiptsScreen() {
     };
 
     useEffect(() => {
+        const hasProcessing = receipts.some(r => r.processingStatus === 'processing' || r.processingStatus === 'pending');
+        if (!hasProcessing) return;
+
+        const interval = setInterval(() => {
+            fetchReceipts();
+        }, 3000);
+
+        return () => clearInterval(interval);
+    }, [receipts]);
+    useEffect(() => {
         fetchReceipts();
-    }, []);
+    }   , []);
 
     const getStatusColor = (status: string) => {
         switch (status) {
@@ -105,7 +115,13 @@ export default function ReceiptsScreen() {
                     </View>
                 }
                 renderItem={({ item }) => (
-                    <TouchableOpacity style={styles.card} onPress={() => router.push(`/receipt/${item.id}`)}>
+                    <TouchableOpacity style={styles.card} onPress={() => {
+                        if (item.processingStatus === 'failed' || item.processingStatus === 'pending') {
+                            router.push(`/receipt/edit/${item.id}`);
+                        } else {
+                            router.push(`/receipt/${item.id}`);
+                        }
+                    }}>
                         <View style={styles.cardLeft}>
                             <Ionicons name="receipt-outline" size={28} color="#2e7d32" />
                         </View>
