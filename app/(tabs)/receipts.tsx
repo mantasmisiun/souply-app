@@ -20,6 +20,7 @@ export default function ReceiptsScreen() {
     const [loading, setLoading] = useState(true);
     const router = useRouter();
     const [uploading, setUploading] = useState(false);
+    const [lastUploadedId, setLastUploadedId] = useState<number | null>(null);
 
     const fetchReceipts = async (removePlaceholder = false) => {
         try {
@@ -42,14 +43,24 @@ export default function ReceiptsScreen() {
 
     useEffect(() => {
         const hasProcessing = receipts.some(r => r.processingStatus === 'processing' || r.processingStatus === 'pending');
-        if (!hasProcessing) return;
+        if (!hasProcessing && !lastUploadedId) return;
 
-        const interval = setInterval(() => {
-            fetchReceipts();
+        const interval = setInterval(async () => {
+            await fetchReceipts();
+            if (lastUploadedId) {
+                setReceipts(prev => {
+                    const stillExists = prev.some(r => r.id === lastUploadedId);
+                    if (!stillExists) {
+                        Alert.alert('Dublikatas', 'Šis kvitas jau buvo įkeltas anksčiau');
+                        setLastUploadedId(null);
+                    }
+                    return prev;
+                });
+            }
         }, 3000);
 
         return () => clearInterval(interval);
-    }, [receipts]);
+    }, [receipts, lastUploadedId]);
     useFocusEffect(
         useCallback(() => {
             fetchReceipts();
@@ -107,6 +118,7 @@ export default function ReceiptsScreen() {
             });
             const data = await response.json();
             if (data.receiptId) {
+                setLastUploadedId(data.receiptId);
                 await fetchReceipts(true);
             }
         } catch (error) {
