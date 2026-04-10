@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Alert, Image, FlatList } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Alert, Image, FlatList, Keyboard } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
@@ -38,6 +38,7 @@ export default function ReceiptEditScreen() {
     const pendingSelection = useReceiptEditStore(s => s.pendingSelection);
     const setPendingSelection = useReceiptEditStore(s => s.setPendingSelection);
     const [chainId, setChainId] = useState<number | null>(null);
+    const [nameSuggestions, setNameSuggestions] = useState<{id: number, storeProductName: string}[]>([]);
 
     useFocusEffect(
         useCallback(() => {
@@ -195,13 +196,42 @@ export default function ReceiptEditScreen() {
                         {selectedItem && (
                             <BottomSheetScrollView keyboardShouldPersistTaps="handled">
                                 <Text style={styles.sheetTitle}>{selectedItem.name}</Text>
-
                                 <Text style={styles.label}>Pavadinimas</Text>
                                 <TextInput
                                     style={styles.input}
                                     value={selectedItem.name}
-                                    onChangeText={v => updateItem('name', v)}
+                                    onChangeText={async v => {
+                                        updateItem('name', v);
+                                        if (v.length < 2) {
+                                            setNameSuggestions([]);
+                                            return;
+                                        }
+                                        try {
+                                            const res = await fetch(`${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(v)}&chainId=${chainId}`);
+                                            const data = await res.json();
+                                            setNameSuggestions(Array.isArray(data) ? data.slice(0, 5) : []);
+                                        } catch {
+                                            setNameSuggestions([]);
+                                        }
+                                    }}
                                 />
+                                {nameSuggestions.length > 0 && (
+                                    <View style={styles.suggestionsContainer}>
+                                        {nameSuggestions.map(s => (
+                                            <TouchableOpacity
+                                                key={s.id}
+                                                style={styles.suggestionItem}
+                                                onPress={() => {
+                                                    updateItem('name', s.storeProductName);
+                                                    setNameSuggestions([]);
+                                                    Keyboard.dismiss();
+                                                }}
+                                            >
+                                                <Text style={styles.suggestionText}>{s.storeProductName}</Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </View>
+                                )}
 
                                 <Text style={styles.label}>Kategorija</Text>
                                 <TouchableOpacity 
@@ -292,4 +322,12 @@ const styles = StyleSheet.create({
         alignItems: 'center', marginTop: 24, marginBottom: 16,
     },
     doneButtonText: { color: 'white', fontWeight: '700', fontSize: 16 },
+    suggestionsContainer: {
+    borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8,
+    backgroundColor: 'white', marginTop: 2,
+    },
+    suggestionItem: {
+        padding: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
+    },
+    suggestionText: { fontSize: 14, color: '#212121' },
 });
