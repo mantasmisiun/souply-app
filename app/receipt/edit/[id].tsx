@@ -102,10 +102,11 @@ export default function ReceiptEditScreen() {
         bottomSheetRef.current?.close();
     };
 
-    const updateItem = (field: keyof EditableItem, value: any) => {
-        if (selectedIndex === null) return;
+    const updateItem = (field: keyof EditableItem, value: any, index?: number) => {
+        const targetIndex = index !== undefined ? index : selectedIndex;
+        if (targetIndex === null) return;
         setItems(prev => prev.map((item, i) =>
-            i === selectedIndex ? { ...item, [field]: value } : item
+            i === targetIndex ? { ...item, [field]: value } : item
         ));
     };
 
@@ -176,6 +177,16 @@ export default function ReceiptEditScreen() {
                                     size={20}
                                     color={item.price ? '#2e7d32' : '#c62828'}
                                 />
+                                <TouchableOpacity
+                                    onPress={() => updateItem('isWeighable', !item.isWeighable, index)}
+                                    style={{ marginLeft: 8 }}
+                                >
+                                    <Ionicons
+                                        name={item.isWeighable ? 'scale' : 'scale-outline'}
+                                        size={20}
+                                        color={item.isWeighable ? '#2e7d32' : '#9e9e9e'}
+                                    />
+                                </TouchableOpacity>
                                 <View style={{ flex: 1, marginLeft: 8 }}>
                                     <Text style={styles.itemName} numberOfLines={1}>{item.name}</Text>
                                     <Text style={styles.itemPrice}>
@@ -310,7 +321,20 @@ export default function ReceiptEditScreen() {
                                     keyboardType="decimal-pad"
                                     placeholder="0,00"
                                 />
-
+                                <Text style={styles.label}>Sveriamas produktas</Text>
+                                <TouchableOpacity
+                                    style={styles.weighableButton}
+                                    onPress={() => updateItem('isWeighable', !selectedItem.isWeighable)}
+                                >
+                                    <Ionicons
+                                        name={selectedItem.isWeighable ? 'scale' : 'scale-outline'}
+                                        size={20}
+                                        color={selectedItem.isWeighable ? '#2e7d32' : '#9e9e9e'}
+                                    />
+                                    <Text style={[styles.weighableText, selectedItem.isWeighable && styles.weighableTextActive]}>
+                                        {selectedItem.isWeighable ? 'Taip' : 'Ne'}
+                                    </Text>
+                                </TouchableOpacity>
                                 <TouchableOpacity style={styles.doneButton} onPress={closeSheet}>
                                     <Text style={styles.doneButtonText}>Patvirtinti</Text>
                                 </TouchableOpacity>
@@ -380,4 +404,15 @@ const styles = StyleSheet.create({
         color: '#2e7d32',
         fontWeight: '500',
     },
+    weighableButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#e0e0e0',
+        borderRadius: 8,
+        padding: 10,
+        gap: 8,
+    },
+    weighableText: { fontSize: 14, color: '#9e9e9e' },
+    weighableTextActive: { color: '#2e7d32' },
 });

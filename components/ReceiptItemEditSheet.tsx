@@ -15,6 +15,7 @@ interface ReceiptItem {
     categoryName: string | null;
     price: number;
     promoPrice: number | null;
+    isWeighable: boolean;
 }
 
 interface Props {
@@ -39,6 +40,7 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
     const pendingSelection = useReceiptEditStore(s => s.pendingSelection);
     const setPendingSelection = useReceiptEditStore(s => s.setPendingSelection);
     const [isNew, setIsNew] = useState(false);
+    const [isWeighable, setIsWeighable] = useState(false);
     useFocusEffect(
         useCallback(() => {
             if (pendingSelection) {
@@ -52,7 +54,7 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
     );
     const openNew = () => {
         setIsNew(true);
-        setEditingItem({ priceId: -1, storeProductId: -1, name: '', categoryId: null, categoryName: null, price: 0, promoPrice: null });
+        setEditingItem({ priceId: -1, storeProductId: -1, name: '', categoryId: null, categoryName: null, price: 0, promoPrice: null, isWeighable: false });
         setEditName('');
         setEditCategoryId(null);
         setEditCategoryName(null);
@@ -60,6 +62,7 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
         setEditPromoPrice('');
         setNameSuggestions([]);
         bottomSheetRef.current?.snapToIndex(1);
+        setIsWeighable(false);
     };
 
     ReceiptItemEditSheet.openNew = openNew;
@@ -72,6 +75,7 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
         setEditPromoPrice(item.promoPrice ? String(item.promoPrice).replace('.', ',') : '');
         setNameSuggestions([]);
         bottomSheetRef.current?.snapToIndex(1);
+        setIsWeighable(item.isWeighable || false);
     };
 
     const close = () => {
@@ -90,6 +94,7 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
                         categoryId: editCategoryId,
                         price: parseFloat(editPrice.replace(',', '.')),
                         promoPrice: editPromoPrice ? parseFloat(editPromoPrice.replace(',', '.')) : null,
+                        isWeighable,
                     }),
                 });
                 const data = await response.json();
@@ -109,6 +114,7 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
                         promoPrice: editPromoPrice ? parseFloat(editPromoPrice.replace(',', '.')) : null,
                         oldName: editingItem!.name,
                         storeProductId: editingItem!.storeProductId,
+                        isWeighable,
                     }),
                 });
                 const data = await response.json();
@@ -207,6 +213,20 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
                             keyboardType="numeric"
                             placeholder="0,00"
                         />
+                        <Text style={styles.label}>Sveriamas produktas</Text>
+                        <TouchableOpacity
+                            style={styles.weighableButton}
+                            onPress={() => setIsWeighable(!isWeighable)}
+                        >
+                            <Ionicons
+                                name={isWeighable ? 'scale' : 'scale-outline'}
+                                size={20}
+                                color={isWeighable ? '#2e7d32' : '#9e9e9e'}
+                            />
+                            <Text style={[styles.weighableText, isWeighable && styles.weighableTextActive]}>
+                                {isWeighable ? 'Taip' : 'Ne'}
+                            </Text>
+                        </TouchableOpacity>
 
                         <TouchableOpacity style={styles.doneButton} onPress={handleSave}>
                             <Text style={styles.doneButtonText}>Išsaugoti</Text>
@@ -242,4 +262,15 @@ const styles = StyleSheet.create({
         alignItems: 'center', marginTop: 24, marginBottom: 16,
     },
     doneButtonText: { color: 'white', fontWeight: '700', fontSize: 16 },
+    weighableButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        borderWidth: 1,
+        borderColor: '#e0e0e0',
+        borderRadius: 8,
+        padding: 10,
+        gap: 8,
+    },
+    weighableText: { fontSize: 14, color: '#9e9e9e' },
+    weighableTextActive: { color: '#2e7d32' },
 });
