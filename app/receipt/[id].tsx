@@ -13,6 +13,15 @@ interface Receipt {
     receiptDate: string | null;
     receiptNo: string | null;
     chainName: string | null;
+    parsedData?: {
+        items: {
+            name: string;
+            price: number | null;
+            promoPrice: number | null;
+            categoryId?: number | null;
+            categoryName?: string | null;
+        }[];
+    };
 }
 
 const getStatusText = (status: string) => {
@@ -123,6 +132,26 @@ const [imageUrl, setImageUrl] = useState<string | null>(null);
                     </View>
                 </View>
             </View>
+            {receipt.parsedData?.items && (
+            <View style={styles.card}>
+                <Text style={styles.sectionTitle}>Produktai</Text>
+                {receipt.parsedData.items.map((item: any, index: number) => (
+                    <View key={index} style={styles.itemRow}>
+                        <View style={styles.itemContent}>
+                            <Text style={styles.itemName}>{item.name}</Text>
+                            <View style={styles.itemPriceRow}>
+                                <Text style={styles.itemPrice}>
+                                    {item.price ? `€${item.price}` : 'Kaina nenurodyta'}
+                                </Text>
+                                {item.promoPrice && (
+                                    <Text style={styles.itemPromoPrice}>€{item.promoPrice}</Text>
+                                )}
+                            </View>
+                        </View>
+                    </View>
+                ))}
+            </View>
+        )}
         </ScrollView>
     );
 }
@@ -166,4 +195,15 @@ const styles = StyleSheet.create({
     label: { fontSize: 12, color: '#757575' },
     value: { fontSize: 15, color: '#212121', marginTop: 2, fontWeight: '500' },
     divider: { height: 1, backgroundColor: '#f0f0f0', marginVertical: 4 },
+    sectionTitle: { fontSize: 16, fontWeight: '700', color: '#212121', marginBottom: 12 },
+    itemRow: {
+        paddingVertical: 10,
+        borderBottomWidth: 1,
+        borderBottomColor: '#f0f0f0',
+    },
+    itemContent: { flex: 1 },
+    itemName: { fontSize: 14, color: '#212121' },
+    itemPriceRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 },
+    itemPrice: { fontSize: 13, color: '#2e7d32', fontWeight: '600' },
+    itemPromoPrice: { fontSize: 13, color: '#c62828', textDecorationLine: 'line-through' },
 });
