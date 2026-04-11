@@ -11,8 +11,8 @@ interface ReceiptItem {
     priceId: number;
     storeProductId: number;
     name: string;
-    categoryId: number;
-    categoryName: string;
+    categoryId: number | null;
+    categoryName: string | null;
     price: number;
     promoPrice: number | null;
 }
@@ -38,7 +38,7 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
 
     const pendingSelection = useReceiptEditStore(s => s.pendingSelection);
     const setPendingSelection = useReceiptEditStore(s => s.setPendingSelection);
-
+    const [isNew, setIsNew] = useState(false);
     useFocusEffect(
         useCallback(() => {
             if (pendingSelection) {
@@ -50,7 +50,19 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
             }
         }, [pendingSelection])
     );
+    const openNew = () => {
+        setIsNew(true);
+        setEditingItem({ priceId: -1, storeProductId: -1, name: '', categoryId: null, categoryName: null, price: 0, promoPrice: null });
+        setEditName('');
+        setEditCategoryId(null);
+        setEditCategoryName(null);
+        setEditPrice('');
+        setEditPromoPrice('');
+        setNameSuggestions([]);
+        bottomSheetRef.current?.snapToIndex(1);
+    };
 
+    ReceiptItemEditSheet.openNew = openNew;
     const open = (item: ReceiptItem) => {
         setEditingItem(item);
         setEditName(item.name);
@@ -67,24 +79,43 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
     };
 
     const handleSave = async () => {
-        if (!editingItem || !editPrice) return;
+        if (!editPrice) return;
         try {
-            const response = await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/items/${editingItem.priceId}`, {
-                method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    name: editName,
-                    categoryId: editCategoryId,
-                    price: parseFloat(editPrice.replace(',', '.')),
-                    promoPrice: editPromoPrice ? parseFloat(editPromoPrice.replace(',', '.')) : null,
-                    oldName: editingItem.name,
-                    storeProductId: editingItem.storeProductId,
-                }),
-            });
-            const data = await response.json();
-            if (data.message) {
-                close();
-                onSaved();
+            if (isNew) {
+                const response = await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/items`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: editName,
+                        categoryId: editCategoryId,
+                        price: parseFloat(editPrice.replace(',', '.')),
+                        promoPrice: editPromoPrice ? parseFloat(editPromoPrice.replace(',', '.')) : null,
+                    }),
+                });
+                const data = await response.json();
+                if (data.message) {
+                    setIsNew(false);
+                    close();
+                    onSaved();
+                }
+            } else {
+                const response = await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/items/${editingItem!.priceId}`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: editName,
+                        categoryId: editCategoryId,
+                        price: parseFloat(editPrice.replace(',', '.')),
+                        promoPrice: editPromoPrice ? parseFloat(editPromoPrice.replace(',', '.')) : null,
+                        oldName: editingItem!.name,
+                        storeProductId: editingItem!.storeProductId,
+                    }),
+                });
+                const data = await response.json();
+                if (data.message) {
+                    close();
+                    onSaved();
+                }
             }
         } catch (error) {
             Alert.alert('Klaida', 'Nepavyko išsaugoti');
@@ -187,8 +218,8 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
     );
 }
 
-// Static method to allow opening from parent
 ReceiptItemEditSheet.open = (_item: any) => {};
+ReceiptItemEditSheet.openNew = () => {};
 
 const styles = StyleSheet.create({
     sheetTitle: { fontSize: 16, fontWeight: '700', color: '#212121', marginBottom: 16 },

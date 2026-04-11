@@ -186,6 +186,29 @@ export default function ReceiptEditScreen() {
                             </TouchableOpacity>
                         )}
                     />
+                    <TouchableOpacity
+                        style={styles.addItemButton}
+                        onPress={() => {
+                            // Add empty item to items array and open it
+                            const newItem = {
+                                name: '',
+                                brandName: null,
+                                price: null,
+                                quantity: 1,
+                                isWeighable: false,
+                                promoPrice: null,
+                                categoryId: null,
+                                categoryName: null,
+                                priceInput: '',
+                                promoPriceInput: '',
+                            };
+                            setItems(prev => [...prev, newItem]);
+                            openItem(items.length);
+                        }}
+                    >
+                        <Ionicons name="add-circle-outline" size={20} color="#2e7d32" />
+                        <Text style={styles.addItemText}>Pridėti trūkstamą produktą</Text>
+                    </TouchableOpacity>
                 </View>
 
                 {/* Bottom sheet for editing */}
@@ -276,17 +299,17 @@ export default function ReceiptEditScreen() {
                                 />
 
                                 <Text style={styles.label}>Nuolaidos kaina (€, neprivaloma)</Text>
-                                    <TextInput
-                                        style={styles.input}
-                                        value={selectedItem.promoPriceInput}
-                                        onChangeText={v => {
-                                            updateItem('promoPriceInput', v);
-                                            const normalized = v.replace(',', '.');
-                                            updateItem('promoPrice', normalized ? parseFloat(normalized) : null);
-                                        }}
-                                        keyboardType="decimal-pad"
-                                        placeholder="0,00"
-                                    />
+                                <TextInput
+                                    style={styles.input}
+                                    value={selectedItem.promoPriceInput}
+                                    onChangeText={v => {
+                                        updateItem('promoPriceInput', v);
+                                        const normalized = v.replace(',', '.');
+                                        updateItem('promoPrice', normalized ? parseFloat(normalized) : null);
+                                    }}
+                                    keyboardType="decimal-pad"
+                                    placeholder="0,00"
+                                />
 
                                 <TouchableOpacity style={styles.doneButton} onPress={closeSheet}>
                                     <Text style={styles.doneButtonText}>Patvirtinti</Text>
@@ -346,4 +369,15 @@ const styles = StyleSheet.create({
         padding: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
     },
     suggestionText: { fontSize: 14, color: '#212121' },
+    addItemButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    gap: 8,
+    },
+    addItemText: {
+        fontSize: 14,
+        color: '#2e7d32',
+        fontWeight: '500',
+    },
 });

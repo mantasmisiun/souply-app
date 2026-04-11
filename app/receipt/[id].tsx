@@ -171,7 +171,15 @@ export default function ReceiptDetailScreen() {
                                     <Ionicons name="pencil-outline" size={18} color="#2e7d32" />
                                 </TouchableOpacity>
                             </View>
+                            
                         ))}
+                        <TouchableOpacity 
+                            style={styles.addItemButton}
+                            onPress={() => ReceiptItemEditSheet.openNew()}
+                        >
+                            <Ionicons name="add-circle-outline" size={20} color="#2e7d32" />
+                            <Text style={styles.addItemText}>Pridėti trūkstamą produktą</Text>
+                        </TouchableOpacity>
                     </View>
                 )}
             </ScrollView>
@@ -241,4 +249,9 @@ const styles = StyleSheet.create({
     itemPriceCrossed: { textDecorationLine: 'line-through', color: '#9e9e9e' },
     itemPromoPrice: { fontSize: 14, color: '#c62828', fontWeight: '600' },
     editButton: { padding: 8 },
+    addItemButton: {
+    flexDirection: 'row', alignItems: 'center', paddingVertical: 12,
+    gap: 8,
+    },
+    addItemText: { fontSize: 14, color: '#2e7d32', fontWeight: '500' },
 });
