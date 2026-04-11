@@ -4,6 +4,8 @@ import { useEffect, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
 import { Stack } from 'expo-router';
+import ReceiptItemEditSheet from '../../components/ReceiptItemEditSheet';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 interface Receipt {
     id: number;
@@ -44,10 +46,12 @@ const getStatusColor = (status: string) => {
 
 export default function ReceiptDetailScreen() {
     const { id } = useLocalSearchParams();
-    const router = useRouter();
-const [receipt, setReceipt] = useState<Receipt | null>(null);
-const [loading, setLoading] = useState(true);
-const [imageUrl, setImageUrl] = useState<string | null>(null);
+    const receiptId = Array.isArray(id) ? id[0] : id;
+    const [receipt, setReceipt] = useState<Receipt | null>(null);
+    const [loading, setLoading] = useState(true);
+    const [imageUrl, setImageUrl] = useState<string | null>(null);
+    const [items, setItems] = useState<any[]>([]);
+    const [chainId, setChainId] = useState<number | null>(null);
 
     useEffect(() => {
         const fetchReceipt = async () => {
@@ -56,9 +60,19 @@ const [imageUrl, setImageUrl] = useState<string | null>(null);
                 const data = await response.json();
                 setReceipt(data);
 
+                if (data.chainName) {
+                    const chainRes = await fetch(`${API_BASE_URL}/api/chains?name=${encodeURIComponent(data.chainName)}`);
+                    const chainData = await chainRes.json();
+                    if (chainData.length > 0) setChainId(chainData[0].id);
+                }
+
                 const imageResponse = await fetch(`${API_BASE_URL}/api/receipts/${id}/image`);
                 const imageData = await imageResponse.json();
                 setImageUrl(imageData.url);
+
+                const itemsResponse = await fetch(`${API_BASE_URL}/api/receipts/${id}/items`);
+                const itemsData = await itemsResponse.json();
+                setItems(Array.isArray(itemsData) ? itemsData : []);
             } catch (error) {
                 console.error('Failed to fetch receipt:', error);
             } finally {
@@ -85,74 +99,93 @@ const [imageUrl, setImageUrl] = useState<string | null>(null);
     }
 
     return (
-        <ScrollView style={styles.container}>
-            <Stack.Screen options={{ title: receipt.receiptNo ? `Kvitas Nr. ${receipt.receiptNo}` : 'Kvitas' }} />
-            {/* Receipt Image */}
-            <View style={styles.imageContainer}>
-                <Image
-                    source={{ uri: imageUrl || '' }}
-                    style={styles.image}
-                    resizeMode="contain"
-                />
-            </View>
-
-            {/* Details Card */}
-            <View style={styles.card}>
-                <View style={styles.row}>
-                    <Ionicons name="storefront-outline" size={20} color="#757575" />
-                    <View style={styles.rowContent}>
-                        <Text style={styles.label}>Parduotuvė</Text>
-                        <Text style={styles.value}>{receipt.chainName || '—'}</Text>
-                    </View>
+        <GestureHandlerRootView style={{ flex: 1 }}>
+            <ScrollView style={styles.container}>
+                <Stack.Screen options={{ title: receipt.receiptNo ? `Kvitas Nr. ${receipt.receiptNo}` : 'Kvitas' }} />
+                {/* Receipt Image */}
+                <View style={styles.imageContainer}>
+                    <Image
+                        source={{ uri: imageUrl || '' }}
+                        style={styles.image}
+                        resizeMode="contain"
+                    />
                 </View>
 
-                <View style={styles.divider} />
-
-                <View style={styles.row}>
-                    <Ionicons name="calendar-outline" size={20} color="#757575" />
-                    <View style={styles.rowContent}>
-                        <Text style={styles.label}>Data</Text>
-                        <Text style={styles.value}>
-                            {receipt.receiptDate
-                                ? new Date(receipt.receiptDate).toLocaleDateString('lt-LT')
-                                : '—'}
-                        </Text>
-                    </View>
-                </View>
-
-                <View style={styles.divider} />
-
-                <View style={styles.row}>
-                    <Ionicons name="checkmark-circle-outline" size={20} color={getStatusColor(receipt.processingStatus)} />
-                    <View style={styles.rowContent}>
-                        <Text style={styles.label}>Būsena</Text>
-                        <Text style={[styles.value, { color: getStatusColor(receipt.processingStatus) }]}>
-                            {getStatusText(receipt.processingStatus)}
-                        </Text>
-                    </View>
-                </View>
-            </View>
-            {receipt.parsedData?.items && (
-            <View style={styles.card}>
-                <Text style={styles.sectionTitle}>Produktai</Text>
-                {receipt.parsedData.items.map((item: any, index: number) => (
-                    <View key={index} style={styles.itemRow}>
-                        <View style={styles.itemContent}>
-                            <Text style={styles.itemName}>{item.name}</Text>
-                            <View style={styles.itemPriceRow}>
-                                <Text style={styles.itemPrice}>
-                                    {item.price ? `€${item.price}` : 'Kaina nenurodyta'}
-                                </Text>
-                                {item.promoPrice && (
-                                    <Text style={styles.itemPromoPrice}>€{item.promoPrice}</Text>
-                                )}
-                            </View>
+                {/* Details Card */}
+                <View style={styles.card}>
+                    <View style={styles.row}>
+                        <Ionicons name="storefront-outline" size={20} color="#757575" />
+                        <View style={styles.rowContent}>
+                            <Text style={styles.label}>Parduotuvė</Text>
+                            <Text style={styles.value}>{receipt.chainName || '—'}</Text>
                         </View>
                     </View>
-                ))}
-            </View>
-        )}
-        </ScrollView>
+
+                    <View style={styles.divider} />
+
+                    <View style={styles.row}>
+                        <Ionicons name="calendar-outline" size={20} color="#757575" />
+                        <View style={styles.rowContent}>
+                            <Text style={styles.label}>Data</Text>
+                            <Text style={styles.value}>
+                                {receipt.receiptDate
+                                    ? new Date(receipt.receiptDate).toLocaleDateString('lt-LT')
+                                    : '—'}
+                            </Text>
+                        </View>
+                    </View>
+
+                    <View style={styles.divider} />
+
+                    <View style={styles.row}>
+                        <Ionicons name="checkmark-circle-outline" size={20} color={getStatusColor(receipt.processingStatus)} />
+                        <View style={styles.rowContent}>
+                            <Text style={styles.label}>Būsena</Text>
+                            <Text style={[styles.value, { color: getStatusColor(receipt.processingStatus) }]}>
+                                {getStatusText(receipt.processingStatus)}
+                            </Text>
+                        </View>
+                    </View>
+                </View>
+
+                {receipt.parsedData?.items && (
+                    <View style={styles.card}>
+                        <Text style={styles.sectionTitle}>Produktai</Text>
+                        {items.map((item: any, index: number) => (
+                            <View key={index} style={styles.itemRow}>
+                                <View style={styles.itemContent}>
+                                    <Text style={styles.itemName}>{item.name}</Text>
+                                    <Text style={styles.itemCategory}>{item.categoryName}</Text>
+                                    <View style={styles.itemPriceRow}>
+                                        <Text style={[styles.itemPrice, item.promoPrice && styles.itemPriceCrossed]}>
+                                            €{parseFloat(item.price).toFixed(2)}
+                                        </Text>
+                                        {item.promoPrice && (
+                                            <Text style={styles.itemPromoPrice}>
+                                                €{parseFloat(item.promoPrice).toFixed(2)}
+                                            </Text>
+                                        )}
+                                    </View>
+                                </View>
+                                <TouchableOpacity style={styles.editButton} onPress={() => ReceiptItemEditSheet.open(item)}>
+                                    <Ionicons name="pencil-outline" size={18} color="#2e7d32" />
+                                </TouchableOpacity>
+                            </View>
+                        ))}
+                    </View>
+                )}
+            </ScrollView>
+
+            <ReceiptItemEditSheet
+                receiptId={Number(receiptId)}
+                chainId={chainId}
+                onSaved={async () => {
+                    const itemsResponse = await fetch(`${API_BASE_URL}/api/receipts/${id}/items`);
+                    const itemsData = await itemsResponse.json();
+                    setItems(Array.isArray(itemsData) ? itemsData : []);
+                }}
+            />
+        </GestureHandlerRootView>
     );
 }
 
@@ -197,13 +230,15 @@ const styles = StyleSheet.create({
     divider: { height: 1, backgroundColor: '#f0f0f0', marginVertical: 4 },
     sectionTitle: { fontSize: 16, fontWeight: '700', color: '#212121', marginBottom: 12 },
     itemRow: {
-        paddingVertical: 10,
-        borderBottomWidth: 1,
-        borderBottomColor: '#f0f0f0',
+        flexDirection: 'row', alignItems: 'center',
+        paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
     },
     itemContent: { flex: 1 },
-    itemName: { fontSize: 14, color: '#212121' },
+    itemName: { fontSize: 14, color: '#212121', fontWeight: '500' },
+    itemCategory: { fontSize: 11, color: '#9e9e9e', marginTop: 2 },
     itemPriceRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 8 },
-    itemPrice: { fontSize: 13, color: '#2e7d32', fontWeight: '600' },
-    itemPromoPrice: { fontSize: 13, color: '#c62828', textDecorationLine: 'line-through' },
+    itemPrice: { fontSize: 14, color: '#2e7d32', fontWeight: '600' },
+    itemPriceCrossed: { textDecorationLine: 'line-through', color: '#9e9e9e' },
+    itemPromoPrice: { fontSize: 14, color: '#c62828', fontWeight: '600' },
+    editButton: { padding: 8 },
 });
