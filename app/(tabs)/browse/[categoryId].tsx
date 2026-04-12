@@ -3,6 +3,9 @@ import { useEffect, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../config/api';
+import { Alert } from 'react-native';
+import { useBasketState } from '../../../state/basketState';
+import { addProductToBasket } from '../../../utils/basketUtils';
 
 interface Category {
     id: number;
@@ -22,6 +25,7 @@ export default function CategoryScreen() {
     const [isL3, setIsL3] = useState(false);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
+    const { draftBasketId, setDraftBasketId } = useBasketState();
 
     useEffect(() => {
         const fetchData = async () => {
@@ -65,6 +69,15 @@ export default function CategoryScreen() {
                                 <Text style={styles.cardText}>{item.name}</Text>
                                 {item.brandName && <Text style={styles.brandText}>{item.brandName}</Text>}
                             </View>
+                            <TouchableOpacity
+                                style={styles.addButton}
+                                onPress={async () => {
+                                    const result = await addProductToBasket(item.id, draftBasketId, setDraftBasketId);
+                                    Alert.alert(result.success ? 'Pridėta' : 'Klaida', result.message);
+                                }}
+                            >
+                                <Ionicons name="add-circle-outline" size={24} color="#2e7d32" />
+                            </TouchableOpacity>
                         </View>
                     )}
                 />
@@ -100,4 +113,5 @@ const styles = StyleSheet.create({
     cardText: { fontSize: 15, color: '#212121', flex: 1 },
     brandText: { fontSize: 12, color: '#757575', marginTop: 2 },
     emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: '#757575' },
+    addButton: { padding: 4 },
 });

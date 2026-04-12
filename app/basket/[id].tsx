@@ -1,0 +1,265 @@
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput } from 'react-native';
+import { useRef, useState, useCallback } from 'react';
+import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { API_BASE_URL } from '../../config/api';
+
+interface BasketItem {
+    id: number;
+    basketId: number;
+    productId: number;
+    quantity: number;
+    productName: string;
+    categoryName?: string;
+    isWeighable: boolean;
+}
+
+interface Basket {
+    id: number;
+    status: string;
+    name: string;
+    createdAt: string;
+}
+
+export default function BasketDetailScreen() {
+    const { id } = useLocalSearchParams();
+    const router = useRouter();
+    const [basket, setBasket] = useState<Basket | null>(null);
+    const [items, setItems] = useState<BasketItem[]>([]);
+    const [loading, setLoading] = useState(true);
+    const [quantityInputs, setQuantityInputs] = useState<{[key: number]: string}>({});
+    const [basketName, setBasketName] = useState('');
+    const [editingName, setEditingName] = useState(false);
+    const nameInputRef = useRef<any>(null);
+
+    const fetchBasket = async () => {
+        try {
+            const [basketRes, itemsRes] = await Promise.all([
+                fetch(`${API_BASE_URL}/api/baskets/${id}`),
+                fetch(`${API_BASE_URL}/api/baskets/${id}/items`),
+            ]);
+            const basketData = await basketRes.json();
+            const itemsData = await itemsRes.json();
+            setBasket(basketData);
+            setBasketName(basketData.name || '');
+            const parsedItems = Array.isArray(itemsData) ? itemsData.map((item: any) => ({
+                ...item,
+                quantity: parseFloat(item.quantity),
+                isWeighable: item.isWeighable === 1,
+            })) : [];
+            setItems(parsedItems);
+
+            const inputs: {[key: number]: string} = {};
+            parsedItems.forEach((item: any) => {
+                inputs[item.id] = parseFloat(item.quantity) % 1 === 0
+                    ? String(parseInt(item.quantity))
+                    : parseFloat(item.quantity).toFixed(1);
+            });
+            setQuantityInputs(inputs);
+        } catch (error) {
+            console.error('Failed to fetch basket:', error);
+        } finally {
+            setLoading(false);
+        }
+    };
+    const saveBasketName = async (name: string) => {
+        try {
+            await fetch(`${API_BASE_URL}/api/baskets/${id}/name`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name }),
+            });
+            setBasketName(name);
+            setEditingName(false);
+        } catch (error) {
+            Alert.alert('Klaida', 'Nepavyko pervadinti krepšelio');
+        }
+    };
+    useFocusEffect(useCallback(() => {
+        fetchBasket();
+    }, [id]));
+
+    const updateQuantity = async (itemId: number, newQuantity: number) => {
+        const rounded = Math.round(newQuantity * 100) / 100;
+        if (rounded < 1 && !items.find(i => i.id === itemId)?.isWeighable) {
+            removeItem(itemId);
+            return;
+        }
+        if (rounded <= 0) {
+            removeItem(itemId);
+            return;
+        }
+        try {
+            await fetch(`${API_BASE_URL}/api/basket-items/${itemId}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quantity: rounded }),
+            });
+            setItems(prev => prev.map(item =>
+                item.id === itemId ? { ...item, quantity: rounded } : item
+            ));
+            setQuantityInputs(prev => ({ ...prev, [itemId]: String(rounded) }));
+        } catch (error) {
+            Alert.alert('Klaida', 'Nepavyko atnaujinti kiekio');
+        }
+    };
+
+    const removeItem = async (itemId: number) => {
+        try {
+            await fetch(`${API_BASE_URL}/api/basket-items/${itemId}`, {
+                method: 'DELETE',
+            });
+            const remaining = items.filter(item => item.id !== itemId);
+            setItems(remaining);
+
+            if (remaining.length === 0) {
+                await fetch(`${API_BASE_URL}/api/baskets/${id}`, {
+                    method: 'DELETE',
+                });
+                router.back();
+            }
+        } catch (error) {
+            Alert.alert('Klaida', 'Nepavyko pašalinti produkto');
+        }
+    };
+
+    if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color="#2e7d32" /></View>;
+
+    const isDraft = basket?.status === 'draft';
+
+    return (
+        <>
+            <Stack.Screen options={{
+                title: editingName ? '' : basketName || new Date(basket?.createdAt || '').toLocaleDateString('lt-LT'),
+                headerTitle: editingName ? () => (
+                    <TextInput
+                        ref={nameInputRef}
+                        value={basketName}
+                        onChangeText={setBasketName}
+                        onEndEditing={e => saveBasketName(e.nativeEvent.text)}
+                        onSubmitEditing={e => saveBasketName(e.nativeEvent.text)}
+                        style={{ fontSize: 16, color: '#212121', minWidth: 200 }}
+                    />
+                ) : undefined,
+                headerRight: () => basket?.status === 'draft' ? (
+                    <TouchableOpacity
+                        onPress={() => {
+                            if (editingName) {
+                                setEditingName(false);
+                            } else {
+                                setEditingName(true);
+                                setTimeout(() => nameInputRef.current?.focus(), 50);
+                            }
+                        }}
+                        style={{ marginRight: 12 }}
+                    >
+                        <Ionicons name={editingName ? 'close' : 'pencil-outline'} size={20} color="#2e7d32" />
+                    </TouchableOpacity>
+                ) : undefined,
+            }} />
+            <View style={styles.container}>
+                <FlatList
+                    data={items}
+                    keyExtractor={item => item.id.toString()}
+                    contentContainerStyle={styles.list}
+                    ListEmptyComponent={
+                        <View style={styles.centered}>
+                            <Text style={styles.emptyText}>Krepšelis tuščias</Text>
+                            <Text style={styles.emptySubText}>Pridėkite produktų naršydami katalogą</Text>
+                        </View>
+                    }
+                    renderItem={({ item }) => (
+                        <View style={styles.card}>
+                            <View style={styles.cardContent}>
+                                <Text style={styles.itemName}>{item.productName}</Text>
+                                <Text style={styles.itemCategory}>{item.categoryName}</Text>
+                            </View>
+                            {isDraft && (
+                                <View style={styles.controls}>
+                                    <TouchableOpacity
+                                        style={styles.controlButton}
+                                        onPress={() => updateQuantity(item.id, item.quantity - 1)}
+                                    >
+                                        <Ionicons name="remove" size={18} color="#2e7d32" />
+                                    </TouchableOpacity>
+                                    <TextInput
+                                        style={styles.quantityInput}
+                                        value={quantityInputs[item.id] ?? String(item.quantity)}
+                                        onChangeText={v => {
+                                            if (!item.isWeighable && (v.includes('.') || v.includes(','))) return;
+                                            // Restrict to 1 decimal place for weighable
+                                            const dotIndex = v.indexOf('.');
+                                            const commaIndex = v.indexOf(',');
+                                            const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
+                                            if (separatorIndex !== -1 && v.length - separatorIndex > 2) return;
+                                            setQuantityInputs(prev => ({ ...prev, [item.id]: v }));
+                                        }}
+                                        onEndEditing={async e => {
+                                            const val = parseFloat(e.nativeEvent.text.replace(',', '.'));
+                                            if (!val || val <= 0) {
+                                                removeItem(item.id);
+                                                return;
+                                            }
+                                            await updateQuantity(item.id, val);
+                                            setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
+                                        }}
+                                        keyboardType={item.isWeighable ? 'numeric' : 'number-pad'}
+                                        selectTextOnFocus
+                                    />
+                                    <TouchableOpacity
+                                        style={styles.controlButton}
+                                        onPress={() => updateQuantity(item.id, item.quantity + 1)}
+                                    >
+                                        <Ionicons name="add" size={18} color="#2e7d32" />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                        style={styles.removeButton}
+                                        onPress={() => removeItem(item.id)}
+                                    >
+                                        <Ionicons name="trash-outline" size={18} color="#c62828" />
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        </View>
+                    )}
+                />
+            </View>
+        </>
+    );
+}
+
+const styles = StyleSheet.create({
+    container: { flex: 1, backgroundColor: '#f5f5f5' },
+    centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
+    list: { padding: 16 },
+    card: {
+        backgroundColor: 'white', borderRadius: 12, padding: 16, marginBottom: 10,
+        flexDirection: 'row', alignItems: 'center',
+        elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1, shadowRadius: 2,
+    },
+    cardContent: { flex: 1 },
+    itemName: { fontSize: 14, fontWeight: '600', color: '#212121' },
+    itemCategory: { fontSize: 12, color: '#757575', marginTop: 2 },
+    controls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    controlButton: {
+        width: 28, height: 28, borderRadius: 14,
+        borderWidth: 1, borderColor: '#2e7d32',
+        alignItems: 'center', justifyContent: 'center',
+    },
+    quantity: { fontSize: 15, fontWeight: '600', color: '#212121', minWidth: 24, textAlign: 'center' },
+    removeButton: {
+        width: 28, height: 28, borderRadius: 14,
+        borderWidth: 1, borderColor: '#c62828',
+        alignItems: 'center', justifyContent: 'center',
+        marginLeft: 4,
+    },
+    emptyText: { fontSize: 16, color: '#757575', fontWeight: '600' },
+    emptySubText: { fontSize: 13, color: '#9e9e9e', marginTop: 4 },
+    quantityInput: {
+        fontSize: 15, fontWeight: '600', color: '#212121',
+        minWidth: 40, textAlign: 'center',
+        borderBottomWidth: 1, borderBottomColor: '#e0e0e0',
+        paddingVertical: 2,
+    },
+});

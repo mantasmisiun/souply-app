@@ -3,6 +3,9 @@ import { useEffect, useState } from 'react';
 import { useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../config/api';
+import { useBasketState } from '../../../state/basketState';
+import { addProductToBasket } from '../../../utils/basketUtils';
+import { Alert } from 'react-native';
 
 interface Category {
     id: number;
@@ -24,6 +27,7 @@ export default function BrowseIndex() {
     const [searchQuery, setSearchQuery] = useState('');
     const [searching, setSearching] = useState(false);
     const router = useRouter();
+    const { draftBasketId, setDraftBasketId } = useBasketState();
 
     useEffect(() => {
         fetch(`${API_BASE_URL}/api/categories`)
@@ -98,6 +102,15 @@ export default function BrowseIndex() {
                             <View style={styles.card}>
                                 <Ionicons name="cube-outline" size={24} color="#2e7d32" style={{ marginRight: 12 }} />
                                 <Text style={styles.cardText}>{item.name}</Text>
+                                <TouchableOpacity
+                                    style={styles.addButton}
+                                    onPress={async () => {
+                                        const result = await addProductToBasket(item.id, draftBasketId, setDraftBasketId);
+                                        Alert.alert(result.success ? 'Pridėta' : 'Klaida', result.message);
+                                    }}
+                                >
+                                    <Ionicons name="add-circle-outline" size={24} color="#2e7d32" />
+                                </TouchableOpacity>
                             </View>
                         )}
                     />
@@ -134,4 +147,5 @@ const styles = StyleSheet.create({
     cardText: { fontSize: 15, color: '#212121', flex: 1 },
     emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: '#757575' },
     searchInput: { fontSize: 16, flex: 1, color: '#757575' },
+    addButton: { padding: 4 },
 });
