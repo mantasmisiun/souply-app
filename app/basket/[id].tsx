@@ -92,6 +92,16 @@ export default function BasketDetailScreen() {
             return;
         }
         try {
+            // Revert to draft if compared
+            if (basket?.status === 'compared') {
+                await fetch(`${API_BASE_URL}/api/baskets/${id}/status`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'draft' }),
+                });
+                setBasket(prev => prev ? { ...prev, status: 'draft' } : prev);
+            }
+
             await fetch(`${API_BASE_URL}/api/basket-items/${itemId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -108,6 +118,16 @@ export default function BasketDetailScreen() {
 
     const removeItem = async (itemId: number) => {
         try {
+            // Revert to draft if compared
+            if (basket?.status === 'compared') {
+                await fetch(`${API_BASE_URL}/api/baskets/${id}/status`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'draft' }),
+                });
+                setBasket(prev => prev ? { ...prev, status: 'draft' } : prev);
+            }
+
             await fetch(`${API_BASE_URL}/api/basket-items/${itemId}`, {
                 method: 'DELETE',
             });
@@ -125,13 +145,15 @@ export default function BasketDetailScreen() {
         }
     };
     const handleCalculate = async () => {
+        await AsyncStorage.removeItem(`basket_results_${id}`);
+        router.push(`/basket/results/${id}`);
         try {
             const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
                 method: 'POST',
             });
-            const results = await res.json();
-            await AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(results));
-            router.push(`/basket/results/${id}`);
+            const newResults = await res.json();
+            await AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults));
+            setBasket(prev => prev ? { ...prev, status: 'compared' } : prev);
         } catch (error) {
             Alert.alert('Klaida', 'Nepavyko apskaičiuoti krepšelio');
         }
@@ -177,27 +199,18 @@ export default function BasketDetailScreen() {
                         style={{ fontSize: 16, color: '#212121', minWidth: 200 }}
                     />
                 ) : undefined,
-                headerRight: () => (
-                    <View style={{ flexDirection: 'row', gap: 8, marginRight: 12 }}>
-                        {basket?.status === 'draft' && (
-                            <TouchableOpacity onPress={() => {
-                                if (editingName) {
-                                    setEditingName(false);
-                                } else {
-                                    setEditingName(true);
-                                    setTimeout(() => nameInputRef.current?.focus(), 50);
-                                }
-                            }}>
-                                <Ionicons name={editingName ? 'close' : 'pencil-outline'} size={20} color="#2e7d32" />
-                            </TouchableOpacity>
-                        )}
-                        {basket?.status === 'compared' && (
-                            <TouchableOpacity onPress={handleRevertToDraft}>
-                                <Ionicons name="create-outline" size={20} color="#757575" />
-                            </TouchableOpacity>
-                        )}
-                    </View>
-                ),
+                headerRight: () => basket?.status === 'draft' ? (
+                    <TouchableOpacity onPress={() => {
+                        if (editingName) {
+                            setEditingName(false);
+                        } else {
+                            setEditingName(true);
+                            setTimeout(() => nameInputRef.current?.focus(), 50);
+                        }
+                    }} style={{ marginRight: 12 }}>
+                        <Ionicons name={editingName ? 'close' : 'pencil-outline'} size={20} color="#2e7d32" />
+                    </TouchableOpacity>
+                ) : undefined,
             }} />
             <View style={styles.container}>
                 <FlatList
@@ -221,78 +234,71 @@ export default function BasketDetailScreen() {
                             )}
                             <View style={styles.cardContent}>
                                 <Text style={styles.itemName}>{item.productName}</Text>
-                                {isDraft && (
-                                    <View style={styles.controls}>
-                                        <TouchableOpacity
-                                            style={styles.controlButton}
-                                            onPress={() => updateQuantity(item.id, item.quantity - 1)}
-                                        >
-                                            <Ionicons name="remove" size={18} color="#2e7d32" />
-                                        </TouchableOpacity>
-                                        <TextInput
-                                            style={styles.quantityInput}
-                                            value={quantityInputs[item.id] ?? String(item.quantity)}
-                                            onChangeText={v => {
-                                                if (!item.isWeighable && (v.includes('.') || v.includes(','))) return;
-                                                const dotIndex = v.indexOf('.');
-                                                const commaIndex = v.indexOf(',');
-                                                const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
-                                                if (separatorIndex !== -1 && v.length - separatorIndex > 2) return;
-                                                setQuantityInputs(prev => ({ ...prev, [item.id]: v }));
-                                            }}
-                                            onEndEditing={async e => {
-                                                const val = parseFloat(e.nativeEvent.text.replace(',', '.'));
-                                                if (!val || val <= 0) {
-                                                    removeItem(item.id);
-                                                    return;
-                                                }
-                                                await updateQuantity(item.id, val);
-                                                setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
-                                            }}
-                                            keyboardType={item.isWeighable ? 'numeric' : 'number-pad'}
-                                            selectTextOnFocus
-                                        />
-                                        <TouchableOpacity
-                                            style={styles.controlButton}
-                                            onPress={() => updateQuantity(item.id, item.quantity + 1)}
-                                        >
-                                            <Ionicons name="add" size={18} color="#2e7d32" />
-                                        </TouchableOpacity>
-                                    </View>
-                                )}
+                                <View style={styles.controls}>
+                                    <TouchableOpacity
+                                        style={styles.controlButton}
+                                        onPress={() => updateQuantity(item.id, item.quantity - 1)}
+                                    >
+                                        <Ionicons name="remove" size={18} color="#2e7d32" />
+                                    </TouchableOpacity>
+                                    <TextInput
+                                        style={styles.quantityInput}
+                                        value={quantityInputs[item.id] ?? String(item.quantity)}
+                                        onChangeText={v => {
+                                            if (!item.isWeighable && (v.includes('.') || v.includes(','))) return;
+                                            const dotIndex = v.indexOf('.');
+                                            const commaIndex = v.indexOf(',');
+                                            const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
+                                            if (separatorIndex !== -1 && v.length - separatorIndex > 2) return;
+                                            setQuantityInputs(prev => ({ ...prev, [item.id]: v }));
+                                        }}
+                                        onEndEditing={async e => {
+                                            const val = parseFloat(e.nativeEvent.text.replace(',', '.'));
+                                            if (!val || val <= 0) {
+                                                removeItem(item.id);
+                                                return;
+                                            }
+                                            await updateQuantity(item.id, val);
+                                            setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
+                                        }}
+                                        keyboardType={item.isWeighable ? 'numeric' : 'number-pad'}
+                                        selectTextOnFocus
+                                    />
+                                    <TouchableOpacity
+                                        style={styles.controlButton}
+                                        onPress={() => updateQuantity(item.id, item.quantity + 1)}
+                                    >
+                                        <Ionicons name="add" size={18} color="#2e7d32" />
+                                    </TouchableOpacity>
+                                </View>
                             </View>
-                            {isDraft && (
-                                <TouchableOpacity
-                                    style={styles.removeButton}
-                                    onPress={() => removeItem(item.id)}
-                                >
-                                    <Ionicons name="trash-outline" size={20} color="#c62828" />
-                                </TouchableOpacity>
-                            )}
+                            <TouchableOpacity
+                                style={styles.removeButton}
+                                onPress={() => removeItem(item.id)}
+                            >
+                                <Ionicons name="trash-outline" size={20} color="#c62828" />
+                            </TouchableOpacity>
                         </View>
                     )}
                 />
-                {(basket?.status === 'draft' && items.length > 0) || basket?.status === 'compared' ? (
+                {items.length > 0 && (
                     <View style={styles.bottomBar}>
-                        {basket?.status === 'draft' && (
+                        {basket?.status === 'compared' ? (
+                            <TouchableOpacity
+                                style={styles.showResultsButton}
+                                onPress={() => router.push(`/basket/results/${id}`)}
+                            >
+                                <Ionicons name="storefront-outline" size={20} color="white" />
+                                <Text style={styles.showResultsText}>Rodyti parduotuves</Text>
+                            </TouchableOpacity>
+                        ) : (
                             <TouchableOpacity style={styles.showResultsButton} onPress={handleCalculate}>
                                 <Ionicons name="calculator-outline" size={20} color="white" />
                                 <Text style={styles.showResultsText}>Apskaičiuoti</Text>
                             </TouchableOpacity>
                         )}
-                        {basket?.status === 'compared' && (
-                            <>
-                                <TouchableOpacity
-                                    style={styles.showResultsButton}
-                                    onPress={() => router.push(`/basket/results/${id}`)}
-                                >
-                                    <Ionicons name="list-outline" size={20} color="white" />
-                                    <Text style={styles.showResultsText}>Rodyti parduotuves</Text>
-                                </TouchableOpacity>
-                            </>
-                        )}
                     </View>
-                ) : null}
+                )}
             </View>
         </>
     );

@@ -10,9 +10,10 @@ interface Basket {
     id: number;
     userId: string;
     status: string;
-    name: string;
+    name: string | null;
     createdAt: string;
     updatedAt: string;
+    itemCount: number;
 }
 
 export default function BasketScreen() {
@@ -104,7 +105,14 @@ export default function BasketScreen() {
                         onPress={() => router.push(`/basket/${item.id}`)}
                     >
                         <View style={styles.cardLeft}>
-                            <Ionicons name="cart-outline" size={28} color="#2e7d32" />
+                            <View style={styles.iconContainer}>
+                                <Ionicons name="cart-outline" size={28} color="#2e7d32" />
+                                {item.itemCount > 0 && (
+                                    <View style={styles.badge}>
+                                        <Text style={styles.badgeText}>{item.itemCount}</Text>
+                                    </View>
+                                )}
+                            </View>
                         </View>
                         <View style={styles.cardContent}>
                             {item.name ? (
@@ -153,4 +161,24 @@ const styles = StyleSheet.create({
         backgroundColor: '#2e7d32', width: 56, height: 56,
         borderRadius: 28, alignItems: 'center', justifyContent: 'center', elevation: 4,
     },
+    iconContainer: {
+        position: 'relative',
+        width: 36,
+        height: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    badge: {
+        position: 'absolute',
+        top: -4,
+        right: -6,
+        backgroundColor: '#2e7d32',
+        borderRadius: 10,
+        minWidth: 18,
+        height: 18,
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingHorizontal: 4,
+    },
+    badgeText: { color: 'white', fontSize: 10, fontWeight: '700' },
 });
