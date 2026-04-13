@@ -1,4 +1,4 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Image } from 'react-native';
 import { useRef, useState, useCallback } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -13,6 +13,7 @@ interface BasketItem {
     productName: string;
     categoryName?: string;
     isWeighable: boolean;
+    imageUrl: string | null;
 }
 
 interface Basket {
@@ -209,88 +210,89 @@ export default function BasketDetailScreen() {
                             <Text style={styles.emptySubText}>Pridėkite produktų naršydami katalogą</Text>
                         </View>
                     }
-                    ListFooterComponent={
-                        basket?.status === 'draft' && items.length > 0 ? (
-                            <View style={styles.footer}>
-                                <TouchableOpacity style={styles.calculateButton} onPress={handleCalculate}>
-                                    <Ionicons name="calculator-outline" size={20} color="white" />
-                                    <Text style={styles.calculateButtonText}>Apskaičiuoti</Text>
-                                </TouchableOpacity>
-                            </View>
-                        ) : null
-                    }
                     renderItem={({ item }) => (
                         <View style={styles.card}>
+                            {item.imageUrl ? (
+                                <Image source={{ uri: item.imageUrl }} style={styles.productImage} resizeMode="contain" />
+                            ) : (
+                                <View style={styles.productImagePlaceholder}>
+                                    <Ionicons name="cube-outline" size={24} color="#9e9e9e" />
+                                </View>
+                            )}
                             <View style={styles.cardContent}>
                                 <Text style={styles.itemName}>{item.productName}</Text>
-                                <Text style={styles.itemCategory}>{item.categoryName}</Text>
+                                {isDraft && (
+                                    <View style={styles.controls}>
+                                        <TouchableOpacity
+                                            style={styles.controlButton}
+                                            onPress={() => updateQuantity(item.id, item.quantity - 1)}
+                                        >
+                                            <Ionicons name="remove" size={18} color="#2e7d32" />
+                                        </TouchableOpacity>
+                                        <TextInput
+                                            style={styles.quantityInput}
+                                            value={quantityInputs[item.id] ?? String(item.quantity)}
+                                            onChangeText={v => {
+                                                if (!item.isWeighable && (v.includes('.') || v.includes(','))) return;
+                                                const dotIndex = v.indexOf('.');
+                                                const commaIndex = v.indexOf(',');
+                                                const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
+                                                if (separatorIndex !== -1 && v.length - separatorIndex > 2) return;
+                                                setQuantityInputs(prev => ({ ...prev, [item.id]: v }));
+                                            }}
+                                            onEndEditing={async e => {
+                                                const val = parseFloat(e.nativeEvent.text.replace(',', '.'));
+                                                if (!val || val <= 0) {
+                                                    removeItem(item.id);
+                                                    return;
+                                                }
+                                                await updateQuantity(item.id, val);
+                                                setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
+                                            }}
+                                            keyboardType={item.isWeighable ? 'numeric' : 'number-pad'}
+                                            selectTextOnFocus
+                                        />
+                                        <TouchableOpacity
+                                            style={styles.controlButton}
+                                            onPress={() => updateQuantity(item.id, item.quantity + 1)}
+                                        >
+                                            <Ionicons name="add" size={18} color="#2e7d32" />
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
                             </View>
                             {isDraft && (
-                                <View style={styles.controls}>
-                                    <TouchableOpacity
-                                        style={styles.controlButton}
-                                        onPress={() => updateQuantity(item.id, item.quantity - 1)}
-                                    >
-                                        <Ionicons name="remove" size={18} color="#2e7d32" />
-                                    </TouchableOpacity>
-                                    <TextInput
-                                        style={styles.quantityInput}
-                                        value={quantityInputs[item.id] ?? String(item.quantity)}
-                                        onChangeText={v => {
-                                            if (!item.isWeighable && (v.includes('.') || v.includes(','))) return;
-                                            // Restrict to 1 decimal place for weighable
-                                            const dotIndex = v.indexOf('.');
-                                            const commaIndex = v.indexOf(',');
-                                            const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
-                                            if (separatorIndex !== -1 && v.length - separatorIndex > 2) return;
-                                            setQuantityInputs(prev => ({ ...prev, [item.id]: v }));
-                                        }}
-                                        onEndEditing={async e => {
-                                            const val = parseFloat(e.nativeEvent.text.replace(',', '.'));
-                                            if (!val || val <= 0) {
-                                                removeItem(item.id);
-                                                return;
-                                            }
-                                            await updateQuantity(item.id, val);
-                                            setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
-                                        }}
-                                        keyboardType={item.isWeighable ? 'numeric' : 'number-pad'}
-                                        selectTextOnFocus
-                                    />
-                                    <TouchableOpacity
-                                        style={styles.controlButton}
-                                        onPress={() => updateQuantity(item.id, item.quantity + 1)}
-                                    >
-                                        <Ionicons name="add" size={18} color="#2e7d32" />
-                                    </TouchableOpacity>
-                                    <TouchableOpacity
-                                        style={styles.removeButton}
-                                        onPress={() => removeItem(item.id)}
-                                    >
-                                        <Ionicons name="trash-outline" size={18} color="#c62828" />
-                                    </TouchableOpacity>
-                                </View>
+                                <TouchableOpacity
+                                    style={styles.removeButton}
+                                    onPress={() => removeItem(item.id)}
+                                >
+                                    <Ionicons name="trash-outline" size={20} color="#c62828" />
+                                </TouchableOpacity>
                             )}
                         </View>
                     )}
                 />
-                {basket?.status === 'compared' && (
+                {(basket?.status === 'draft' && items.length > 0) || basket?.status === 'compared' ? (
                     <View style={styles.bottomBar}>
-                        <TouchableOpacity
-                            style={styles.showResultsButton}
-                            onPress={() => router.push(`/basket/results/${id}`)}
-                        >
-                            <Ionicons name="list-outline" size={20} color="white" />
-                            <Text style={styles.showResultsText}>Rodyti rezultatus</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.recalculateIconButton}
-                            onPress={handleCalculate}
-                        >
-                            <Ionicons name="refresh-outline" size={22} color="#2e7d32" />
-                        </TouchableOpacity>
+                        {basket?.status === 'draft' && (
+                            <TouchableOpacity style={styles.showResultsButton} onPress={handleCalculate}>
+                                <Ionicons name="calculator-outline" size={20} color="white" />
+                                <Text style={styles.showResultsText}>Apskaičiuoti</Text>
+                            </TouchableOpacity>
+                        )}
+                        {basket?.status === 'compared' && (
+                            <>
+                                <TouchableOpacity
+                                    style={styles.showResultsButton}
+                                    onPress={() => router.push(`/basket/results/${id}`)}
+                                >
+                                    <Ionicons name="list-outline" size={20} color="white" />
+                                    <Text style={styles.showResultsText}>Rodyti parduotuves</Text>
+                                </TouchableOpacity>
+                            </>
+                        )}
                     </View>
-                )}
+                ) : null}
             </View>
         </>
     );
@@ -300,28 +302,13 @@ const styles = StyleSheet.create({
     container: { flex: 1, backgroundColor: '#f5f5f5' },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
     list: { padding: 16 },
-    card: {
-        backgroundColor: 'white', borderRadius: 12, padding: 16, marginBottom: 10,
-        flexDirection: 'row', alignItems: 'center',
-        elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.1, shadowRadius: 2,
-    },
-    cardContent: { flex: 1 },
-    itemName: { fontSize: 14, fontWeight: '600', color: '#212121' },
     itemCategory: { fontSize: 12, color: '#757575', marginTop: 2 },
-    controls: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     controlButton: {
         width: 28, height: 28, borderRadius: 14,
         borderWidth: 1, borderColor: '#2e7d32',
         alignItems: 'center', justifyContent: 'center',
     },
     quantity: { fontSize: 15, fontWeight: '600', color: '#212121', minWidth: 24, textAlign: 'center' },
-    removeButton: {
-        width: 28, height: 28, borderRadius: 14,
-        borderWidth: 1, borderColor: '#c62828',
-        alignItems: 'center', justifyContent: 'center',
-        marginLeft: 4,
-    },
     emptyText: { fontSize: 16, color: '#757575', fontWeight: '600' },
     emptySubText: { fontSize: 13, color: '#9e9e9e', marginTop: 4 },
     quantityInput: {
@@ -373,4 +360,29 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     footer: { padding: 16 },
+    card: {
+        backgroundColor: 'white', borderRadius: 12, padding: 12, marginBottom: 10,
+        flexDirection: 'row', alignItems: 'center',
+        elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.1, shadowRadius: 2,
+    },
+    productImage: {
+        width: 56, height: 56, borderRadius: 8, marginRight: 12, alignSelf: 'center',
+    },
+    productImagePlaceholder: {
+        width: 56, height: 56, borderRadius: 8, marginRight: 12,
+        backgroundColor: '#f0f0f0', alignItems: 'center', justifyContent: 'center', alignSelf: 'center',
+    },
+    cardContent: { flex: 1, justifyContent: 'space-between' },
+    itemName: { fontSize: 14, fontWeight: '600', color: '#212121' },
+    controls: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
+    removeButton: {
+        width: 36,
+        alignItems: 'center',
+        justifyContent: 'center',
+        borderLeftWidth: 1,
+        borderLeftColor: '#f0f0f0',
+        marginLeft: 8,
+        paddingLeft: 8,
+    },
 });

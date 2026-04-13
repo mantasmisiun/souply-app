@@ -1,8 +1,9 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { API_BASE_URL } from '../../../config/api';
 
 interface ItemResult {
     productId: number;
@@ -20,6 +21,8 @@ interface StoreResult {
     storeName: string;
     chainName: string;
     chainId: number;
+    chainLogoUrl: string | null;
+    storeAddress: string;
     distance: number;
     total: number;
     isApproximated: boolean;
@@ -47,12 +50,30 @@ export default function BasketResultsScreen() {
         };
         loadResults();
     }, [id]);
-
+    const handleRecalculate = async () => {
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
+                method: 'POST',
+            });
+            const results = await res.json();
+            await AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(results));
+            setResults(results);
+        } catch (error) {
+            Alert.alert('Klaida', 'Nepavyko perskaičiuoti');
+        }
+    };
     if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color="#2e7d32" /></View>;
 
     return (
         <>
-            <Stack.Screen options={{ title: 'Palyginimo rezultatai' }} />
+            <Stack.Screen options={{
+                title: 'Palyginimo rezultatai',
+                headerRight: () => (
+                    <TouchableOpacity onPress={handleRecalculate} style={{ marginRight: 12 }}>
+                        <Ionicons name="refresh-outline" size={22} color="#2e7d32" />
+                    </TouchableOpacity>
+                ),
+            }} />
             <FlatList
                 data={results}
                 keyExtractor={item => item.storeId.toString()}
@@ -73,11 +94,16 @@ export default function BasketResultsScreen() {
                             </View>
                         )}
                         <View style={styles.cardLeft}>
-                            <Text style={styles.rank}>#{index + 1}</Text>
+                            {item.chainLogoUrl ? (
+                                <Image source={{ uri: item.chainLogoUrl }} style={styles.logo} resizeMode="contain" />
+                            ) : (
+                                <View style={styles.logoPlaceholder}>
+                                    <Text style={styles.logoPlaceholderText}>{item.chainName[0]}</Text>
+                                </View>
+                            )}
                         </View>
                         <View style={styles.cardContent}>
-                            <Text style={styles.storeName}>{item.storeName}</Text>
-                            <Text style={styles.chainName}>{item.chainName}</Text>
+                            <Text style={styles.storeName}>{item.storeAddress}</Text>
                             <View style={styles.metaRow}>
                                 <Ionicons name="location-outline" size={12} color="#9e9e9e" />
                                 <Text style={styles.distance}>{item.distance} km</Text>
@@ -131,4 +157,10 @@ const styles = StyleSheet.create({
     priceContainer: { alignItems: 'flex-end', flexDirection: 'row', gap: 4 },
     price: { fontSize: 18, fontWeight: '700', color: '#2e7d32' },
     emptyText: { fontSize: 16, color: '#757575' },
+    logo: { width: 48, height: 48, borderRadius: 8 },
+    logoPlaceholder: {
+        width: 48, height: 48, borderRadius: 8,
+        backgroundColor: '#e0e0e0', alignItems: 'center', justifyContent: 'center',
+    },
+    logoPlaceholderText: { fontSize: 20, fontWeight: '700', color: '#757575' },
 });
