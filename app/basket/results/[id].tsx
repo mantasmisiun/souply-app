@@ -107,11 +107,11 @@ export default function BasketResultsScreen() {
             const { getUserId } = await import('../../../config/user');
             const userId = await getUserId();
 
-            // Create shopping list first
+            // Create shopping list with basketId
             const listRes = await fetch(`${API_BASE_URL}/api/shopping-lists`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId, storeId: selectedStore.storeId }),
+                body: JSON.stringify({ userId, storeId: selectedStore.storeId, basketId: Number(id) }),
             });
             const listData = await listRes.json();
             const listId = listData.id;
@@ -119,7 +119,7 @@ export default function BasketResultsScreen() {
             // Navigate immediately
             router.replace('/(tabs)/shoppingList' as any);
             setTimeout(() => {
-                router.push(`/shopping-list/${listId}` as any);
+                router.push(`/shopping-list/${listId}?expectedCount=${selectedStore.items.length}` as any);
             }, 100);
 
             // Add items in background

@@ -30,7 +30,6 @@ interface ShoppingListItem {
 }
 
 export default function ShoppingListScreen() {
-    const { id } = useLocalSearchParams();
     const router = useRouter();
     const [list, setList] = useState<ShoppingList | null>(null);
     const [items, setItems] = useState<ShoppingListItem[]>([]);
@@ -42,6 +41,7 @@ export default function ShoppingListScreen() {
     const [initialLoading, setInitialLoading] = useState(true);
     const [visibleCount, setVisibleCount] = useState(0);
     const [menuVisible, setMenuVisible] = useState(false);
+    const { id, expectedCount } = useLocalSearchParams<{ id: string; expectedCount: string }>();
 
     const fetchList = async () => {
         try {
@@ -78,24 +78,24 @@ export default function ShoppingListScreen() {
             }
         };
 
+        const expected = expectedCount ? parseInt(expectedCount) : 0;
+
         const pollItems = async () => {
             if (cancelled) return;
             try {
                 const res = await fetch(`${API_BASE_URL}/api/shopping-lists/${id}/items`);
                 const data = await res.json();
 
-                if (Array.isArray(data) && data.length > 0) {
-                    setItems(data);
+                if (Array.isArray(data) && (data.length >= expected || attempts >= 20)) {
+                    setItems(data.sort((a: any, b: any) => Number(a.isChecked) - Number(b.isChecked)));
                     setLoading(false);
                     setVisibleCount(0);
                     for (let i = 0; i <= data.length; i++) {
                         setTimeout(() => setVisibleCount(i), i * 100);
                     }
-                } else if (attempts < 20) {
+                } else {
                     attempts++;
                     setTimeout(pollItems, 500);
-                } else {
-                    setLoading(false);
                 }
             } catch (error) {
                 console.error('Failed to fetch items:', error);
@@ -226,7 +226,7 @@ export default function ShoppingListScreen() {
                 ) : null,
                 headerRight: () => list?.status === 'completed' ? (
                     <TouchableOpacity style={{ marginRight: 12 }} onPress={() => setMenuVisible(true)}>
-                        <Ionicons name="ellipsis-vertical" size={22} color="#212121" />
+                        <Ionicons name="ellipsis-vertical" size={22} color="#9e9e9e" />
                     </TouchableOpacity>
                 ) : undefined,
             }} />

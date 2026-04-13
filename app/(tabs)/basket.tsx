@@ -71,6 +71,7 @@ export default function BasketScreen() {
         switch (status) {
             case 'draft': return '#f57c00';
             case 'compared': return '#1565c0';
+            case 'active': return '#6a1b9a';
             case 'completed': return '#2e7d32';
             default: return '#757575';
         }
@@ -80,7 +81,8 @@ export default function BasketScreen() {
         switch (status) {
             case 'draft': return 'Juodraštis';
             case 'compared': return 'Palyginta';
-            case 'completed': return 'Užbaigta';
+            case 'active': return 'Vykdomas';
+            case 'completed': return 'Baigtas';
             default: return status;
         }
     };
