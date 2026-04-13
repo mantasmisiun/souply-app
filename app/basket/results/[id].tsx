@@ -101,9 +101,43 @@ export default function BasketResultsScreen() {
         Linking.openURL(url);
     };
 
-    const handleCreateShoppingList = () => {
-        // TODO: implement shopping list creation
-        Alert.alert('Netrukus', 'Pirkinių sąrašo kūrimas bus pridėtas netrukus');
+    const handleCreateShoppingList = async () => {
+        if (!selectedStore) return;
+        try {
+            const { getUserId } = await import('../../../config/user');
+            const userId = await getUserId();
+
+            // Create shopping list first
+            const listRes = await fetch(`${API_BASE_URL}/api/shopping-lists`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, storeId: selectedStore.storeId }),
+            });
+            const listData = await listRes.json();
+            const listId = listData.id;
+
+            // Navigate immediately
+            router.replace('/(tabs)/shoppingList' as any);
+            setTimeout(() => {
+                router.push(`/shopping-list/${listId}` as any);
+            }, 100);
+
+            // Add items in background
+            for (const item of selectedStore.items) {
+                await fetch(`${API_BASE_URL}/api/list-items`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        listId,
+                        productId: item.productId,
+                        quantity: item.quantity,
+                        price: item.effectivePrice,
+                    }),
+                });
+            }
+        } catch (error) {
+            Alert.alert('Klaida', 'Nepavyko sukurti pirkinių sąrašo');
+        }
     };
 
     return (

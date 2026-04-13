@@ -20,6 +20,7 @@ export default function RootLayout() {
         <Stack.Screen name="basket/[id]" options={{ title: 'Krepšelis' }} />
         <Stack.Screen name="basket/results/[id]" options={{ title: 'Rezultatai' }} />
         <Stack.Screen name="basket/results/store" options={{ title: 'Parduotuvė' }} />
+        <Stack.Screen name="shopping-list/[id]" options={{ title: 'Pirkinių sąrašas' }} />
         <Stack.Screen name="receipt/[id]" options={{ title: 'Kvitas' }} />
       </Stack>
       <StatusBar style="auto" />
