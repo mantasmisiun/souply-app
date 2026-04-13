@@ -14,6 +14,7 @@ interface ShoppingList {
     storeName: string;
     storeAddress: string;
     chainName: string;
+    chainId: number;
     chainLogoUrl: string | null;
     status: string;
     createdAt: string;
@@ -234,7 +235,7 @@ export default function ShoppingListScreen() {
         setSearchQuery(query);
         if (query.length < 2) { setSearchResults([]); return; }
         try {
-            const res = await fetch(`${API_BASE_URL}/api/products/search?q=${encodeURIComponent(query)}`);
+            const res = await fetch(`${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(query)}&chainId=${list?.chainId}`);
             const data = await res.json();
             setSearchResults(Array.isArray(data) ? data.slice(0, 5) : []);
         } catch {}
@@ -343,25 +344,28 @@ export default function ShoppingListScreen() {
                                 </TouchableOpacity>
                             </View>
                             {searchResults.length > 0 && (
-                                <View style={styles.searchResults}>
+                                <ScrollView
+                                    style={styles.searchResults}
+                                    keyboardShouldPersistTaps="handled"
+                                >
                                     {searchResults.map((product, index) => {
-                                        const alreadyInList = items.some(i => i.productId === product.id);
+                                        const alreadyInList = items.some(i => i.productId === product.productId);
                                         return (
                                             <TouchableOpacity
                                                 key={`${product.id}-${index}`}
                                                 style={styles.searchResultItem}
                                                 onPress={() => {
                                                     if (alreadyInList) {
-                                                        Alert.alert('Jau sąraše', `"${product.name}" jau yra pirkinių sąraše`);
+                                                        Alert.alert('Jau sąraše', `"${product.storeProductName}" jau yra pirkinių sąraše`);
                                                         return;
                                                     }
-                                                    promptQuantity(product.id, product.name, product.isWeighable === 1 || product.isWeighable === true);
+                                                    promptQuantity(product.productId, product.storeProductName, product.isWeighable === 1 || product.isWeighable === true);
                                                 }}
                                             >
                                                 {alreadyInList && (
                                                     <Ionicons name="checkmark-circle" size={18} color="#2e7d32" style={{ marginRight: 8 }} />
                                                 )}
-                                                <Text style={styles.searchResultText}>{product.name}</Text>
+                                                <Text style={styles.searchResultText}>{product.storeProductName}</Text>
                                             </TouchableOpacity>
                                         );
                                     })}
@@ -372,7 +376,7 @@ export default function ShoppingListScreen() {
                                         <Ionicons name="add-circle-outline" size={18} color="#2e7d32" />
                                         <Text style={styles.customItemText}>Pridėti "{searchQuery}" kaip naują prekę</Text>
                                     </TouchableOpacity>
-                                </View>
+                                </ScrollView>
                             )}
                             {searchQuery.length > 0 && searchResults.length === 0 && (
                                 <TouchableOpacity
@@ -574,13 +578,19 @@ card: {
     itemPriceChecked: { color: '#9e9e9e' },
     searchInput: { flex: 1, fontSize: 14, color: '#212121' },
     searchOverlay: {
-        backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', zIndex: 10,
+        backgroundColor: 'white',
+        borderBottomWidth: 1,
+        borderBottomColor: '#e0e0e0',
+        zIndex: 10,
+        maxHeight: 400,
+    },
+    searchResults: {
+        maxHeight: 250,
     },
     searchContainer: {
         flexDirection: 'row', alignItems: 'center', gap: 8,
         padding: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
     },
-    searchResults: { maxHeight: 200 },
     searchResultItem: {
         padding: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
         flexDirection: 'row', alignItems: 'center',
