@@ -27,6 +27,7 @@ interface ShoppingListItem {
     isChecked: boolean;
     customName: string | null;
     imageUrl: string | null;
+    isWeighable: boolean;
 }
 
 export default function ShoppingListScreen() {
@@ -176,6 +177,7 @@ export default function ShoppingListScreen() {
                 isChecked: false,
                 customName: productId ? null : name,
                 imageUrl: null,
+                isWeighable: false,
             };
             setItems(prev => [...prev, newItem]);
             setVisibleCount(prev => prev + 1);
@@ -340,7 +342,9 @@ export default function ShoppingListScreen() {
                                     <Text style={[styles.itemName, item.isChecked && styles.itemNameChecked]}>
                                         {item.productName}
                                     </Text>
-                                    <Text style={styles.itemQuantity}>Kiekis: {item.quantity}</Text>
+                                    <Text style={styles.itemQuantity}>
+                                        Kiekis: {item.quantity} {item.isWeighable ? 'kg' : 'vnt.'}
+                                    </Text>
                                 </View>
 
                                 {item.price && (
