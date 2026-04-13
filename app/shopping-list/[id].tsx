@@ -175,8 +175,13 @@ export default function ShoppingListScreen() {
     };
 
     const addProduct = async (productId: number | null, name: string) => {
+        const existing = items.find(i => i.productId === productId && productId !== null);
+        if (existing) {
+            Alert.alert('Jau sąraše', `"${name}" jau yra pirkinių sąraše`);
+            return;
+        }
         try {
-            await fetch(`${API_BASE_URL}/api/list-items`, {
+            const res = await fetch(`${API_BASE_URL}/api/list-items`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -186,11 +191,25 @@ export default function ShoppingListScreen() {
                     customName: productId ? null : name,
                 }),
             });
+            const data = await res.json();
+
+            // Add item directly to state
+            const newItem = {
+                id: data.id,
+                listId: Number(id),
+                productId,
+                productName: name,
+                quantity: 1,
+                price: null,
+                isChecked: false,
+                customName: productId ? null : name,
+            };
+            setItems(prev => [...prev, newItem]);
+            setVisibleCount(prev => prev + 1);
+
             setSearchQuery('');
             setSearchResults([]);
             setSearchVisible(false);
-            setCustomItemName('');
-            fetchList();
         } catch (error) {
             Alert.alert('Klaida', 'Nepavyko pridėti produkto');
         }
@@ -258,15 +277,27 @@ export default function ShoppingListScreen() {
                             </View>
                             {searchResults.length > 0 && (
                                 <View style={styles.searchResults}>
-                                    {searchResults.map(product => (
-                                        <TouchableOpacity
-                                            key={product.id}
-                                            style={styles.searchResultItem}
-                                            onPress={() => addProduct(product.id, product.name)}
-                                        >
-                                            <Text style={styles.searchResultText}>{product.name}</Text>
-                                        </TouchableOpacity>
-                                    ))}
+                                    {searchResults.map((product, index) => {
+                                        const alreadyInList = items.some(i => i.productId === product.id);
+                                        return (
+                                            <TouchableOpacity
+                                                key={`${product.id}-${index}`}
+                                                style={styles.searchResultItem}
+                                                onPress={() => {
+                                                    if (alreadyInList) {
+                                                        Alert.alert('Jau sąraše', `"${product.name}" jau yra pirkinių sąraše`);
+                                                        return;
+                                                    }
+                                                    addProduct(product.id, product.name);
+                                                }}
+                                            >
+                                                {alreadyInList && (
+                                                    <Ionicons name="checkmark-circle" size={18} color="#2e7d32" style={{ marginRight: 8 }} />
+                                                )}
+                                                <Text style={styles.searchResultText}>{product.name}</Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
                                     <TouchableOpacity
                                         style={styles.customItemButton}
                                         onPress={() => addProduct(null, searchQuery)}
@@ -414,7 +445,10 @@ const styles = StyleSheet.create({
     searchResults: {
         maxHeight: 200,
     },
-    searchResultItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+    searchResultItem: { 
+        padding: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
+        flexDirection: 'row', alignItems: 'center',
+    },
     searchResultText: { fontSize: 14, color: '#212121' },
     customItemButton: {
         flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12,
