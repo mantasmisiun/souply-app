@@ -1,10 +1,12 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Image } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Image, Keyboard, Platform  } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 
 interface ShoppingList {
     id: number;
@@ -29,7 +31,85 @@ interface ShoppingListItem {
     imageUrl: string | null;
     isWeighable: boolean;
 }
+function ShoppingListItemCard({ item, onToggle, onRemove }: {
+    item: ShoppingListItem;
+    onToggle: (item: ShoppingListItem) => void;
+    onRemove: (id: number) => void;
+}) {
+    const swipeableRef = useRef<SwipeableMethods>(null);
 
+    const handleSwipeOpen = (direction: 'left' | 'right') => {
+        if (direction === 'left') {
+            swipeableRef.current?.close();
+            Alert.alert(
+                'Pašalinti',
+                `Pašalinti "${item.productName}" iš sąrašo?`,
+                [
+                    { text: 'Atšaukti', style: 'cancel' as const },
+                    { text: 'Pašalinti', style: 'destructive' as const, onPress: () => onRemove(item.id) },
+                ]
+            );
+        }
+    };
+
+    const rightActions = () => (
+        <View style={styles.deleteAction}>
+            <Ionicons name="trash-outline" size={24} color="white" />
+            <Text style={styles.actionText}>Ištrinti</Text>
+        </View>
+    );
+
+    return (
+        <View style={{ paddingHorizontal: 2, overflow: 'visible' }}>
+            <ReanimatedSwipeable
+                ref={swipeableRef}
+                renderRightActions={rightActions}
+                overshootRight={false}
+                friction={3}
+                activeOffsetX={[-20, 20]}
+                failOffsetY={[-10, 10]}
+                rightThreshold={40}
+                onSwipeableOpen={handleSwipeOpen}
+            >
+                <TouchableOpacity
+                    style={[styles.card, item.isChecked && styles.cardChecked]}
+                    onPress={() => onToggle(item)}
+                >
+                    <View style={styles.imageContainer}>
+                        {item.isChecked ? (
+                            <View style={styles.checkmarkContainer}>
+                                <Ionicons name="checkmark" size={24} color="white" />
+                            </View>
+                        ) : item.imageUrl ? (
+                            <Image
+                                source={{ uri: item.imageUrl }}
+                                style={styles.productImage}
+                                resizeMode="contain"
+                            />
+                        ) : (
+                            <View style={styles.imagePlaceholder}>
+                                <Ionicons name="cube-outline" size={22} color="#bdbdbd" />
+                            </View>
+                        )}
+                    </View>
+                    <View style={styles.cardContent}>
+                        <Text style={[styles.itemName, item.isChecked && styles.itemNameChecked]}>
+                            {item.productName}
+                        </Text>
+                        <Text style={styles.itemQuantity}>
+                            Kiekis: {item.quantity} {item.isWeighable ? 'kg' : 'vnt.'}
+                        </Text>
+                    </View>
+                    {item.price && (
+                        <Text style={[styles.itemPrice, item.isChecked && styles.itemPriceChecked]}>
+                            €{item.price.toFixed(2)}
+                        </Text>
+                    )}
+                </TouchableOpacity>
+            </ReanimatedSwipeable>
+        </View>
+    );
+}
 export default function ShoppingListScreen() {
     const router = useRouter();
     const [list, setList] = useState<ShoppingList | null>(null);
@@ -41,7 +121,15 @@ export default function ShoppingListScreen() {
     const [visibleCount, setVisibleCount] = useState(0);
     const [menuVisible, setMenuVisible] = useState(false);
     const { id, expectedCount } = useLocalSearchParams<{ id: string; expectedCount: string }>();
-
+    const [quantityModal, setQuantityModal] = useState<{ productId: number | null; name: string; isWeighable: boolean } | null>(null);
+    const [quantityInput, setQuantityInput] = useState('1');
+    const [modalIsWeighable, setModalIsWeighable] = useState(false);
+    const [keyboardHeight, setKeyboardHeight] = useState(0);
+    useEffect(() => {
+        const show = Keyboard.addListener('keyboardDidShow', e => setKeyboardHeight(e.endCoordinates.height));
+        const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0));
+        return () => { show.remove(); hide.remove(); };
+    }, []);
     useFocusEffect(useCallback(() => {
         let attempts = 0;
         let cancelled = false;
@@ -128,7 +216,11 @@ export default function ShoppingListScreen() {
             );
         }
     };
-
+    const promptQuantity = (productId: number | null, name: string, isWeighable: boolean) => {
+        setModalIsWeighable(isWeighable);
+        setQuantityInput(isWeighable ? '0.5' : '1');
+        setQuantityModal({ productId, name, isWeighable });
+    };
     const removeItem = async (itemId: number) => {
         try {
             await fetch(`${API_BASE_URL}/api/list-items/${itemId}`, { method: 'DELETE' });
@@ -148,7 +240,7 @@ export default function ShoppingListScreen() {
         } catch {}
     };
 
-    const addProduct = async (productId: number | null, name: string) => {
+    const addProduct = async (productId: number | null, name: string, quantity: number, isWeighable: boolean) => {
         const existing = items.find(i => i.productId === productId && productId !== null);
         if (existing) {
             Alert.alert('Jau sąraše', `"${name}" jau yra pirkinių sąraše`);
@@ -161,7 +253,7 @@ export default function ShoppingListScreen() {
                 body: JSON.stringify({
                     listId: Number(id),
                     productId,
-                    quantity: 1,
+                    quantity,
                     customName: productId ? null : name,
                 }),
             });
@@ -172,12 +264,12 @@ export default function ShoppingListScreen() {
                 listId: Number(id),
                 productId,
                 productName: name,
-                quantity: 1,
+                quantity,
                 price: null,
                 isChecked: false,
                 customName: productId ? null : name,
                 imageUrl: null,
-                isWeighable: false,
+                isWeighable,
             };
             setItems(prev => [...prev, newItem]);
             setVisibleCount(prev => prev + 1);
@@ -212,184 +304,212 @@ export default function ShoppingListScreen() {
     if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color="#2e7d32" /></View>;
 
     return (
-        <>
-            <Stack.Screen options={{
-                title: list?.storeAddress || 'Pirkinių sąrašas',
-                headerLeft: () => list?.chainLogoUrl ? (
-                    <Image source={{ uri: list.chainLogoUrl }} style={styles.headerLogo} resizeMode="contain" />
-                ) : null,
-                headerRight: () => list?.status === 'completed' ? (
-                    <TouchableOpacity style={{ marginRight: 12 }} onPress={() => setMenuVisible(true)}>
-                        <Ionicons name="ellipsis-vertical" size={22} color="#9e9e9e" />
-                    </TouchableOpacity>
-                ) : undefined,
-            }} />
+        <GestureHandlerRootView style={{ flex: 1 }}>
+            <>
+                <Stack.Screen options={{
+                    title: list?.storeAddress || 'Pirkinių sąrašas',
+                    headerLeft: () => list?.chainLogoUrl ? (
+                        <Image source={{ uri: list.chainLogoUrl }} style={styles.headerLogo} resizeMode="contain" />
+                    ) : null,
+                    headerRight: () => list?.status === 'completed' ? (
+                        <TouchableOpacity style={{ marginRight: 12 }} onPress={() => setMenuVisible(true)}>
+                            <Ionicons name="ellipsis-vertical" size={22} color="#9e9e9e" />
+                        </TouchableOpacity>
+                    ) : undefined,
+                }} />
 
-            <View style={styles.container}>
-                <View style={styles.progressContainer}>
-                    <View style={styles.progressBar}>
-                        <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
-                    </View>
-                    <Text style={styles.progressText}>{checkedCount} iš {totalCount}</Text>
-                </View>
-
-                {searchVisible && (
-                    <View style={styles.searchOverlay}>
-                        <View style={styles.searchContainer}>
-                            <Ionicons name="search" size={18} color="#9e9e9e" />
-                            <TextInput
-                                style={styles.searchInput}
-                                placeholder="Ieškoti produkto..."
-                                placeholderTextColor="#9e9e9e"
-                                value={searchQuery}
-                                onChangeText={handleSearch}
-                                autoFocus
-                            />
-                            <TouchableOpacity onPress={() => { setSearchVisible(false); setSearchQuery(''); setSearchResults([]); }}>
-                                <Ionicons name="close" size={22} color="#757575" />
-                            </TouchableOpacity>
+                <View style={styles.container}>
+                    <View style={styles.progressContainer}>
+                        <View style={styles.progressBar}>
+                            <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
                         </View>
-                        {searchResults.length > 0 && (
-                            <View style={styles.searchResults}>
-                                {searchResults.map((product, index) => {
-                                    const alreadyInList = items.some(i => i.productId === product.id);
-                                    return (
-                                        <TouchableOpacity
-                                            key={`${product.id}-${index}`}
-                                            style={styles.searchResultItem}
-                                            onPress={() => {
-                                                if (alreadyInList) {
-                                                    Alert.alert('Jau sąraše', `"${product.name}" jau yra pirkinių sąraše`);
-                                                    return;
-                                                }
-                                                addProduct(product.id, product.name);
-                                            }}
-                                        >
-                                            {alreadyInList && (
-                                                <Ionicons name="checkmark-circle" size={18} color="#2e7d32" style={{ marginRight: 8 }} />
-                                            )}
-                                            <Text style={styles.searchResultText}>{product.name}</Text>
-                                        </TouchableOpacity>
-                                    );
-                                })}
+                        <Text style={styles.progressText}>{checkedCount} iš {totalCount}</Text>
+                    </View>
+
+                    {searchVisible && (
+                        <View style={styles.searchOverlay}>
+                            <View style={styles.searchContainer}>
+                                <Ionicons name="search" size={18} color="#9e9e9e" />
+                                <TextInput
+                                    style={styles.searchInput}
+                                    placeholder="Ieškoti produkto..."
+                                    placeholderTextColor="#9e9e9e"
+                                    value={searchQuery}
+                                    onChangeText={handleSearch}
+                                    autoFocus
+                                />
+                                <TouchableOpacity onPress={() => { setSearchVisible(false); setSearchQuery(''); setSearchResults([]); }}>
+                                    <Ionicons name="close" size={22} color="#757575" />
+                                </TouchableOpacity>
+                            </View>
+                            {searchResults.length > 0 && (
+                                <View style={styles.searchResults}>
+                                    {searchResults.map((product, index) => {
+                                        const alreadyInList = items.some(i => i.productId === product.id);
+                                        return (
+                                            <TouchableOpacity
+                                                key={`${product.id}-${index}`}
+                                                style={styles.searchResultItem}
+                                                onPress={() => {
+                                                    if (alreadyInList) {
+                                                        Alert.alert('Jau sąraše', `"${product.name}" jau yra pirkinių sąraše`);
+                                                        return;
+                                                    }
+                                                    promptQuantity(product.id, product.name, product.isWeighable === 1 || product.isWeighable === true);
+                                                }}
+                                            >
+                                                {alreadyInList && (
+                                                    <Ionicons name="checkmark-circle" size={18} color="#2e7d32" style={{ marginRight: 8 }} />
+                                                )}
+                                                <Text style={styles.searchResultText}>{product.name}</Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                    <TouchableOpacity
+                                        style={styles.customItemButton}
+                                        onPress={() => promptQuantity(null, searchQuery, false)}
+                                    >
+                                        <Ionicons name="add-circle-outline" size={18} color="#2e7d32" />
+                                        <Text style={styles.customItemText}>Pridėti "{searchQuery}" kaip naują prekę</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                            {searchQuery.length > 0 && searchResults.length === 0 && (
                                 <TouchableOpacity
                                     style={styles.customItemButton}
-                                    onPress={() => addProduct(null, searchQuery)}
+                                    onPress={() => promptQuantity(null, searchQuery, false)}
                                 >
                                     <Ionicons name="add-circle-outline" size={18} color="#2e7d32" />
                                     <Text style={styles.customItemText}>Pridėti "{searchQuery}" kaip naują prekę</Text>
                                 </TouchableOpacity>
+                            )}
+                        </View>
+                    )}
+                    <ScrollView contentContainerStyle={styles.list}>
+                        {items.slice(0, visibleCount).length > 0 && (
+                            <View style={styles.listContainer}>
+                                {items.slice(0, visibleCount).map((item, index) => (
+                                    <Animated.View key={item.id} entering={FadeInDown.delay(index * 30)}>
+                                        {index > 0 && <View style={styles.divider} />}
+                                        <ShoppingListItemCard
+                                            item={item}
+                                            onToggle={toggleItem}
+                                            onRemove={removeItem}
+                                        />
+                                    </Animated.View>
+                                ))}
                             </View>
                         )}
-                        {searchQuery.length > 0 && searchResults.length === 0 && (
+                        {items.length === 0 && (
+                            <View style={styles.centered}>
+                                <Text style={styles.emptyText}>Sąrašas tuščias</Text>
+                            </View>
+                        )}
+                        {list?.status === 'active' && (
                             <TouchableOpacity
-                                style={styles.customItemButton}
-                                onPress={() => addProduct(null, searchQuery)}
+                                style={styles.addCard}
+                                onPress={() => setSearchVisible(true)}
                             >
-                                <Ionicons name="add-circle-outline" size={18} color="#2e7d32" />
-                                <Text style={styles.customItemText}>Pridėti "{searchQuery}" kaip naują prekę</Text>
+                                <View style={styles.addCardInner}>
+                                    <Ionicons name="add-circle-outline" size={22} color="#2e7d32" />
+                                    <Text style={styles.addCardText}>Pridėti prekę</Text>
+                                </View>
                             </TouchableOpacity>
                         )}
-                    </View>
-                )}
+                    </ScrollView>
 
-                <FlatList
-                    data={items.slice(0, visibleCount)}
-                    keyExtractor={item => item.id.toString()}
-                    contentContainerStyle={styles.list}
-                    ListEmptyComponent={
-                        <View style={styles.centered}>
-                            <Text style={styles.emptyText}>Sąrašas tuščias</Text>
-                        </View>
-                    }
-                    renderItem={({ item, index }) => (
-                        <Animated.View entering={FadeInDown.delay(index * 30)}>
-                            <TouchableOpacity
-                                style={[
-                                        styles.card,
-                                        item.isChecked && styles.cardChecked,
-                                    ]}
-                                onPress={() => toggleItem(item)}
-                                onLongPress={() => Alert.alert(
-                                    'Pašalinti',
-                                    `Pašalinti "${item.productName}" iš sąrašo?`,
-                                    [
-                                        { text: 'Atšaukti', style: 'cancel' },
-                                        { text: 'Pašalinti', style: 'destructive', onPress: () => removeItem(item.id) }
-                                    ]
-                                )}
-                            >
-                                {/* Image or checkmark */}
-                                <View style={styles.imageContainer}>
-                                    {item.isChecked ? (
-                                        <View style={styles.checkmarkContainer}>
-                                            <Ionicons name="checkmark" size={24} color="white" />
-                                        </View>
-                                    ) : item.imageUrl ? (
-                                        <Image
-                                            source={{ uri: item.imageUrl }}
-                                            style={styles.productImage}
-                                            resizeMode="contain"
-                                        />
-                                    ) : (
-                                        <View style={styles.imagePlaceholder}>
-                                            <Ionicons name="cube-outline" size={22} color="#bdbdbd" />
-                                        </View>
-                                    )}
-                                </View>
-
-                                <View style={styles.cardContent}>
-                                    <Text style={[styles.itemName, item.isChecked && styles.itemNameChecked]}>
-                                        {item.productName}
-                                    </Text>
-                                    <Text style={styles.itemQuantity}>
-                                        Kiekis: {item.quantity} {item.isWeighable ? 'kg' : 'vnt.'}
-                                    </Text>
-                                </View>
-
-                                {item.price && (
-                                    <Text style={[styles.itemPrice, item.isChecked && styles.itemPriceChecked]}>
-                                        €{item.price.toFixed(2)}
-                                    </Text>
-                                )}
-                            </TouchableOpacity>
-                        </Animated.View>
-                    )}
-                    ListFooterComponent={list?.status === 'active' ? (
+                    {menuVisible && (
                         <TouchableOpacity
-                            style={styles.addCard}
-                            onPress={() => setSearchVisible(true)}
+                            style={styles.menuOverlay}
+                            onPress={() => setMenuVisible(false)}
+                            activeOpacity={1}
                         >
-                            <View style={styles.addCardInner}>
-                                <Ionicons name="add-circle-outline" size={22} color="#2e7d32" />
-                                <Text style={styles.addCardText}>Pridėti prekę</Text>
+                            <View style={styles.menuContainer}>
+                                <TouchableOpacity
+                                    style={styles.menuItem}
+                                    onPress={() => {
+                                        setMenuVisible(false);
+                                        handleDuplicate();
+                                    }}
+                                >
+                                    <Ionicons name="copy-outline" size={18} color="#212121" />
+                                    <Text style={styles.menuItemText}>Nukopijuoti sąrašą</Text>
+                                </TouchableOpacity>
                             </View>
                         </TouchableOpacity>
-                    ) : null}
-                />
+                    )}
+                </View>
+                {quantityModal && (
+                    <View style={[styles.modalOverlay, { paddingBottom: keyboardHeight }]}>
+                        <TouchableOpacity
+                            style={StyleSheet.absoluteFillObject}
+                            activeOpacity={1}
+                            onPress={() => setQuantityModal(null)}
+                        />
+                        <View style={styles.modalContainer}>
+                            <Text style={styles.modalTitle}>{quantityModal.name}</Text>
 
-                {menuVisible && (
-                    <TouchableOpacity
-                        style={styles.menuOverlay}
-                        onPress={() => setMenuVisible(false)}
-                        activeOpacity={1}
-                    >
-                        <View style={styles.menuContainer}>
-                            <TouchableOpacity
-                                style={styles.menuItem}
-                                onPress={() => {
-                                    setMenuVisible(false);
-                                    handleDuplicate();
+                            {quantityModal.productId === null && (
+                                <TouchableOpacity
+                                    style={styles.weighableRow}
+                                    onPress={() => {
+                                        const next = !modalIsWeighable;
+                                        setModalIsWeighable(next);
+                                        setQuantityInput(next ? '0.5' : '1');
+                                    }}
+                                >
+                                    <View style={[styles.checkbox, modalIsWeighable ? styles.checkboxChecked : null]}>
+                                        {modalIsWeighable ? <Ionicons name="checkmark" size={14} color="white" /> : null}
+                                    </View>
+                                    <Text style={styles.weighableLabel}>Sveriamas</Text>
+                                </TouchableOpacity>
+                            )}
+
+                            <Text style={styles.modalLabel}>
+                                {modalIsWeighable ? 'Kiekis (kg)' : 'Kiekis (vnt.)'}
+                            </Text>
+                            <TextInput
+                                style={styles.modalInput}
+                                value={quantityInput}
+                                onChangeText={(text) => {
+                                    if (modalIsWeighable) {
+                                        if (/^\d*\.?\d*$/.test(text)) setQuantityInput(text);
+                                    } else {
+                                        if (/^\d*$/.test(text)) setQuantityInput(text);
+                                    }
                                 }}
-                            >
-                                <Ionicons name="copy-outline" size={18} color="#212121" />
-                                <Text style={styles.menuItemText}>Nukopijuoti sąrašą</Text>
-                            </TouchableOpacity>
+                                keyboardType={modalIsWeighable ? 'decimal-pad' : 'number-pad'}
+                                selectTextOnFocus
+                                autoFocus
+                            />
+                            <View style={styles.modalButtons}>
+                                <TouchableOpacity
+                                    style={styles.modalCancel}
+                                    onPress={() => setQuantityModal(null)}
+                                >
+                                    <Text style={styles.modalCancelText}>Atšaukti</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.modalConfirm}
+                                    onPress={() => {
+                                        const qty = parseFloat(quantityInput);
+                                        if (!qty || qty <= 0) {
+                                            Alert.alert('Klaida', 'Įveskite teisingą kiekį');
+                                            return;
+                                        }
+                                        const modal = quantityModal;
+                                        setQuantityModal(null);
+                                        addProduct(modal.productId, modal.name, qty, modalIsWeighable);
+                                    }}
+                                >
+                                    <Text style={styles.modalConfirmText}>Pridėti</Text>
+                                </TouchableOpacity>
+                            </View>
                         </View>
-                    </TouchableOpacity>
+                    </View>
                 )}
-            </View>
-        </>
+            </>
+        </GestureHandlerRootView>
     );
 }
 
@@ -404,33 +524,53 @@ const styles = StyleSheet.create({
     progressBar: { flex: 1, height: 8, backgroundColor: '#e0e0e0', borderRadius: 4, overflow: 'hidden' },
     progressFill: { height: '100%', backgroundColor: '#2e7d32', borderRadius: 4 },
     progressText: { fontSize: 13, color: '#757575', minWidth: 50, textAlign: 'right' },
-    list: { padding: 16, paddingBottom: 100 },
-    card: {
-        backgroundColor: 'white', borderRadius: 12, padding: 14, marginBottom: 10,
-        flexDirection: 'row', alignItems: 'center',
-        elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.1, shadowRadius: 2,
+list: {
+    paddingTop: 16,
+    paddingBottom: 100,
+},
+listContainer: {
+    backgroundColor: 'white',
+    marginBottom: 10,
+    elevation: 1,
+    shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05, shadowRadius: 2,
+},
+card: {
+    backgroundColor: 'white',
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 12,
+},
+    divider: {
+        height: 0.5,
+        backgroundColor: '#e0e0e0',
+        marginLeft: 68,
+    },
+
+    cardChecked: {
+        opacity: 0.5,
     },
     imageContainer: {
-        width: 44, height: 44, marginRight: 12,
+        width: 40, height: 40, flexShrink: 0,
     },
     productImage: {
-        width: 44, height: 44, borderRadius: 8,
+        width: 40, height: 40, borderRadius: 8,
     },
     imagePlaceholder: {
-        width: 44, height: 44, borderRadius: 8,
-        backgroundColor: '#f5f5f5', alignItems: 'center', justifyContent: 'center',
-        borderWidth: 1, borderColor: '#e0e0e0',
+        width: 40, height: 40, borderRadius: 8,
+        backgroundColor: '#f0faf0', alignItems: 'center', justifyContent: 'center',
     },
     checkmarkContainer: {
-        width: 44, height: 44, borderRadius: 8,
+        width: 40, height: 40, borderRadius: 8,
         backgroundColor: '#2e7d32', alignItems: 'center', justifyContent: 'center',
     },
     cardContent: { flex: 1 },
     itemName: { fontSize: 14, fontWeight: '600', color: '#212121' },
     itemNameChecked: { textDecorationLine: 'line-through', color: '#9e9e9e' },
     itemQuantity: { fontSize: 12, color: '#757575', marginTop: 2 },
-    itemPrice: { fontSize: 15, fontWeight: '700', color: '#2e7d32' },
+    itemPrice: { fontSize: 14, fontWeight: '500', color: '#2e7d32' },
     itemPriceChecked: { color: '#9e9e9e' },
     searchInput: { flex: 1, fontSize: 14, color: '#212121' },
     searchOverlay: {
@@ -466,7 +606,70 @@ const styles = StyleSheet.create({
     },
     menuItem: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, borderRadius: 10 },
     menuItemText: { fontSize: 14, color: '#212121' },
-    cardChecked: {
-        opacity: 0.7,
+    modalOverlay: {
+        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+        backgroundColor: 'rgba(0,0,0,0.4)',
+        justifyContent: 'center',
+        alignItems: 'center', zIndex: 200,
     },
+    modalContainer: {
+        backgroundColor: 'white',
+        borderRadius: 16,
+        padding: 24,
+        width: '90%',
+        elevation: 8,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2, shadowRadius: 8,
+    },
+    modalTitle: {
+        fontSize: 16, fontWeight: '700', color: '#212121', marginBottom: 12,
+    },
+    modalLabel: {
+        fontSize: 13, color: '#757575', marginBottom: 8,
+    },
+    modalInput: {
+        borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8,
+        padding: 12, fontSize: 18, color: '#212121', textAlign: 'center',
+        marginBottom: 16,
+    },
+    modalButtons: {
+        flexDirection: 'row', gap: 10,
+    },
+    modalCancel: {
+        flex: 1, padding: 12, borderRadius: 8,
+        borderWidth: 1, borderColor: '#e0e0e0', alignItems: 'center',
+    },
+    modalCancelText: {
+        fontSize: 14, color: '#757575', fontWeight: '600',
+    },
+    modalConfirm: {
+        flex: 1, padding: 12, borderRadius: 8,
+        backgroundColor: '#2e7d32', alignItems: 'center',
+    },
+    modalConfirmText: {
+        fontSize: 14, color: 'white', fontWeight: '600',
+    },
+    weighableRow: {
+        flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16,
+    },
+    weighableLabel: {
+        fontSize: 14, color: '#212121',
+    },
+    checkbox: {
+        width: 22, height: 22, borderRadius: 11,
+        borderWidth: 2, borderColor: '#2e7d32',
+        alignItems: 'center', justifyContent: 'center',
+    },
+    checkboxChecked: {
+        backgroundColor: '#2e7d32', borderColor: '#2e7d32',
+    },
+    deleteAction: {
+        backgroundColor: '#c62828',
+        justifyContent: 'center',
+        alignItems: 'center',
+        width: 80,
+        flexDirection: 'column',
+        flex: 1,
+    },
+    actionText: { color: 'white', fontSize: 11, fontWeight: '600' },
 });
