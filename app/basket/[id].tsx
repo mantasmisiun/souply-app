@@ -2,6 +2,7 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, 
 import { useRef, useState, useCallback } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../../config/api';
 
 interface BasketItem {
@@ -122,11 +123,45 @@ export default function BasketDetailScreen() {
             Alert.alert('Klaida', 'Nepavyko pašalinti produkto');
         }
     };
+    const handleCalculate = async () => {
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
+                method: 'POST',
+            });
+            const results = await res.json();
+            await AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(results));
+            router.push(`/basket/results/${id}`);
+        } catch (error) {
+            Alert.alert('Klaida', 'Nepavyko apskaičiuoti krepšelio');
+        }
+    };
+
+    const handleRevertToDraft = async () => {
+        Alert.alert(
+            'Grąžinti į juodraštį',
+            'Ar tikrai norite grąžinti krepšelį į juodraštį?',
+            [
+                { text: 'Atšaukti', style: 'cancel' },
+                {
+                    text: 'Grąžinti',
+                    onPress: async () => {
+                        await fetch(`${API_BASE_URL}/api/baskets/${id}/status`, {
+                            method: 'PATCH',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ status: 'draft' }),
+                        });
+                        await AsyncStorage.removeItem(`basket_results_${id}`);
+                        fetchBasket();
+                    }
+                }
+            ]
+        );
+    };
 
     if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color="#2e7d32" /></View>;
 
     const isDraft = basket?.status === 'draft';
-
+    console.log('basket status:', basket?.status, 'items:', items.length);
     return (
         <>
             <Stack.Screen options={{
@@ -141,21 +176,27 @@ export default function BasketDetailScreen() {
                         style={{ fontSize: 16, color: '#212121', minWidth: 200 }}
                     />
                 ) : undefined,
-                headerRight: () => basket?.status === 'draft' ? (
-                    <TouchableOpacity
-                        onPress={() => {
-                            if (editingName) {
-                                setEditingName(false);
-                            } else {
-                                setEditingName(true);
-                                setTimeout(() => nameInputRef.current?.focus(), 50);
-                            }
-                        }}
-                        style={{ marginRight: 12 }}
-                    >
-                        <Ionicons name={editingName ? 'close' : 'pencil-outline'} size={20} color="#2e7d32" />
-                    </TouchableOpacity>
-                ) : undefined,
+                headerRight: () => (
+                    <View style={{ flexDirection: 'row', gap: 8, marginRight: 12 }}>
+                        {basket?.status === 'draft' && (
+                            <TouchableOpacity onPress={() => {
+                                if (editingName) {
+                                    setEditingName(false);
+                                } else {
+                                    setEditingName(true);
+                                    setTimeout(() => nameInputRef.current?.focus(), 50);
+                                }
+                            }}>
+                                <Ionicons name={editingName ? 'close' : 'pencil-outline'} size={20} color="#2e7d32" />
+                            </TouchableOpacity>
+                        )}
+                        {basket?.status === 'compared' && (
+                            <TouchableOpacity onPress={handleRevertToDraft}>
+                                <Ionicons name="create-outline" size={20} color="#757575" />
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                ),
             }} />
             <View style={styles.container}>
                 <FlatList
@@ -167,6 +208,16 @@ export default function BasketDetailScreen() {
                             <Text style={styles.emptyText}>Krepšelis tuščias</Text>
                             <Text style={styles.emptySubText}>Pridėkite produktų naršydami katalogą</Text>
                         </View>
+                    }
+                    ListFooterComponent={
+                        basket?.status === 'draft' && items.length > 0 ? (
+                            <View style={styles.footer}>
+                                <TouchableOpacity style={styles.calculateButton} onPress={handleCalculate}>
+                                    <Ionicons name="calculator-outline" size={20} color="white" />
+                                    <Text style={styles.calculateButtonText}>Apskaičiuoti</Text>
+                                </TouchableOpacity>
+                            </View>
+                        ) : null
                     }
                     renderItem={({ item }) => (
                         <View style={styles.card}>
@@ -223,6 +274,23 @@ export default function BasketDetailScreen() {
                         </View>
                     )}
                 />
+                {basket?.status === 'compared' && (
+                    <View style={styles.bottomBar}>
+                        <TouchableOpacity
+                            style={styles.showResultsButton}
+                            onPress={() => router.push(`/basket/results/${id}`)}
+                        >
+                            <Ionicons name="list-outline" size={20} color="white" />
+                            <Text style={styles.showResultsText}>Rodyti rezultatus</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={styles.recalculateIconButton}
+                            onPress={handleCalculate}
+                        >
+                            <Ionicons name="refresh-outline" size={22} color="#2e7d32" />
+                        </TouchableOpacity>
+                    </View>
+                )}
             </View>
         </>
     );
@@ -262,4 +330,47 @@ const styles = StyleSheet.create({
         borderBottomWidth: 1, borderBottomColor: '#e0e0e0',
         paddingVertical: 2,
     },
+    calculateButton: {
+        backgroundColor: '#2e7d32', borderRadius: 12, padding: 16,
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    },
+    calculateButtonText: { color: 'white', fontWeight: '700', fontSize: 16 },
+    recalculateButton: {
+        borderWidth: 1, borderColor: '#2e7d32', borderRadius: 12, padding: 16,
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    },
+    recalculateButtonText: { color: '#2e7d32', fontWeight: '600', fontSize: 15 },
+    draftButton: {
+        borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 12, padding: 16,
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+    },
+    draftButtonText: { color: '#757575', fontWeight: '600', fontSize: 15 },
+        bottomBar: {
+        flexDirection: 'row',
+        padding: 12,
+        backgroundColor: 'white',
+        borderTopWidth: 1,
+        borderTopColor: '#e0e0e0',
+        gap: 10,
+    },
+    showResultsButton: {
+        flex: 1,
+        backgroundColor: '#2e7d32',
+        borderRadius: 12,
+        padding: 14,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+    },
+    showResultsText: { color: 'white', fontWeight: '700', fontSize: 15 },
+    recalculateIconButton: {
+        width: 50,
+        borderWidth: 1,
+        borderColor: '#2e7d32',
+        borderRadius: 12,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    footer: { padding: 16 },
 });
