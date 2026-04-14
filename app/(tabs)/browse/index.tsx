@@ -22,7 +22,19 @@ interface Product {
     name: string;
     categoryId: number;
 }
-
+const CATEGORY_ICONS: Record<string, string> = {
+    'Daržovės ir vaisiai': '🥦',
+    'Pieno gaminiai, kiaušiniai ir majonezas': '🥛',
+    'Duonos gaminiai ir konditerija': '🍞',
+    'Mėsa, žuvis ir kulinarija': '🥩',
+    'Bakalėja': '🫙',
+    'Šaldytas maistas': '🧊',
+    'Gėrimai': '🥤',
+    'Kūdikių ir vaikų prekės': '🍼',
+    'Kosmetika ir higiena': '🧴',
+    'Švaros ir gyvūnų prekės': '🧹',
+    'Namai ir laisvalaikis': '🏠',
+};
 export default function BrowseIndex() {
     const [l1Categories, setL1Categories] = useState<Category[]>([]);
     const [l2Map, setL2Map] = useState<Record<number, Category[]>>({});
@@ -152,6 +164,7 @@ export default function BrowseIndex() {
                                     style={styles.l1Row}
                                     onPress={() => toggleL1(item.id)}
                                 >
+                                    <Text style={styles.l1Icon}>{CATEGORY_ICONS[item.name] || '📦'}</Text>
                                     <Text style={styles.l1Text}>{item.name}</Text>
                                     <Ionicons
                                         name={isExpanded ? 'chevron-up' : 'chevron-down'}
@@ -247,4 +260,8 @@ const styles = StyleSheet.create({
     },
     productName: { flex: 1, fontSize: 14, color: '#212121' },
     emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: '#757575' },
+    l1Icon: {
+        fontSize: 20,
+        marginRight: 12,
+    },
 });

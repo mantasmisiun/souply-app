@@ -1,4 +1,4 @@
-import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, ActivityIndicator, Image } from 'react-native';
 import { useEffect, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -16,6 +16,7 @@ interface Product {
     id: number;
     name: string;
     brandName: string | null;
+    imageUrl: string | null;
 }
 
 export default function CategoryScreen() {
@@ -25,7 +26,6 @@ export default function CategoryScreen() {
     const [selectedL3, setSelectedL3] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
     const [loadingProducts, setLoadingProducts] = useState(false);
-    const router = useRouter();
     const { draftBasketId, setDraftBasketId } = useBasketState();
 
     useEffect(() => {
@@ -104,25 +104,31 @@ export default function CategoryScreen() {
                             data={products}
                             keyExtractor={item => item.id.toString()}
                             contentContainerStyle={styles.list}
+                            numColumns={2}
+                            columnWrapperStyle={styles.row}
                             ListEmptyComponent={
                                 <Text style={styles.emptyText}>Ši kategorija neturi produktų</Text>
                             }
                             renderItem={({ item }) => (
-                                <View style={styles.productRow}>
-                                    <View style={styles.productIcon}>
-                                        <Ionicons name="cube-outline" size={20} color="#bdbdbd" />
+                                <View style={styles.productCard}>
+                                    <View style={styles.productImageContainer}>
+                                        {item.imageUrl ? (
+                                            <Image source={{ uri: item.imageUrl }} style={styles.productImage} resizeMode="contain" />
+                                        ) : (
+                                            <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
+                                        )}
                                     </View>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.productName}>{item.name}</Text>
-                                        {item.brandName && <Text style={styles.brandText}>{item.brandName}</Text>}
+                                    <View style={styles.productInfo}>
+                                        <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
                                     </View>
                                     <TouchableOpacity
+                                        style={styles.addButton}
                                         onPress={async () => {
                                             const result = await addProductToBasket(item.id, draftBasketId, setDraftBasketId);
                                             Alert.alert(result.success ? 'Pridėta' : 'Klaida', result.message);
                                         }}
                                     >
-                                        <Ionicons name="add-circle-outline" size={24} color="#2e7d32" />
+                                        <Text style={styles.addButtonText}>Į krepšelį</Text>
                                     </TouchableOpacity>
                                 </View>
                             )}
@@ -170,8 +176,58 @@ const styles = StyleSheet.create({
         fontWeight: '600',
     },
     list: {
-        padding: 16,
+        padding: 12,
     },
+    row: {
+        gap: 12,
+        marginBottom: 12,
+    },
+    productCard: {
+        flex: 1,
+        maxWidth: '50%',
+        backgroundColor: 'white',
+        borderRadius: 12,
+        padding: 12,
+        alignItems: 'center',
+        elevation: 1,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05, shadowRadius: 2,
+    },
+    productImageContainer: {
+        width: '100%',
+        height: 130,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 8,
+    },
+    productImage: {
+        width: '100%',
+        height: '100%',
+    },
+    productInfo: {
+        flex: 1,
+        width: '100%',
+        marginBottom: 10,
+    },
+    productName: {
+        fontSize: 13,
+        color: '#212121',
+        lineHeight: 18,
+    },
+    addButton: {
+        width: '100%',
+        backgroundColor: '#2e7d32',
+        borderRadius: 8,
+        paddingVertical: 10,
+        alignItems: 'center',
+    },
+    addButtonText: {
+        color: 'white',
+        fontSize: 13,
+        fontWeight: '600',
+    },
+    brandText: { fontSize: 12, color: '#9e9e9e', marginTop: 2 },
+    emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: '#757575' },
     productRow: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -185,7 +241,4 @@ const styles = StyleSheet.create({
         backgroundColor: '#f5f5f5',
         alignItems: 'center', justifyContent: 'center',
     },
-    productName: { fontSize: 14, color: '#212121', fontWeight: '500' },
-    brandText: { fontSize: 12, color: '#9e9e9e', marginTop: 2 },
-    emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: '#757575' },
 });
