@@ -27,6 +27,7 @@ export default function CategoryScreen() {
     const [loading, setLoading] = useState(true);
     const [loadingProducts, setLoadingProducts] = useState(false);
     const { draftBasketId, setDraftBasketId } = useBasketState();
+    const [basketQuantities, setBasketQuantities] = useState<{[productId: number]: number}>({});
 
     useEffect(() => {
         const fetchData = async () => {
@@ -109,29 +110,94 @@ export default function CategoryScreen() {
                             ListEmptyComponent={
                                 <Text style={styles.emptyText}>Ši kategorija neturi produktų</Text>
                             }
-                            renderItem={({ item }) => (
-                                <View style={styles.productCard}>
-                                    <View style={styles.productImageContainer}>
-                                        {item.imageUrl ? (
-                                            <Image source={{ uri: item.imageUrl }} style={styles.productImage} resizeMode="contain" />
+                            renderItem={({ item }) => {
+                                const quantity = basketQuantities[item.id] ?? 0;
+                                return (
+                                    <View style={styles.productCard}>
+                                        <View style={styles.productImageContainer}>
+                                            {item.imageUrl ? (
+                                                <Image source={{ uri: item.imageUrl }} style={styles.productImage} resizeMode="contain" />
+                                            ) : (
+                                                <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
+                                            )}
+                                        </View>
+                                        <View style={styles.productInfo}>
+                                            <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
+                                        </View>
+                                        {quantity === 0 ? (
+                                            <TouchableOpacity
+                                                style={styles.addButton}
+                                                onPress={async () => {
+                                                    const result = await addProductToBasket(item.id, draftBasketId, setDraftBasketId);
+                                                    if (result.success) {
+                                                        setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
+                                                    }
+                                                }}
+                                            >
+                                                <Text style={styles.addButtonText}>Į krepšelį</Text>
+                                            </TouchableOpacity>
                                         ) : (
-                                            <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
+                                            <View style={styles.quantityControl}>
+                                                <TouchableOpacity
+                                                    style={styles.qtyButton}
+                                                    onPress={async () => {
+                                                        const newQty = quantity - 1;
+                                                        setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
+                                                        if (newQty === 0) {
+                                                            // Remove from basket
+                                                            try {
+                                                                const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
+                                                                const items = await res.json();
+                                                                const basketItem = items.find((i: any) => i.productId === item.id);
+                                                                if (basketItem) {
+                                                                    await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
+                                                                }
+                                                            } catch {}
+                                                        } else {
+                                                            try {
+                                                                const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
+                                                                const items = await res.json();
+                                                                const basketItem = items.find((i: any) => i.productId === item.id);
+                                                                if (basketItem) {
+                                                                    await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
+                                                                        method: 'PUT',
+                                                                        headers: { 'Content-Type': 'application/json' },
+                                                                        body: JSON.stringify({ quantity: newQty }),
+                                                                    });
+                                                                }
+                                                            } catch {}
+                                                        }
+                                                    }}
+                                                >
+                                                    <Ionicons name="remove" size={16} color="#2e7d32" />
+                                                </TouchableOpacity>
+                                                <Text style={styles.qtyText}>{quantity}</Text>
+                                                <TouchableOpacity
+                                                    style={styles.qtyButton}
+                                                    onPress={async () => {
+                                                        const newQty = quantity + 1;
+                                                        setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
+                                                        try {
+                                                            const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
+                                                            const items = await res.json();
+                                                            const basketItem = items.find((i: any) => i.productId === item.id);
+                                                            if (basketItem) {
+                                                                await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
+                                                                    method: 'PUT',
+                                                                    headers: { 'Content-Type': 'application/json' },
+                                                                    body: JSON.stringify({ quantity: newQty }),
+                                                                });
+                                                            }
+                                                        } catch {}
+                                                    }}
+                                                >
+                                                    <Ionicons name="add" size={16} color="#2e7d32" />
+                                                </TouchableOpacity>
+                                            </View>
                                         )}
                                     </View>
-                                    <View style={styles.productInfo}>
-                                        <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
-                                    </View>
-                                    <TouchableOpacity
-                                        style={styles.addButton}
-                                        onPress={async () => {
-                                            const result = await addProductToBasket(item.id, draftBasketId, setDraftBasketId);
-                                            Alert.alert(result.success ? 'Pridėta' : 'Klaida', result.message);
-                                        }}
-                                    >
-                                        <Text style={styles.addButtonText}>Į krepšelį</Text>
-                                    </TouchableOpacity>
-                                </View>
-                            )}
+                                );
+                            }}
                         />
                     )}
                 </View>
@@ -240,5 +306,26 @@ const styles = StyleSheet.create({
         width: 36, height: 36, borderRadius: 8,
         backgroundColor: '#f5f5f5',
         alignItems: 'center', justifyContent: 'center',
+    },
+    quantityControl: {
+        width: '100%',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        borderWidth: 1,
+        borderColor: '#2e7d32',
+        borderRadius: 8,
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+    },
+    qtyButton: {
+        padding: 2,
+    },
+    qtyText: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: '#2e7d32',
+        minWidth: 20,
+        textAlign: 'center',
     },
 });
