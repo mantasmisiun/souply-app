@@ -107,7 +107,6 @@ export default function BasketResultsScreen() {
             const { getUserId } = await import('../../../config/user');
             const userId = await getUserId();
 
-            // Create shopping list with basketId
             const listRes = await fetch(`${API_BASE_URL}/api/shopping-lists`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -116,15 +115,9 @@ export default function BasketResultsScreen() {
             const listData = await listRes.json();
             const listId = listData.id;
 
-            // Navigate immediately
-            router.replace('/(tabs)/shoppingList' as any);
-            setTimeout(() => {
-                router.push(`/shopping-list/${listId}?expectedCount=${selectedStore.items.length}` as any);
-            }, 100);
-
-            // Add items in background
-            for (const item of selectedStore.items) {
-                await fetch(`${API_BASE_URL}/api/list-items`, {
+            // Add ALL items BEFORE navigating
+            await Promise.all(selectedStore.items.map(item =>
+                fetch(`${API_BASE_URL}/api/list-items`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
@@ -133,8 +126,15 @@ export default function BasketResultsScreen() {
                         quantity: item.quantity,
                         price: item.effectivePrice,
                     }),
-                });
-            }
+                })
+            ));
+
+            // Navigate only after all items are saved
+            router.replace('/(tabs)/shoppingList' as any);
+            setTimeout(() => {
+                router.push(`/shopping-list/${listId}?expectedCount=${selectedStore.items.length}` as any);
+            }, 100);
+
         } catch (error) {
             Alert.alert('Klaida', 'Nepavyko sukurti pirkinių sąrašo');
         }
