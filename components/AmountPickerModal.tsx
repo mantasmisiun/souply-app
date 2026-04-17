@@ -25,28 +25,21 @@ export default function AmountPickerModal({
     const step = isKg ? 0.1 : 1;
     const defaultAmount = isKg ? 1.0 : 1;
     const [amount, setAmount] = useState(defaultAmount);
- 
-    const displayUnit = isKg ? 'kg' : unit;
     const displayAmount = isKg ? amount.toFixed(1) : amount.toString();
- 
+    const [inputText, setInputText] = useState(isKg ? '1.0' : '1');
+    const displayUnit = isKg ? 'kg' : unit;
     const decrease = () => {
-        const newAmount = Math.round((amount - step) * 10) / 10;
+        const current = parseFloat(inputText) || 0;
+        const newAmount = Math.round((current - step) * 10) / 10;
         if (newAmount >= step) {
-            setAmount(newAmount);
+            setInputText(isKg ? newAmount.toFixed(1) : newAmount.toString());
         }
     };
- 
+
     const increase = () => {
-        const newAmount = Math.round((amount + step) * 10) / 10;
-        setAmount(newAmount);
-    };
- 
-    const handleTextChange = (text: string) => {
-        const cleaned = text.replace(',', '.');
-        const parsed = parseFloat(cleaned);
-        if (!isNaN(parsed) && parsed > 0) {
-            setAmount(Math.round(parsed * 10) / 10);
-        }
+        const current = parseFloat(inputText) || 0;
+        const newAmount = Math.round((current + step) * 10) / 10;
+        setInputText(isKg ? newAmount.toFixed(1) : newAmount.toString());
     };
  
     return (
@@ -76,8 +69,8 @@ export default function AmountPickerModal({
                         <View style={styles.inputContainer}>
                             <TextInput
                                 style={styles.input}
-                                value={displayAmount}
-                                onChangeText={handleTextChange}
+                                value={inputText}
+                                onChangeText={setInputText}
                                 keyboardType="decimal-pad"
                                 selectTextOnFocus
                             />
@@ -99,7 +92,12 @@ export default function AmountPickerModal({
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={styles.confirmButton}
-                            onPress={() => onConfirm(amount)}
+                            onPress={() => {
+                                const parsed = parseFloat(inputText.replace(',', '.'));
+                                if (!isNaN(parsed) && parsed > 0) {
+                                    onConfirm(Math.round(parsed * 10) / 10);
+                                }
+                            }}
                         >
                             <Text style={styles.confirmText}>Pridėti</Text>
                         </TouchableOpacity>

@@ -55,6 +55,29 @@ export default function CategoryScreen() {
         };
         fetchData();
     }, [categoryId]);
+    useEffect(() => {
+        const loadBasketQuantities = async () => {
+            // Init draft basket if not set
+            if (!draftBasketId) {
+                await useBasketState.getState().initDraftBasket();
+            }
+            const currentDraftId = useBasketState.getState().draftBasketId;
+            if (!currentDraftId) return;
+
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
+                const items = await res.json();
+                if (Array.isArray(items)) {
+                    const quantities: {[productId: number]: number} = {};
+                    items.forEach((item: any) => {
+                        quantities[item.productId] = parseFloat(item.quantity);
+                    });
+                    setBasketQuantities(quantities);
+                }
+            } catch {}
+        };
+        loadBasketQuantities();
+    }, [draftBasketId]);
 
     const selectL3 = async (l3Id: number | null) => {
         setSelectedL3(l3Id);
