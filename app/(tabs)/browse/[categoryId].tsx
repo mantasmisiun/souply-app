@@ -6,6 +6,7 @@ import { API_BASE_URL } from '../../../config/api';
 import { Alert } from 'react-native';
 import { useBasketState } from '../../../state/basketState';
 import { addProductToBasket } from '../../../utils/basketUtils';
+import AmountPickerModal from '../../../components/AmountPickerModal';
 
 interface Category {
     id: number;
@@ -17,6 +18,10 @@ interface Product {
     name: string;
     brandName: string | null;
     imageUrl: string | null;
+    minAmount: number | null;
+    maxAmount: number | null;
+    unit: string | null;
+    hasWeighable: boolean;
 }
 
 export default function CategoryScreen() {
@@ -29,6 +34,10 @@ export default function CategoryScreen() {
     const { draftBasketId, setDraftBasketId } = useBasketState();
     const [basketQuantities, setBasketQuantities] = useState<{[productId: number]: number}>({});
 
+    const [amountModal, setAmountModal] = useState<{
+        visible: boolean;
+        product: Product | null;
+    }>({ visible: false, product: null });
     useEffect(() => {
         const fetchData = async () => {
             setLoading(true);
@@ -37,7 +46,7 @@ export default function CategoryScreen() {
                 const subData = await subRes.json();
                 setL3Categories(Array.isArray(subData) ? subData : []);
 
-                const prodRes = await fetch(`${API_BASE_URL}/api/categories/${categoryId}/all-products`);
+                const prodRes = await fetch(`${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts`);
                 const prodData = await prodRes.json();
                 setProducts(Array.isArray(prodData) ? prodData : []);
             } finally {
@@ -52,8 +61,8 @@ export default function CategoryScreen() {
         setLoadingProducts(true);
         try {
             const url = l3Id
-                ? `${API_BASE_URL}/api/categories/${l3Id}/products`
-                : `${API_BASE_URL}/api/categories/${categoryId}/all-products`;
+                ? `${API_BASE_URL}/api/categories/${l3Id}/products-with-amounts`
+                : `${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts`;
             const res = await fetch(url);
             const data = await res.json();
             setProducts(Array.isArray(data) ? data : []);
@@ -123,14 +132,33 @@ export default function CategoryScreen() {
                                         </View>
                                         <View style={styles.productInfo}>
                                             <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
+                                            <Text style={styles.amountText}>
+                                                {item.minAmount != null && item.maxAmount != null ? (() => {
+                                                    const min = Number(item.minAmount);
+                                                    const max = Number(item.maxAmount);
+                                                    const formatAmount = (val: number) => 
+                                                        val >= 1000 ? `${val / 1000} kg` : `${val} g`;
+                                                    return min === max 
+                                                        ? formatAmount(min)
+                                                        : `${formatAmount(min)} - ${formatAmount(max)}`;
+                                                })() : ''}
+                                            </Text>
                                         </View>
                                         {quantity === 0 ? (
                                             <TouchableOpacity
                                                 style={styles.addButton}
                                                 onPress={async () => {
-                                                    const result = await addProductToBasket(item.id, draftBasketId, setDraftBasketId);
-                                                    if (result.success) {
-                                                        setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
+                                                    const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
+                                                    
+                                                    if (hasRange) {
+                                                        // Different amounts across stores — show popup
+                                                        setAmountModal({ visible: true, product: item });
+                                                    } else {
+                                                        // All same amount or no amount info — add directly with quantity 1
+                                                        const result = await addProductToBasket(item.id, draftBasketId, setDraftBasketId);
+                                                        if (result.success) {
+                                                            setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
+                                                        }
                                                     }
                                                 }}
                                             >
@@ -141,10 +169,12 @@ export default function CategoryScreen() {
                                                 <TouchableOpacity
                                                     style={styles.qtyButton}
                                                     onPress={async () => {
-                                                        const newQty = quantity - 1;
-                                                        setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
-                                                        if (newQty === 0) {
-                                                            // Remove from basket
+                                                        const hasRange = item.minAmount !== null && item.maxAmount !== null && Number(item.minAmount) !== Number(item.maxAmount);
+                                                        const step = hasRange ? 0.1 : 1;
+                                                        const newQty = Math.round((quantity - step) * 10) / 10;
+                                                        
+                                                        if (newQty <= 0) {
+                                                            setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
                                                             try {
                                                                 const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
                                                                 const items = await res.json();
@@ -154,6 +184,7 @@ export default function CategoryScreen() {
                                                                 }
                                                             } catch {}
                                                         } else {
+                                                            setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
                                                             try {
                                                                 const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
                                                                 const items = await res.json();
@@ -171,11 +202,15 @@ export default function CategoryScreen() {
                                                 >
                                                     <Ionicons name="remove" size={16} color="#2e7d32" />
                                                 </TouchableOpacity>
-                                                <Text style={styles.qtyText}>{quantity}</Text>
+                                                <Text style={styles.qtyText}>
+                                                    {Number.isInteger(quantity) ? quantity : quantity.toFixed(1)}
+                                                </Text>
                                                 <TouchableOpacity
                                                     style={styles.qtyButton}
                                                     onPress={async () => {
-                                                        const newQty = quantity + 1;
+                                                        const hasRange = item.minAmount !== null && item.maxAmount !== null && Number(item.minAmount) !== Number(item.maxAmount);
+                                                        const step = hasRange ? 0.1 : 1;
+                                                        const newQty = Math.round((quantity + step) * 10) / 10;
                                                         setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
                                                         try {
                                                             const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
@@ -202,6 +237,31 @@ export default function CategoryScreen() {
                     )}
                 </View>
             </View>
+            <AmountPickerModal
+                visible={amountModal.visible}
+                productName={amountModal.product?.name || ''}
+                minAmount={amountModal.product?.minAmount || 0}
+                maxAmount={amountModal.product?.maxAmount || 0}
+                unit={amountModal.product?.unit || 'g'}
+                onCancel={() => setAmountModal({ visible: false, product: null })}
+                onConfirm={async (amount) => {
+                    if (amountModal.product) {
+                        const result = await addProductToBasket(
+                            amountModal.product.id,
+                            draftBasketId,
+                            setDraftBasketId,
+                            amount
+                        );
+                        if (result.success) {
+                            setBasketQuantities(prev => ({
+                                ...prev,
+                                [amountModal.product!.id]: amount,
+                            }));
+                        }
+                    }
+                    setAmountModal({ visible: false, product: null });
+                }}
+            />
         </>
     );
 }
@@ -327,5 +387,10 @@ const styles = StyleSheet.create({
         color: '#2e7d32',
         minWidth: 20,
         textAlign: 'center',
+    },
+    amountText: {
+        fontSize: 12,
+        color: '#9e9e9e',
+        marginTop: 2,
     },
 });

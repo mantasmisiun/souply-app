@@ -15,6 +15,11 @@ interface ItemResult {
     effectivePrice: number | null;
     isApproximated: boolean;
     isFallback: boolean;
+    isWeighable: boolean;
+    packsNeeded: number | null;
+    totalPrice: number | null;
+    storeProductName: string | null;
+    storeProductId: number | null;
 }
 
 interface StoreResult {
@@ -115,7 +120,6 @@ export default function BasketResultsScreen() {
             const listData = await listRes.json();
             const listId = listData.id;
 
-            // Add ALL items BEFORE navigating
             await Promise.all(selectedStore.items.map(item =>
                 fetch(`${API_BASE_URL}/api/list-items`, {
                     method: 'POST',
@@ -123,8 +127,11 @@ export default function BasketResultsScreen() {
                     body: JSON.stringify({
                         listId,
                         productId: item.productId,
-                        quantity: item.quantity,
-                        price: item.effectivePrice,
+                        storeProductId: item.storeProductId || null,
+                        quantity: item.storeProductId 
+                            ? (item.isWeighable ? item.quantity : item.packsNeeded || item.quantity)
+                            : item.quantity,
+                        price: item.totalPrice,
                     }),
                 })
             ));

@@ -4,8 +4,9 @@ import { getUserId } from '../config/user';
 export const addProductToBasket = async (
     productId: number,
     draftBasketId: number | null,
-    setDraftBasketId: (id: number) => void
-): Promise<{ success: boolean; message: string }> => {
+    setDraftBasketId: (id: number) => void,
+    quantity: number = 1   // ADD this parameter with default
+) => {
     try {
         const userId = await getUserId();
         let basketId = draftBasketId;
@@ -26,7 +27,7 @@ export const addProductToBasket = async (
         const res = await fetch(`${API_BASE_URL}/api/basket-items`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ basketId, productId, quantity: 1 }),
+            body: JSON.stringify({ basketId, productId, quantity }),
         });
 
         if (res.status === 409) {

@@ -28,9 +28,10 @@ interface ShoppingListItem {
     quantity: number;
     price: number | null;
     isChecked: boolean;
-    customName: string | null;
     imageUrl: string | null;
     isWeighable: boolean;
+    unit?: string;
+    storeProductId?: number | null;
 }
 function ShoppingListItemCard({ item, onToggle, onRemove }: {
     item: ShoppingListItem;
@@ -98,7 +99,11 @@ function ShoppingListItemCard({ item, onToggle, onRemove }: {
                             {item.productName}
                         </Text>
                         <Text style={styles.itemQuantity}>
-                            Kiekis: {item.quantity} {item.isWeighable ? 'kg' : 'vnt.'}
+                            Kiekis: {item.storeProductId 
+                                ? `${item.quantity} ${item.unit}` 
+                                : (item.quantity < 10 
+                                    ? `${item.quantity} kg` 
+                                    : `${item.quantity} g`)}
                         </Text>
                     </View>
                     {item.price && (
@@ -122,7 +127,13 @@ export default function ShoppingListScreen() {
     const [visibleCount, setVisibleCount] = useState(0);
     const [menuVisible, setMenuVisible] = useState(false);
     const { id, expectedCount } = useLocalSearchParams<{ id: string; expectedCount: string }>();
-    const [quantityModal, setQuantityModal] = useState<{ productId: number | null; name: string; isWeighable: boolean } | null>(null);
+    const [quantityModal, setQuantityModal] = useState<{ 
+        productId: number | null; 
+        name: string; 
+        isWeighable: boolean; 
+        storeProductId: number | null;
+        imageUrl: string | null;
+    } | null>(null);
     const [quantityInput, setQuantityInput] = useState('1');
     const [modalIsWeighable, setModalIsWeighable] = useState(false);
     const [keyboardHeight, setKeyboardHeight] = useState(0);
@@ -217,10 +228,10 @@ export default function ShoppingListScreen() {
             );
         }
     };
-    const promptQuantity = (productId: number | null, name: string, isWeighable: boolean) => {
+    const promptQuantity = (productId: number | null, name: string, isWeighable: boolean, storeProductId: number | null = null, imageUrl: string | null = null) => {
         setModalIsWeighable(isWeighable);
         setQuantityInput(isWeighable ? '0.5' : '1');
-        setQuantityModal({ productId, name, isWeighable });
+        setQuantityModal({ productId, name, isWeighable, storeProductId, imageUrl });
     };
     const removeItem = async (itemId: number) => {
         try {
@@ -241,7 +252,7 @@ export default function ShoppingListScreen() {
         } catch {}
     };
 
-    const addProduct = async (productId: number | null, name: string, quantity: number, isWeighable: boolean) => {
+    const addProduct = async (productId: number | null, name: string, quantity: number, isWeighable: boolean, storeProductId: number | null = null, imageUrl: string | null = null) => {
         const existing = items.find(i => i.productId === productId && productId !== null);
         if (existing) {
             Alert.alert('Jau sąraše', `"${name}" jau yra pirkinių sąraše`);
@@ -254,23 +265,23 @@ export default function ShoppingListScreen() {
                 body: JSON.stringify({
                     listId: Number(id),
                     productId,
+                    storeProductId,
                     quantity,
-                    customName: productId ? null : name,
                 }),
             });
             const data = await res.json();
-
             const newItem: ShoppingListItem = {
                 id: data.id,
                 listId: Number(id),
                 productId,
+                storeProductId,
                 productName: name,
                 quantity,
                 price: null,
                 isChecked: false,
-                customName: productId ? null : name,
-                imageUrl: null,
+                imageUrl: imageUrl,
                 isWeighable,
+                unit: isWeighable ? 'kg' : 'vnt.',
             };
             setItems(prev => [...prev, newItem]);
             setVisibleCount(prev => prev + 1);
@@ -359,7 +370,7 @@ export default function ShoppingListScreen() {
                                                         Alert.alert('Jau sąraše', `"${product.storeProductName}" jau yra pirkinių sąraše`);
                                                         return;
                                                     }
-                                                    promptQuantity(product.productId, product.storeProductName, product.isWeighable === 1 || product.isWeighable === true);
+                                                    promptQuantity(product.productId, product.storeProductName, product.isWeighable === 1 || product.isWeighable === true, product.id, product.imageUrl);
                                                 }}
                                             >
                                                 {alreadyInList && (
@@ -503,7 +514,7 @@ export default function ShoppingListScreen() {
                                         }
                                         const modal = quantityModal;
                                         setQuantityModal(null);
-                                        addProduct(modal.productId, modal.name, qty, modalIsWeighable);
+                                        addProduct(modal.productId, modal.name, qty, modalIsWeighable, modal.storeProductId, modal.imageUrl);
                                     }}
                                 >
                                     <Text style={styles.modalConfirmText}>Pridėti</Text>
