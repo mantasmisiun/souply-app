@@ -16,6 +16,7 @@ interface StoreProduct {
     isWeighable: number;
     chainName: string;
     logoUrl: string;
+    imageUrl: string | null;
 }
 
 interface PricePoint {
@@ -384,7 +385,7 @@ export default function ProductDetailScreen() {
                                     Visos parduotuvės
                                 </Text>
                             </TouchableOpacity>
-                            <ScrollView style={styles.storeList}>
+                            <ScrollView style={styles.storeList} nestedScrollEnabled={true}>
                                 {filteredStores.map(item => (
                                     <TouchableOpacity
                                         key={item.id}
@@ -422,8 +423,8 @@ export default function ProductDetailScreen() {
                         return (
                             <View key={sp.id} style={styles.spCard}>
                                 <View style={styles.spLeft}>
-                                    {product.imageUrl ? (
-                                        <Image source={{ uri: product.imageUrl }} style={styles.spImage} resizeMode="contain" />
+                                    {(sp.imageUrl || product?.imageUrl) ? (
+                                        <Image source={{ uri: (sp.imageUrl || product?.imageUrl)! }} style={styles.spImage} resizeMode="contain" />
                                     ) : (
                                         <View style={styles.spImagePlaceholder}>
                                             <Ionicons name="cube-outline" size={24} color="#e0e0e0" />
