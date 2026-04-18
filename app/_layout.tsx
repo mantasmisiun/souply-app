@@ -17,6 +17,7 @@ export default function RootLayout() {
       <Stack>
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
+        <Stack.Screen name="product" options={{ headerShown: false }} />
         <Stack.Screen name="basket/[id]" options={{ title: 'Krepšelis' }} />
         <Stack.Screen name="basket/results/[id]" options={{ title: 'Rezultatai' }} />
         <Stack.Screen name="basket/results/store" options={{ title: 'Parduotuvė' }} />

@@ -33,7 +33,7 @@ export default function CategoryScreen() {
     const [loadingProducts, setLoadingProducts] = useState(false);
     const { draftBasketId, setDraftBasketId } = useBasketState();
     const [basketQuantities, setBasketQuantities] = useState<{[productId: number]: number}>({});
-
+    const router = useRouter();
     const [amountModal, setAmountModal] = useState<{
         visible: boolean;
         product: Product | null;
@@ -146,27 +146,31 @@ export default function CategoryScreen() {
                                 const quantity = basketQuantities[item.id] ?? 0;
                                 return (
                                     <View style={styles.productCard}>
-                                        <View style={styles.productImageContainer}>
+                                        <TouchableOpacity 
+                                            onPress={() => router.push(`/product/${item.id}` as any)}
+                                            style={styles.productImageContainer}
+                                            activeOpacity={0.7}
+                                        >
                                             {item.imageUrl ? (
                                                 <Image source={{ uri: item.imageUrl }} style={styles.productImage} resizeMode="contain" />
                                             ) : (
                                                 <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
                                             )}
-                                        </View>
+                                        </TouchableOpacity>
                                         <View style={styles.productInfo}>
                                             <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
-                                            <Text style={styles.amountText}>
-                                                {item.minAmount != null && item.maxAmount != null ? (() => {
-                                                    const min = Number(item.minAmount);
-                                                    const max = Number(item.maxAmount);
-                                                    const formatAmount = (val: number) => 
-                                                        val >= 1000 ? `${val / 1000} kg` : `${val} g`;
-                                                    return min === max 
-                                                        ? formatAmount(min)
-                                                        : `${formatAmount(min)} - ${formatAmount(max)}`;
-                                                })() : ''}
-                                            </Text>
-                                        </View>
+                                                <Text style={styles.amountText}>
+                                                    {item.minAmount != null && item.maxAmount != null ? (() => {
+                                                        const min = Number(item.minAmount);
+                                                        const max = Number(item.maxAmount);
+                                                        const formatAmount = (val: number) => 
+                                                            val >= 1000 ? `${val / 1000} kg` : `${val} g`;
+                                                        return min === max 
+                                                            ? formatAmount(min)
+                                                            : `${formatAmount(min)} - ${formatAmount(max)}`;
+                                                    })() : ''}
+                                                </Text>
+                                            </View>
                                         {quantity === 0 ? (
                                             <TouchableOpacity
                                                 style={styles.addButton}
@@ -332,8 +336,6 @@ const styles = StyleSheet.create({
         marginBottom: 12,
     },
     productCard: {
-        flex: 1,
-        maxWidth: '50%',
         backgroundColor: 'white',
         borderRadius: 12,
         padding: 12,
@@ -341,6 +343,8 @@ const styles = StyleSheet.create({
         elevation: 1,
         shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.05, shadowRadius: 2,
+        flex: 1,
+        maxWidth: '50%',
     },
     productImageContainer: {
         width: '100%',
