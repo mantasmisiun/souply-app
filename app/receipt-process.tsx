@@ -1,9 +1,9 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, ActivityIndicator, TextInput, Dimensions } from 'react-native';
 import { useState, useEffect } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
-import { isRimiReceipt, parseRimiReceipt, parseRimiHeaderOnly, RimiProduct, RimiHeader, RimiFooter } from '../utils/rimiParser';
+import { isRimiReceipt, parseRimiReceipt, parseRimiHeaderOnly, RimiProduct, RimiHeader, RimiFooter, Region, RimiLine } from '../utils/rimiParser';
 import { API_BASE_URL } from '../config/api';
 
 interface ProductLine {
@@ -12,11 +12,11 @@ interface ProductLine {
     storeProductId: number | null;
     price: number;
     promoPrice: number | null;
-    discount: number | null;
     quantity: number;
     unit: string;
     pricePerUnit: number | null;
     rawLines: string[];
+    region: Region;
 }
 
 interface HeaderData {
@@ -30,6 +30,7 @@ interface HeaderData {
     matchConfidence: number | null;
     matchLoading: boolean;
     rawText: string;
+    region: Region;
 }
 
 interface FooterData {
@@ -39,8 +40,50 @@ interface FooterData {
     receiptNo: string;
     totalSavings: number | null;
     rawText: string;
+    region: Region;
 }
 
+interface RegionPreviewProps {
+    imageUri: string;
+    imageWidth: number;
+    imageHeight: number;
+    region: Region;
+    cardWidth: number;
+}
+const CARD_WIDTH = Dimensions.get('window').width - 32 - 32; // screen - horizontal margins (16+16) - card padding (16+16)
+function RegionPreview({ imageUri, imageWidth, imageHeight, region, cardWidth }: RegionPreviewProps) {
+    // Bail out if region is empty (e.g. generic result fallback)
+    if (region.yBottom <= region.yTop || region.xRight <= region.xLeft) {
+        return null;
+    }
+
+    // Scale factor: how much we shrink the image to fit the card width.
+    // We show the full image width, cropped vertically (and horizontally if needed) to the region.
+    const scale = cardWidth / imageWidth;
+
+    const regionHeight = region.yBottom - region.yTop;
+    const displayHeight = regionHeight * scale;
+
+    return (
+        <View style={{
+            width: cardWidth,
+            height: displayHeight,
+            overflow: 'hidden',
+            borderRadius: 6,
+            backgroundColor: '#fafafa',
+        }}>
+            <Image
+                source={{ uri: imageUri }}
+                style={{
+                    width: imageWidth * scale,
+                    height: imageHeight * scale,
+                    marginTop: -region.yTop * scale,
+                }}
+                resizeMode="cover"
+            />
+        </View>
+    );
+}
 export default function ProcessReceiptScreen() {
     const { uri } = useLocalSearchParams<{ uri: string }>();
     const router = useRouter();
@@ -51,9 +94,14 @@ export default function ProcessReceiptScreen() {
     const [products, setProducts] = useState<ProductLine[]>([]);
     const [footer, setFooter] = useState<FooterData | null>(null);
     const [editingSection, setEditingSection] = useState<'header' | 'footer' | number | null>(null);
-
+    const [imageUri, setImageUri] = useState<string | null>(null);
+    const [imageDims, setImageDims] = useState<{ width: number; height: number } | null>(null);
     useEffect(() => {
-        if (uri) processReceipt(decodeURIComponent(uri));
+        if (uri) {
+            const decoded = decodeURIComponent(uri);
+            setImageUri(decoded);
+            processReceipt(decoded);
+        }
     }, [uri]);
 
     const processReceipt = async (imageUri: string) => {
@@ -61,36 +109,83 @@ export default function ProcessReceiptScreen() {
             setLoading(true);
             setLoadingMessage('Atpažįstamas tekstas...');
 
+            // Get the displayed image dimensions first so we can normalize MLKit coords
+            const dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
+                Image.getSize(imageUri, (width, height) => resolve({ width, height }), reject);
+            });
+            setImageDims(dims);
+
             const result = await TextRecognition.recognize(imageUri);
 
-            // Get all lines sorted by Y position
-            const allLines: { text: string; y: number }[] = [];
+            // Find MLKit's internal image bounds (max extents of all detected text)
+            let mlkitMaxX = 0, mlkitMaxY = 0;
+            for (const block of result.blocks) {
+                for (const line of block.lines) {
+                    if (line.frame) {
+                        mlkitMaxX = Math.max(mlkitMaxX, line.frame.left + line.frame.width);
+                        mlkitMaxY = Math.max(mlkitMaxY, line.frame.top + line.frame.height);
+                    }
+                }
+            }
+
+            // MLKit processes at the image's *native* resolution, but Image.getSize returns
+            // the on-disk dimensions (which may be a smaller display-sized version).
+            // Compute a scale factor to map MLKit frames → display image coords.
+            // We estimate MLKit's source height from its max Y plus a small margin,
+            // or compare ratios if the image aspect is consistent.
+            const scaleX = dims.width / mlkitMaxX;
+            const scaleY = dims.height / mlkitMaxY;
+            // Use the average — both should be ~identical for a uniform downscale
+            const frameScale = (scaleX + scaleY) / 2;
+
+            console.log('=== COORDINATE NORMALIZATION ===');
+            console.log(`Image dims: ${dims.width} x ${dims.height}`);
+            console.log(`MLKit max: ${mlkitMaxX} x ${mlkitMaxY}`);
+            console.log(`Scale X: ${scaleX.toFixed(3)}, Y: ${scaleY.toFixed(3)}, using: ${frameScale.toFixed(3)}`);
+
+            interface LineWithFrame {
+                text: string;
+                yTop: number;
+                yBottom: number;
+                xLeft: number;
+                xRight: number;
+            }
+
+            const allLines: LineWithFrame[] = [];
             for (const block of result.blocks) {
                 for (const line of block.lines) {
                     if (line.frame && line.text.trim()) {
                         allLines.push({
                             text: line.text.trim(),
-                            y: line.frame.top,
+                            yTop: line.frame.top * frameScale,
+                            yBottom: (line.frame.top + line.frame.height) * frameScale,
+                            xLeft: line.frame.left * frameScale,
+                            xRight: (line.frame.left + line.frame.width) * frameScale,
                         });
                     }
                 }
             }
-            allLines.sort((a, b) => a.y - b.y);
+            allLines.sort((a, b) => a.yTop - b.yTop);
 
-            // Merge lines on same physical row, keeping price-like text at end
-            const mergedLines: { text: string; y: number }[] = [];
+            // Merge lines on same physical row (threshold also needs scaling — was 30 in MLKit coords)
+            const mergedLines: LineWithFrame[] = [];
             const PRICE_RE = /^\d+[.,]\s?\d{2}\s*[AB]\s*$/;
+            const ROW_THRESHOLD = 30 * frameScale;
 
             for (const line of allLines) {
                 if (mergedLines.length > 0) {
                     const last = mergedLines[mergedLines.length - 1];
-                    if (Math.abs(line.y - last.y) < 30) {
+                    if (Math.abs(line.yTop - last.yTop) < ROW_THRESHOLD) {
                         if (PRICE_RE.test(line.text)) {
                             mergedLines.push({ ...line });
                         } else if (PRICE_RE.test(last.text)) {
                             mergedLines.splice(mergedLines.length - 1, 0, { ...line });
                         } else {
                             last.text = last.text + ' ' + line.text;
+                            last.yTop = Math.min(last.yTop, line.yTop);
+                            last.yBottom = Math.max(last.yBottom, line.yBottom);
+                            last.xLeft = Math.min(last.xLeft, line.xLeft);
+                            last.xRight = Math.max(last.xRight, line.xRight);
                         }
                         continue;
                     }
@@ -99,14 +194,14 @@ export default function ProcessReceiptScreen() {
             }
 
             console.log('=== MERGED OCR LINES ===');
-            mergedLines.forEach((l, i) => console.log(`${i}: [y=${Math.round(l.y)}] ${l.text}`));
+            mergedLines.forEach((l, i) => console.log(`${i}: [y=${Math.round(l.yTop)}] ${l.text}`));
 
             const lineTexts = mergedLines.map(l => l.text);
 
             setLoadingMessage('Analizuojama struktūra...');
 
             if (isRimiReceipt(lineTexts)) {
-                const earlyHeader = parseRimiHeaderOnly(lineTexts);
+                const earlyHeader = parseRimiHeaderOnly(mergedLines);
                 setHeader({
                     chainName: 'RIMI',
                     chainId: 2,
@@ -118,10 +213,19 @@ export default function ProcessReceiptScreen() {
                     matchConfidence: null,
                     matchLoading: true,
                     rawText: earlyHeader.rawText,
+                    region: earlyHeader.region,
                 });
                 setLoading(false);
 
-                const parsed = parseRimiReceipt(lineTexts);
+                const parsed = parseRimiReceipt(mergedLines);
+                
+                console.log('=== PARSED REGIONS ===');
+                console.log('Header region:', parsed.header.region);
+                parsed.products.forEach((p, i) =>
+                    console.log(`Product ${i} "${p.name}" region:`, p.region)
+                );
+                console.log('Footer region:', parsed.footer.region);
+
                 await applyRimiResult(parsed.header, parsed.products, parsed.footer);
             } else {
                 applyGenericResult(lineTexts);
@@ -187,6 +291,7 @@ export default function ProcessReceiptScreen() {
             matchConfidence,
             matchLoading: false,
             rawText: rHeader.rawText,
+            region: rHeader.region,
         });
 
         // Match products with StoreProduct (unchanged)
@@ -221,11 +326,11 @@ export default function ProcessReceiptScreen() {
                 storeProductId: matchedSpId,
                 price: rp.price,
                 promoPrice: rp.promoPrice,
-                discount: rp.discount,
                 quantity: rp.quantity,
                 unit: rp.unit,
                 pricePerUnit: rp.pricePerUnit,
                 rawLines: rp.rawLines,
+                region: rp.region,
             });
         }
         setProducts(productLines);
@@ -237,7 +342,9 @@ export default function ProcessReceiptScreen() {
             receiptNo: rFooter.receiptNo,
             totalSavings: rFooter.totalSavings,
             rawText: rFooter.rawText,
+            region: rFooter.region,
         });
+
     };
     const applyGenericResult = (lines: string[]) => {
         setHeader({
@@ -251,9 +358,18 @@ export default function ProcessReceiptScreen() {
             matchConfidence: null,
             matchLoading: false,
             rawText: lines.slice(0, 5).join('\n'),
+            region: { yTop: 0, yBottom: 0, xLeft: 0, xRight: 0 },
         });
         setProducts([]);
-        setFooter({ total: null, date: '', time: '', receiptNo: '', totalSavings: null, rawText: lines.slice(-5).join('\n') });
+        setFooter({
+            total: null,
+            date: '',
+            time: '',
+            receiptNo: '',
+            totalSavings: null,
+            rawText: lines.slice(-5).join('\n'),
+            region: { yTop: 0, yBottom: 0, xLeft: 0, xRight: 0 },
+        });
     };
 
     // Simple similarity score (Dice coefficient on bigrams)
@@ -315,10 +431,16 @@ export default function ProcessReceiptScreen() {
                             <Text style={styles.warningText}>Parduotuvė neatpažinta</Text>
                         )}
                     </View>
-                    {editingSection === 'header' && (
+                    {editingSection === 'header' && header?.region && imageUri && imageDims && (
                         <View style={styles.editSection}>
-                            <Text style={styles.rawTextLabel}>Nuskaitytas tekstas:</Text>
-                            <Text style={styles.rawText}>{header?.rawText}</Text>
+                            <Text style={styles.rawTextLabel}>Nuskaitytas regionas:</Text>
+                            <RegionPreview
+                                imageUri={imageUri}
+                                imageWidth={imageDims.width}
+                                imageHeight={imageDims.height}
+                                region={header.region}
+                                cardWidth={CARD_WIDTH}
+                            />
                         </View>
                     )}
                 </TouchableOpacity>
@@ -361,9 +483,6 @@ export default function ProcessReceiptScreen() {
                                 ) : (
                                     <Text style={styles.productPrice}>€{product.price.toFixed(2)}</Text>
                                 )}
-                                {product.discount !== null && (
-                                    <Text style={styles.discountText}>-€{product.discount.toFixed(2)}</Text>
-                                )}
                             </View>
                             <View style={styles.matchIndicator}>
                                 <Ionicons
@@ -375,10 +494,19 @@ export default function ProcessReceiptScreen() {
                         </View>
 
                         {editingSection === index && (
-                            <View style={styles.editSection}>
-                                <Text style={styles.rawTextLabel}>Nuskaitytas tekstas:</Text>
-                                <Text style={styles.rawText}>{product.rawLines.join('\n')}</Text>
-                                <TextInput
+                        <View style={styles.editSection}>
+                            <Text style={styles.rawTextLabel}>Nuskaitytas regionas:</Text>
+                            {imageUri && imageDims && (
+                                <RegionPreview
+                                    imageUri={imageUri}
+                                    imageWidth={imageDims.width}
+                                    imageHeight={imageDims.height}
+                                    region={product.region}
+                                    cardWidth={CARD_WIDTH}
+                                />
+                            )}
+                            <View style={{ height: 12 }} />
+                            <TextInput
                                     style={styles.editInput}
                                     value={product.name}
                                     onChangeText={(text) => {
@@ -466,19 +594,17 @@ export default function ProcessReceiptScreen() {
                             <Text style={styles.footerLabel}>Kvito Nr.:</Text>
                             <Text style={styles.footerValue}>{footer?.receiptNo || '—'}</Text>
                         </View>
-                        {footer?.totalSavings ? (
-                            <View style={styles.footerRow}>
-                                <Text style={styles.footerLabel}>Sutaupyta:</Text>
-                                <Text style={[styles.footerValue, { color: '#2e7d32' }]}>
-                                    €{footer.totalSavings.toFixed(2)}
-                                </Text>
-                            </View>
-                        ) : null}
                     </View>
-                    {editingSection === 'footer' && (
+                    {editingSection === 'footer' && footer?.region && imageUri && imageDims && (
                         <View style={styles.editSection}>
-                            <Text style={styles.rawTextLabel}>Nuskaitytas tekstas:</Text>
-                            <Text style={styles.rawText}>{footer?.rawText}</Text>
+                            <Text style={styles.rawTextLabel}>Nuskaitytas regionas:</Text>
+                            <RegionPreview
+                                imageUri={imageUri}
+                                imageWidth={imageDims.width}
+                                imageHeight={imageDims.height}
+                                region={footer.region}
+                                cardWidth={CARD_WIDTH}
+                            />
                         </View>
                     )}
                 </TouchableOpacity>
@@ -620,11 +746,6 @@ const styles = StyleSheet.create({
         fontSize: 15,
         fontWeight: '700',
         color: '#d32f2f',
-    },
-    discountText: {
-        fontSize: 11,
-        color: '#d32f2f',
-        marginTop: 2,
     },
     matchIndicator: {
         marginLeft: 4,
