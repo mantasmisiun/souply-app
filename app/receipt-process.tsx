@@ -1,4 +1,4 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, ActivityIndicator, TextInput, Dimensions } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, ActivityIndicator, TextInput, Dimensions, Modal } from 'react-native';
 import { useState, useEffect } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -6,10 +6,24 @@ import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { isRimiReceipt, parseRimiReceipt, parseRimiHeaderOnly, RimiProduct, RimiHeader, RimiFooter, Region, RimiLine } from '../utils/rimiParser';
 import { API_BASE_URL } from '../config/api';
 
-interface ProductLine {
+interface ProductMatchOption {
+    storeProductId: number;
+    productId: number;
     name: string;
-    matchedName: string | null;
-    storeProductId: number | null;
+    imageUrl: string | null;
+    amount: number | null;
+    unit: string | null;
+    confidence: number;
+}
+
+interface ProductLine {
+    name: string;                            // OCR name
+    matchedName: string | null;              // DB name (if matched)
+    storeProductId: number | null;           // null if not confidently matched
+    storeProductImageUrl: string | null;
+    matchConfidence: number | null;
+    matchConfirmed: boolean;                 // true = auto-applied OR user-picked
+    altMatches: ProductMatchOption[];        // top 3 from backend, for manual picker
     price: number;
     promoPrice: number | null;
     quantity: number;
@@ -96,6 +110,7 @@ export default function ProcessReceiptScreen() {
     const [editingSection, setEditingSection] = useState<'header' | 'footer' | number | null>(null);
     const [imageUri, setImageUri] = useState<string | null>(null);
     const [imageDims, setImageDims] = useState<{ width: number; height: number } | null>(null);
+    const [pickerState, setPickerState] = useState<{ productIndex: number } | null>(null);
     useEffect(() => {
         if (uri) {
             const decoded = decodeURIComponent(uri);
@@ -295,35 +310,44 @@ export default function ProcessReceiptScreen() {
         });
 
         // Match products with StoreProduct (unchanged)
-        const productLines: ProductLine[] = [];
-        for (const rp of rProducts) {
-            let matchedName: string | null = null;
-            let matchedSpId: number | null = null;
+        // Match each product via backend endpoint, in parallel
+        const AUTO_APPLY_THRESHOLD = 0.85;
+
+        const matchPromises = rProducts.map(async (rp) => {
+            let altMatches: ProductMatchOption[] = [];
 
             try {
-                const searchName = rp.name.substring(0, 30);
-                const res = await fetch(
-                    `${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(searchName)}&chainId=${chainId}`
-                );
-                const matches = await res.json();
-                if (Array.isArray(matches) && matches.length > 0) {
-                    let bestMatch = null;
-                    let bestScore = 0;
-                    for (const m of matches) {
-                        const score = similarity(rp.name.toLowerCase(), m.storeProductName.toLowerCase());
-                        if (score > bestScore) { bestScore = score; bestMatch = m; }
-                    }
-                    if (bestMatch && bestScore > 0.3) {
-                        matchedName = bestMatch.storeProductName;
-                        matchedSpId = bestMatch.id;
-                    }
+                const params = new URLSearchParams({
+                    chainId: String(chainId),
+                    name: rp.name,
+                });
+                // Include amount/unit to boost matching when we have them
+                if (rp.pricePerUnit !== null && rp.unit === 'kg') {
+                    // For weighable items, amount in the DB is the package size, not the kg weight.
+                    // Skip the hint; name-only match is safer.
+                } else if (rp.unit && rp.unit !== 'vnt') {
+                    // Edge case — pass through if we ever see other units
                 }
-            } catch {}
+                // For multi-buy (unit=vnt), skip amount hint too — quantity is count, not package size.
 
-            productLines.push({
+                const res = await fetch(`${API_BASE_URL}/api/store-products/match?${params.toString()}`);
+                const data = await res.json();
+                if (Array.isArray(data?.matches)) altMatches = data.matches;
+            } catch (e) {
+                console.warn(`Product match failed for "${rp.name}":`, e);
+            }
+
+            const top = altMatches[0] || null;
+            const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
+
+            return {
                 name: rp.name,
-                matchedName,
-                storeProductId: matchedSpId,
+                matchedName: top?.name ?? null,
+                storeProductId: autoApply ? top!.storeProductId : null,
+                storeProductImageUrl: top?.imageUrl ?? null,
+                matchConfidence: top?.confidence ?? null,
+                matchConfirmed: autoApply,
+                altMatches,
                 price: rp.price,
                 promoPrice: rp.promoPrice,
                 quantity: rp.quantity,
@@ -331,8 +355,10 @@ export default function ProcessReceiptScreen() {
                 pricePerUnit: rp.pricePerUnit,
                 rawLines: rp.rawLines,
                 region: rp.region,
-            });
-        }
+            } as ProductLine;
+        });
+
+        const productLines = await Promise.all(matchPromises);
         setProducts(productLines);
 
         setFooter({
@@ -458,10 +484,22 @@ export default function ProcessReceiptScreen() {
                         onPress={() => setEditingSection(editingSection === index ? null : index)}
                     >
                         <View style={styles.productRow}>
+                            {product.storeProductImageUrl && (
+                                <Image
+                                    source={{ uri: product.storeProductImageUrl }}
+                                    style={styles.productThumb}
+                                    resizeMode="contain"
+                                />
+                            )}
                             <View style={styles.productInfo}>
                                 {product.matchedName ? (
                                     <>
-                                        <Text style={styles.matchedName}>{product.matchedName}</Text>
+                                        <Text style={[
+                                            styles.matchedName,
+                                            !product.matchConfirmed && { color: '#f57c00' }
+                                        ]}>
+                                            {product.matchedName}
+                                        </Text>
                                         <Text style={styles.ocrName}>{product.name}</Text>
                                     </>
                                 ) : (
@@ -484,13 +522,27 @@ export default function ProcessReceiptScreen() {
                                     <Text style={styles.productPrice}>€{product.price.toFixed(2)}</Text>
                                 )}
                             </View>
-                            <View style={styles.matchIndicator}>
+                            <TouchableOpacity
+                                style={styles.matchIndicator}
+                                onPress={(e) => {
+                                    e.stopPropagation?.();  // don't toggle the raw-text editing section
+                                    setPickerState({ productIndex: index });
+                                }}
+                            >
                                 <Ionicons
-                                    name={product.storeProductId ? 'checkmark-circle' : 'help-circle-outline'}
-                                    size={18}
-                                    color={product.storeProductId ? '#2e7d32' : '#f57c00'}
+                                    name={
+                                        product.matchConfirmed ? 'checkmark-circle' :
+                                        product.matchedName ? 'warning' :
+                                        'help-circle-outline'
+                                    }
+                                    size={20}
+                                    color={
+                                        product.matchConfirmed ? '#2e7d32' :
+                                        product.matchedName ? '#f57c00' :
+                                        '#9e9e9e'
+                                    }
                                 />
-                            </View>
+                            </TouchableOpacity>
                         </View>
 
                         {editingSection === index && (
@@ -623,6 +675,71 @@ export default function ProcessReceiptScreen() {
 
                 <View style={{ height: 40 }} />
             </ScrollView>
+            {pickerState !== null && (
+            <Modal
+                transparent
+                animationType="fade"
+                onRequestClose={() => setPickerState(null)}
+            >
+                <TouchableOpacity
+                    style={styles.modalBackdrop}
+                    activeOpacity={1}
+                    onPress={() => setPickerState(null)}
+                >
+                    <View style={styles.modalCard}>
+                        <Text style={styles.modalTitle}>Pasirinkite prekę</Text>
+                        <Text style={styles.modalSubtitle}>
+                            {products[pickerState.productIndex]?.name}
+                        </Text>
+                        {products[pickerState.productIndex]?.altMatches.length === 0 && (
+                            <Text style={styles.emptyText}>Atitikmenų nerasta</Text>
+                        )}
+                        {products[pickerState.productIndex]?.altMatches.map(alt => (
+                            <TouchableOpacity
+                                key={alt.storeProductId}
+                                style={styles.modalOption}
+                                onPress={() => {
+                                    const idx = pickerState.productIndex;
+                                    setProducts(prev => {
+                                        const updated = [...prev];
+                                        updated[idx] = {
+                                            ...updated[idx],
+                                            matchedName: alt.name,
+                                            storeProductId: alt.storeProductId,
+                                            storeProductImageUrl: alt.imageUrl,
+                                            matchConfidence: alt.confidence,
+                                            matchConfirmed: true,
+                                        };
+                                        return updated;
+                                    });
+                                    setPickerState(null);
+                                }}
+                            >
+                                {alt.imageUrl && (
+                                    <Image
+                                        source={{ uri: alt.imageUrl }}
+                                        style={styles.modalThumb}
+                                        resizeMode="contain"
+                                    />
+                                )}
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.modalOptionName}>{alt.name}</Text>
+                                    <Text style={styles.modalOptionMeta}>
+                                        Tikimybė {Math.round(alt.confidence * 100)}%
+                                    </Text>
+                                </View>
+                            </TouchableOpacity>
+                        ))}
+                        <TouchableOpacity
+                            style={styles.modalCancel}
+                            onPress={() => setPickerState(null)}
+                        >
+                            <Text style={styles.modalCancelText}>Atšaukti</Text>
+                        </TouchableOpacity>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
+        )}
         </>
     );
 }
@@ -837,4 +954,71 @@ const styles = StyleSheet.create({
         fontWeight: '700',
     },
     chainRow: { flexDirection: 'row', alignItems: 'center' },
+    productThumb: {
+        width: 48,
+        height: 48,
+        borderRadius: 6,
+        backgroundColor: '#fafafa',
+        marginRight: 10,
+    },
+
+    modalBackdrop: {
+        flex: 1,
+        backgroundColor: 'rgba(0,0,0,0.4)',
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    modalCard: {
+        backgroundColor: 'white',
+        borderRadius: 12,
+        padding: 16,
+        width: '100%',
+        maxWidth: 480,
+    },
+    modalTitle: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: '#212121',
+        marginBottom: 4,
+    },
+    modalSubtitle: {
+        fontSize: 12,
+        color: '#9e9e9e',
+        marginBottom: 12,
+    },
+    modalOption: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingVertical: 10,
+        borderTopWidth: 0.5,
+        borderTopColor: '#e0e0e0',
+    },
+    modalThumb: {
+        width: 44,
+        height: 44,
+        borderRadius: 6,
+        backgroundColor: '#fafafa',
+        marginRight: 12,
+    },
+    modalOptionName: {
+        fontSize: 14,
+        color: '#212121',
+        fontWeight: '500',
+    },
+    modalOptionMeta: {
+        fontSize: 11,
+        color: '#9e9e9e',
+        marginTop: 2,
+    },
+    modalCancel: {
+        marginTop: 12,
+        paddingVertical: 10,
+        alignItems: 'center',
+    },
+    modalCancelText: {
+        fontSize: 14,
+        color: '#757575',
+        fontWeight: '600',
+    },
 });
