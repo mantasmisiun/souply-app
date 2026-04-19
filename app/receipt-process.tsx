@@ -5,10 +5,12 @@ import { Ionicons } from '@expo/vector-icons';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { isRimiReceipt, parseRimiReceipt, parseRimiHeaderOnly, RimiProduct, RimiHeader, RimiFooter, Region, RimiLine } from '../utils/rimiParser';
 import { API_BASE_URL } from '../config/api';
+import { useReceiptPickerState } from '../state/basketState';
 
 interface ProductMatchOption {
     storeProductId: number;
     productId: number;
+    categoryId: number;
     name: string;
     imageUrl: string | null;
     amount: number | null;
@@ -64,6 +66,7 @@ interface RegionPreviewProps {
     region: Region;
     cardWidth: number;
 }
+
 const CARD_WIDTH = Dimensions.get('window').width - 32 - 32; // screen - horizontal margins (16+16) - card padding (16+16)
 function RegionPreview({ imageUri, imageWidth, imageHeight, region, cardWidth }: RegionPreviewProps) {
     // Bail out if region is empty (e.g. generic result fallback)
@@ -111,6 +114,7 @@ export default function ProcessReceiptScreen() {
     const [imageUri, setImageUri] = useState<string | null>(null);
     const [imageDims, setImageDims] = useState<{ width: number; height: number } | null>(null);
     const [pickerState, setPickerState] = useState<{ productIndex: number } | null>(null);
+    const { pendingPick, clearPendingPick } = useReceiptPickerState();
     useEffect(() => {
         if (uri) {
             const decoded = decodeURIComponent(uri);
@@ -118,7 +122,80 @@ export default function ProcessReceiptScreen() {
             processReceipt(decoded);
         }
     }, [uri]);
+    useEffect(() => {
+        if (!pendingPick) return;
+        const { productIndex, storeProductId, storeProductName, imageUrl } = pendingPick;
 
+        setProducts(prev => {
+            if (productIndex < 0 || productIndex >= prev.length) return prev;
+            const updated = [...prev];
+            updated[productIndex] = {
+                ...updated[productIndex],
+                matchedName: storeProductName,
+                storeProductId,
+                storeProductImageUrl: imageUrl,
+                matchConfidence: 1,          // user manually picked — treat as confident
+                matchConfirmed: true,
+            };
+            return updated;
+        });
+
+        clearPendingPick();
+    }, [pendingPick, clearPendingPick]);
+    const handleBrowseCategories = async () => {
+        if (pickerState === null) return;
+        const idx = pickerState.productIndex;
+        const product = products[idx];
+        const topMatch = product.altMatches[0];
+
+        let preselectL1: string | undefined;
+        let preselectL2: string | undefined;
+        let preselectL3: string | undefined;
+
+        if (topMatch) {
+            try {
+                const res = await fetch(
+                    `${API_BASE_URL}/api/categories/${topMatch.categoryId}/ancestors`
+                );
+                const data = await res.json();
+                if (data?.l1) preselectL1 = String(data.l1.id);
+                if (data?.l2) preselectL2 = String(data.l2.id);
+                if (data?.l3) preselectL3 = String(data.l3.id);
+            } catch (e) {
+                console.warn('Ancestor lookup failed:', e);
+            }
+        }
+
+        const chainId = header?.chainId ?? 2;
+        setPickerState(null);
+
+        if (preselectL1 && preselectL2) {
+            // Push L1, then L2 (two screens stacked)
+            router.push({
+                pathname: '/receipt/browse',
+                params: { chainId: String(chainId), productIndex: String(idx), preselectL1 },
+            });
+            // Small delay so L1 mounts before L2 pushes on top
+            setTimeout(() => {
+                router.push({
+                    pathname: '/receipt/browse/[categoryId]',
+                    params: {
+                        categoryId: preselectL2!,
+                        name: '',
+                        chainId: String(chainId),
+                        productIndex: String(idx),
+                        ...(preselectL3 ? { preselectL3 } : {}),
+                    },
+                });
+            }, 50);
+        } else {
+            // No ancestor data — just push L1
+            router.push({
+                pathname: '/receipt/browse',
+                params: { chainId: String(chainId), productIndex: String(idx) },
+            });
+        }
+    };
     const processReceipt = async (imageUri: string) => {
         try {
             setLoading(true);
@@ -672,7 +749,6 @@ export default function ProcessReceiptScreen() {
                     <Ionicons name="save-outline" size={20} color="white" />
                     <Text style={styles.saveText}>Išsaugoti</Text>
                 </TouchableOpacity>
-
                 <View style={{ height: 40 }} />
             </ScrollView>
             {pickerState !== null && (
@@ -730,6 +806,13 @@ export default function ProcessReceiptScreen() {
                                 </View>
                             </TouchableOpacity>
                         ))}
+                        <TouchableOpacity
+                            style={styles.browseButton}
+                            onPress={handleBrowseCategories}
+                        >
+                            <Ionicons name="grid-outline" size={18} color="white" />
+                            <Text style={styles.browseButtonText}>Naršyti kategorijas</Text>
+                        </TouchableOpacity>
                         <TouchableOpacity
                             style={styles.modalCancel}
                             onPress={() => setPickerState(null)}
@@ -1019,6 +1102,21 @@ const styles = StyleSheet.create({
     modalCancelText: {
         fontSize: 14,
         color: '#757575',
+        fontWeight: '600',
+    },
+    browseButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: '#2e7d32',
+        borderRadius: 8,
+        paddingVertical: 10,
+        marginTop: 12,
+    },
+    browseButtonText: {
+        color: 'white',
+        fontSize: 14,
         fontWeight: '600',
     },
 });

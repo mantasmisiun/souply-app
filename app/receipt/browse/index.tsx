@@ -1,0 +1,155 @@
+import { View, FlatList, TouchableOpacity, Text, StyleSheet, ActivityIndicator, LayoutAnimation, UIManager, Platform } from 'react-native';
+import { useEffect, useState } from 'react';
+import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import { API_BASE_URL } from '../../../config/api';
+
+if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
+    UIManager.setLayoutAnimationEnabledExperimental(true);
+}
+
+interface Category {
+    id: number;
+    name: string;
+    parentCategoryId: number | null;
+}
+
+const CATEGORY_ICONS: Record<string, string> = {
+    'Daržovės ir vaisiai': '🥦',
+    'Pieno gaminiai, kiaušiniai ir majonezas': '🥛',
+    'Duonos gaminiai ir konditerija': '🍞',
+    'Mėsa, žuvis ir kulinarija': '🥩',
+    'Bakalėja': '🫙',
+    'Šaldytas maistas': '🧊',
+    'Gėrimai': '🥤',
+    'Kūdikių ir vaikų prekės': '🍼',
+    'Kosmetika ir higiena': '🧴',
+    'Švaros ir gyvūnų prekės': '🧹',
+    'Namai ir laisvalaikis': '🏠',
+};
+
+export default function ReceiptBrowseIndex() {
+    const { chainId, productIndex, preselectL1 } = useLocalSearchParams<{
+        chainId: string;
+        productIndex: string;
+        preselectL1?: string;
+    }>();
+    const router = useRouter();
+    const [l1Categories, setL1Categories] = useState<Category[]>([]);
+    const [l2Map, setL2Map] = useState<Record<number, Category[]>>({});
+    const [expandedL1, setExpandedL1] = useState<number | null>(null);
+    const [loading, setLoading] = useState(true);
+
+    useEffect(() => {
+        (async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/categories`);
+                const data = await res.json();
+                const l1s = Array.isArray(data) ? data : [];
+                setL1Categories(l1s);
+
+                // If we came from the modal with a preselectL1, auto-expand it
+                if (preselectL1) {
+                    const preselId = Number(preselectL1);
+                    const subRes = await fetch(`${API_BASE_URL}/api/categories/${preselId}/subcategories`);
+                    const subData = await subRes.json();
+                    setL2Map({ [preselId]: Array.isArray(subData) ? subData : [] });
+                    setExpandedL1(preselId);
+                }
+            } finally {
+                setLoading(false);
+            }
+        })();
+    }, [preselectL1]);
+
+    const toggleL1 = async (id: number) => {
+        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
+        if (expandedL1 === id) {
+            setExpandedL1(null);
+            return;
+        }
+        setExpandedL1(id);
+        if (!l2Map[id]) {
+            const res = await fetch(`${API_BASE_URL}/api/categories/${id}/subcategories`);
+            const data = await res.json();
+            setL2Map(prev => ({ ...prev, [id]: Array.isArray(data) ? data : [] }));
+        }
+    };
+
+    if (loading) return <ActivityIndicator style={styles.centered} size="large" color="#2e7d32" />;
+
+    return (
+        <>
+            <Stack.Screen options={{ title: 'Pasirinkite kategoriją' }} />
+            <FlatList
+                data={l1Categories}
+                keyExtractor={item => item.id.toString()}
+                contentContainerStyle={styles.list}
+                renderItem={({ item }) => {
+                    const isExpanded = expandedL1 === item.id;
+                    const l2 = l2Map[item.id] || [];
+                    return (
+                        <View style={styles.l1Container}>
+                            <TouchableOpacity style={styles.l1Row} onPress={() => toggleL1(item.id)}>
+                                <Text style={styles.l1Icon}>{CATEGORY_ICONS[item.name] || '📦'}</Text>
+                                <Text style={styles.l1Text}>{item.name}</Text>
+                                <Ionicons
+                                    name={isExpanded ? 'chevron-up' : 'chevron-down'}
+                                    size={20} color="#757575"
+                                />
+                            </TouchableOpacity>
+                            {isExpanded && (
+                                <View style={styles.l2Container}>
+                                    {l2.length === 0 ? (
+                                        <ActivityIndicator size="small" color="#2e7d32" style={{ padding: 12 }} />
+                                    ) : (
+                                        l2.map((cat, index) => (
+                                            <View key={cat.id}>
+                                                {index > 0 && <View style={styles.divider} />}
+                                                <TouchableOpacity
+                                                    style={styles.l2Row}
+                                                    onPress={() => router.push({
+                                                        pathname: `/receipt/browse/[categoryId]`,
+                                                        params: {
+                                                            categoryId: String(cat.id),
+                                                            name: cat.name,
+                                                            chainId,
+                                                            productIndex,
+                                                        },
+                                                    })}
+                                                >
+                                                    <Text style={styles.l2Text}>{cat.name}</Text>
+                                                    <Ionicons name="chevron-forward" size={18} color="#9e9e9e" />
+                                                </TouchableOpacity>
+                                            </View>
+                                        ))
+                                    )}
+                                </View>
+                            )}
+                        </View>
+                    );
+                }}
+            />
+        </>
+    );
+}
+
+const styles = StyleSheet.create({
+    centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+    list: { padding: 16 },
+    l1Container: {
+        backgroundColor: 'white', borderRadius: 12, marginBottom: 8, overflow: 'hidden',
+        elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05, shadowRadius: 2,
+    },
+    l1Row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 },
+    l1Text: { fontSize: 15, fontWeight: '600', color: '#212121', flex: 1 },
+    l2Container: { borderTopWidth: 0.5, borderTopColor: '#e0e0e0' },
+    l2Row: {
+        flexDirection: 'row', alignItems: 'center',
+        paddingHorizontal: 16, paddingVertical: 12, paddingLeft: 24,
+    },
+    l2Text: { fontSize: 14, color: '#424242', flex: 1 },
+    divider: { height: 0.5, backgroundColor: '#f0f0f0', marginLeft: 24 },
+    l1Icon: { fontSize: 20, marginRight: 12 },
+});

@@ -1,6 +1,21 @@
 import { create } from 'zustand';
 import { API_BASE_URL } from '../config/api';
 import { getUserId } from '../config/user';
+export interface ReceiptPick {
+    productIndex: number;
+    storeProductId: number;
+    productId: number;
+    storeProductName: string;
+    imageUrl: string | null;
+    amount: number | null;
+    unit: string | null;
+}
+
+interface ReceiptPickerState {
+    pendingPick: ReceiptPick | null;
+    setPendingPick: (pick: ReceiptPick) => void;
+    clearPendingPick: () => void;
+}
 
 interface BasketState {
     draftBasketId: number | null;
@@ -22,4 +37,10 @@ export const useBasketState = create<BasketState>((set) => ({
             set({ draftBasketId: null });
         }
     },
+}));
+
+export const useReceiptPickerState = create<ReceiptPickerState>((set) => ({
+    pendingPick: null,
+    setPendingPick: (pick) => set({ pendingPick: pick }),
+    clearPendingPick: () => set({ pendingPick: null }),
 }));
