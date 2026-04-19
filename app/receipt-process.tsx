@@ -1,0 +1,719 @@
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, ActivityIndicator, TextInput } from 'react-native';
+import { useState, useEffect } from 'react';
+import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
+import TextRecognition from '@react-native-ml-kit/text-recognition';
+import { isRimiReceipt, parseRimiReceipt, parseRimiHeaderOnly, RimiProduct, RimiHeader, RimiFooter } from '../utils/rimiParser';
+import { API_BASE_URL } from '../config/api';
+
+interface ProductLine {
+    name: string;
+    matchedName: string | null;
+    storeProductId: number | null;
+    price: number;
+    promoPrice: number | null;
+    discount: number | null;
+    quantity: number;
+    unit: string;
+    pricePerUnit: number | null;
+    rawLines: string[];
+}
+
+interface HeaderData {
+    chainName: string;
+    chainId: number | null;
+    storeCode: string;
+    storeAddress: string;           // OCR'd address
+    storeId: number | null;
+    storeName: string | null;
+    storeAddressMatched: string | null; // clean address from DB
+    matchConfidence: number | null;
+    matchLoading: boolean;
+    rawText: string;
+}
+
+interface FooterData {
+    total: number | null;
+    date: string;
+    time: string;
+    receiptNo: string;
+    totalSavings: number | null;
+    rawText: string;
+}
+
+export default function ProcessReceiptScreen() {
+    const { uri } = useLocalSearchParams<{ uri: string }>();
+    const router = useRouter();
+    const [loading, setLoading] = useState(true);
+    const [loadingMessage, setLoadingMessage] = useState('Nuskaitomas kvitas...');
+
+    const [header, setHeader] = useState<HeaderData | null>(null);
+    const [products, setProducts] = useState<ProductLine[]>([]);
+    const [footer, setFooter] = useState<FooterData | null>(null);
+    const [editingSection, setEditingSection] = useState<'header' | 'footer' | number | null>(null);
+
+    useEffect(() => {
+        if (uri) processReceipt(decodeURIComponent(uri));
+    }, [uri]);
+
+    const processReceipt = async (imageUri: string) => {
+        try {
+            setLoading(true);
+            setLoadingMessage('Atpažįstamas tekstas...');
+
+            const result = await TextRecognition.recognize(imageUri);
+
+            // Get all lines sorted by Y position
+            const allLines: { text: string; y: number }[] = [];
+            for (const block of result.blocks) {
+                for (const line of block.lines) {
+                    if (line.frame && line.text.trim()) {
+                        allLines.push({
+                            text: line.text.trim(),
+                            y: line.frame.top,
+                        });
+                    }
+                }
+            }
+            allLines.sort((a, b) => a.y - b.y);
+
+            // Merge lines on same physical row, keeping price-like text at end
+            const mergedLines: { text: string; y: number }[] = [];
+            const PRICE_RE = /^\d+[.,]\s?\d{2}\s*[AB]\s*$/;
+
+            for (const line of allLines) {
+                if (mergedLines.length > 0) {
+                    const last = mergedLines[mergedLines.length - 1];
+                    if (Math.abs(line.y - last.y) < 30) {
+                        if (PRICE_RE.test(line.text)) {
+                            mergedLines.push({ ...line });
+                        } else if (PRICE_RE.test(last.text)) {
+                            mergedLines.splice(mergedLines.length - 1, 0, { ...line });
+                        } else {
+                            last.text = last.text + ' ' + line.text;
+                        }
+                        continue;
+                    }
+                }
+                mergedLines.push({ ...line });
+            }
+
+            console.log('=== MERGED OCR LINES ===');
+            mergedLines.forEach((l, i) => console.log(`${i}: [y=${Math.round(l.y)}] ${l.text}`));
+
+            const lineTexts = mergedLines.map(l => l.text);
+
+            setLoadingMessage('Analizuojama struktūra...');
+
+            if (isRimiReceipt(lineTexts)) {
+                const earlyHeader = parseRimiHeaderOnly(lineTexts);
+                setHeader({
+                    chainName: 'RIMI',
+                    chainId: 2,
+                    storeCode: earlyHeader.storeCode,
+                    storeAddress: earlyHeader.storeAddress,
+                    storeId: null,
+                    storeName: null,
+                    storeAddressMatched: null,
+                    matchConfidence: null,
+                    matchLoading: true,
+                    rawText: earlyHeader.rawText,
+                });
+                setLoading(false);
+
+                const parsed = parseRimiReceipt(lineTexts);
+                await applyRimiResult(parsed.header, parsed.products, parsed.footer);
+            } else {
+                applyGenericResult(lineTexts);
+                setLoading(false);
+            }
+        } catch (error) {
+            console.error('OCR error:', error);
+            setLoadingMessage('Klaida apdorojant kvitą');
+            setLoading(false);
+        }
+    };
+
+    const applyRimiResult = async (
+        rHeader: RimiHeader,
+        rProducts: RimiProduct[],
+        rFooter: RimiFooter
+    ) => {
+        const chainId = 2; // Rimi
+
+        // Match store via backend Levenshtein endpoint
+        let storeId: number | null = null;
+        let storeName: string | null = null;
+        let storeAddressMatched: string | null = null;
+        let matchConfidence: number | null = null;
+
+        if (rHeader.storeAddress) {
+            try {
+                const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(rHeader.storeAddress)}`;
+                console.log('=== STORE MATCH REQUEST ===');
+                console.log('URL:', url);
+                console.log('OCR address:', rHeader.storeAddress);
+                
+                const res = await fetch(url);
+                console.log('Response status:', res.status);
+                
+                const data = await res.json();
+                console.log('Response data:', JSON.stringify(data));
+                
+                if (data?.match) {
+                    storeId = data.match.storeId;
+                    storeName = data.match.storeName;
+                    storeAddressMatched = data.match.address;
+                    matchConfidence = data.match.confidence;
+                    console.log('Matched:', storeName, 'confidence:', matchConfidence);
+                } else {
+                    console.log('No match in response');
+                }
+            } catch (e) {
+                console.warn('Store match failed:', e);
+            }
+        } else {
+            console.log('No storeAddress parsed from OCR — skipping match');
+        }
+
+        setHeader({
+            chainName: 'RIMI',
+            chainId,
+            storeCode: rHeader.storeCode,
+            storeAddress: rHeader.storeAddress,
+            storeId,
+            storeName,
+            storeAddressMatched,
+            matchConfidence,
+            matchLoading: false,
+            rawText: rHeader.rawText,
+        });
+
+        // Match products with StoreProduct (unchanged)
+        const productLines: ProductLine[] = [];
+        for (const rp of rProducts) {
+            let matchedName: string | null = null;
+            let matchedSpId: number | null = null;
+
+            try {
+                const searchName = rp.name.substring(0, 30);
+                const res = await fetch(
+                    `${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(searchName)}&chainId=${chainId}`
+                );
+                const matches = await res.json();
+                if (Array.isArray(matches) && matches.length > 0) {
+                    let bestMatch = null;
+                    let bestScore = 0;
+                    for (const m of matches) {
+                        const score = similarity(rp.name.toLowerCase(), m.storeProductName.toLowerCase());
+                        if (score > bestScore) { bestScore = score; bestMatch = m; }
+                    }
+                    if (bestMatch && bestScore > 0.3) {
+                        matchedName = bestMatch.storeProductName;
+                        matchedSpId = bestMatch.id;
+                    }
+                }
+            } catch {}
+
+            productLines.push({
+                name: rp.name,
+                matchedName,
+                storeProductId: matchedSpId,
+                price: rp.price,
+                promoPrice: rp.promoPrice,
+                discount: rp.discount,
+                quantity: rp.quantity,
+                unit: rp.unit,
+                pricePerUnit: rp.pricePerUnit,
+                rawLines: rp.rawLines,
+            });
+        }
+        setProducts(productLines);
+
+        setFooter({
+            total: rFooter.total,
+            date: rFooter.date,
+            time: rFooter.time,
+            receiptNo: rFooter.receiptNo,
+            totalSavings: rFooter.totalSavings,
+            rawText: rFooter.rawText,
+        });
+    };
+    const applyGenericResult = (lines: string[]) => {
+        setHeader({
+            chainName: 'Neatpažinta',
+            chainId: null,
+            storeCode: '',
+            storeAddress: '',
+            storeId: null,
+            storeName: null,
+            storeAddressMatched: null,
+            matchConfidence: null,
+            matchLoading: false,
+            rawText: lines.slice(0, 5).join('\n'),
+        });
+        setProducts([]);
+        setFooter({ total: null, date: '', time: '', receiptNo: '', totalSavings: null, rawText: lines.slice(-5).join('\n') });
+    };
+
+    // Simple similarity score (Dice coefficient on bigrams)
+    const similarity = (a: string, b: string): number => {
+        if (!a || !b) return 0;
+        if (a === b) return 1;
+        const bigrams = (s: string) => {
+            const set = new Set<string>();
+            for (let i = 0; i < s.length - 1; i++) set.add(s.substring(i, i + 2));
+            return set;
+        };
+        const aSet = bigrams(a);
+        const bSet = bigrams(b);
+        let intersection = 0;
+        for (const bg of aSet) if (bSet.has(bg)) intersection++;
+        return (2 * intersection) / (aSet.size + bSet.size);
+    };
+
+    if (loading) {
+        return (
+            <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#2e7d32" />
+                <Text style={styles.loadingText}>{loadingMessage}</Text>
+            </View>
+        );
+    }
+
+    return (
+        <>
+            <Stack.Screen options={{ title: 'Kvito peržiūra' }} />
+            <ScrollView style={styles.container}>
+                {/* Header section */}
+                <TouchableOpacity
+                    style={styles.sectionCard}
+                    onPress={() => setEditingSection(editingSection === 'header' ? null : 'header')}
+                >
+                    <View style={styles.sectionContent}>
+                        <View style={styles.chainRow}>
+                            <Text style={styles.chainBadge}>{header?.chainName || 'Neatpažinta'}</Text>
+                            {header?.matchLoading && (
+                                <ActivityIndicator size="small" color="#2e7d32" style={{ marginLeft: 8 }} />
+                            )}
+                            {!header?.matchLoading && header?.storeId && (
+                                <Ionicons name="checkmark-circle" size={20} color="#2e7d32" style={{ marginLeft: 8 }} />
+                            )}
+                            {!header?.matchLoading && !header?.storeId && header?.chainId && (
+                                <Ionicons name="alert-circle" size={20} color="#f57c00" style={{ marginLeft: 8 }} />
+                            )}
+                        </View>
+                        {header?.storeName && (
+                            <Text style={styles.storeName}>{header.storeName}</Text>
+                        )}
+                        {header?.storeAddressMatched ? (
+                            <Text style={styles.sectionSubvalue}>{header.storeAddressMatched}</Text>
+                        ) : header?.storeAddress ? (
+                            <Text style={styles.sectionSubvalue}>{header.storeAddress}</Text>
+                        ) : null}
+                        {!header?.matchLoading && header?.storeId === null && header?.chainId && (
+                            <Text style={styles.warningText}>Parduotuvė neatpažinta</Text>
+                        )}
+                    </View>
+                    {editingSection === 'header' && (
+                        <View style={styles.editSection}>
+                            <Text style={styles.rawTextLabel}>Nuskaitytas tekstas:</Text>
+                            <Text style={styles.rawText}>{header?.rawText}</Text>
+                        </View>
+                    )}
+                </TouchableOpacity>
+
+                {/* Products section */}
+                <View style={styles.productsHeader}>
+                    <Ionicons name="cart-outline" size={20} color="#2e7d32" />
+                    <Text style={styles.sectionTitle}>Prekės ({products.length})</Text>
+                </View>
+
+                {products.map((product, index) => (
+                    <TouchableOpacity
+                        key={index}
+                        style={styles.productCard}
+                        onPress={() => setEditingSection(editingSection === index ? null : index)}
+                    >
+                        <View style={styles.productRow}>
+                            <View style={styles.productInfo}>
+                                {product.matchedName ? (
+                                    <>
+                                        <Text style={styles.matchedName}>{product.matchedName}</Text>
+                                        <Text style={styles.ocrName}>{product.name}</Text>
+                                    </>
+                                ) : (
+                                    <Text style={styles.productName}>{product.name}</Text>
+                                )}
+                                {product.quantity !== 1 && (
+                                    <Text style={styles.productQuantity}>
+                                        {product.quantity} {product.unit}
+                                        {product.pricePerUnit ? ` × €${product.pricePerUnit.toFixed(2)}/${product.unit}` : ''}
+                                    </Text>
+                                )}
+                            </View>
+                            <View style={styles.productPriceCol}>
+                                {product.promoPrice !== null ? (
+                                    <>
+                                        <Text style={styles.productPriceStrike}>€{product.price.toFixed(2)}</Text>
+                                        <Text style={styles.productPromoPrice}>€{product.promoPrice.toFixed(2)}</Text>
+                                    </>
+                                ) : (
+                                    <Text style={styles.productPrice}>€{product.price.toFixed(2)}</Text>
+                                )}
+                                {product.discount !== null && (
+                                    <Text style={styles.discountText}>-€{product.discount.toFixed(2)}</Text>
+                                )}
+                            </View>
+                            <View style={styles.matchIndicator}>
+                                <Ionicons
+                                    name={product.storeProductId ? 'checkmark-circle' : 'help-circle-outline'}
+                                    size={18}
+                                    color={product.storeProductId ? '#2e7d32' : '#f57c00'}
+                                />
+                            </View>
+                        </View>
+
+                        {editingSection === index && (
+                            <View style={styles.editSection}>
+                                <Text style={styles.rawTextLabel}>Nuskaitytas tekstas:</Text>
+                                <Text style={styles.rawText}>{product.rawLines.join('\n')}</Text>
+                                <TextInput
+                                    style={styles.editInput}
+                                    value={product.name}
+                                    onChangeText={(text) => {
+                                        setProducts(prev => {
+                                            const updated = [...prev];
+                                            updated[index] = { ...updated[index], name: text };
+                                            return updated;
+                                        });
+                                    }}
+                                    placeholder="Pavadinimas"
+                                    placeholderTextColor="#9e9e9e"
+                                />
+                                <View style={styles.editRow}>
+                                    <View style={styles.editField}>
+                                        <Text style={styles.editLabel}>Kaina</Text>
+                                        <TextInput
+                                            style={styles.editInput}
+                                            value={product.price.toString()}
+                                            onChangeText={(text) => {
+                                                setProducts(prev => {
+                                                    const updated = [...prev];
+                                                    updated[index] = { ...updated[index], price: parseFloat(text) || 0 };
+                                                    return updated;
+                                                });
+                                            }}
+                                            keyboardType="decimal-pad"
+                                        />
+                                    </View>
+                                    <View style={styles.editField}>
+                                        <Text style={styles.editLabel}>Galutinė kaina</Text>
+                                        <TextInput
+                                            style={styles.editInput}
+                                            value={product.promoPrice?.toString() || ''}
+                                            onChangeText={(text) => {
+                                                setProducts(prev => {
+                                                    const updated = [...prev];
+                                                    updated[index] = { ...updated[index], promoPrice: text ? parseFloat(text) || null : null };
+                                                    return updated;
+                                                });
+                                            }}
+                                            keyboardType="decimal-pad"
+                                            placeholder="—"
+                                        />
+                                    </View>
+                                </View>
+                            </View>
+                        )}
+                    </TouchableOpacity>
+                ))}
+
+                {products.length === 0 && (
+                    <View style={styles.emptyProducts}>
+                        <Ionicons name="alert-circle-outline" size={32} color="#e0e0e0" />
+                        <Text style={styles.emptyText}>Prekės neatpažintos</Text>
+                    </View>
+                )}
+
+                {/* Footer section */}
+                <TouchableOpacity
+                    style={styles.sectionCard}
+                    onPress={() => setEditingSection(editingSection === 'footer' ? null : 'footer')}
+                >
+                    <View style={styles.sectionHeader}>
+                        <Ionicons name="document-text-outline" size={20} color="#2e7d32" />
+                        <Text style={styles.sectionTitle}>Kvito duomenys</Text>
+                        <Ionicons
+                            name={editingSection === 'footer' ? 'chevron-up' : 'chevron-down'}
+                            size={18} color="#757575"
+                        />
+                    </View>
+                    <View style={styles.footerContent}>
+                        <View style={styles.footerRow}>
+                            <Text style={styles.footerLabel}>Suma:</Text>
+                            <Text style={styles.footerValue}>
+                                {footer?.total ? `€${footer.total.toFixed(2)}` : '—'}
+                            </Text>
+                        </View>
+                        <View style={styles.footerRow}>
+                            <Text style={styles.footerLabel}>Data:</Text>
+                            <Text style={styles.footerValue}>
+                                {footer?.date || '—'} {footer?.time || ''}
+                            </Text>
+                        </View>
+                        <View style={styles.footerRow}>
+                            <Text style={styles.footerLabel}>Kvito Nr.:</Text>
+                            <Text style={styles.footerValue}>{footer?.receiptNo || '—'}</Text>
+                        </View>
+                        {footer?.totalSavings ? (
+                            <View style={styles.footerRow}>
+                                <Text style={styles.footerLabel}>Sutaupyta:</Text>
+                                <Text style={[styles.footerValue, { color: '#2e7d32' }]}>
+                                    €{footer.totalSavings.toFixed(2)}
+                                </Text>
+                            </View>
+                        ) : null}
+                    </View>
+                    {editingSection === 'footer' && (
+                        <View style={styles.editSection}>
+                            <Text style={styles.rawTextLabel}>Nuskaitytas tekstas:</Text>
+                            <Text style={styles.rawText}>{footer?.rawText}</Text>
+                        </View>
+                    )}
+                </TouchableOpacity>
+
+                {/* Save button */}
+                <TouchableOpacity style={styles.saveButton} onPress={() => {
+                    // TODO: Save to backend
+                    console.log('Header:', header);
+                    console.log('Products:', products);
+                    console.log('Footer:', footer);
+                    router.back();
+                }}>
+                    <Ionicons name="save-outline" size={20} color="white" />
+                    <Text style={styles.saveText}>Išsaugoti</Text>
+                </TouchableOpacity>
+
+                <View style={{ height: 40 }} />
+            </ScrollView>
+        </>
+    );
+}
+
+const styles = StyleSheet.create({
+    container: { flex: 1, backgroundColor: '#f5f5f5' },
+    loadingContainer: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#f5f5f5',
+        gap: 16,
+    },
+    loadingText: { fontSize: 15, color: '#757575' },
+
+    sectionCard: {
+        backgroundColor: 'white',
+        marginHorizontal: 16,
+        marginTop: 16,
+        borderRadius: 12,
+        padding: 16,
+        elevation: 1,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
+    },
+    sectionHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    sectionTitle: {
+        flex: 1,
+        fontSize: 15,
+        fontWeight: '600',
+        color: '#212121',
+    },
+    sectionContent: { marginTop: 10 },
+    chainBadge: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: '#212121',
+    },
+    storeName: {
+        fontSize: 14,
+        color: '#424242',
+        marginTop: 4,
+    },
+    sectionSubvalue: {
+        fontSize: 13,
+        color: '#757575',
+        marginTop: 2,
+    },
+    warningText: {
+        fontSize: 12,
+        color: '#f57c00',
+        marginTop: 4,
+    },
+
+    productsHeader: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginHorizontal: 16,
+        marginTop: 20,
+        marginBottom: 4,
+    },
+    productCard: {
+        backgroundColor: 'white',
+        marginHorizontal: 16,
+        marginTop: 8,
+        borderRadius: 12,
+        padding: 14,
+        elevation: 1,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
+    },
+    productRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    productInfo: { flex: 1 },
+    productName: {
+        fontSize: 14,
+        color: '#212121',
+        fontWeight: '500',
+    },
+    matchedName: {
+        fontSize: 14,
+        color: '#2e7d32',
+        fontWeight: '600',
+    },
+    ocrName: {
+        fontSize: 11,
+        color: '#9e9e9e',
+        marginTop: 2,
+    },
+    productQuantity: {
+        fontSize: 12,
+        color: '#757575',
+        marginTop: 2,
+    },
+    productPriceCol: {
+        alignItems: 'flex-end',
+        marginRight: 8,
+    },
+    productPrice: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#212121',
+    },
+    productPriceStrike: {
+        fontSize: 12,
+        color: '#9e9e9e',
+        textDecorationLine: 'line-through',
+    },
+    productPromoPrice: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#d32f2f',
+    },
+    discountText: {
+        fontSize: 11,
+        color: '#d32f2f',
+        marginTop: 2,
+    },
+    matchIndicator: {
+        marginLeft: 4,
+    },
+
+    editSection: {
+        marginTop: 12,
+        paddingTop: 12,
+        borderTopWidth: 0.5,
+        borderTopColor: '#e0e0e0',
+    },
+    rawTextLabel: {
+        fontSize: 11,
+        color: '#9e9e9e',
+        marginBottom: 4,
+    },
+    rawText: {
+        fontSize: 12,
+        color: '#757575',
+        fontFamily: 'monospace',
+        backgroundColor: '#fafafa',
+        padding: 8,
+        borderRadius: 6,
+        marginBottom: 10,
+    },
+    editInput: {
+        borderWidth: 1,
+        borderColor: '#e0e0e0',
+        borderRadius: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        fontSize: 14,
+        color: '#212121',
+        marginBottom: 8,
+    },
+    editRow: {
+        flexDirection: 'row',
+        gap: 8,
+    },
+    editField: {
+        flex: 1,
+    },
+    editLabel: {
+        fontSize: 11,
+        color: '#9e9e9e',
+        marginBottom: 4,
+    },
+
+    footerContent: { marginTop: 10 },
+    footerRow: {
+        flexDirection: 'row',
+        justifyContent: 'space-between',
+        marginTop: 4,
+    },
+    footerLabel: {
+        fontSize: 13,
+        color: '#757575',
+    },
+    footerValue: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: '#212121',
+    },
+
+    emptyProducts: {
+        alignItems: 'center',
+        padding: 32,
+        gap: 8,
+    },
+    emptyText: {
+        fontSize: 14,
+        color: '#9e9e9e',
+    },
+
+    saveButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: '#2e7d32',
+        marginHorizontal: 16,
+        marginTop: 24,
+        paddingVertical: 14,
+        borderRadius: 12,
+    },
+    saveText: {
+        color: 'white',
+        fontSize: 16,
+        fontWeight: '700',
+    },
+    chainRow: { flexDirection: 'row', alignItems: 'center' },
+});
