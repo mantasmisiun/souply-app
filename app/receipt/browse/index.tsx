@@ -29,10 +29,11 @@ const CATEGORY_ICONS: Record<string, string> = {
 };
 
 export default function ReceiptBrowseIndex() {
-    const { chainId, productIndex, preselectL1 } = useLocalSearchParams<{
+    const { chainId, productIndex, preselectL1, ocrName } = useLocalSearchParams<{
         chainId: string;
         productIndex: string;
         preselectL1?: string;
+        ocrName?: string;
     }>();
     const router = useRouter();
     const [l1Categories, setL1Categories] = useState<Category[]>([]);
@@ -48,7 +49,6 @@ export default function ReceiptBrowseIndex() {
                 const l1s = Array.isArray(data) ? data : [];
                 setL1Categories(l1s);
 
-                // If we came from the modal with a preselectL1, auto-expand it
                 if (preselectL1) {
                     const preselId = Number(preselectL1);
                     const subRes = await fetch(`${API_BASE_URL}/api/categories/${preselId}/subcategories`);
@@ -80,7 +80,28 @@ export default function ReceiptBrowseIndex() {
 
     return (
         <>
-            <Stack.Screen options={{ title: 'Pasirinkite kategoriją' }} />
+            <Stack.Screen
+                options={{
+                    title: 'Pasirinkite kategoriją',
+                    headerRight: () => (
+                        <TouchableOpacity
+                            onPress={() => router.push({
+                                pathname: '/search',
+                                params: {
+                                    mode: 'store-products',
+                                    chainId,
+                                    productIndex,
+                                    source: 'receipt-index',
+                                    ...(ocrName ? { ocrName } : {}),
+                                },
+                            })}
+                            style={{ marginRight: 12 }}
+                        >
+                            <Ionicons name="search" size={24} color="#2e7d32" />
+                        </TouchableOpacity>
+                    ),
+                }}
+            />
             <FlatList
                 data={l1Categories}
                 keyExtractor={item => item.id.toString()}
@@ -115,6 +136,7 @@ export default function ReceiptBrowseIndex() {
                                                             name: cat.name,
                                                             chainId,
                                                             productIndex,
+                                                            ocrName,
                                                         },
                                                     })}
                                                 >

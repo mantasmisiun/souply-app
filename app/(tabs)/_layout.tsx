@@ -91,9 +91,9 @@ export default function TabLayout() {
             <Tabs.Screen
                 name="receipts"
                 options={{
-                    title: 'Kvitai',
+                    title: 'Analizė',
                     tabBarIcon: ({ focused, color, size }) => (
-                        <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />
+                    <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />
                     ),
                 }}
             />
