@@ -24,7 +24,6 @@ export default function RootLayout() {
         <Stack.Screen name="shopping-list/[id]" options={{ title: 'Pirkinių sąrašas' }} />
         <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
         <Stack.Screen name="receipt-process" options={{ title: 'Kvito peržiūra' }} />
-        <Stack.Screen name="receipt/[id]" options={{ title: 'Kvitas' }} />
       </Stack>
       <StatusBar style="auto" />
     </ThemeProvider>

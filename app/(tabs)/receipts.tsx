@@ -184,7 +184,7 @@ export default function ReceiptsScreen() {
             <TouchableOpacity
               style={styles.card}
               onPress={() => {
-                router.push(`/receipt/${item.id}`);
+                router.push(`/receipt-process?receiptId=${item.id}`);
               }}
             >
               <View style={styles.cardLeft}>

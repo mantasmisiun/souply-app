@@ -7,6 +7,9 @@ import { isRimiReceipt, parseRimiReceipt, parseRimiHeaderOnly, RimiProduct, Rimi
 import { API_BASE_URL } from '../config/api';
 import { getUserId } from '../config/user';
 import { useReceiptPickerState } from '../state/basketState';
+import ReceiptComparisonSection from '../components/receipt/ReceiptComparisonSection';
+import { useReceiptComparison } from '../hooks/useReceiptComparison';
+import { ReceiptComparison } from '../types/receipt-view';
 
 interface ProductMatchOption {
     storeProductId: number;
@@ -82,25 +85,25 @@ interface ComparisonChain {
     chainLogoUrl: string | null;
 }
 
-interface ReceiptComparison {
-    currentChain: {
-        chainId: number;
-        chainName: string;
-        storeId: number;
-        storeName: string;
-        storeAddress: string;
-        total: number;
-        comparedItems: number;
-        missingItems: number;
-        chainLogoUrl: string | null;
-    };
-    alternatives: ComparisonChain[];
-    summary: {
-        recognizedItems: number;
-        excludedItems: number;
-        note?: string;
-    };
-}
+// interface ReceiptComparison {
+//     currentChain: {
+//         chainId: number;
+//         chainName: string;
+//         storeId: number;
+//         storeName: string;
+//         storeAddress: string;
+//         total: number;
+//         comparedItems: number;
+//         missingItems: number;
+//         chainLogoUrl: string | null;
+//     };
+//     alternatives: ComparisonChain[];
+//     summary: {
+//         recognizedItems: number;
+//         excludedItems: number;
+//         note?: string;
+//     };
+// }
 
 type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
 
@@ -159,10 +162,13 @@ function buildParsedData(
 }
 
 export default function ProcessReceiptScreen() {
-    const { uri } = useLocalSearchParams<{ uri: string }>();
+    const { uri, receiptId: receiptIdParam } = useLocalSearchParams<{ uri?: string; receiptId?: string }>();
+    const existingReceiptId = receiptIdParam ? Number(receiptIdParam) : null;
+    const isExistingMode = Number.isFinite(existingReceiptId);
     const router = useRouter();
     const [loading, setLoading] = useState(true);
     const [loadingMessage, setLoadingMessage] = useState('Nuskaitomas kvitas...');
+    const isHydratingRef = useRef(false);
 
     const [header, setHeader] = useState<HeaderData | null>(null);
     const [products, setProducts] = useState<ProductLine[]>([]);
@@ -177,36 +183,89 @@ export default function ProcessReceiptScreen() {
     const [receiptId, setReceiptId] = useState<number | null>(null);
     const [imageFilePath, setImageFilePath] = useState<string | null>(null);
     const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
-    const [comparison, setComparison] = useState<ReceiptComparison | null>(null);
-    const [comparisonLoading, setComparisonLoading] = useState(false);
-    const [comparisonError, setComparisonError] = useState<string | null>(null);
+    const {
+        comparison,
+        comparisonLoading,
+        comparisonError,
+        fetchComparison,
+    } = useReceiptComparison();
 
-    const fetchComparison = async (id: number) => {
-        try {
-            setComparisonLoading(true);
-            setComparisonError(null);
-
-            const res = await fetch(`${API_BASE_URL}/api/receipts/${id}/comparison`);
-            if (!res.ok) {
-                const errBody = await res.json().catch(() => ({}));
-                throw new Error(errBody?.error || 'Nepavyko gauti palyginimo');
-            }
-
-            const data = await res.json();
-            setComparison(data);
-        } catch (e: any) {
-            console.warn('Comparison fetch failed:', e);
-            setComparisonError(e?.message || 'Nepavyko gauti palyginimo');
-        } finally {
-            setComparisonLoading(false);
-        }
-    };
     useEffect(() => {
         if (!receiptId) return;
         if (saveStatus !== 'saved') return;
         fetchComparison(receiptId);
     }, [receiptId, saveStatus]);
+    const loadExistingReceipt = async (id: number) => {
+        try {
+            setLoading(true);
+            isHydratingRef.current = true;
 
+            const res = await fetch(`${API_BASE_URL}/api/receipts/${id}`);
+            const receipt = await res.json();
+
+            const parsed = typeof receipt.parsedData === 'string'
+                ? JSON.parse(receipt.parsedData)
+                : receipt.parsedData;
+
+            if (!parsed?.header || !parsed?.footer || !Array.isArray(parsed?.products)) {
+                throw new Error('Receipt parsedData is missing required fields');
+            }
+
+            setHeader({
+                chainName: parsed.header.chainName ?? receipt.chainName ?? 'Neatpažinta',
+                chainId: parsed.header.chainId ?? null,
+                storeCode: parsed.header.storeCode ?? '',
+                storeAddress: parsed.header.storeAddress ?? '',
+                storeId: parsed.header.storeId ?? receipt.storeId ?? null,
+                storeName: parsed.header.storeName ?? null,
+                storeAddressMatched: parsed.header.storeAddressMatched ?? null,
+                matchConfidence: parsed.header.matchConfidence ?? null,
+                matchLoading: false,
+                rawText: parsed.header.rawText ?? '',
+                region: parsed.header.region ?? { yTop: 0, yBottom: 0, xLeft: 0, xRight: 0 },
+            });
+
+            setProducts(parsed.products.map((p: any) => ({
+                name: p.name ?? '',
+                matchedName: p.matchedName ?? null,
+                storeProductId: p.storeProductId ?? null,
+                storeProductImageUrl: p.storeProductImageUrl ?? null,
+                matchConfidence: typeof p.matchConfidence === 'number' ? p.matchConfidence : null,
+                matchConfirmed: !!p.matchConfirmed,
+                altMatches: Array.isArray(p.altMatches) ? p.altMatches : [],
+                price: Number(p.price ?? 0),
+                promoPrice: p.promoPrice == null ? null : Number(p.promoPrice),
+                quantity: Number(p.quantity ?? 1),
+                unit: p.unit ?? '',
+                pricePerUnit: p.pricePerUnit == null ? null : Number(p.pricePerUnit),
+                rawLines: Array.isArray(p.rawLines) ? p.rawLines : [],
+                region: p.region ?? { yTop: 0, yBottom: 0, xLeft: 0, xRight: 0 },
+            })));
+
+            setFooter({
+                total: parsed.footer.total ?? null,
+                date: parsed.footer.date ?? '',
+                time: parsed.footer.time ?? '',
+                receiptNo: parsed.footer.receiptNo ?? receipt.receiptNo ?? '',
+                totalSavings: parsed.footer.totalSavings ?? null,
+                rawText: parsed.footer.rawText ?? '',
+                region: parsed.footer.region ?? { yTop: 0, yBottom: 0, xLeft: 0, xRight: 0 },
+            });
+
+            setReceiptId(id);
+            setSaveStatus('saved');
+            hasPostedRef.current = true;
+
+            if (parsed?.image?.filePath) {
+                setImageFilePath(parsed.image.filePath);
+            }
+
+            await fetchComparison(id);
+        } finally {
+            setLoading(false);
+            setTimeout(() => { isHydratingRef.current = false; }, 0);
+        }
+    };
     // Refs for debounced save machinery (no re-renders, live values for unmount cleanup)
     const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
     const pendingSaveRef = useRef<object | null>(null);
@@ -227,12 +286,17 @@ export default function ProcessReceiptScreen() {
 
     // Kick off OCR when uri is provided
     useEffect(() => {
+        if (isExistingMode && existingReceiptId) {
+            loadExistingReceipt(existingReceiptId);
+            return;
+        }
+
         if (uri) {
             const decoded = decodeURIComponent(uri);
             setImageUri(decoded);
             processReceipt(decoded);
         }
-    }, [uri]);
+    }, [uri, isExistingMode, existingReceiptId]);
 
     // Apply user's manual pick from the category browser
     useEffect(() => {
@@ -258,6 +322,7 @@ export default function ProcessReceiptScreen() {
 
     // Step 1: POST receipt once OCR + store match + product match have all completed
     useEffect(() => {
+        if (isExistingMode) return;
         if (hasPostedRef.current) return;
         if (!header || !footer) return;         // parsing not done
         if (header.matchLoading) return;         // store match still running
@@ -337,6 +402,7 @@ export default function ProcessReceiptScreen() {
     useEffect(() => {
         if (!receiptId) return;        // POST hasn't completed yet
         if (!header || !footer) return;
+        if (isHydratingRef.current) return;
 
         const parsedData = buildParsedData(
             header, products, footer,
@@ -373,18 +439,13 @@ export default function ProcessReceiptScreen() {
             setSaveStatus('saving');
             const userId = userIdRef.current ?? await getUserId();
             userIdRef.current = userId;
-
             await fetch(`${API_BASE_URL}/api/receipts/${id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ userId, parsedData: data }),
             });
             setSaveStatus('saved');
-            await fetch(`${API_BASE_URL}/api/receipts/${id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId, parsedData: data }),
-            });
+            fetchComparison(id);
             setSaveStatus('saved');
             fetchComparison(id);
             } catch (e) {
@@ -725,90 +786,11 @@ export default function ProcessReceiptScreen() {
             <Stack.Screen options={{ title: 'Kvito peržiūra' }} />
             <ScrollView style={styles.container}>
                 {renderStatusBadge()}
-                {comparisonLoading && (
-                    <View style={styles.sectionCard}>
-                        <Text style={styles.sectionTitle}>Kainų palyginimas</Text>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
-                            <ActivityIndicator size="small" color="#2e7d32" />
-                            <Text style={styles.sectionSubvalue}>Skaičiuojama...</Text>
-                        </View>
-                    </View>
-                )}
-
-                {!!comparisonError && (
-                    <View style={styles.sectionCard}>
-                        <Text style={styles.sectionTitle}>Kainų palyginimas</Text>
-                        <Text style={[styles.sectionSubvalue, { color: '#c62828', marginTop: 6 }]}>
-                            {comparisonError}
-                        </Text>
-                    </View>
-                )}
-
-                {comparison && (() => {
-                    const bestAlt = comparison.alternatives[0];
-                    const hasSavings = !!bestAlt && bestAlt.savings > 0;
-
-                    const totals = [
-                        comparison.currentChain.total,
-                        ...comparison.alternatives.map(a => a.total),
-                    ].filter(n => Number.isFinite(n) && n >= 0);
-
-                    const maxTotal = totals.length ? Math.max(...totals) : 1;
-                    const barWidth = (total: number): DimensionValue => {
-                        const pct = Math.max(8, (total / Math.max(maxTotal, 1)) * 100);
-                        return `${pct}%` as `${number}%`;
-                    };
-
-                    return (
-                        <View style={[styles.sectionCard, hasSavings && styles.savingsCard]}>
-                            <Text style={styles.sectionTitle}>Kainų palyginimas</Text>
-
-                            {hasSavings ? (
-                                <Text style={styles.savingsText}>
-                                    Sutaupytumėte €{bestAlt.savings.toFixed(2)} pasirinkę {bestAlt.chainName}
-                                </Text>
-                            ) : (
-                                <Text style={styles.sectionSubvalue}>Pigiau nerasta pagal turimus duomenis</Text>
-                            )}
-
-                            <Text style={[styles.sectionSubvalue, { marginTop: 8 }]}>
-                                Lyginta pagal {comparison.summary.recognizedItems} atpažintas prekes
-                                {comparison.summary.excludedItems > 0 ? `, neįtraukta: ${comparison.summary.excludedItems}` : ''}
-                            </Text>
-                            {!!comparison.summary.note && (
-                                <Text style={styles.warningText}>{comparison.summary.note}</Text>
-                            )}
-
-                            <View style={{ marginTop: 12, gap: 10 }}>
-                                <View>
-                                    <Text style={styles.footerLabel}>
-                                        Jūsų parduotuvė: {comparison.currentChain.chainName} ({comparison.currentChain.storeName})
-                                    </Text>
-                                    <View style={styles.compareBarTrack}>
-                                        <View style={[styles.compareBarFillCurrent, { width: barWidth(comparison.currentChain.total) }]} />
-                                    </View>
-                                    <Text style={styles.footerValue}>€{comparison.currentChain.total.toFixed(2)}</Text>
-                                </View>
-
-                                {comparison.alternatives.map((alt) => (
-                                    <View key={`${alt.chainId}-${alt.storeId}`}>
-                                        <Text style={styles.footerLabel}>
-                                            {alt.chainName} ({alt.storeName}) • {alt.distanceKm.toFixed(1)} km
-                                        </Text>
-                                        <View style={styles.compareBarTrack}>
-                                            <View style={[styles.compareBarFillAlt, { width: barWidth(alt.total) }]} />
-                                        </View>
-                                        <Text style={styles.footerValue}>
-                                            €{alt.total.toFixed(2)}
-                                            {alt.savings > 0 ? `  (−€${alt.savings.toFixed(2)})` : ''}
-                                        </Text>
-                                        {!!alt.note && <Text style={styles.warningText}>{alt.note}</Text>}
-                                    </View>
-                                ))}
-                            </View>
-                        </View>
-                    );
-                })()}
+               <ReceiptComparisonSection
+                    comparison={comparison}
+                    loading={comparisonLoading}
+                    error={comparisonError}
+                />
 
                 {/* Header section */}
                 <TouchableOpacity
@@ -1302,22 +1284,5 @@ const styles = StyleSheet.create({
         fontSize: 14,
         fontWeight: '700',
         color: '#1b5e20',
-    },
-    compareBarTrack: {
-        marginTop: 6,
-        height: 8,
-        borderRadius: 999,
-        backgroundColor: '#eeeeee',
-        overflow: 'hidden',
-    },
-    compareBarFillCurrent: {
-        height: '100%',
-        backgroundColor: '#1565c0',
-        borderRadius: 999,
-    },
-    compareBarFillAlt: {
-        height: '100%',
-        backgroundColor: '#2e7d32',
-        borderRadius: 999,
     },
 });
