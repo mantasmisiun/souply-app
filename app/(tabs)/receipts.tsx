@@ -184,14 +184,7 @@ export default function ReceiptsScreen() {
             <TouchableOpacity
               style={styles.card}
               onPress={() => {
-                if (
-                  item.processingStatus === "failed" ||
-                  item.processingStatus === "pending"
-                ) {
-                  router.push(`/receipt/edit/${item.id}`);
-                } else {
-                  router.push(`/receipt/${item.id}`);
-                }
+                router.push(`/receipt/${item.id}`);
               }}
             >
               <View style={styles.cardLeft}>

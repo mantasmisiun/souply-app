@@ -1,10 +1,11 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, ActivityIndicator, TextInput, Dimensions, Modal } from 'react-native';
-import { useState, useEffect } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Image, ActivityIndicator, TextInput, Dimensions, Modal, DimensionValue } from 'react-native';
+import { useState, useEffect, useRef } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import { isRimiReceipt, parseRimiReceipt, parseRimiHeaderOnly, RimiProduct, RimiHeader, RimiFooter, Region, RimiLine } from '../utils/rimiParser';
 import { API_BASE_URL } from '../config/api';
+import { getUserId } from '../config/user';
 import { useReceiptPickerState } from '../state/basketState';
 
 interface ProductMatchOption {
@@ -19,13 +20,13 @@ interface ProductMatchOption {
 }
 
 interface ProductLine {
-    name: string;                            // OCR name
-    matchedName: string | null;              // DB name (if matched)
-    storeProductId: number | null;           // null if not confidently matched
+    name: string;
+    matchedName: string | null;
+    storeProductId: number | null;
     storeProductImageUrl: string | null;
     matchConfidence: number | null;
-    matchConfirmed: boolean;                 // true = auto-applied OR user-picked
-    altMatches: ProductMatchOption[];        // top 3 from backend, for manual picker
+    matchConfirmed: boolean;
+    altMatches: ProductMatchOption[];
     price: number;
     promoPrice: number | null;
     quantity: number;
@@ -39,10 +40,10 @@ interface HeaderData {
     chainName: string;
     chainId: number | null;
     storeCode: string;
-    storeAddress: string;           // OCR'd address
+    storeAddress: string;
     storeId: number | null;
     storeName: string | null;
-    storeAddressMatched: string | null; // clean address from DB
+    storeAddressMatched: string | null;
     matchConfidence: number | null;
     matchLoading: boolean;
     rawText: string;
@@ -66,18 +67,49 @@ interface RegionPreviewProps {
     region: Region;
     cardWidth: number;
 }
+interface ComparisonChain {
+    chainId: number;
+    chainName: string;
+    storeId: number;
+    storeName: string;
+    storeAddress: string;
+    distanceKm: number;
+    total: number;
+    savings: number;
+    comparedItems: number;
+    missingItems: number;
+    note?: string;
+    chainLogoUrl: string | null;
+}
 
-const CARD_WIDTH = Dimensions.get('window').width - 32 - 32; // screen - horizontal margins (16+16) - card padding (16+16)
+interface ReceiptComparison {
+    currentChain: {
+        chainId: number;
+        chainName: string;
+        storeId: number;
+        storeName: string;
+        storeAddress: string;
+        total: number;
+        comparedItems: number;
+        missingItems: number;
+        chainLogoUrl: string | null;
+    };
+    alternatives: ComparisonChain[];
+    summary: {
+        recognizedItems: number;
+        excludedItems: number;
+        note?: string;
+    };
+}
+
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error';
+
+const CARD_WIDTH = Dimensions.get('window').width - 32 - 32;
+
 function RegionPreview({ imageUri, imageWidth, imageHeight, region, cardWidth }: RegionPreviewProps) {
-    // Bail out if region is empty (e.g. generic result fallback)
-    if (region.yBottom <= region.yTop || region.xRight <= region.xLeft) {
-        return null;
-    }
+    if (region.yBottom <= region.yTop || region.xRight <= region.xLeft) return null;
 
-    // Scale factor: how much we shrink the image to fit the card width.
-    // We show the full image width, cropped vertically (and horizontally if needed) to the region.
     const scale = cardWidth / imageWidth;
-
     const regionHeight = region.yBottom - region.yTop;
     const displayHeight = regionHeight * scale;
 
@@ -101,6 +133,31 @@ function RegionPreview({ imageUri, imageWidth, imageHeight, region, cardWidth }:
         </View>
     );
 }
+
+/**
+ * Build the parsedData payload sent to the backend.
+ * Mirrors the shape agreed on in receiptSaveService.ts on the API side.
+ */
+function buildParsedData(
+    header: HeaderData,
+    products: ProductLine[],
+    footer: FooterData,
+    imageMeta: { uri: string | null; width: number; height: number } | null,
+    imageFilePath: string | null
+): object {
+    return {
+        version: 1,
+        image: imageMeta ? {
+            filePath: imageFilePath,
+            width: imageMeta.width,
+            height: imageMeta.height,
+        } : null,
+        header,
+        products,
+        footer,
+    };
+}
+
 export default function ProcessReceiptScreen() {
     const { uri } = useLocalSearchParams<{ uri: string }>();
     const router = useRouter();
@@ -115,6 +172,60 @@ export default function ProcessReceiptScreen() {
     const [imageDims, setImageDims] = useState<{ width: number; height: number } | null>(null);
     const [pickerState, setPickerState] = useState<{ productIndex: number } | null>(null);
     const { pendingPick, clearPendingPick } = useReceiptPickerState();
+
+    // Save state
+    const [receiptId, setReceiptId] = useState<number | null>(null);
+    const [imageFilePath, setImageFilePath] = useState<string | null>(null);
+    const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle');
+    const [comparison, setComparison] = useState<ReceiptComparison | null>(null);
+    const [comparisonLoading, setComparisonLoading] = useState(false);
+    const [comparisonError, setComparisonError] = useState<string | null>(null);
+
+    const fetchComparison = async (id: number) => {
+        try {
+            setComparisonLoading(true);
+            setComparisonError(null);
+
+            const res = await fetch(`${API_BASE_URL}/api/receipts/${id}/comparison`);
+            if (!res.ok) {
+                const errBody = await res.json().catch(() => ({}));
+                throw new Error(errBody?.error || 'Nepavyko gauti palyginimo');
+            }
+
+            const data = await res.json();
+            setComparison(data);
+        } catch (e: any) {
+            console.warn('Comparison fetch failed:', e);
+            setComparisonError(e?.message || 'Nepavyko gauti palyginimo');
+        } finally {
+            setComparisonLoading(false);
+        }
+    };
+    useEffect(() => {
+        if (!receiptId) return;
+        if (saveStatus !== 'saved') return;
+        fetchComparison(receiptId);
+    }, [receiptId, saveStatus]);
+
+    // Refs for debounced save machinery (no re-renders, live values for unmount cleanup)
+    const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const pendingSaveRef = useRef<object | null>(null);
+    const receiptIdRef = useRef<number | null>(null);
+    const userIdRef = useRef<string | null>(null);
+    const hasPostedRef = useRef(false);  // guard against double POST from re-renders
+
+    // Keep refs in sync with state
+    useEffect(() => { receiptIdRef.current = receiptId; }, [receiptId]);
+
+    // Cache userId on mount so unmount flush can use it synchronously
+    useEffect(() => {
+        (async () => {
+            const id = await getUserId();
+            userIdRef.current = id;
+        })();
+    }, []);
+
+    // Kick off OCR when uri is provided
     useEffect(() => {
         if (uri) {
             const decoded = decodeURIComponent(uri);
@@ -122,6 +233,8 @@ export default function ProcessReceiptScreen() {
             processReceipt(decoded);
         }
     }, [uri]);
+
+    // Apply user's manual pick from the category browser
     useEffect(() => {
         if (!pendingPick) return;
         const { productIndex, storeProductId, storeProductName, imageUrl } = pendingPick;
@@ -134,7 +247,7 @@ export default function ProcessReceiptScreen() {
                 matchedName: storeProductName,
                 storeProductId,
                 storeProductImageUrl: imageUrl,
-                matchConfidence: 1,          // user manually picked — treat as confident
+                matchConfidence: 1,
                 matchConfirmed: true,
             };
             return updated;
@@ -142,6 +255,160 @@ export default function ProcessReceiptScreen() {
 
         clearPendingPick();
     }, [pendingPick, clearPendingPick]);
+
+    // Step 1: POST receipt once OCR + store match + product match have all completed
+    useEffect(() => {
+        if (hasPostedRef.current) return;
+        if (!header || !footer) return;         // parsing not done
+        if (header.matchLoading) return;         // store match still running
+        // products may be empty array (receipt with no recognized items), that's fine
+
+        hasPostedRef.current = true;
+        (async () => {
+            try {
+                const userId = userIdRef.current ?? await getUserId();
+                userIdRef.current = userId;
+
+                const parsedData = buildParsedData(header, products, footer, imageDims ? { uri: imageUri, ...imageDims } : null, imageFilePath);
+
+                const res = await fetch(`${API_BASE_URL}/api/receipts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, filePath: '', parsedData }),
+                });
+                const data = await res.json();
+                if (data?.id) {
+                    setReceiptId(data.id);
+                    setSaveStatus('saved');
+                    fetchComparison(data.id); // immediate first fetch
+                } else {
+                    console.warn('Receipt POST returned no id:', data);
+                    setSaveStatus('error');
+                    hasPostedRef.current = false;  // allow retry on next state change
+                }
+            } catch (e) {
+                console.warn('Receipt POST failed:', e);
+                setSaveStatus('error');
+                hasPostedRef.current = false;
+            }
+        })();
+    }, [header, footer, products]);
+
+    // Step 2: MinIO upload — runs in parallel with POST, PATCH filePath once done
+    useEffect(() => {
+        if (!imageUri || !receiptId || imageFilePath) return;
+
+        (async () => {
+            try {
+                // Get presigned PUT URL
+                const urlRes = await fetch(`${API_BASE_URL}/api/receipts/upload-url`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        filename: `receipt-${receiptId}.jpg`,
+                        mimeType: 'image/jpeg',
+                    }),
+                });
+                const { uploadUrl, filePath } = await urlRes.json();
+
+                // Upload the image bytes (fetch(uri) returns a blob for local files)
+                const imageBlob = await (await fetch(imageUri)).blob();
+                await fetch(uploadUrl, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'image/jpeg' },
+                    body: imageBlob,
+                });
+
+                // PATCH the receipt with the filePath
+                await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/file-path`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ filePath }),
+                });
+
+                setImageFilePath(filePath);
+            } catch (e) {
+                console.warn('MinIO upload failed:', e);
+            }
+        })();
+    }, [imageUri, receiptId, imageFilePath]);
+
+    // Step 3: debounced PUT on any parsedData change
+    useEffect(() => {
+        if (!receiptId) return;        // POST hasn't completed yet
+        if (!header || !footer) return;
+
+        const parsedData = buildParsedData(
+            header, products, footer,
+            imageDims ? { uri: imageUri, ...imageDims } : null,
+            imageFilePath
+        );
+        scheduleDebouncedSave(parsedData);
+    }, [header, products, footer, receiptId, imageFilePath]);
+
+    // Unmount flush
+    useEffect(() => {
+        return () => {
+            if (saveTimerRef.current) {
+                clearTimeout(saveTimerRef.current);
+                saveTimerRef.current = null;
+            }
+            const id = receiptIdRef.current;
+            const userId = userIdRef.current;
+            const snapshot = pendingSaveRef.current;
+            if (id && userId && snapshot) {
+                // Fire and forget — component is tearing down, can't await
+                fetch(`${API_BASE_URL}/api/receipts/${id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, parsedData: snapshot }),
+                }).catch(err => console.warn('Unmount flush failed:', err));
+                pendingSaveRef.current = null;
+            }
+        };
+    }, []);
+
+    const saveNow = async (id: number, data: object) => {
+        try {
+            setSaveStatus('saving');
+            const userId = userIdRef.current ?? await getUserId();
+            userIdRef.current = userId;
+
+            await fetch(`${API_BASE_URL}/api/receipts/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, parsedData: data }),
+            });
+            setSaveStatus('saved');
+            await fetch(`${API_BASE_URL}/api/receipts/${id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, parsedData: data }),
+            });
+            setSaveStatus('saved');
+            fetchComparison(id);
+            } catch (e) {
+            console.warn('Save failed:', e);
+            setSaveStatus('error');
+        }
+    };
+
+    const scheduleDebouncedSave = (data: object) => {
+        pendingSaveRef.current = data;
+
+        if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+
+        saveTimerRef.current = setTimeout(() => {
+            const id = receiptIdRef.current;
+            const snapshot = pendingSaveRef.current;
+            if (id && snapshot) {
+                saveNow(id, snapshot);
+                pendingSaveRef.current = null;
+            }
+            saveTimerRef.current = null;
+        }, 1500);
+    };
+
     const handleBrowseCategories = async () => {
         if (pickerState === null) return;
         const idx = pickerState.productIndex;
@@ -154,9 +421,7 @@ export default function ProcessReceiptScreen() {
 
         if (topMatch) {
             try {
-                const res = await fetch(
-                    `${API_BASE_URL}/api/categories/${topMatch.categoryId}/ancestors`
-                );
+                const res = await fetch(`${API_BASE_URL}/api/categories/${topMatch.categoryId}/ancestors`);
                 const data = await res.json();
                 if (data?.l1) preselectL1 = String(data.l1.id);
                 if (data?.l2) preselectL2 = String(data.l2.id);
@@ -170,12 +435,10 @@ export default function ProcessReceiptScreen() {
         setPickerState(null);
 
         if (preselectL1 && preselectL2) {
-            // Push L1, then L2 (two screens stacked)
             router.push({
                 pathname: '/receipt/browse',
                 params: { chainId: String(chainId), productIndex: String(idx), preselectL1 },
             });
-            // Small delay so L1 mounts before L2 pushes on top
             setTimeout(() => {
                 router.push({
                     pathname: '/receipt/browse/[categoryId]',
@@ -189,19 +452,18 @@ export default function ProcessReceiptScreen() {
                 });
             }, 50);
         } else {
-            // No ancestor data — just push L1
             router.push({
                 pathname: '/receipt/browse',
                 params: { chainId: String(chainId), productIndex: String(idx) },
             });
         }
     };
+
     const processReceipt = async (imageUri: string) => {
         try {
             setLoading(true);
             setLoadingMessage('Atpažįstamas tekstas...');
 
-            // Get the displayed image dimensions first so we can normalize MLKit coords
             const dims = await new Promise<{ width: number; height: number }>((resolve, reject) => {
                 Image.getSize(imageUri, (width, height) => resolve({ width, height }), reject);
             });
@@ -209,7 +471,6 @@ export default function ProcessReceiptScreen() {
 
             const result = await TextRecognition.recognize(imageUri);
 
-            // Find MLKit's internal image bounds (max extents of all detected text)
             let mlkitMaxX = 0, mlkitMaxY = 0;
             for (const block of result.blocks) {
                 for (const line of block.lines) {
@@ -220,14 +481,8 @@ export default function ProcessReceiptScreen() {
                 }
             }
 
-            // MLKit processes at the image's *native* resolution, but Image.getSize returns
-            // the on-disk dimensions (which may be a smaller display-sized version).
-            // Compute a scale factor to map MLKit frames → display image coords.
-            // We estimate MLKit's source height from its max Y plus a small margin,
-            // or compare ratios if the image aspect is consistent.
             const scaleX = dims.width / mlkitMaxX;
             const scaleY = dims.height / mlkitMaxY;
-            // Use the average — both should be ~identical for a uniform downscale
             const frameScale = (scaleX + scaleY) / 2;
 
             console.log('=== COORDINATE NORMALIZATION ===');
@@ -259,7 +514,6 @@ export default function ProcessReceiptScreen() {
             }
             allLines.sort((a, b) => a.yTop - b.yTop);
 
-            // Merge lines on same physical row (threshold also needs scaling — was 30 in MLKit coords)
             const mergedLines: LineWithFrame[] = [];
             const PRICE_RE = /^\d+[.,]\s?\d{2}\s*[AB]\s*$/;
             const ROW_THRESHOLD = 30 * frameScale;
@@ -310,14 +564,6 @@ export default function ProcessReceiptScreen() {
                 setLoading(false);
 
                 const parsed = parseRimiReceipt(mergedLines);
-                
-                console.log('=== PARSED REGIONS ===');
-                console.log('Header region:', parsed.header.region);
-                parsed.products.forEach((p, i) =>
-                    console.log(`Product ${i} "${p.name}" region:`, p.region)
-                );
-                console.log('Footer region:', parsed.footer.region);
-
                 await applyRimiResult(parsed.header, parsed.products, parsed.footer);
             } else {
                 applyGenericResult(lineTexts);
@@ -330,14 +576,9 @@ export default function ProcessReceiptScreen() {
         }
     };
 
-    const applyRimiResult = async (
-        rHeader: RimiHeader,
-        rProducts: RimiProduct[],
-        rFooter: RimiFooter
-    ) => {
-        const chainId = 2; // Rimi
+    const applyRimiResult = async (rHeader: RimiHeader, rProducts: RimiProduct[], rFooter: RimiFooter) => {
+        const chainId = 2;
 
-        // Match store via backend Levenshtein endpoint
         let storeId: number | null = null;
         let storeName: string | null = null;
         let storeAddressMatched: string | null = null;
@@ -346,30 +587,17 @@ export default function ProcessReceiptScreen() {
         if (rHeader.storeAddress) {
             try {
                 const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(rHeader.storeAddress)}`;
-                console.log('=== STORE MATCH REQUEST ===');
-                console.log('URL:', url);
-                console.log('OCR address:', rHeader.storeAddress);
-                
                 const res = await fetch(url);
-                console.log('Response status:', res.status);
-                
                 const data = await res.json();
-                console.log('Response data:', JSON.stringify(data));
-                
                 if (data?.match) {
                     storeId = data.match.storeId;
                     storeName = data.match.storeName;
                     storeAddressMatched = data.match.address;
                     matchConfidence = data.match.confidence;
-                    console.log('Matched:', storeName, 'confidence:', matchConfidence);
-                } else {
-                    console.log('No match in response');
                 }
             } catch (e) {
                 console.warn('Store match failed:', e);
             }
-        } else {
-            console.log('No storeAddress parsed from OCR — skipping match');
         }
 
         setHeader({
@@ -386,8 +614,6 @@ export default function ProcessReceiptScreen() {
             region: rHeader.region,
         });
 
-        // Match products with StoreProduct (unchanged)
-        // Match each product via backend endpoint, in parallel
         const AUTO_APPLY_THRESHOLD = 0.85;
 
         const matchPromises = rProducts.map(async (rp) => {
@@ -398,15 +624,6 @@ export default function ProcessReceiptScreen() {
                     chainId: String(chainId),
                     name: rp.name,
                 });
-                // Include amount/unit to boost matching when we have them
-                if (rp.pricePerUnit !== null && rp.unit === 'kg') {
-                    // For weighable items, amount in the DB is the package size, not the kg weight.
-                    // Skip the hint; name-only match is safer.
-                } else if (rp.unit && rp.unit !== 'vnt') {
-                    // Edge case — pass through if we ever see other units
-                }
-                // For multi-buy (unit=vnt), skip amount hint too — quantity is count, not package size.
-
                 const res = await fetch(`${API_BASE_URL}/api/store-products/match?${params.toString()}`);
                 const data = await res.json();
                 if (Array.isArray(data?.matches)) altMatches = data.matches;
@@ -447,8 +664,8 @@ export default function ProcessReceiptScreen() {
             rawText: rFooter.rawText,
             region: rFooter.region,
         });
-
     };
+
     const applyGenericResult = (lines: string[]) => {
         setHeader({
             chainName: 'Neatpažinta',
@@ -475,22 +692,6 @@ export default function ProcessReceiptScreen() {
         });
     };
 
-    // Simple similarity score (Dice coefficient on bigrams)
-    const similarity = (a: string, b: string): number => {
-        if (!a || !b) return 0;
-        if (a === b) return 1;
-        const bigrams = (s: string) => {
-            const set = new Set<string>();
-            for (let i = 0; i < s.length - 1; i++) set.add(s.substring(i, i + 2));
-            return set;
-        };
-        const aSet = bigrams(a);
-        const bSet = bigrams(b);
-        let intersection = 0;
-        for (const bg of aSet) if (bSet.has(bg)) intersection++;
-        return (2 * intersection) / (aSet.size + bSet.size);
-    };
-
     if (loading) {
         return (
             <View style={styles.loadingContainer}>
@@ -500,10 +701,115 @@ export default function ProcessReceiptScreen() {
         );
     }
 
+    // Save status badge (under the title, pill-style)
+    const renderStatusBadge = () => {
+        if (saveStatus === 'idle') return null;
+        const config = {
+            saving: { bg: '#e3f2fd', color: '#1565c0', text: 'Saugoma…' },
+            saved:  { bg: '#e8f5e9', color: '#2e7d32', text: 'Išsaugota' },
+            error:  { bg: '#ffebee', color: '#c62828', text: 'Nepavyko išsaugoti' },
+        }[saveStatus];
+        return (
+            <View style={[styles.statusBadgeWrap]}>
+                <View style={[styles.statusBadge, { backgroundColor: config.bg }]}>
+                    <Text style={[styles.statusBadgeText, { color: config.color }]}>
+                        {config.text}
+                    </Text>
+                </View>
+            </View>
+        );
+    };
+
     return (
         <>
             <Stack.Screen options={{ title: 'Kvito peržiūra' }} />
             <ScrollView style={styles.container}>
+                {renderStatusBadge()}
+                {comparisonLoading && (
+                    <View style={styles.sectionCard}>
+                        <Text style={styles.sectionTitle}>Kainų palyginimas</Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                            <ActivityIndicator size="small" color="#2e7d32" />
+                            <Text style={styles.sectionSubvalue}>Skaičiuojama...</Text>
+                        </View>
+                    </View>
+                )}
+
+                {!!comparisonError && (
+                    <View style={styles.sectionCard}>
+                        <Text style={styles.sectionTitle}>Kainų palyginimas</Text>
+                        <Text style={[styles.sectionSubvalue, { color: '#c62828', marginTop: 6 }]}>
+                            {comparisonError}
+                        </Text>
+                    </View>
+                )}
+
+                {comparison && (() => {
+                    const bestAlt = comparison.alternatives[0];
+                    const hasSavings = !!bestAlt && bestAlt.savings > 0;
+
+                    const totals = [
+                        comparison.currentChain.total,
+                        ...comparison.alternatives.map(a => a.total),
+                    ].filter(n => Number.isFinite(n) && n >= 0);
+
+                    const maxTotal = totals.length ? Math.max(...totals) : 1;
+                    const barWidth = (total: number): DimensionValue => {
+                        const pct = Math.max(8, (total / Math.max(maxTotal, 1)) * 100);
+                        return `${pct}%` as `${number}%`;
+                    };
+
+                    return (
+                        <View style={[styles.sectionCard, hasSavings && styles.savingsCard]}>
+                            <Text style={styles.sectionTitle}>Kainų palyginimas</Text>
+
+                            {hasSavings ? (
+                                <Text style={styles.savingsText}>
+                                    Sutaupytumėte €{bestAlt.savings.toFixed(2)} pasirinkę {bestAlt.chainName}
+                                </Text>
+                            ) : (
+                                <Text style={styles.sectionSubvalue}>Pigiau nerasta pagal turimus duomenis</Text>
+                            )}
+
+                            <Text style={[styles.sectionSubvalue, { marginTop: 8 }]}>
+                                Lyginta pagal {comparison.summary.recognizedItems} atpažintas prekes
+                                {comparison.summary.excludedItems > 0 ? `, neįtraukta: ${comparison.summary.excludedItems}` : ''}
+                            </Text>
+                            {!!comparison.summary.note && (
+                                <Text style={styles.warningText}>{comparison.summary.note}</Text>
+                            )}
+
+                            <View style={{ marginTop: 12, gap: 10 }}>
+                                <View>
+                                    <Text style={styles.footerLabel}>
+                                        Jūsų parduotuvė: {comparison.currentChain.chainName} ({comparison.currentChain.storeName})
+                                    </Text>
+                                    <View style={styles.compareBarTrack}>
+                                        <View style={[styles.compareBarFillCurrent, { width: barWidth(comparison.currentChain.total) }]} />
+                                    </View>
+                                    <Text style={styles.footerValue}>€{comparison.currentChain.total.toFixed(2)}</Text>
+                                </View>
+
+                                {comparison.alternatives.map((alt) => (
+                                    <View key={`${alt.chainId}-${alt.storeId}`}>
+                                        <Text style={styles.footerLabel}>
+                                            {alt.chainName} ({alt.storeName}) • {alt.distanceKm.toFixed(1)} km
+                                        </Text>
+                                        <View style={styles.compareBarTrack}>
+                                            <View style={[styles.compareBarFillAlt, { width: barWidth(alt.total) }]} />
+                                        </View>
+                                        <Text style={styles.footerValue}>
+                                            €{alt.total.toFixed(2)}
+                                            {alt.savings > 0 ? `  (−€${alt.savings.toFixed(2)})` : ''}
+                                        </Text>
+                                        {!!alt.note && <Text style={styles.warningText}>{alt.note}</Text>}
+                                    </View>
+                                ))}
+                            </View>
+                        </View>
+                    );
+                })()}
+
                 {/* Header section */}
                 <TouchableOpacity
                     style={styles.sectionCard}
@@ -602,7 +908,7 @@ export default function ProcessReceiptScreen() {
                             <TouchableOpacity
                                 style={styles.matchIndicator}
                                 onPress={(e) => {
-                                    e.stopPropagation?.();  // don't toggle the raw-text editing section
+                                    e.stopPropagation?.();
                                     setPickerState({ productIndex: index });
                                 }}
                             >
@@ -623,19 +929,19 @@ export default function ProcessReceiptScreen() {
                         </View>
 
                         {editingSection === index && (
-                        <View style={styles.editSection}>
-                            <Text style={styles.rawTextLabel}>Nuskaitytas regionas:</Text>
-                            {imageUri && imageDims && (
-                                <RegionPreview
-                                    imageUri={imageUri}
-                                    imageWidth={imageDims.width}
-                                    imageHeight={imageDims.height}
-                                    region={product.region}
-                                    cardWidth={CARD_WIDTH}
-                                />
-                            )}
-                            <View style={{ height: 12 }} />
-                            <TextInput
+                            <View style={styles.editSection}>
+                                <Text style={styles.rawTextLabel}>Nuskaitytas regionas:</Text>
+                                {imageUri && imageDims && (
+                                    <RegionPreview
+                                        imageUri={imageUri}
+                                        imageWidth={imageDims.width}
+                                        imageHeight={imageDims.height}
+                                        region={product.region}
+                                        cardWidth={CARD_WIDTH}
+                                    />
+                                )}
+                                <View style={{ height: 12 }} />
+                                <TextInput
                                     style={styles.editInput}
                                     value={product.name}
                                     onChangeText={(text) => {
@@ -738,91 +1044,81 @@ export default function ProcessReceiptScreen() {
                     )}
                 </TouchableOpacity>
 
-                {/* Save button */}
-                <TouchableOpacity style={styles.saveButton} onPress={() => {
-                    // TODO: Save to backend
-                    console.log('Header:', header);
-                    console.log('Products:', products);
-                    console.log('Footer:', footer);
-                    router.back();
-                }}>
-                    <Ionicons name="save-outline" size={20} color="white" />
-                    <Text style={styles.saveText}>Išsaugoti</Text>
-                </TouchableOpacity>
                 <View style={{ height: 40 }} />
             </ScrollView>
+
             {pickerState !== null && (
-            <Modal
-                transparent
-                animationType="fade"
-                onRequestClose={() => setPickerState(null)}
-            >
-                <TouchableOpacity
-                    style={styles.modalBackdrop}
-                    activeOpacity={1}
-                    onPress={() => setPickerState(null)}
+                <Modal
+                    transparent
+                    animationType="fade"
+                    onRequestClose={() => setPickerState(null)}
                 >
-                    <View style={styles.modalCard}>
-                        <Text style={styles.modalTitle}>Pasirinkite prekę</Text>
-                        <Text style={styles.modalSubtitle}>
-                            {products[pickerState.productIndex]?.name}
-                        </Text>
-                        {products[pickerState.productIndex]?.altMatches.length === 0 && (
-                            <Text style={styles.emptyText}>Atitikmenų nerasta</Text>
-                        )}
-                        {products[pickerState.productIndex]?.altMatches.map(alt => (
+                    <TouchableOpacity
+                        style={styles.modalBackdrop}
+                        activeOpacity={1}
+                        onPress={() => setPickerState(null)}
+                    >
+                        <View style={styles.modalCard}>
+                            <Text style={styles.modalTitle}>Pasirinkite prekę</Text>
+                            <Text style={styles.modalSubtitle}>
+                                {products[pickerState.productIndex]?.name}
+                            </Text>
+                            {products[pickerState.productIndex]?.altMatches.length === 0 && (
+                                <Text style={styles.emptyText}>Atitikmenų nerasta</Text>
+                            )}
+                            {products[pickerState.productIndex]?.altMatches.map(alt => (
+                                <TouchableOpacity
+                                    key={alt.storeProductId}
+                                    style={styles.modalOption}
+                                    onPress={() => {
+                                        const idx = pickerState.productIndex;
+                                        setProducts(prev => {
+                                            const updated = [...prev];
+                                            updated[idx] = {
+                                                ...updated[idx],
+                                                matchedName: alt.name,
+                                                storeProductId: alt.storeProductId,
+                                                storeProductImageUrl: alt.imageUrl,
+                                                matchConfidence: alt.confidence,
+                                                matchConfirmed: true,
+                                            };
+                                            return updated;
+                                        });
+                                        setPickerState(null);
+                                    }}
+                                >
+                                    {alt.imageUrl && (
+                                        <Image
+                                            source={{ uri: alt.imageUrl }}
+                                            style={styles.modalThumb}
+                                            resizeMode="contain"
+                                        />
+                                    )}
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.modalOptionName}>{alt.name}</Text>
+                                        <Text style={styles.modalOptionMeta}>
+                                            Tikimybė {Math.round(alt.confidence * 100)}%
+                                        </Text>
+                                    </View>
+                                </TouchableOpacity>
+                            ))}
                             <TouchableOpacity
-                                key={alt.storeProductId}
-                                style={styles.modalOption}
-                                onPress={() => {
-                                    const idx = pickerState.productIndex;
-                                    setProducts(prev => {
-                                        const updated = [...prev];
-                                        updated[idx] = {
-                                            ...updated[idx],
-                                            matchedName: alt.name,
-                                            storeProductId: alt.storeProductId,
-                                            storeProductImageUrl: alt.imageUrl,
-                                            matchConfidence: alt.confidence,
-                                            matchConfirmed: true,
-                                        };
-                                        return updated;
-                                    });
-                                    setPickerState(null);
-                                }}
+                                style={styles.browseButton}
+                                onPress={handleBrowseCategories}
                             >
-                                {alt.imageUrl && (
-                                    <Image
-                                        source={{ uri: alt.imageUrl }}
-                                        style={styles.modalThumb}
-                                        resizeMode="contain"
-                                    />
-                                )}
-                                <View style={{ flex: 1 }}>
-                                    <Text style={styles.modalOptionName}>{alt.name}</Text>
-                                    <Text style={styles.modalOptionMeta}>
-                                        Tikimybė {Math.round(alt.confidence * 100)}%
-                                    </Text>
-                                </View>
+                                <Ionicons name="grid-outline" size={18} color="white" />
+                                <Text style={styles.browseButtonText}>Naršyti kategorijas</Text>
                             </TouchableOpacity>
-                        ))}
-                        <TouchableOpacity
-                            style={styles.browseButton}
-                            onPress={handleBrowseCategories}
-                        >
-                            <Ionicons name="grid-outline" size={18} color="white" />
-                            <Text style={styles.browseButtonText}>Naršyti kategorijas</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.modalCancel}
-                            onPress={() => setPickerState(null)}
-                        >
-                            <Text style={styles.modalCancelText}>Atšaukti</Text>
-                        </TouchableOpacity>
-                    </View>
-                </TouchableOpacity>
-            </Modal>
-        )}
+                            <TouchableOpacity
+                                style={styles.modalCancel}
+                                onPress={() => setPickerState(null)}
+                            >
+                                <Text style={styles.modalCancelText}>Atšaukti</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </TouchableOpacity>
+                </Modal>
+            )}
         </>
     );
 }
@@ -838,6 +1134,20 @@ const styles = StyleSheet.create({
     },
     loadingText: { fontSize: 15, color: '#757575' },
 
+    statusBadgeWrap: {
+        alignItems: 'center',
+        marginTop: 12,
+    },
+    statusBadge: {
+        paddingHorizontal: 12,
+        paddingVertical: 4,
+        borderRadius: 12,
+    },
+    statusBadgeText: {
+        fontSize: 12,
+        fontWeight: '600',
+    },
+
     sectionCard: {
         backgroundColor: 'white',
         marginHorizontal: 16,
@@ -850,38 +1160,13 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.05,
         shadowRadius: 2,
     },
-    sectionHeader: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 8,
-    },
-    sectionTitle: {
-        flex: 1,
-        fontSize: 15,
-        fontWeight: '600',
-        color: '#212121',
-    },
+    sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    sectionTitle: { flex: 1, fontSize: 15, fontWeight: '600', color: '#212121' },
     sectionContent: { marginTop: 10 },
-    chainBadge: {
-        fontSize: 18,
-        fontWeight: '700',
-        color: '#212121',
-    },
-    storeName: {
-        fontSize: 14,
-        color: '#424242',
-        marginTop: 4,
-    },
-    sectionSubvalue: {
-        fontSize: 13,
-        color: '#757575',
-        marginTop: 2,
-    },
-    warningText: {
-        fontSize: 12,
-        color: '#f57c00',
-        marginTop: 4,
-    },
+    chainBadge: { fontSize: 18, fontWeight: '700', color: '#212121' },
+    storeName: { fontSize: 14, color: '#424242', marginTop: 4 },
+    sectionSubvalue: { fontSize: 13, color: '#757575', marginTop: 2 },
+    warningText: { fontSize: 12, color: '#f57c00', marginTop: 4 },
 
     productsHeader: {
         flexDirection: 'row',
@@ -903,53 +1188,17 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.05,
         shadowRadius: 2,
     },
-    productRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
+    productRow: { flexDirection: 'row', alignItems: 'center' },
     productInfo: { flex: 1 },
-    productName: {
-        fontSize: 14,
-        color: '#212121',
-        fontWeight: '500',
-    },
-    matchedName: {
-        fontSize: 14,
-        color: '#2e7d32',
-        fontWeight: '600',
-    },
-    ocrName: {
-        fontSize: 11,
-        color: '#9e9e9e',
-        marginTop: 2,
-    },
-    productQuantity: {
-        fontSize: 12,
-        color: '#757575',
-        marginTop: 2,
-    },
-    productPriceCol: {
-        alignItems: 'flex-end',
-        marginRight: 8,
-    },
-    productPrice: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: '#212121',
-    },
-    productPriceStrike: {
-        fontSize: 12,
-        color: '#9e9e9e',
-        textDecorationLine: 'line-through',
-    },
-    productPromoPrice: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: '#d32f2f',
-    },
-    matchIndicator: {
-        marginLeft: 4,
-    },
+    productName: { fontSize: 14, color: '#212121', fontWeight: '500' },
+    matchedName: { fontSize: 14, color: '#2e7d32', fontWeight: '600' },
+    ocrName: { fontSize: 11, color: '#9e9e9e', marginTop: 2 },
+    productQuantity: { fontSize: 12, color: '#757575', marginTop: 2 },
+    productPriceCol: { alignItems: 'flex-end', marginRight: 8 },
+    productPrice: { fontSize: 15, fontWeight: '700', color: '#212121' },
+    productPriceStrike: { fontSize: 12, color: '#9e9e9e', textDecorationLine: 'line-through' },
+    productPromoPrice: { fontSize: 15, fontWeight: '700', color: '#d32f2f' },
+    matchIndicator: { marginLeft: 4 },
 
     editSection: {
         marginTop: 12,
@@ -957,11 +1206,7 @@ const styles = StyleSheet.create({
         borderTopWidth: 0.5,
         borderTopColor: '#e0e0e0',
     },
-    rawTextLabel: {
-        fontSize: 11,
-        color: '#9e9e9e',
-        marginBottom: 4,
-    },
+    rawTextLabel: { fontSize: 11, color: '#9e9e9e', marginBottom: 4 },
     rawText: {
         fontSize: 12,
         color: '#757575',
@@ -981,61 +1226,18 @@ const styles = StyleSheet.create({
         color: '#212121',
         marginBottom: 8,
     },
-    editRow: {
-        flexDirection: 'row',
-        gap: 8,
-    },
-    editField: {
-        flex: 1,
-    },
-    editLabel: {
-        fontSize: 11,
-        color: '#9e9e9e',
-        marginBottom: 4,
-    },
+    editRow: { flexDirection: 'row', gap: 8 },
+    editField: { flex: 1 },
+    editLabel: { fontSize: 11, color: '#9e9e9e', marginBottom: 4 },
 
     footerContent: { marginTop: 10 },
-    footerRow: {
-        flexDirection: 'row',
-        justifyContent: 'space-between',
-        marginTop: 4,
-    },
-    footerLabel: {
-        fontSize: 13,
-        color: '#757575',
-    },
-    footerValue: {
-        fontSize: 13,
-        fontWeight: '600',
-        color: '#212121',
-    },
+    footerRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
+    footerLabel: { fontSize: 13, color: '#757575' },
+    footerValue: { fontSize: 13, fontWeight: '600', color: '#212121' },
 
-    emptyProducts: {
-        alignItems: 'center',
-        padding: 32,
-        gap: 8,
-    },
-    emptyText: {
-        fontSize: 14,
-        color: '#9e9e9e',
-    },
+    emptyProducts: { alignItems: 'center', padding: 32, gap: 8 },
+    emptyText: { fontSize: 14, color: '#9e9e9e' },
 
-    saveButton: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        gap: 8,
-        backgroundColor: '#2e7d32',
-        marginHorizontal: 16,
-        marginTop: 24,
-        paddingVertical: 14,
-        borderRadius: 12,
-    },
-    saveText: {
-        color: 'white',
-        fontSize: 16,
-        fontWeight: '700',
-    },
     chainRow: { flexDirection: 'row', alignItems: 'center' },
     productThumb: {
         width: 48,
@@ -1059,17 +1261,8 @@ const styles = StyleSheet.create({
         width: '100%',
         maxWidth: 480,
     },
-    modalTitle: {
-        fontSize: 16,
-        fontWeight: '700',
-        color: '#212121',
-        marginBottom: 4,
-    },
-    modalSubtitle: {
-        fontSize: 12,
-        color: '#9e9e9e',
-        marginBottom: 12,
-    },
+    modalTitle: { fontSize: 16, fontWeight: '700', color: '#212121', marginBottom: 4 },
+    modalSubtitle: { fontSize: 12, color: '#9e9e9e', marginBottom: 12 },
     modalOption: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1084,26 +1277,10 @@ const styles = StyleSheet.create({
         backgroundColor: '#fafafa',
         marginRight: 12,
     },
-    modalOptionName: {
-        fontSize: 14,
-        color: '#212121',
-        fontWeight: '500',
-    },
-    modalOptionMeta: {
-        fontSize: 11,
-        color: '#9e9e9e',
-        marginTop: 2,
-    },
-    modalCancel: {
-        marginTop: 12,
-        paddingVertical: 10,
-        alignItems: 'center',
-    },
-    modalCancelText: {
-        fontSize: 14,
-        color: '#757575',
-        fontWeight: '600',
-    },
+    modalOptionName: { fontSize: 14, color: '#212121', fontWeight: '500' },
+    modalOptionMeta: { fontSize: 11, color: '#9e9e9e', marginTop: 2 },
+    modalCancel: { marginTop: 12, paddingVertical: 10, alignItems: 'center' },
+    modalCancelText: { fontSize: 14, color: '#757575', fontWeight: '600' },
     browseButton: {
         flexDirection: 'row',
         alignItems: 'center',
@@ -1114,9 +1291,33 @@ const styles = StyleSheet.create({
         paddingVertical: 10,
         marginTop: 12,
     },
-    browseButtonText: {
-        color: 'white',
+    browseButtonText: { color: 'white', fontSize: 14, fontWeight: '600' },
+    savingsCard: {
+        borderWidth: 1,
+        borderColor: '#a5d6a7',
+        backgroundColor: '#e8f5e9',
+    },
+    savingsText: {
+        marginTop: 6,
         fontSize: 14,
-        fontWeight: '600',
+        fontWeight: '700',
+        color: '#1b5e20',
+    },
+    compareBarTrack: {
+        marginTop: 6,
+        height: 8,
+        borderRadius: 999,
+        backgroundColor: '#eeeeee',
+        overflow: 'hidden',
+    },
+    compareBarFillCurrent: {
+        height: '100%',
+        backgroundColor: '#1565c0',
+        borderRadius: 999,
+    },
+    compareBarFillAlt: {
+        height: '100%',
+        backgroundColor: '#2e7d32',
+        borderRadius: 999,
     },
 });
