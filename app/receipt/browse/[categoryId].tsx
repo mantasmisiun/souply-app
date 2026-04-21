@@ -10,6 +10,7 @@ import {
 import CreateStoreProductModal, {
     CreatedStoreProductPayload,
 } from '../../../components/receipt/CreateStoreProductModal';
+import { ProductImage } from '../../../components/ProductImage';
 
 interface Category {
     id: number;
@@ -19,9 +20,20 @@ interface OtherChainProductRow {
     productId: number;
     productName: string;
     categoryId: number;
-    imageUrl: string | null;
+    imageUrls?: (string | null | undefined)[] | string | null;
     sourceChainLogoUrl?: string | null;
 }
+
+const firstImageUrl = (raw: OtherChainProductRow["imageUrls"]): string | null => {
+    if (!raw) return null;
+    let arr: unknown = raw;
+    if (typeof arr === "string") {
+        try { arr = JSON.parse(arr); } catch { return null; }
+    }
+    if (!Array.isArray(arr)) return null;
+    const first = arr.find((u) => typeof u === "string" && u.length > 0);
+    return typeof first === "string" ? first : null;
+};
 interface StoreProductRow {
     id: number;
     productId: number;
@@ -188,7 +200,7 @@ export default function ReceiptCategoryScreen() {
                                 storeProductId: created.id,
                                 productId: p.productId,
                                 storeProductName: p.productName,
-                                imageUrl: p.imageUrl ?? null,
+                                imageUrl: firstImageUrl(p.imageUrls),
                                 amount: null,
                                 unit: null,
                                 priceVerified: false,
@@ -215,11 +227,12 @@ export default function ReceiptCategoryScreen() {
     const renderProductCard = (sp: StoreProductRow) => (
         <TouchableOpacity style={styles.productCard} onPress={() => handlePick(sp)} activeOpacity={0.7}>
             <View style={styles.productImageContainer}>
-                {sp.imageUrl ? (
-                    <Image source={{ uri: sp.imageUrl }} style={styles.productImage} resizeMode="contain" />
-                ) : (
-                    <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
-                )}
+                <ProductImage
+                    uris={[sp.imageUrl]}
+                    imageStyle={styles.productImage}
+                    placeholderStyle={styles.productImagePlaceholder}
+                    emojiStyle={styles.productImageEmoji}
+                />
             </View>
             <View style={styles.productInfo}>
                 <Text style={styles.productName} numberOfLines={3}>{sp.storeProductName}</Text>
@@ -238,11 +251,12 @@ export default function ReceiptCategoryScreen() {
             </View>
 
             <View style={styles.productImageContainer}>
-                {p.imageUrl ? (
-                    <Image source={{ uri: p.imageUrl }} style={styles.productImage} resizeMode="contain" />
-                ) : (
-                    <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
-                )}
+                <ProductImage
+                    uris={p.imageUrls}
+                    imageStyle={styles.productImage}
+                    placeholderStyle={styles.productImagePlaceholder}
+                    emojiStyle={styles.productImageEmoji}
+                />
             </View>
             <View style={styles.productInfo}>
                 <Text style={styles.productName} numberOfLines={3}>{p.productName}</Text>
@@ -426,6 +440,18 @@ const styles = StyleSheet.create({
         marginBottom: 8,
     },
     productImage: { width: '100%', height: '100%' },
+    productImagePlaceholder: {
+        width: '100%',
+        height: '100%',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#f3f4f6',
+        borderRadius: 8,
+    },
+    productImageEmoji: {
+        fontSize: 44,
+        opacity: 0.4,
+    },
     productInfo: { flex: 1, width: '100%' },
     productName: { fontSize: 13, color: '#212121', lineHeight: 18 },
     amountText: { fontSize: 12, color: '#9e9e9e', marginTop: 2 },

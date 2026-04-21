@@ -4,6 +4,7 @@ import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-rou
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../../config/api';
+import { ProductImage } from '../../components/ProductImage';
 
 interface BasketItem {
     id: number;
@@ -13,7 +14,7 @@ interface BasketItem {
     productName: string;
     categoryName?: string;
     isWeighable: boolean;
-    imageUrl: string | null;
+    imageUrls?: (string | null | undefined)[] | string | null;
 }
 
 interface Basket {
@@ -225,13 +226,12 @@ export default function BasketDetailScreen() {
                     }
                     renderItem={({ item }) => (
                         <View style={styles.card}>
-                            {item.imageUrl ? (
-                                <Image source={{ uri: item.imageUrl }} style={styles.productImage} resizeMode="contain" />
-                            ) : (
-                                <View style={styles.productImagePlaceholder}>
-                                    <Ionicons name="cube-outline" size={24} color="#9e9e9e" />
-                                </View>
-                            )}
+                            <ProductImage
+                                uris={item.imageUrls}
+                                imageStyle={styles.productImage}
+                                placeholderStyle={styles.productImagePlaceholder}
+                                emojiStyle={styles.productImageEmoji}
+                            />
                             <View style={styles.cardContent}>
                                 <Text style={styles.itemName}>{item.productName}</Text>
                                 <View style={styles.controls}>
@@ -377,7 +377,11 @@ const styles = StyleSheet.create({
     },
     productImagePlaceholder: {
         width: 56, height: 56, borderRadius: 8, marginRight: 12,
-        backgroundColor: '#f0f0f0', alignItems: 'center', justifyContent: 'center', alignSelf: 'center',
+        backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center', alignSelf: 'center',
+    },
+    productImageEmoji: {
+        fontSize: 28,
+        opacity: 0.4,
     },
     cardContent: { flex: 1, justifyContent: 'space-between' },
     itemName: { fontSize: 14, fontWeight: '600', color: '#212121' },

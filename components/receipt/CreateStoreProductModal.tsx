@@ -247,7 +247,6 @@ export default function CreateStoreProductModal({
         body: JSON.stringify({
           categoryId: Number(selectedCategoryId),
           name: finalName,
-          imageUrl: uploadedImageUrl,
         }),
       });
       const pData = await pRes.json();

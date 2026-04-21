@@ -1,4 +1,5 @@
 import { View, Text, FlatList, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Image, TextInput } from 'react-native';
+import { ProductImage } from '../../components/ProductImage';
 import { useEffect, useState, useMemo } from 'react';
 import { useLocalSearchParams, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -43,7 +44,7 @@ interface Chain {
 interface Product {
     id: number;
     name: string;
-    imageUrl: string | null;
+    imageUrls: (string | null | undefined)[] | string | null;
     categoryId: number;
 }
 
@@ -279,11 +280,12 @@ export default function ProductDetailScreen() {
                 {/* Header */}
                 <View style={styles.header}>
                     <View style={styles.headerImageContainer}>
-                        {product.imageUrl ? (
-                            <Image source={{ uri: product.imageUrl }} style={styles.headerImage} resizeMode="contain" />
-                        ) : (
-                            <Ionicons name="cube-outline" size={64} color="#e0e0e0" />
-                        )}
+                        <ProductImage
+                            uris={product.imageUrls}
+                            imageStyle={styles.headerImage}
+                            placeholderStyle={styles.headerImagePlaceholder}
+                            emojiStyle={styles.headerImageEmoji}
+                        />
                     </View>
                     <Text style={styles.productName}>{product.name}</Text>
                     {breadcrumb ? <Text style={styles.breadcrumb}>{breadcrumb}</Text> : null}
@@ -423,13 +425,13 @@ export default function ProductDetailScreen() {
                         return (
                             <View key={sp.id} style={styles.spCard}>
                                 <View style={styles.spLeft}>
-                                    {(sp.imageUrl || product?.imageUrl) ? (
-                                        <Image source={{ uri: (sp.imageUrl || product?.imageUrl)! }} style={styles.spImage} resizeMode="contain" />
-                                    ) : (
-                                        <View style={styles.spImagePlaceholder}>
-                                            <Ionicons name="cube-outline" size={24} color="#e0e0e0" />
-                                        </View>
-                                    )}
+                                    <ProductImage
+                                        uris={[sp.imageUrl]}
+                                        imageStyle={styles.spImage}
+                                        placeholderStyle={styles.spImagePlaceholder}
+                                        emojiStyle={styles.spImageEmoji}
+                                    />
+
                                     <View style={styles.spInfo}>
                                         <Text style={styles.spName} numberOfLines={2}>{sp.storeProductName}</Text>
                                         <Text style={styles.spAmount}>{amountStr}</Text>
@@ -654,6 +656,22 @@ const styles = StyleSheet.create({
         backgroundColor: '#f5f5f5',
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    spImageEmoji: {
+        fontSize: 28,
+        opacity: 0.4,
+    },
+    headerImagePlaceholder: {
+        width: 120,
+        height: 120,
+        borderRadius: 12,
+        backgroundColor: '#f3f4f6',
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    headerImageEmoji: {
+        fontSize: 56,
+        opacity: 0.4,
     },
     spInfo: {
         flex: 1,

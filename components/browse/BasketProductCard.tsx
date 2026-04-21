@@ -1,9 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
-import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { ProductImage } from '../ProductImage';
 
 type Props = {
     name: string;
-    imageUrl?: string | null;
+    imageUrls?: (string | null | undefined)[] | string | null;
     amountText?: string;
     quantity: number;
     onOpen?: () => void;
@@ -14,7 +15,7 @@ type Props = {
 
 export default function BasketProductCard({
     name,
-    imageUrl,
+    imageUrls,
     amountText,
     quantity,
     onOpen,
@@ -30,11 +31,12 @@ export default function BasketProductCard({
                 activeOpacity={onOpen ? 0.7 : 1}
                 disabled={!onOpen}
             >
-                {imageUrl ? (
-                    <Image source={{ uri: imageUrl }} style={styles.productImage} resizeMode="contain" />
-                ) : (
-                    <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
-                )}
+                <ProductImage
+                    uris={imageUrls}
+                    imageStyle={styles.productImage}
+                    placeholderStyle={styles.productImagePlaceholder}
+                    emojiStyle={styles.productImageEmoji}
+                />
             </TouchableOpacity>
 
             <View style={styles.productInfo}>
@@ -85,6 +87,18 @@ const styles = StyleSheet.create({
         marginBottom: 8,
     },
     productImage: { width: '100%', height: '100%' },
+    productImagePlaceholder: {
+        width: '100%',
+        height: '100%',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#f3f4f6',
+        borderRadius: 8,
+    },
+    productImageEmoji: {
+        fontSize: 44,
+        opacity: 0.4,
+    },
     productInfo: { flex: 1, width: '100%', marginBottom: 10 },
     productName: { fontSize: 13, color: '#212121', lineHeight: 18 },
     amountText: { fontSize: 12, color: '#9e9e9e', marginTop: 2 },

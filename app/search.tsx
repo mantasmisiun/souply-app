@@ -5,7 +5,6 @@ import {
     ActivityIndicator,
     Alert,
     FlatList,
-    Image,
     StyleSheet,
     Text,
     TextInput,
@@ -17,17 +16,37 @@ import { useReceiptPickerState } from "../state/basketState";
 import { useBasketState } from '../state/basketState';
 import { addProductToBasket } from '../utils/basketUtils';
 import BasketProductCard from '../components/browse/BasketProductCard';
+import { ProductImage } from "../components/ProductImage";
 import CreateStoreProductModal, {
   CreatedStoreProductPayload,
 } from "../components/receipt/CreateStoreProductModal";
 
+// Pick the first URL from the API's imageUrls (string | array | null) for
+// places that only support a single imageUrl field (e.g. pendingPick).
+const firstImageUrl = (raw: ImageUrlList): string | null => {
+  if (!raw) return null;
+  let arr: unknown = raw;
+  if (typeof arr === "string") {
+    try {
+      arr = JSON.parse(arr);
+    } catch {
+      return null;
+    }
+  }
+  if (!Array.isArray(arr)) return null;
+  const first = arr.find((u) => typeof u === "string" && u.length > 0);
+  return typeof first === "string" ? first : null;
+};
+
 type SearchMode = "products" | "store-products";
+
+type ImageUrlList = (string | null | undefined)[] | string | null | undefined;
 
 interface ProductRow {
   id: number;
   name: string;
   categoryId: number;
-  imageUrl?: string | null;
+  imageUrls?: ImageUrlList;
 }
 
 interface StoreProductRow {
@@ -44,7 +63,7 @@ interface OtherChainProductRow {
   productId: number;
   productName: string;
   categoryId: number;
-  imageUrl: string | null;
+  imageUrls?: ImageUrlList;
   sourceChainLogoUrl?: string | null;
 }
 
@@ -171,8 +190,6 @@ export default function SearchScreen() {
             `${API_BASE_URL}/api/products/search?q=${encodeURIComponent(q)}`
             );
             const data = await res.json();
-            const qLower = q.toLowerCase();
-
             const cleaned: ProductRow[] = (Array.isArray(data) ? data : [])
             .filter((p: any) =>
                 p &&
@@ -181,14 +198,13 @@ export default function SearchScreen() {
                 Number.isFinite(Number(p.categoryId)) &&
                 Number(p.categoryId) > 0 &&
                 typeof p.name === "string" &&
-                p.name.trim().length > 0 &&
-                !(String(p.name).trim().toLowerCase() === qLower && !p.imageUrl)
+                p.name.trim().length > 0
             )
             .map((p: any) => ({
                 id: Number(p.id),
                 categoryId: Number(p.categoryId),
                 name: String(p.name).trim(),
-                imageUrl: p.imageUrl ?? null,
+                imageUrls: p.imageUrls ?? null,
             }));
 
         if (!cancelled) {
@@ -236,7 +252,7 @@ export default function SearchScreen() {
                 storeProductId: created.id,
                 productId: p.productId,
                 storeProductName: p.productName,
-                imageUrl: p.imageUrl ?? null,
+                imageUrl: firstImageUrl(p.imageUrls),
                 amount: null,
                 unit: null,
                 });
@@ -282,15 +298,12 @@ export default function SearchScreen() {
       activeOpacity={0.7}
     >
       <View style={styles.productImageContainer}>
-        {sp.imageUrl ? (
-          <Image
-            source={{ uri: sp.imageUrl }}
-            style={styles.productImage}
-            resizeMode="contain"
-          />
-        ) : (
-          <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
-        )}
+        <ProductImage
+          uris={[sp.imageUrl]}
+          imageStyle={styles.productImage}
+          placeholderStyle={styles.productImagePlaceholder}
+          emojiStyle={styles.productImageEmoji}
+        />
       </View>
       <View style={styles.productInfo}>
         <Text style={styles.productName} numberOfLines={3}>
@@ -327,11 +340,12 @@ export default function SearchScreen() {
     </View>
 
     <View style={styles.productImageContainer}>
-      {p.imageUrl ? (
-        <Image source={{ uri: p.imageUrl }} style={styles.productImage} resizeMode="contain" />
-      ) : (
-        <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
-      )}
+      <ProductImage
+        uris={p.imageUrls}
+        imageStyle={styles.productImage}
+        placeholderStyle={styles.productImagePlaceholder}
+        emojiStyle={styles.productImageEmoji}
+      />
     </View>
 
     <View style={styles.productInfo}>
@@ -481,7 +495,7 @@ export default function SearchScreen() {
                 return (
                     <BasketProductCard
                     name={item.name}
-                    imageUrl={item.imageUrl}
+                    imageUrls={item.imageUrls}
                     quantity={quantity}
                     onOpen={() => router.push(`/product/${item.id}` as any)}
                     onAdd={async () => {
@@ -550,6 +564,18 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   productImage: { width: "100%", height: "100%" },
+  productImagePlaceholder: {
+    width: "100%",
+    height: "100%",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#f3f4f6",
+    borderRadius: 8,
+  },
+  productImageEmoji: {
+    fontSize: 44,
+    opacity: 0.4,
+  },
   productInfo: { flex: 1, width: "100%" },
   productName: { fontSize: 13, color: "#212121", lineHeight: 18 },
   amountText: { fontSize: 12, color: "#9e9e9e", marginTop: 2 },

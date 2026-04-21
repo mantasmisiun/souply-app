@@ -7,6 +7,7 @@ import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
+import { ProductImage } from '../../components/ProductImage';
 
 interface ShoppingList {
     id: number;
@@ -28,7 +29,7 @@ interface ShoppingListItem {
     quantity: number;
     price: number | null;
     isChecked: boolean;
-    imageUrl: string | null;
+    imageUrls?: (string | null | undefined)[] | string | null;
     isWeighable: boolean;
     unit?: string;
     storeProductId?: number | null;
@@ -82,16 +83,13 @@ function ShoppingListItemCard({ item, onToggle, onRemove }: {
                             <View style={styles.checkmarkContainer}>
                                 <Ionicons name="checkmark" size={24} color="white" />
                             </View>
-                        ) : item.imageUrl ? (
-                            <Image
-                                source={{ uri: item.imageUrl }}
-                                style={styles.productImage}
-                                resizeMode="contain"
-                            />
                         ) : (
-                            <View style={styles.imagePlaceholder}>
-                                <Ionicons name="cube-outline" size={22} color="#bdbdbd" />
-                            </View>
+                            <ProductImage
+                                uris={item.imageUrls}
+                                imageStyle={styles.productImage}
+                                placeholderStyle={styles.imagePlaceholder}
+                                emojiStyle={styles.imageEmoji}
+                            />
                         )}
                     </View>
                     <View style={styles.cardContent}>
@@ -279,7 +277,7 @@ export default function ShoppingListScreen() {
                 quantity,
                 price: null,
                 isChecked: false,
-                imageUrl: imageUrl,
+                imageUrls: imageUrl ? [imageUrl] : null,
                 isWeighable,
                 unit: isWeighable ? 'kg' : 'vnt.',
             };
@@ -575,7 +573,11 @@ card: {
     },
     imagePlaceholder: {
         width: 40, height: 40, borderRadius: 8,
-        backgroundColor: '#f0faf0', alignItems: 'center', justifyContent: 'center',
+        backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center',
+    },
+    imageEmoji: {
+        fontSize: 22,
+        opacity: 0.4,
     },
     checkmarkContainer: {
         width: 40, height: 40, borderRadius: 8,

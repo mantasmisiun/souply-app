@@ -7,6 +7,7 @@ import { Alert } from 'react-native';
 import { useBasketState } from '../../../state/basketState';
 import { addProductToBasket } from '../../../utils/basketUtils';
 import AmountPickerModal from '../../../components/AmountPickerModal';
+import { ProductImage } from '../../../components/ProductImage';
 
 interface Category {
     id: number;
@@ -17,7 +18,7 @@ interface Product {
     id: number;
     name: string;
     brandName: string | null;
-    imageUrl: string | null;
+    imageUrls?: (string | null | undefined)[] | string | null;
     minAmount: number | null;
     maxAmount: number | null;
     unit: string | null;
@@ -151,11 +152,12 @@ export default function CategoryScreen() {
                                             style={styles.productImageContainer}
                                             activeOpacity={0.7}
                                         >
-                                            {item.imageUrl ? (
-                                                <Image source={{ uri: item.imageUrl }} style={styles.productImage} resizeMode="contain" />
-                                            ) : (
-                                                <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
-                                            )}
+                                            <ProductImage
+                                                uris={item.imageUrls}
+                                                imageStyle={styles.productImage}
+                                                placeholderStyle={styles.productImagePlaceholder}
+                                                emojiStyle={styles.productImageEmoji}
+                                            />
                                         </TouchableOpacity>
                                         <View style={styles.productInfo}>
                                             <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
@@ -356,6 +358,18 @@ const styles = StyleSheet.create({
     productImage: {
         width: '100%',
         height: '100%',
+    },
+    productImagePlaceholder: {
+        width: '100%',
+        height: '100%',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: '#f3f4f6',
+        borderRadius: 8,
+    },
+    productImageEmoji: {
+        fontSize: 44,
+        opacity: 0.4,
     },
     productInfo: {
         flex: 1,
