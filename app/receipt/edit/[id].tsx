@@ -1,11 +1,12 @@
 import { View, Text, StyleSheet, ScrollView, TextInput, TouchableOpacity, ActivityIndicator, Alert, Image, FlatList, Keyboard } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
-import { useEffect, useState, useRef, useCallback } from 'react';
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetView, BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { API_BASE_URL } from '../../../config/api';
 import { useReceiptEditStore } from '../../../state/receiptEditState';
+import { useTheme, type AppTheme } from '../../../constants/theme';
 
 interface EditableItem {
     name: string;
@@ -21,6 +22,8 @@ interface EditableItem {
 }
 
 export default function ReceiptEditScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const { id } = useLocalSearchParams();
     const router = useRouter();
     const [loading, setLoading] = useState(true);
@@ -137,7 +140,7 @@ export default function ReceiptEditScreen() {
     };
 
     if (loading) {
-        return <View style={styles.centered}><ActivityIndicator size="large" color="#2e7d32" /></View>;
+        return <View style={styles.centered}><ActivityIndicator size="large" color={colors.primary} /></View>;
     }
 
     const selectedItem = selectedIndex !== null ? items[selectedIndex] : null;
@@ -149,8 +152,8 @@ export default function ReceiptEditScreen() {
                 headerRight: () => (
                     <TouchableOpacity onPress={handleSave} disabled={saving} style={{ marginRight: 12 }}>
                         {saving
-                            ? <ActivityIndicator size="small" color="#2e7d32" />
-                            : <Text style={{ color: '#2e7d32', fontWeight: '700', fontSize: 16 }}>Išsaugoti</Text>
+                            ? <ActivityIndicator size="small" color={colors.primary} />
+                            : <Text style={{ color: colors.primary, fontWeight: '700', fontSize: 16 }}>Išsaugoti</Text>
                         }
                     </TouchableOpacity>
                 )
@@ -175,7 +178,7 @@ export default function ReceiptEditScreen() {
                                 <Ionicons
                                     name={item.price ? 'checkmark-circle' : 'alert-circle'}
                                     size={20}
-                                    color={item.price ? '#2e7d32' : '#c62828'}
+                                    color={item.price ? colors.primary : colors.error}
                                 />
                                 <TouchableOpacity
                                     onPress={() => updateItem('isWeighable', !item.isWeighable, index)}
@@ -184,7 +187,7 @@ export default function ReceiptEditScreen() {
                                     <Ionicons
                                         name={item.isWeighable ? 'scale' : 'scale-outline'}
                                         size={20}
-                                        color={item.isWeighable ? '#2e7d32' : '#9e9e9e'}
+                                        color={item.isWeighable ? colors.primary : colors.textMuted}
                                     />
                                 </TouchableOpacity>
                                 <View style={{ flex: 1, marginLeft: 8 }}>
@@ -193,7 +196,7 @@ export default function ReceiptEditScreen() {
                                         {item.price ? `€${item.price}` : 'Kaina nenurodyta'}
                                     </Text>
                                 </View>
-                                <Ionicons name="chevron-forward" size={16} color="#757575" />
+                                <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
                             </TouchableOpacity>
                         )}
                     />
@@ -217,7 +220,7 @@ export default function ReceiptEditScreen() {
                             openItem(items.length);
                         }}
                     >
-                        <Ionicons name="add-circle-outline" size={20} color="#2e7d32" />
+                        <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
                         <Text style={styles.addItemText}>Pridėti trūkstamą produktą</Text>
                     </TouchableOpacity>
                 </View>
@@ -284,7 +287,7 @@ export default function ReceiptEditScreen() {
                                 )}
 
                                 <Text style={styles.label}>Kategorija</Text>
-                                <TouchableOpacity 
+                                <TouchableOpacity
                                     style={styles.categoryButton}
                                     onPress={() => {
                                         router.push(`/receipt/edit/category-picker?itemIndex=${selectedIndex}&chainId=${chainId || ''}`);
@@ -293,7 +296,7 @@ export default function ReceiptEditScreen() {
                                     <Text style={selectedItem.categoryName ? styles.categorySelected : styles.categoryPlaceholder}>
                                         {selectedItem.categoryName || 'Pasirinkti kategoriją...'}
                                     </Text>
-                                    <Ionicons name="chevron-forward" size={18} color="#757575" />
+                                    <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
                                 </TouchableOpacity>
 
                                 <Text style={styles.label}>Kaina (€)</Text>
@@ -329,7 +332,7 @@ export default function ReceiptEditScreen() {
                                     <Ionicons
                                         name={selectedItem.isWeighable ? 'scale' : 'scale-outline'}
                                         size={20}
-                                        color={selectedItem.isWeighable ? '#2e7d32' : '#9e9e9e'}
+                                        color={selectedItem.isWeighable ? colors.primary : colors.textMuted}
                                     />
                                     <Text style={[styles.weighableText, selectedItem.isWeighable && styles.weighableTextActive]}>
                                         {selectedItem.isWeighable ? 'Taip' : 'Ne'}
@@ -347,52 +350,52 @@ export default function ReceiptEditScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5' },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-    imageContainer: { flex: 1, backgroundColor: '#e0e0e0' },
+    imageContainer: { flex: 1, backgroundColor: c.border },
     image: { width: '100%', height: 500 },
     itemsList: {
         maxHeight: 280,
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderTopWidth: 1,
-        borderTopColor: '#e0e0e0',
+        borderTopColor: c.border,
         padding: 12,
     },
-    listTitle: { fontSize: 13, color: '#757575', marginBottom: 8 },
+    listTitle: { fontSize: 13, color: c.textSecondary, marginBottom: 8 },
     itemRow: {
         flexDirection: 'row', alignItems: 'center',
-        paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
+        paddingVertical: 10, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
     },
-    itemName: { fontSize: 14, color: '#212121' },
-    itemPrice: { fontSize: 12, color: '#757575', marginTop: 2 },
+    itemName: { fontSize: 14, color: c.textPrimary },
+    itemPrice: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
     sheetContent: { padding: 16, flex: 1 },
-    sheetTitle: { fontSize: 16, fontWeight: '700', color: '#212121', marginBottom: 16 },
-    label: { fontSize: 12, color: '#757575', marginBottom: 4, marginTop: 12 },
+    sheetTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginBottom: 16 },
+    label: { fontSize: 12, color: c.textSecondary, marginBottom: 4, marginTop: 12 },
     input: {
-        borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8,
-        padding: 10, fontSize: 14, color: '#212121',
+        borderWidth: 1, borderColor: c.border, borderRadius: 8,
+        padding: 10, fontSize: 14, color: c.textPrimary,
     },
-    inputError: { borderColor: '#c62828' },
+    inputError: { borderColor: c.error },
     categoryButton: {
-        borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8,
+        borderWidth: 1, borderColor: c.border, borderRadius: 8,
         padding: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     },
-    categorySelected: { fontSize: 14, color: '#212121', flex: 1 },
-    categoryPlaceholder: { fontSize: 14, color: '#9e9e9e', flex: 1 },
+    categorySelected: { fontSize: 14, color: c.textPrimary, flex: 1 },
+    categoryPlaceholder: { fontSize: 14, color: c.textMuted, flex: 1 },
     doneButton: {
-        backgroundColor: '#2e7d32', borderRadius: 12, padding: 16,
+        backgroundColor: c.primary, borderRadius: 12, padding: 16,
         alignItems: 'center', marginTop: 24, marginBottom: 16,
     },
-    doneButtonText: { color: 'white', fontWeight: '700', fontSize: 16 },
+    doneButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 16 },
     suggestionsContainer: {
-    borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8,
-    backgroundColor: 'white', marginTop: 2,
+    borderWidth: 1, borderColor: c.border, borderRadius: 8,
+    backgroundColor: c.cardBackground, marginTop: 2,
     },
     suggestionItem: {
-        padding: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
+        padding: 12, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
     },
-    suggestionText: { fontSize: 14, color: '#212121' },
+    suggestionText: { fontSize: 14, color: c.textPrimary },
     addItemButton: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -401,18 +404,18 @@ const styles = StyleSheet.create({
     },
     addItemText: {
         fontSize: 14,
-        color: '#2e7d32',
+        color: c.primary,
         fontWeight: '500',
     },
     weighableButton: {
         flexDirection: 'row',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#e0e0e0',
+        borderColor: c.border,
         borderRadius: 8,
         padding: 10,
         gap: 8,
     },
-    weighableText: { fontSize: 14, color: '#9e9e9e' },
-    weighableTextActive: { color: '#2e7d32' },
+    weighableText: { fontSize: 14, color: c.textMuted },
+    weighableTextActive: { color: c.primary },
 });

@@ -1,10 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import { useRouter } from "expo-router";
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useTheme, type AppTheme } from "../../constants/theme";
 
 export default function CaptureReceiptScreen() {
+  const colors = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [permission, requestPermission] = useCameraPermissions();
   const [photo, setPhoto] = useState<string | null>(null);
   const cameraRef = useRef<CameraView>(null);
@@ -17,7 +20,7 @@ export default function CaptureReceiptScreen() {
   if (!permission.granted) {
     return (
       <View style={styles.permissionContainer}>
-        <Ionicons name="camera-outline" size={64} color="#9e9e9e" />
+        <Ionicons name="camera-outline" size={64} color={colors.textMuted} />
         <Text style={styles.permissionText}>Reikia prieigos prie kameros</Text>
         <TouchableOpacity
           style={styles.permissionButton}
@@ -61,11 +64,11 @@ export default function CaptureReceiptScreen() {
         />
         <View style={styles.previewActions}>
           <TouchableOpacity style={styles.retakeButton} onPress={retakePhoto}>
-            <Ionicons name="refresh" size={24} color="white" />
+            <Ionicons name="refresh" size={24} color={colors.onPrimary} />
             <Text style={styles.retakeText}>Iš naujo</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.confirmButton} onPress={confirmPhoto}>
-            <Ionicons name="checkmark" size={24} color="white" />
+            <Ionicons name="checkmark" size={24} color={colors.onPrimary} />
             <Text style={styles.confirmText}>Tęsti</Text>
           </TouchableOpacity>
         </View>
@@ -91,7 +94,7 @@ export default function CaptureReceiptScreen() {
           style={styles.backButton}
           onPress={() => router.back()}
         >
-          <Ionicons name="arrow-back" size={24} color="white" />
+          <Ionicons name="arrow-back" size={24} color={colors.onPrimary} />
         </TouchableOpacity>
         <TouchableOpacity style={styles.captureButton} onPress={takePicture}>
           <View style={styles.captureInner} />
@@ -102,128 +105,130 @@ export default function CaptureReceiptScreen() {
   );
 }
 
-const cornerStyle = {
-  position: "absolute" as const,
-  width: 24,
-  height: 24,
-  borderColor: "#2e7d32",
-};
+const makeStyles = (c: AppTheme) => {
+  const cornerStyle = {
+    position: "absolute" as const,
+    width: 24,
+    height: 24,
+    borderColor: c.primary,
+  };
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "black" },
-  camera: { flex: 1 },
-  overlay: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  receiptGuide: {
-    width: "75%",
-    height: "80%",
-    position: "relative",
-  },
-  cornerTL: {
-    ...cornerStyle,
-    top: 0,
-    left: 0,
-    borderTopWidth: 3,
-    borderLeftWidth: 3,
-  },
-  cornerTR: {
-    ...cornerStyle,
-    top: 0,
-    right: 0,
-    borderTopWidth: 3,
-    borderRightWidth: 3,
-  },
-  cornerBL: {
-    ...cornerStyle,
-    bottom: 0,
-    left: 0,
-    borderBottomWidth: 3,
-    borderLeftWidth: 3,
-  },
-  cornerBR: {
-    ...cornerStyle,
-    bottom: 0,
-    right: 0,
-    borderBottomWidth: 3,
-    borderRightWidth: 3,
-  },
-  controls: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: 24,
-    paddingBottom: 40,
-    paddingTop: 16,
-    backgroundColor: "black",
-  },
-  backButton: {
-    width: 48,
-    height: 48,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  captureButton: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    borderWidth: 4,
-    borderColor: "white",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  captureInner: {
-    width: 58,
-    height: 58,
-    borderRadius: 29,
-    backgroundColor: "white",
-  },
-  preview: {
-    flex: 1,
-  },
-  previewActions: {
-    flexDirection: "row",
-    justifyContent: "space-around",
-    paddingVertical: 24,
-    paddingBottom: 40,
-    backgroundColor: "black",
-  },
-  retakeButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: "#757575",
-  },
-  retakeText: { color: "white", fontSize: 15, fontWeight: "600" },
-  confirmButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingHorizontal: 24,
-    paddingVertical: 14,
-    borderRadius: 12,
-    backgroundColor: "#2e7d32",
-  },
-  confirmText: { color: "white", fontSize: 15, fontWeight: "600" },
-  permissionContainer: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 16,
-    backgroundColor: "#f5f5f5",
-  },
-  permissionText: { fontSize: 16, color: "#757575" },
-  permissionButton: {
-    backgroundColor: "#2e7d32",
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 10,
-  },
-  permissionButtonText: { color: "white", fontSize: 15, fontWeight: "600" },
-});
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: "black" },
+    camera: { flex: 1 },
+    overlay: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    receiptGuide: {
+      width: "75%",
+      height: "80%",
+      position: "relative",
+    },
+    cornerTL: {
+      ...cornerStyle,
+      top: 0,
+      left: 0,
+      borderTopWidth: 3,
+      borderLeftWidth: 3,
+    },
+    cornerTR: {
+      ...cornerStyle,
+      top: 0,
+      right: 0,
+      borderTopWidth: 3,
+      borderRightWidth: 3,
+    },
+    cornerBL: {
+      ...cornerStyle,
+      bottom: 0,
+      left: 0,
+      borderBottomWidth: 3,
+      borderLeftWidth: 3,
+    },
+    cornerBR: {
+      ...cornerStyle,
+      bottom: 0,
+      right: 0,
+      borderBottomWidth: 3,
+      borderRightWidth: 3,
+    },
+    controls: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      paddingHorizontal: 24,
+      paddingBottom: 40,
+      paddingTop: 16,
+      backgroundColor: "black",
+    },
+    backButton: {
+      width: 48,
+      height: 48,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    captureButton: {
+      width: 72,
+      height: 72,
+      borderRadius: 36,
+      borderWidth: 4,
+      borderColor: c.onPrimary,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    captureInner: {
+      width: 58,
+      height: 58,
+      borderRadius: 29,
+      backgroundColor: c.onPrimary,
+    },
+    preview: {
+      flex: 1,
+    },
+    previewActions: {
+      flexDirection: "row",
+      justifyContent: "space-around",
+      paddingVertical: 24,
+      paddingBottom: 40,
+      backgroundColor: "black",
+    },
+    retakeButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      paddingHorizontal: 24,
+      paddingVertical: 14,
+      borderRadius: 12,
+      borderWidth: 1,
+      borderColor: c.textSecondary,
+    },
+    retakeText: { color: c.onPrimary, fontSize: 15, fontWeight: "600" },
+    confirmButton: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      paddingHorizontal: 24,
+      paddingVertical: 14,
+      borderRadius: 12,
+      backgroundColor: c.primary,
+    },
+    confirmText: { color: c.onPrimary, fontSize: 15, fontWeight: "600" },
+    permissionContainer: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 16,
+      backgroundColor: c.pageBackground,
+    },
+    permissionText: { fontSize: 16, color: c.textSecondary },
+    permissionButton: {
+      backgroundColor: c.primary,
+      paddingHorizontal: 24,
+      paddingVertical: 12,
+      borderRadius: 10,
+    },
+    permissionButtonText: { color: c.onPrimary, fontSize: 15, fontWeight: "600" },
+  });
+};

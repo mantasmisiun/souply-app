@@ -1,7 +1,8 @@
 import { View, Text, TouchableOpacity, StyleSheet, Modal, TextInput } from 'react-native';
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
- 
+import { useTheme, type AppTheme } from '../constants/theme';
+
 interface AmountPickerModalProps {
     visible: boolean;
     productName: string;
@@ -11,7 +12,7 @@ interface AmountPickerModalProps {
     onConfirm: (amount: number) => void;
     onCancel: () => void;
 }
- 
+
 export default function AmountPickerModal({
     visible,
     productName,
@@ -21,6 +22,9 @@ export default function AmountPickerModal({
     onConfirm,
     onCancel,
 }: AmountPickerModalProps) {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
+
     const isKg = unit === 'kg' || unit === 'g';
     const step = isKg ? 0.1 : 1;
     const defaultAmount = isKg ? 1.0 : 1;
@@ -41,7 +45,7 @@ export default function AmountPickerModal({
         const newAmount = Math.round((current + step) * 10) / 10;
         setInputText(isKg ? newAmount.toFixed(1) : newAmount.toString());
     };
- 
+
     return (
         <Modal
             visible={visible}
@@ -58,14 +62,14 @@ export default function AmountPickerModal({
                             : `${minAmount} – ${maxAmount} ${unit}`
                         }
                     </Text>
- 
+
                     <Text style={styles.label}>Kiek jums reikia?</Text>
- 
+
                     <View style={styles.pickerRow}>
                         <TouchableOpacity style={styles.roundButton} onPress={decrease}>
-                            <Ionicons name="remove" size={22} color="#2e7d32" />
+                            <Ionicons name="remove" size={22} color={colors.primary} />
                         </TouchableOpacity>
- 
+
                         <View style={styles.inputContainer}>
                             <TextInput
                                 style={styles.input}
@@ -76,16 +80,16 @@ export default function AmountPickerModal({
                             />
                             <Text style={styles.unitText}>{displayUnit}</Text>
                         </View>
- 
+
                         <TouchableOpacity style={styles.roundButton} onPress={increase}>
-                            <Ionicons name="add" size={22} color="#2e7d32" />
+                            <Ionicons name="add" size={22} color={colors.primary} />
                         </TouchableOpacity>
                     </View>
- 
+
                     <Text style={styles.hint}>
                         Kiekis bus suapvalintas pagal pakuotės dydį
                     </Text>
- 
+
                     <View style={styles.actions}>
                         <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
                             <Text style={styles.cancelText}>Atšaukti</Text>
@@ -107,17 +111,17 @@ export default function AmountPickerModal({
         </Modal>
     );
 }
- 
-const styles = StyleSheet.create({
+
+const makeStyles = (c: AppTheme) => StyleSheet.create({
     overlay: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.4)',
+        backgroundColor: c.overlayBackdrop,
         justifyContent: 'center',
         alignItems: 'center',
         padding: 24,
     },
     modal: {
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderRadius: 16,
         padding: 24,
         width: '100%',
@@ -126,19 +130,19 @@ const styles = StyleSheet.create({
     title: {
         fontSize: 17,
         fontWeight: '700',
-        color: '#212121',
+        color: c.textPrimary,
         textAlign: 'center',
         marginBottom: 4,
     },
     subtitle: {
         fontSize: 13,
-        color: '#757575',
+        color: c.textSecondary,
         textAlign: 'center',
         marginBottom: 20,
     },
     label: {
         fontSize: 14,
-        color: '#424242',
+        color: c.textPrimary,
         textAlign: 'center',
         marginBottom: 12,
     },
@@ -154,7 +158,7 @@ const styles = StyleSheet.create({
         height: 44,
         borderRadius: 22,
         borderWidth: 1.5,
-        borderColor: '#2e7d32',
+        borderColor: c.primary,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -166,21 +170,21 @@ const styles = StyleSheet.create({
     input: {
         fontSize: 28,
         fontWeight: '700',
-        color: '#2e7d32',
+        color: c.primary,
         textAlign: 'center',
         minWidth: 60,
         paddingVertical: 4,
         borderBottomWidth: 2,
-        borderBottomColor: '#2e7d32',
+        borderBottomColor: c.primary,
     },
     unitText: {
         fontSize: 16,
-        color: '#757575',
+        color: c.textSecondary,
         fontWeight: '500',
     },
     hint: {
         fontSize: 11,
-        color: '#9e9e9e',
+        color: c.textMuted,
         textAlign: 'center',
         marginBottom: 20,
     },
@@ -193,24 +197,24 @@ const styles = StyleSheet.create({
         paddingVertical: 12,
         borderRadius: 10,
         borderWidth: 1,
-        borderColor: '#e0e0e0',
+        borderColor: c.border,
         alignItems: 'center',
     },
     cancelText: {
         fontSize: 14,
-        color: '#757575',
+        color: c.textSecondary,
         fontWeight: '600',
     },
     confirmButton: {
         flex: 1,
         paddingVertical: 12,
         borderRadius: 10,
-        backgroundColor: '#2e7d32',
+        backgroundColor: c.primary,
         alignItems: 'center',
     },
     confirmText: {
         fontSize: 14,
-        color: 'white',
+        color: c.onPrimary,
         fontWeight: '600',
     },
 });

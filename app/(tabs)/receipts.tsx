@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useRouter } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { API_BASE_URL } from "../../config/api";
 import { getUserId } from "../../config/user";
+import { useTheme, type AppTheme } from "../../constants/theme";
 
 interface Receipt {
   id: number;
@@ -24,6 +25,8 @@ interface Receipt {
 }
 
 export default function ReceiptsScreen() {
+  const colors = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
@@ -83,13 +86,13 @@ export default function ReceiptsScreen() {
   const getStatusColor = (status: string) => {
     switch (status) {
       case "completed":
-        return "#2e7d32";
+        return colors.success;
       case "processing":
-        return "#f57c00";
+        return colors.warning;
       case "failed":
-        return "#c62828";
+        return colors.error;
       default:
-        return "#757575";
+        return colors.textSecondary;
     }
   };
 
@@ -109,7 +112,7 @@ export default function ReceiptsScreen() {
   if (loading) {
     return (
       <View style={styles.centered}>
-        <ActivityIndicator size="large" color="#2e7d32" />
+        <ActivityIndicator size="large" color={colors.primary} />
       </View>
     );
   }
@@ -173,7 +176,7 @@ export default function ReceiptsScreen() {
               <View style={[styles.card, styles.placeholderCard]}>
                 <ActivityIndicator
                   size="small"
-                  color="#2e7d32"
+                  color={colors.primary}
                   style={{ marginRight: 12 }}
                 />
                 <Text style={styles.placeholderText}>Kvitas įkeliamas...</Text>
@@ -188,7 +191,7 @@ export default function ReceiptsScreen() {
               }}
             >
               <View style={styles.cardLeft}>
-                <Ionicons name="receipt-outline" size={28} color="#2e7d32" />
+                <Ionicons name="receipt-outline" size={28} color={colors.primary} />
               </View>
               <View style={styles.cardContent}>
                 <Text style={styles.cardTitle}>
@@ -240,18 +243,18 @@ export default function ReceiptsScreen() {
           ]);
         }}
       >
-        <Ionicons name="add" size={28} color="white" />
+        <Ionicons name="add" size={28} color={colors.onPrimary} />
       </TouchableOpacity>
     </View>
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f5f5f5" },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: c.pageBackground },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   list: { padding: 16, paddingBottom: 80 },
   card: {
-    backgroundColor: "white",
+    backgroundColor: c.cardBackground,
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
@@ -260,31 +263,37 @@ const styles = StyleSheet.create({
     elevation: 2,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
+    shadowOpacity: 0.08,
     shadowRadius: 2,
+    borderLeftWidth: 3,
+    borderLeftColor: c.softAccent,
   },
   cardLeft: { marginRight: 12 },
   cardContent: { flex: 1 },
-  cardTitle: { fontSize: 15, fontWeight: "600", color: "#212121" },
-  cardDate: { fontSize: 13, color: "#757575", marginTop: 2 },
+  cardTitle: { fontSize: 15, fontWeight: "600", color: c.textPrimary },
+  cardDate: { fontSize: 13, color: c.textSecondary, marginTop: 2 },
   statusBadge: {
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
   },
-  statusText: { fontSize: 11, color: "white", fontWeight: "600" },
-  emptyText: { fontSize: 16, color: "#757575" },
+  statusText: { fontSize: 11, color: c.textInverse, fontWeight: "600" },
+  emptyText: { fontSize: 16, color: c.textSecondary },
   fab: {
     position: "absolute",
     bottom: 24,
     right: 24,
-    backgroundColor: "#2e7d32",
+    backgroundColor: c.primary,
     width: 56,
     height: 56,
     borderRadius: 28,
     alignItems: "center",
     justifyContent: "center",
     elevation: 4,
+    shadowColor: c.primaryShadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
   },
   placeholderCard: {
     flexDirection: "row",
@@ -293,6 +302,6 @@ const styles = StyleSheet.create({
   },
   placeholderText: {
     fontSize: 14,
-    color: "#757575",
+    color: c.textSecondary,
   },
 });

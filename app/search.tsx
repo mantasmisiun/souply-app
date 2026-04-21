@@ -20,6 +20,7 @@ import { ProductImage } from "../components/ProductImage";
 import CreateStoreProductModal, {
   CreatedStoreProductPayload,
 } from "../components/receipt/CreateStoreProductModal";
+import { useTheme, type AppTheme } from "../constants/theme";
 
 // Pick the first URL from the API's imageUrls (string | array | null) for
 // places that only support a single imageUrl field (e.g. pendingPick).
@@ -81,6 +82,8 @@ const safeDecode = (v?: string) => {
 };
 
 export default function SearchScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const params = useLocalSearchParams<{
         mode?: string;
         chainId?: string;
@@ -329,14 +332,14 @@ export default function SearchScreen() {
         position: "absolute",
         top: 8,
         left: 8,
-        backgroundColor: "#ffecb3",
+        backgroundColor: colors.warningMuted,
         borderRadius: 8,
         paddingHorizontal: 6,
         paddingVertical: 2,
         zIndex: 1,
       }}
     >
-      <Text style={{ fontSize: 11, color: "#8d6e63", fontWeight: "600" }}>Kitur</Text>
+      <Text style={{ fontSize: 11, color: colors.onWarning, fontWeight: "600" }}>Kitur</Text>
     </View>
 
     <View style={styles.productImageContainer}>
@@ -374,7 +377,7 @@ export default function SearchScreen() {
           <View style={styles.createProductPlaceholder}>
             <Text style={styles.createBroccoli}>🥦</Text>
             <View style={styles.createPlusBadge}>
-              <Ionicons name="add" size={14} color="#ffffff" />
+              <Ionicons name="add" size={14} color={colors.textInverse} />
             </View>
           </View>
         </View>
@@ -400,7 +403,7 @@ export default function SearchScreen() {
               key={inputKey}
               autoFocus
               placeholder="Ieškoti produkto..."
-              placeholderTextColor="#9e9e9e"
+              placeholderTextColor={colors.textMuted}
               defaultValue={query}
               onChangeText={setQuery}
               style={styles.searchInput}
@@ -413,7 +416,7 @@ export default function SearchScreen() {
               onPress={closeAndBack}
               style={{ marginRight: 12 }}
             >
-              <Ionicons name="close" size={24} color="#2e7d32" />
+              <Ionicons name="close" size={24} color={colors.primary} />
             </TouchableOpacity>
           ),
         }}
@@ -423,7 +426,7 @@ export default function SearchScreen() {
           <ActivityIndicator
             style={styles.centered}
             size="large"
-            color="#2e7d32"
+            color={colors.primary}
           />
         ) : effectiveMode === "store-products" ? (
           <FlatList<StoreGridItem>
@@ -537,14 +540,14 @@ export default function SearchScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f5f5f5" },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: c.pageBackground },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  searchInput: { fontSize: 16, flex: 1, color: "#212121" },
+  searchInput: { fontSize: 16, flex: 1, color: c.textPrimary },
   list: { padding: 12 },
   row: { gap: 12, marginBottom: 12 },
   productCard: {
-    backgroundColor: "white",
+    backgroundColor: c.cardBackground,
     borderRadius: 12,
     padding: 12,
     alignItems: "center",
@@ -569,7 +572,7 @@ const styles = StyleSheet.create({
     height: "100%",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f3f4f6",
+    backgroundColor: c.surfaceMuted,
     borderRadius: 8,
   },
   productImageEmoji: {
@@ -577,13 +580,13 @@ const styles = StyleSheet.create({
     opacity: 0.4,
   },
   productInfo: { flex: 1, width: "100%" },
-  productName: { fontSize: 13, color: "#212121", lineHeight: 18 },
-  amountText: { fontSize: 12, color: "#9e9e9e", marginTop: 2 },
+  productName: { fontSize: 13, color: c.textPrimary, lineHeight: 18 },
+  amountText: { fontSize: 12, color: c.textMuted, marginTop: 2 },
   emptyText: {
     textAlign: "center",
     padding: 32,
     fontSize: 15,
-    color: "#757575",
+    color: c.textSecondary,
   },
   createProductCard: {
     width: "100%",
@@ -596,7 +599,7 @@ const styles = StyleSheet.create({
     width: "100%",
     height: "100%",
     borderRadius: 10,
-    backgroundColor: "#f1f3f4",
+    backgroundColor: c.surfaceMuted,
     alignItems: "center",
     justifyContent: "center",
     position: "relative",
@@ -612,7 +615,7 @@ const styles = StyleSheet.create({
     width: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: "#9e9e9e",
+    backgroundColor: c.primary,
     alignItems: "center",
     justifyContent: "center",
   },

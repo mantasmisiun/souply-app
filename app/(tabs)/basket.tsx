@@ -1,10 +1,11 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
-import { useEffect, useState, useCallback } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { useBasketState } from '../../state/basketState';
+import { useTheme, type AppTheme } from '../../constants/theme';
 
 interface Basket {
     id: number;
@@ -17,6 +18,8 @@ interface Basket {
 }
 
 export default function BasketScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const [baskets, setBaskets] = useState<Basket[]>([]);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
@@ -69,11 +72,11 @@ export default function BasketScreen() {
 
     const getStatusColor = (status: string) => {
         switch (status) {
-            case 'draft': return '#f57c00';
-            case 'compared': return '#1565c0';
-            case 'active': return '#6a1b9a';
-            case 'completed': return '#2e7d32';
-            default: return '#757575';
+            case 'draft': return colors.warning;
+            case 'compared': return colors.info;
+            case 'active': return colors.primary;
+            case 'completed': return colors.success;
+            default: return colors.textSecondary;
         }
     };
 
@@ -87,7 +90,7 @@ export default function BasketScreen() {
         }
     };
 
-    if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color="#2e7d32" /></View>;
+    if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color={colors.primary} /></View>;
 
     return (
         <View style={styles.container}>
@@ -108,7 +111,7 @@ export default function BasketScreen() {
                     >
                         <View style={styles.cardLeft}>
                             <View style={styles.iconContainer}>
-                                <Ionicons name="cart-outline" size={28} color="#2e7d32" />
+                                <Ionicons name="cart-outline" size={28} color={colors.primary} />
                                 {item.itemCount > 0 && (
                                     <View style={styles.badge}>
                                         <Text style={styles.badgeText}>{item.itemCount}</Text>
@@ -140,27 +143,28 @@ export default function BasketScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5' },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
     list: { padding: 16, paddingBottom: 80 },
     card: {
-        backgroundColor: 'white', borderRadius: 12, padding: 16, marginBottom: 12,
+        backgroundColor: c.cardBackground, borderRadius: 12, padding: 16, marginBottom: 12,
         flexDirection: 'row', alignItems: 'center',
         elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.1, shadowRadius: 2,
+        shadowOpacity: 0.08, shadowRadius: 2,
+        borderLeftWidth: 3, borderLeftColor: c.softAccent,
     },
     cardLeft: { marginRight: 12 },
     cardContent: { flex: 1 },
-    cardTitle: { fontSize: 15, fontWeight: '600', color: '#212121' },
-    cardDate: { fontSize: 13, color: '#757575', marginTop: 2 },
+    cardTitle: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+    cardDate: { fontSize: 13, color: c.textSecondary, marginTop: 2 },
     statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
-    statusText: { fontSize: 11, color: 'white', fontWeight: '600' },
-    emptyText: { fontSize: 16, color: '#757575', fontWeight: '600' },
-    emptySubText: { fontSize: 13, color: '#9e9e9e', marginTop: 4 },
+    statusText: { fontSize: 11, color: c.textInverse, fontWeight: '600' },
+    emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600' },
+    emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 4 },
     fab: {
         position: 'absolute', bottom: 24, right: 24,
-        backgroundColor: '#2e7d32', width: 56, height: 56,
+        backgroundColor: c.primary, width: 56, height: 56,
         borderRadius: 28, alignItems: 'center', justifyContent: 'center', elevation: 4,
     },
     iconContainer: {
@@ -174,7 +178,7 @@ const styles = StyleSheet.create({
         position: 'absolute',
         top: -4,
         right: -6,
-        backgroundColor: '#2e7d32',
+        backgroundColor: c.primary,
         borderRadius: 10,
         minWidth: 18,
         height: 18,
@@ -182,5 +186,5 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         paddingHorizontal: 4,
     },
-    badgeText: { color: 'white', fontSize: 10, fontWeight: '700' },
+    badgeText: { color: c.onPrimary, fontSize: 10, fontWeight: '700' },
 });

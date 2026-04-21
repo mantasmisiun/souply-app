@@ -1,6 +1,6 @@
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Image, Keyboard, Platform  } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
-import { useState, useCallback, useEffect, useRef } from 'react';
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeInDown } from 'react-native-reanimated';
 import { API_BASE_URL } from '../../config/api';
@@ -8,6 +8,7 @@ import { getUserId } from '../../config/user';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { ProductImage } from '../../components/ProductImage';
+import { useTheme, type AppTheme } from '../../constants/theme';
 
 interface ShoppingList {
     id: number;
@@ -34,10 +35,12 @@ interface ShoppingListItem {
     unit?: string;
     storeProductId?: number | null;
 }
-function ShoppingListItemCard({ item, onToggle, onRemove }: {
+function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
     item: ShoppingListItem;
     onToggle: (item: ShoppingListItem) => void;
     onRemove: (id: number) => void;
+    styles: ReturnType<typeof makeStyles>;
+    colors: AppTheme;
 }) {
     const swipeableRef = useRef<SwipeableMethods>(null);
 
@@ -57,7 +60,7 @@ function ShoppingListItemCard({ item, onToggle, onRemove }: {
 
     const rightActions = () => (
         <View style={styles.deleteAction}>
-            <Ionicons name="trash-outline" size={24} color="white" />
+            <Ionicons name="trash-outline" size={24} color={colors.onPrimary} />
             <Text style={styles.actionText}>Ištrinti</Text>
         </View>
     );
@@ -81,7 +84,7 @@ function ShoppingListItemCard({ item, onToggle, onRemove }: {
                     <View style={styles.imageContainer}>
                         {item.isChecked ? (
                             <View style={styles.checkmarkContainer}>
-                                <Ionicons name="checkmark" size={24} color="white" />
+                                <Ionicons name="checkmark" size={24} color={colors.onPrimary} />
                             </View>
                         ) : (
                             <ProductImage
@@ -97,10 +100,10 @@ function ShoppingListItemCard({ item, onToggle, onRemove }: {
                             {item.productName}
                         </Text>
                         <Text style={styles.itemQuantity}>
-                            Kiekis: {item.storeProductId 
-                                ? `${item.quantity} ${item.unit}` 
-                                : (item.quantity < 10 
-                                    ? `${item.quantity} kg` 
+                            Kiekis: {item.storeProductId
+                                ? `${item.quantity} ${item.unit}`
+                                : (item.quantity < 10
+                                    ? `${item.quantity} kg`
                                     : `${item.quantity} g`)}
                         </Text>
                     </View>
@@ -115,6 +118,8 @@ function ShoppingListItemCard({ item, onToggle, onRemove }: {
     );
 }
 export default function ShoppingListScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
     const [list, setList] = useState<ShoppingList | null>(null);
     const [items, setItems] = useState<ShoppingListItem[]>([]);
@@ -125,10 +130,10 @@ export default function ShoppingListScreen() {
     const [visibleCount, setVisibleCount] = useState(0);
     const [menuVisible, setMenuVisible] = useState(false);
     const { id, expectedCount } = useLocalSearchParams<{ id: string; expectedCount: string }>();
-    const [quantityModal, setQuantityModal] = useState<{ 
-        productId: number | null; 
-        name: string; 
-        isWeighable: boolean; 
+    const [quantityModal, setQuantityModal] = useState<{
+        productId: number | null;
+        name: string;
+        isWeighable: boolean;
         storeProductId: number | null;
         imageUrl: string | null;
     } | null>(null);
@@ -311,7 +316,7 @@ export default function ShoppingListScreen() {
         }
     };
 
-    if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color="#2e7d32" /></View>;
+    if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color={colors.primary} /></View>;
 
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
@@ -323,7 +328,7 @@ export default function ShoppingListScreen() {
                     ) : null,
                     headerRight: () => list?.status === 'completed' ? (
                         <TouchableOpacity style={{ marginRight: 12 }} onPress={() => setMenuVisible(true)}>
-                            <Ionicons name="ellipsis-vertical" size={22} color="#9e9e9e" />
+                            <Ionicons name="ellipsis-vertical" size={22} color={colors.textMuted} />
                         </TouchableOpacity>
                     ) : undefined,
                 }} />
@@ -339,17 +344,17 @@ export default function ShoppingListScreen() {
                     {searchVisible && (
                         <View style={styles.searchOverlay}>
                             <View style={styles.searchContainer}>
-                                <Ionicons name="search" size={18} color="#9e9e9e" />
+                                <Ionicons name="search" size={18} color={colors.textMuted} />
                                 <TextInput
                                     style={styles.searchInput}
                                     placeholder="Ieškoti produkto..."
-                                    placeholderTextColor="#9e9e9e"
+                                    placeholderTextColor={colors.textMuted}
                                     value={searchQuery}
                                     onChangeText={handleSearch}
                                     autoFocus
                                 />
                                 <TouchableOpacity onPress={() => { setSearchVisible(false); setSearchQuery(''); setSearchResults([]); }}>
-                                    <Ionicons name="close" size={22} color="#757575" />
+                                    <Ionicons name="close" size={22} color={colors.textSecondary} />
                                 </TouchableOpacity>
                             </View>
                             {searchResults.length > 0 && (
@@ -372,7 +377,7 @@ export default function ShoppingListScreen() {
                                                 }}
                                             >
                                                 {alreadyInList && (
-                                                    <Ionicons name="checkmark-circle" size={18} color="#2e7d32" style={{ marginRight: 8 }} />
+                                                    <Ionicons name="checkmark-circle" size={18} color={colors.primary} style={{ marginRight: 8 }} />
                                                 )}
                                                 <Text style={styles.searchResultText}>{product.storeProductName}</Text>
                                             </TouchableOpacity>
@@ -382,7 +387,7 @@ export default function ShoppingListScreen() {
                                         style={styles.customItemButton}
                                         onPress={() => promptQuantity(null, searchQuery, false)}
                                     >
-                                        <Ionicons name="add-circle-outline" size={18} color="#2e7d32" />
+                                        <Ionicons name="add-circle-outline" size={18} color={colors.primary} />
                                         <Text style={styles.customItemText}>Pridėti "{searchQuery}" kaip naują prekę</Text>
                                     </TouchableOpacity>
                                 </ScrollView>
@@ -392,7 +397,7 @@ export default function ShoppingListScreen() {
                                     style={styles.customItemButton}
                                     onPress={() => promptQuantity(null, searchQuery, false)}
                                 >
-                                    <Ionicons name="add-circle-outline" size={18} color="#2e7d32" />
+                                    <Ionicons name="add-circle-outline" size={18} color={colors.primary} />
                                     <Text style={styles.customItemText}>Pridėti "{searchQuery}" kaip naują prekę</Text>
                                 </TouchableOpacity>
                             )}
@@ -408,6 +413,8 @@ export default function ShoppingListScreen() {
                                             item={item}
                                             onToggle={toggleItem}
                                             onRemove={removeItem}
+                                            styles={styles}
+                                            colors={colors}
                                         />
                                     </Animated.View>
                                 ))}
@@ -424,7 +431,7 @@ export default function ShoppingListScreen() {
                                 onPress={() => setSearchVisible(true)}
                             >
                                 <View style={styles.addCardInner}>
-                                    <Ionicons name="add-circle-outline" size={22} color="#2e7d32" />
+                                    <Ionicons name="add-circle-outline" size={22} color={colors.primary} />
                                     <Text style={styles.addCardText}>Pridėti prekę</Text>
                                 </View>
                             </TouchableOpacity>
@@ -445,7 +452,7 @@ export default function ShoppingListScreen() {
                                         handleDuplicate();
                                     }}
                                 >
-                                    <Ionicons name="copy-outline" size={18} color="#212121" />
+                                    <Ionicons name="copy-outline" size={18} color={colors.textPrimary} />
                                     <Text style={styles.menuItemText}>Nukopijuoti sąrašą</Text>
                                 </TouchableOpacity>
                             </View>
@@ -472,7 +479,7 @@ export default function ShoppingListScreen() {
                                     }}
                                 >
                                     <View style={[styles.checkbox, modalIsWeighable ? styles.checkboxChecked : null]}>
-                                        {modalIsWeighable ? <Ionicons name="checkmark" size={14} color="white" /> : null}
+                                        {modalIsWeighable ? <Ionicons name="checkmark" size={14} color={colors.onPrimary} /> : null}
                                     </View>
                                     <Text style={styles.weighableLabel}>Sveriamas</Text>
                                 </TouchableOpacity>
@@ -526,30 +533,30 @@ export default function ShoppingListScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5' },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
     headerLogo: { width: 32, height: 32, marginLeft: 8, borderRadius: 6 },
     progressContainer: {
         flexDirection: 'row', alignItems: 'center', padding: 12,
-        backgroundColor: 'white', borderBottomWidth: 1, borderBottomColor: '#e0e0e0', gap: 10,
+        backgroundColor: c.cardBackground, borderBottomWidth: 1, borderBottomColor: c.border, gap: 10,
     },
-    progressBar: { flex: 1, height: 8, backgroundColor: '#e0e0e0', borderRadius: 4, overflow: 'hidden' },
-    progressFill: { height: '100%', backgroundColor: '#2e7d32', borderRadius: 4 },
-    progressText: { fontSize: 13, color: '#757575', minWidth: 50, textAlign: 'right' },
+    progressBar: { flex: 1, height: 8, backgroundColor: c.border, borderRadius: 4, overflow: 'hidden' },
+    progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: 4 },
+    progressText: { fontSize: 13, color: c.textSecondary, minWidth: 50, textAlign: 'right' },
 list: {
     paddingTop: 16,
     paddingBottom: 100,
 },
 listContainer: {
-    backgroundColor: 'white',
+    backgroundColor: c.cardBackground,
     marginBottom: 10,
     elevation: 1,
     shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05, shadowRadius: 2,
 },
 card: {
-    backgroundColor: 'white',
+    backgroundColor: c.cardBackground,
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 16,
@@ -558,7 +565,7 @@ card: {
 },
     divider: {
         height: 0.5,
-        backgroundColor: '#e0e0e0',
+        backgroundColor: c.border,
         marginLeft: 68,
     },
 
@@ -573,7 +580,7 @@ card: {
     },
     imagePlaceholder: {
         width: 40, height: 40, borderRadius: 8,
-        backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center',
+        backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center',
     },
     imageEmoji: {
         fontSize: 22,
@@ -581,19 +588,19 @@ card: {
     },
     checkmarkContainer: {
         width: 40, height: 40, borderRadius: 8,
-        backgroundColor: '#2e7d32', alignItems: 'center', justifyContent: 'center',
+        backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center',
     },
     cardContent: { flex: 1 },
-    itemName: { fontSize: 14, fontWeight: '600', color: '#212121' },
-    itemNameChecked: { textDecorationLine: 'line-through', color: '#9e9e9e' },
-    itemQuantity: { fontSize: 12, color: '#757575', marginTop: 2 },
-    itemPrice: { fontSize: 14, fontWeight: '500', color: '#2e7d32' },
-    itemPriceChecked: { color: '#9e9e9e' },
-    searchInput: { flex: 1, fontSize: 14, color: '#212121' },
+    itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
+    itemNameChecked: { textDecorationLine: 'line-through', color: c.textMuted },
+    itemQuantity: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
+    itemPrice: { fontSize: 14, fontWeight: '500', color: c.primary },
+    itemPriceChecked: { color: c.textMuted },
+    searchInput: { flex: 1, fontSize: 14, color: c.textPrimary },
     searchOverlay: {
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderBottomWidth: 1,
-        borderBottomColor: '#e0e0e0',
+        borderBottomColor: c.border,
         zIndex: 10,
         maxHeight: 400,
     },
@@ -602,41 +609,41 @@ card: {
     },
     searchContainer: {
         flexDirection: 'row', alignItems: 'center', gap: 8,
-        padding: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
+        padding: 12, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
     },
     searchResultItem: {
-        padding: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
+        padding: 12, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
         flexDirection: 'row', alignItems: 'center',
     },
-    searchResultText: { fontSize: 14, color: '#212121' },
+    searchResultText: { fontSize: 14, color: c.textPrimary },
     customItemButton: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 },
-    customItemText: { fontSize: 14, color: '#2e7d32' },
+    customItemText: { fontSize: 14, color: c.primary },
     addCard: {
-        backgroundColor: 'white', borderRadius: 12, padding: 14, marginBottom: 10,
-        borderWidth: 1, borderColor: '#e0e0e0', borderStyle: 'dashed', elevation: 1,
+        backgroundColor: c.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10,
+        borderWidth: 1, borderColor: c.border, borderStyle: 'dashed', elevation: 1,
     },
     addCardInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-    addCardText: { fontSize: 14, color: '#2e7d32', fontWeight: '600' },
-    emptyText: { fontSize: 16, color: '#757575' },
+    addCardText: { fontSize: 14, color: c.primary, fontWeight: '600' },
+    emptyText: { fontSize: 16, color: c.textSecondary },
     menuOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100 },
     menuContainer: {
         position: 'absolute', top: 8, right: 12,
-        backgroundColor: 'white', borderRadius: 10,
+        backgroundColor: c.cardBackground, borderRadius: 10,
         elevation: 8, shadowColor: '#000',
         shadowOffset: { width: 0, height: 2 },
         shadowOpacity: 0.2, shadowRadius: 4,
         minWidth: 180,
     },
     menuItem: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, borderRadius: 10 },
-    menuItemText: { fontSize: 14, color: '#212121' },
+    menuItemText: { fontSize: 14, color: c.textPrimary },
     modalOverlay: {
         position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-        backgroundColor: 'rgba(0,0,0,0.4)',
+        backgroundColor: c.overlayBackdrop,
         justifyContent: 'center',
         alignItems: 'center', zIndex: 200,
     },
     modalContainer: {
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderRadius: 16,
         padding: 24,
         width: '90%',
@@ -645,14 +652,14 @@ card: {
         shadowOpacity: 0.2, shadowRadius: 8,
     },
     modalTitle: {
-        fontSize: 16, fontWeight: '700', color: '#212121', marginBottom: 12,
+        fontSize: 16, fontWeight: '700', color: c.textPrimary, marginBottom: 12,
     },
     modalLabel: {
-        fontSize: 13, color: '#757575', marginBottom: 8,
+        fontSize: 13, color: c.textSecondary, marginBottom: 8,
     },
     modalInput: {
-        borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8,
-        padding: 12, fontSize: 18, color: '#212121', textAlign: 'center',
+        borderWidth: 1, borderColor: c.border, borderRadius: 8,
+        padding: 12, fontSize: 18, color: c.textPrimary, textAlign: 'center',
         marginBottom: 16,
     },
     modalButtons: {
@@ -660,39 +667,39 @@ card: {
     },
     modalCancel: {
         flex: 1, padding: 12, borderRadius: 8,
-        borderWidth: 1, borderColor: '#e0e0e0', alignItems: 'center',
+        borderWidth: 1, borderColor: c.border, alignItems: 'center',
     },
     modalCancelText: {
-        fontSize: 14, color: '#757575', fontWeight: '600',
+        fontSize: 14, color: c.textSecondary, fontWeight: '600',
     },
     modalConfirm: {
         flex: 1, padding: 12, borderRadius: 8,
-        backgroundColor: '#2e7d32', alignItems: 'center',
+        backgroundColor: c.primary, alignItems: 'center',
     },
     modalConfirmText: {
-        fontSize: 14, color: 'white', fontWeight: '600',
+        fontSize: 14, color: c.onPrimary, fontWeight: '600',
     },
     weighableRow: {
         flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16,
     },
     weighableLabel: {
-        fontSize: 14, color: '#212121',
+        fontSize: 14, color: c.textPrimary,
     },
     checkbox: {
         width: 22, height: 22, borderRadius: 11,
-        borderWidth: 2, borderColor: '#2e7d32',
+        borderWidth: 2, borderColor: c.primary,
         alignItems: 'center', justifyContent: 'center',
     },
     checkboxChecked: {
-        backgroundColor: '#2e7d32', borderColor: '#2e7d32',
+        backgroundColor: c.primary, borderColor: c.primary,
     },
     deleteAction: {
-        backgroundColor: '#c62828',
+        backgroundColor: c.error,
         justifyContent: 'center',
         alignItems: 'center',
         width: 80,
         flexDirection: 'column',
         flex: 1,
     },
-    actionText: { color: 'white', fontSize: 11, fontWeight: '600' },
+    actionText: { color: c.onPrimary, fontSize: 11, fontWeight: '600' },
 });

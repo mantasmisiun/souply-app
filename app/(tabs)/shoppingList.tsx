@@ -1,11 +1,14 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert } from 'react-native';
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
+import { useTheme, type AppTheme } from '../../constants/theme';
+
+type Styles = ReturnType<typeof makeStyles>;
 
 interface ShoppingList {
     id: number;
@@ -20,11 +23,13 @@ interface ShoppingList {
     checkedCount: number;
 }
 
-function ShoppingListCard({ item, onDelete, onComplete, onPress }: {
+function ShoppingListCard({ item, onDelete, onComplete, onPress, styles, colors }: {
     item: ShoppingList;
     onDelete: (id: number) => void;
     onComplete: (id: number) => void;
     onPress: (id: number) => void;
+    styles: Styles;
+    colors: AppTheme;
 }) {
     const swipeableRef = useRef<SwipeableMethods>(null);
     const progress = item.itemCount > 0 ? item.checkedCount / item.itemCount : 0;
@@ -57,7 +62,7 @@ function ShoppingListCard({ item, onDelete, onComplete, onPress }: {
 
     const rightActions = () => (
         <View style={styles.deleteAction}>
-            <Ionicons name="trash-outline" size={24} color="white" />
+            <Ionicons name="trash-outline" size={24} color={colors.textInverse} />
             <Text style={styles.actionText}>Ištrinti</Text>
         </View>
     );
@@ -66,7 +71,7 @@ function ShoppingListCard({ item, onDelete, onComplete, onPress }: {
         if (item.status === 'completed') return null;
         return (
             <View style={styles.completeAction}>
-                <Ionicons name="checkmark-done-outline" size={24} color="white" />
+                <Ionicons name="checkmark-done-outline" size={24} color={colors.textInverse} />
                 <Text style={styles.actionText}>Užbaigti</Text>
             </View>
         );
@@ -127,6 +132,8 @@ function ShoppingListCard({ item, onDelete, onComplete, onPress }: {
 }
 
 export default function ShoppingListScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const [lists, setLists] = useState<ShoppingList[]>([]);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
@@ -175,7 +182,7 @@ export default function ShoppingListScreen() {
 
     if (loading) return (
         <View style={styles.centered}>
-            <ActivityIndicator size="large" color="#2e7d32" />
+            <ActivityIndicator size="large" color={colors.primary} />
         </View>
     );
 
@@ -198,6 +205,8 @@ export default function ShoppingListScreen() {
                                             onDelete={deleteList}
                                             onComplete={completeList}
                                             onPress={(id) => router.push(`/shopping-list/${id}` as any)}
+                                            styles={styles}
+                                            colors={colors}
                                         />
                                     ))}
                                 </>
@@ -212,6 +221,8 @@ export default function ShoppingListScreen() {
                                             onDelete={deleteList}
                                             onComplete={completeList}
                                             onPress={(id) => router.push(`/shopping-list/${id}` as any)}
+                                            styles={styles}
+                                            colors={colors}
                                         />
                                     ))}
                                 </>
@@ -231,60 +242,60 @@ export default function ShoppingListScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5' },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
     list: { padding: 16 },
     sectionTitle: {
-        fontSize: 13, fontWeight: '700', color: '#9e9e9e',
+        fontSize: 13, fontWeight: '700', color: c.textMuted,
         marginBottom: 8, marginTop: 8, textTransform: 'uppercase',
     },
     card: {
-        backgroundColor: 'white', borderRadius: 12, padding: 14, marginBottom: 10,
+        backgroundColor: c.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10,
         flexDirection: 'row', alignItems: 'center',
         elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.1, shadowRadius: 2,
-        borderLeftWidth: 4,                  // ← add
+        shadowOpacity: 0.08, shadowRadius: 2,
+        borderLeftWidth: 4,
     },
     cardLeft: { marginRight: 12 },
     logo: { width: 44, height: 44, borderRadius: 8 },
     logoPlaceholder: {
         width: 44, height: 44, borderRadius: 8,
-        backgroundColor: '#e0e0e0', alignItems: 'center', justifyContent: 'center',
+        backgroundColor: c.border, alignItems: 'center', justifyContent: 'center',
     },
-    logoPlaceholderText: { fontSize: 18, fontWeight: '700', color: '#757575' },
+    logoPlaceholderText: { fontSize: 18, fontWeight: '700', color: c.textSecondary },
     cardContent: { flex: 1 },
-    storeName: { fontSize: 14, fontWeight: '600', color: '#212121' },
-    date: { fontSize: 12, color: '#9e9e9e', marginTop: 2 },
+    storeName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
+    date: { fontSize: 12, color: c.textMuted, marginTop: 2 },
     progressRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
-    progressBar: { flex: 1, height: 4, backgroundColor: '#e0e0e0', borderRadius: 2, overflow: 'hidden' },
-    progressFill: { height: '100%', backgroundColor: '#2e7d32', borderRadius: 2 },
-    progressText: { fontSize: 11, color: '#757575' },
+    progressBar: { flex: 1, height: 4, backgroundColor: c.border, borderRadius: 2, overflow: 'hidden' },
+    progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: 2 },
+    progressText: { fontSize: 11, color: c.textSecondary },
     badgeContainer: { marginLeft: 8 },
     badge: {
-        backgroundColor: '#e8f5e9', width: 28, height: 28, borderRadius: 14,
+        backgroundColor: c.primaryMuted, width: 28, height: 28, borderRadius: 14,
         alignItems: 'center', justifyContent: 'center',
     },
-    badgeCompleted: { backgroundColor: '#e0e0e0' },
-    badgeText: { fontSize: 12, fontWeight: '700', color: '#2e7d32' },
-    badgeTextCompleted: { color: '#9e9e9e' },
-    emptyText: { fontSize: 16, color: '#757575', fontWeight: '600', textAlign: 'center' },
-    emptySubText: { fontSize: 13, color: '#9e9e9e', marginTop: 4, textAlign: 'center' },
+    badgeCompleted: { backgroundColor: c.border },
+    badgeText: { fontSize: 12, fontWeight: '700', color: c.primary },
+    badgeTextCompleted: { color: c.textMuted },
+    emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', textAlign: 'center' },
+    emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 4, textAlign: 'center' },
     deleteAction: {
-        backgroundColor: '#c62828', justifyContent: 'center', alignItems: 'center',
+        backgroundColor: c.error, justifyContent: 'center', alignItems: 'center',
         width: 80, borderRadius: 12, marginBottom: 10,
         flexDirection: 'column', gap: 4,
     },
     completeAction: {
-        backgroundColor: '#2e7d32', justifyContent: 'center', alignItems: 'center',
+        backgroundColor: c.success, justifyContent: 'center', alignItems: 'center',
         width: 80, borderRadius: 12, marginBottom: 10,
         flexDirection: 'column', gap: 4,
     },
-    actionText: { color: 'white', fontSize: 11, fontWeight: '600' },
+    actionText: { color: c.textInverse, fontSize: 11, fontWeight: '600' },
     cardActive: {
-        borderLeftColor: '#2e7d32',          // ← add
+        borderLeftColor: c.primary,
     },
     cardCompleted: {
-        borderLeftColor: '#9e9e9e',          // ← add
+        borderLeftColor: c.textMuted,
     },
 });

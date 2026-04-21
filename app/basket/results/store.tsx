@@ -1,8 +1,8 @@
 import { View, Text, FlatList, StyleSheet } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
-import { useEffect, useState } from 'react';
-import { Ionicons } from '@expo/vector-icons';
+import { useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useTheme, type AppTheme } from '../../../constants/theme';
 
 interface ItemResult {
     productId: number;
@@ -25,6 +25,8 @@ interface StoreResult {
 }
 
 export default function StoreBreakdownScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const { basketId, storeId } = useLocalSearchParams();
     const [store, setStore] = useState<StoreResult | null>(null);
 
@@ -90,34 +92,34 @@ export default function StoreBreakdownScreen() {
     );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: AppTheme) => StyleSheet.create({
     list: { padding: 16 },
     card: {
-        backgroundColor: 'white', borderRadius: 12, padding: 16, marginBottom: 10,
+        backgroundColor: c.cardBackground, borderRadius: 12, padding: 16, marginBottom: 10,
         flexDirection: 'row', alignItems: 'center',
         elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.1, shadowRadius: 2,
+        shadowOpacity: 0.08, shadowRadius: 2,
     },
     cardContent: { flex: 1 },
     nameRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 },
-    itemName: { fontSize: 14, fontWeight: '600', color: '#212121', flex: 1 },
-    quantity: { fontSize: 12, color: '#757575', marginTop: 4 },
+    itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary, flex: 1 },
+    quantity: { fontSize: 12, color: c.textSecondary, marginTop: 4 },
     priceContainer: { alignItems: 'flex-end' },
-    originalPrice: { fontSize: 12, color: '#9e9e9e', textDecorationLine: 'line-through' },
-    price: { fontSize: 16, fontWeight: '700', color: '#2e7d32' },
+    originalPrice: { fontSize: 12, color: c.textMuted, textDecorationLine: 'line-through' },
+    price: { fontSize: 16, fontWeight: '700', color: c.primary },
     approxBadge: {
-        backgroundColor: '#fff3e0', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6,
+        backgroundColor: c.warningMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6,
     },
-    approxText: { fontSize: 10, color: '#e65100' },
+    approxText: { fontSize: 10, color: c.warning },
     fallbackBadge: {
-        backgroundColor: '#e3f2fd', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6,
+        backgroundColor: c.infoMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6,
     },
-    fallbackText: { fontSize: 10, color: '#1565c0' },
+    fallbackText: { fontSize: 10, color: c.info },
     totalRow: {
         flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-        backgroundColor: 'white', borderRadius: 12, padding: 16, marginTop: 4,
+        backgroundColor: c.cardBackground, borderRadius: 12, padding: 16, marginTop: 4,
         elevation: 2,
     },
-    totalLabel: { fontSize: 15, fontWeight: '600', color: '#212121' },
-    totalPrice: { fontSize: 20, fontWeight: '700', color: '#2e7d32' },
+    totalLabel: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+    totalPrice: { fontSize: 20, fontWeight: '700', color: c.primary },
 });

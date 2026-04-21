@@ -1,10 +1,11 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Image } from 'react-native';
-import { useRef, useState, useCallback } from 'react';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput } from 'react-native';
+import { useMemo, useRef, useState, useCallback } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../../config/api';
 import { ProductImage } from '../../components/ProductImage';
+import { useTheme, type AppTheme } from '../../constants/theme';
 
 interface BasketItem {
     id: number;
@@ -25,6 +26,8 @@ interface Basket {
 }
 
 export default function BasketDetailScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const { id } = useLocalSearchParams();
     const router = useRouter();
     const [basket, setBasket] = useState<Basket | null>(null);
@@ -182,7 +185,7 @@ export default function BasketDetailScreen() {
         );
     };
 
-    if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color="#2e7d32" /></View>;
+    if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color={colors.primary} /></View>;
 
     const isDraft = basket?.status === 'draft';
     console.log('basket status:', basket?.status, 'items:', items.length);
@@ -197,7 +200,7 @@ export default function BasketDetailScreen() {
                         onChangeText={setBasketName}
                         onEndEditing={e => saveBasketName(e.nativeEvent.text)}
                         onSubmitEditing={e => saveBasketName(e.nativeEvent.text)}
-                        style={{ fontSize: 16, color: '#212121', minWidth: 200 }}
+                        style={{ fontSize: 16, color: colors.textPrimary, minWidth: 200 }}
                     />
                 ) : undefined,
                 headerRight: () => basket?.status === 'draft' ? (
@@ -209,7 +212,7 @@ export default function BasketDetailScreen() {
                             setTimeout(() => nameInputRef.current?.focus(), 50);
                         }
                     }} style={{ marginRight: 12 }}>
-                        <Ionicons name={editingName ? 'close' : 'pencil-outline'} size={20} color="#2e7d32" />
+                        <Ionicons name={editingName ? 'close' : 'pencil-outline'} size={20} color={colors.primary} />
                     </TouchableOpacity>
                 ) : undefined,
             }} />
@@ -239,7 +242,7 @@ export default function BasketDetailScreen() {
                                         style={styles.controlButton}
                                         onPress={() => updateQuantity(item.id, item.quantity - 1)}
                                     >
-                                        <Ionicons name="remove" size={18} color="#2e7d32" />
+                                        <Ionicons name="remove" size={18} color={colors.primary} />
                                     </TouchableOpacity>
                                     <TextInput
                                         style={styles.quantityInput}
@@ -268,7 +271,7 @@ export default function BasketDetailScreen() {
                                         style={styles.controlButton}
                                         onPress={() => updateQuantity(item.id, item.quantity + 1)}
                                     >
-                                        <Ionicons name="add" size={18} color="#2e7d32" />
+                                        <Ionicons name="add" size={18} color={colors.primary} />
                                     </TouchableOpacity>
                                 </View>
                             </View>
@@ -276,7 +279,7 @@ export default function BasketDetailScreen() {
                                 style={styles.removeButton}
                                 onPress={() => removeItem(item.id)}
                             >
-                                <Ionicons name="trash-outline" size={20} color="#c62828" />
+                                <Ionicons name="trash-outline" size={20} color={colors.error} />
                             </TouchableOpacity>
                         </View>
                     )}
@@ -288,12 +291,12 @@ export default function BasketDetailScreen() {
                                 style={styles.showResultsButton}
                                 onPress={() => router.push(`/basket/results/${id}`)}
                             >
-                                <Ionicons name="storefront-outline" size={20} color="white" />
+                                <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
                                 <Text style={styles.showResultsText}>Rodyti parduotuves</Text>
                             </TouchableOpacity>
                         ) : (
                             <TouchableOpacity style={styles.showResultsButton} onPress={handleCalculate}>
-                                <Ionicons name="calculator-outline" size={20} color="white" />
+                                <Ionicons name="calculator-outline" size={20} color={colors.onPrimary} />
                                 <Text style={styles.showResultsText}>Apskaičiuoti</Text>
                             </TouchableOpacity>
                         )}
@@ -304,51 +307,51 @@ export default function BasketDetailScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5' },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
     list: { padding: 16 },
-    itemCategory: { fontSize: 12, color: '#757575', marginTop: 2 },
+    itemCategory: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
     controlButton: {
         width: 28, height: 28, borderRadius: 14,
-        borderWidth: 1, borderColor: '#2e7d32',
+        borderWidth: 1, borderColor: c.primary,
         alignItems: 'center', justifyContent: 'center',
     },
-    quantity: { fontSize: 15, fontWeight: '600', color: '#212121', minWidth: 24, textAlign: 'center' },
-    emptyText: { fontSize: 16, color: '#757575', fontWeight: '600' },
-    emptySubText: { fontSize: 13, color: '#9e9e9e', marginTop: 4 },
+    quantity: { fontSize: 15, fontWeight: '600', color: c.textPrimary, minWidth: 24, textAlign: 'center' },
+    emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600' },
+    emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 4 },
     quantityInput: {
-        fontSize: 15, fontWeight: '600', color: '#212121',
+        fontSize: 15, fontWeight: '600', color: c.textPrimary,
         minWidth: 40, textAlign: 'center',
-        borderBottomWidth: 1, borderBottomColor: '#e0e0e0',
+        borderBottomWidth: 1, borderBottomColor: c.border,
         paddingVertical: 2,
     },
     calculateButton: {
-        backgroundColor: '#2e7d32', borderRadius: 12, padding: 16,
+        backgroundColor: c.primary, borderRadius: 12, padding: 16,
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     },
-    calculateButtonText: { color: 'white', fontWeight: '700', fontSize: 16 },
+    calculateButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 16 },
     recalculateButton: {
-        borderWidth: 1, borderColor: '#2e7d32', borderRadius: 12, padding: 16,
+        borderWidth: 1, borderColor: c.primary, borderRadius: 12, padding: 16,
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     },
-    recalculateButtonText: { color: '#2e7d32', fontWeight: '600', fontSize: 15 },
+    recalculateButtonText: { color: c.primary, fontWeight: '600', fontSize: 15 },
     draftButton: {
-        borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 12, padding: 16,
+        borderWidth: 1, borderColor: c.border, borderRadius: 12, padding: 16,
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     },
-    draftButtonText: { color: '#757575', fontWeight: '600', fontSize: 15 },
+    draftButtonText: { color: c.textSecondary, fontWeight: '600', fontSize: 15 },
         bottomBar: {
         flexDirection: 'row',
         padding: 12,
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderTopWidth: 1,
-        borderTopColor: '#e0e0e0',
+        borderTopColor: c.border,
         gap: 10,
     },
     showResultsButton: {
         flex: 1,
-        backgroundColor: '#2e7d32',
+        backgroundColor: c.primary,
         borderRadius: 12,
         padding: 14,
         flexDirection: 'row',
@@ -356,42 +359,42 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         gap: 8,
     },
-    showResultsText: { color: 'white', fontWeight: '700', fontSize: 15 },
+    showResultsText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
     recalculateIconButton: {
         width: 50,
         borderWidth: 1,
-        borderColor: '#2e7d32',
+        borderColor: c.primary,
         borderRadius: 12,
         alignItems: 'center',
         justifyContent: 'center',
     },
     footer: { padding: 16 },
     card: {
-        backgroundColor: 'white', borderRadius: 12, padding: 12, marginBottom: 10,
+        backgroundColor: c.cardBackground, borderRadius: 12, padding: 12, marginBottom: 10,
         flexDirection: 'row', alignItems: 'center',
         elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.1, shadowRadius: 2,
+        shadowOpacity: 0.08, shadowRadius: 2,
     },
     productImage: {
         width: 56, height: 56, borderRadius: 8, marginRight: 12, alignSelf: 'center',
     },
     productImagePlaceholder: {
         width: 56, height: 56, borderRadius: 8, marginRight: 12,
-        backgroundColor: '#f3f4f6', alignItems: 'center', justifyContent: 'center', alignSelf: 'center',
+        backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center', alignSelf: 'center',
     },
     productImageEmoji: {
         fontSize: 28,
         opacity: 0.4,
     },
     cardContent: { flex: 1, justifyContent: 'space-between' },
-    itemName: { fontSize: 14, fontWeight: '600', color: '#212121' },
+    itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
     controls: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
     removeButton: {
         width: 36,
         alignItems: 'center',
         justifyContent: 'center',
         borderLeftWidth: 1,
-        borderLeftColor: '#f0f0f0',
+        borderLeftColor: c.borderSubtle,
         marginLeft: 8,
         paddingLeft: 8,
     },

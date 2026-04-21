@@ -1,6 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
+import { useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { ProductImage } from '../ProductImage';
+import { useTheme, type AppTheme } from '../../constants/theme';
 
 type Props = {
     name: string;
@@ -23,6 +25,9 @@ export default function BasketProductCard({
     onDec,
     onInc,
 }: Props) {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
+
     return (
         <View style={styles.productCard}>
             <TouchableOpacity
@@ -51,13 +56,13 @@ export default function BasketProductCard({
             ) : (
                 <View style={styles.quantityControl}>
                     <TouchableOpacity style={styles.qtyButton} onPress={onDec}>
-                        <Ionicons name="remove" size={16} color="#2e7d32" />
+                        <Ionicons name="remove" size={16} color={colors.primary} />
                     </TouchableOpacity>
                     <Text style={styles.qtyText}>
                         {Number.isInteger(quantity) ? quantity : quantity.toFixed(1)}
                     </Text>
                     <TouchableOpacity style={styles.qtyButton} onPress={onInc}>
-                        <Ionicons name="add" size={16} color="#2e7d32" />
+                        <Ionicons name="add" size={16} color={colors.primary} />
                     </TouchableOpacity>
                 </View>
             )}
@@ -65,9 +70,9 @@ export default function BasketProductCard({
     );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: AppTheme) => StyleSheet.create({
     productCard: {
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderRadius: 12,
         padding: 12,
         alignItems: 'center',
@@ -92,7 +97,7 @@ const styles = StyleSheet.create({
         height: '100%',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#f3f4f6',
+        backgroundColor: c.surfaceMuted,
         borderRadius: 8,
     },
     productImageEmoji: {
@@ -100,23 +105,23 @@ const styles = StyleSheet.create({
         opacity: 0.4,
     },
     productInfo: { flex: 1, width: '100%', marginBottom: 10 },
-    productName: { fontSize: 13, color: '#212121', lineHeight: 18 },
-    amountText: { fontSize: 12, color: '#9e9e9e', marginTop: 2 },
+    productName: { fontSize: 13, color: c.textPrimary, lineHeight: 18 },
+    amountText: { fontSize: 12, color: c.textMuted, marginTop: 2 },
     addButton: {
         width: '100%',
-        backgroundColor: '#2e7d32',
+        backgroundColor: c.primary,
         borderRadius: 8,
         paddingVertical: 10,
         alignItems: 'center',
     },
-    addButtonText: { color: 'white', fontSize: 13, fontWeight: '600' },
+    addButtonText: { color: c.onPrimary, fontSize: 13, fontWeight: '600' },
     quantityControl: {
         width: '100%',
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'space-between',
         borderWidth: 1,
-        borderColor: '#2e7d32',
+        borderColor: c.primary,
         borderRadius: 8,
         paddingVertical: 6,
         paddingHorizontal: 10,
@@ -125,7 +130,7 @@ const styles = StyleSheet.create({
     qtyText: {
         fontSize: 14,
         fontWeight: '700',
-        color: '#2e7d32',
+        color: c.primary,
         minWidth: 20,
         textAlign: 'center',
     },

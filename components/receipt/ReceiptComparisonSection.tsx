@@ -1,7 +1,8 @@
 import { ReceiptComparison } from '../../types/receipt-view';
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useMemo, useRef } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet, Image, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTheme, type AppTheme } from '../../constants/theme';
 type Props = {
   comparison: ReceiptComparison | null;
   loading: boolean;
@@ -34,6 +35,8 @@ const getInitials = (value?: string) => {
 };
 
 export default function ReceiptComparisonSection({ comparison, loading, error, summary }: Props) {
+  const colors = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const progress = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
@@ -51,7 +54,7 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
     return (
       <View style={styles.sectionCard}>
         <View style={styles.loadingRow}>
-          <ActivityIndicator size="small" color="#2e7d32" />
+          <ActivityIndicator size="small" color={colors.primary} />
           <Text style={styles.sectionSubvalue}>Skaičiuojama...</Text>
         </View>
       </View>
@@ -112,7 +115,7 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
         <View style={styles.shopNameWrap}>
           <Text style={styles.shopName}>{shopName}</Text>
           {!!summary?.storeRecognized && (
-            <Ionicons name="checkmark-circle" size={18} color="#2e7d32" />
+            <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
           )}
         </View>
         {!!formattedDate && <Text style={styles.topDate}>{formattedDate}</Text>}
@@ -123,15 +126,15 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
       <View style={styles.comparedHeaderWrap}>
         <View style={styles.comparedChip}>
           <Text style={styles.comparedTitle}>Palygintos prekės ({comparedCount}/{totalCount})</Text>
-          {hasUnrecognized && <Ionicons name="alert-circle" size={16} color="#f57c00" />}
+          {hasUnrecognized && <Ionicons name="alert-circle" size={16} color={colors.warning} />}
         </View>
       </View>
         {rows.map((row) => {
           const fillColor = row.isVisited
             ? visitedIsCheapest
-              ? '#2e7d32'
-              : '#c62828'
-            : '#1565c0';
+              ? colors.primary
+              : colors.error
+            : colors.info;
 
           return (
             <View key={`${row.chainId}-${row.storeId}`} style={styles.rowWrap}>
@@ -176,19 +179,19 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: AppTheme) => StyleSheet.create({
   barsWrap: {
     marginTop: 14,
     gap: 12,
   },
   rowWrap: {
     gap: 8,
-    backgroundColor: '#ffffff',
+    backgroundColor: c.cardBackground,
     borderRadius: 12,
     paddingVertical: 10,
     paddingHorizontal: 10,
     borderWidth: 1,
-    borderColor: '#edf2f7',
+    borderColor: c.borderSubtle,
   },
   rowHeader: {
     flexDirection: 'row',
@@ -207,19 +210,19 @@ const styles = StyleSheet.create({
     marginTop: 2,
     height: 18,
     borderRadius: 999,
-    backgroundColor: '#e5e7eb',
+    backgroundColor: c.border,
     overflow: 'hidden',
     width: '100%',
   },
   totalText: {
     fontSize: 14,
     fontWeight: '700',
-    color: '#111827',
+    color: c.textPrimary,
     minWidth: 72,
     textAlign: 'right',
   },
   sectionCard: {
-    backgroundColor: 'white',
+    backgroundColor: c.cardBackground,
     marginHorizontal: 16,
     marginTop: 16,
     borderRadius: 12,
@@ -232,40 +235,40 @@ const styles = StyleSheet.create({
   },
   heroCard: {
     borderWidth: 1,
-    borderColor: '#dce7ff',
-    backgroundColor: '#f9fbff',
+    borderColor: c.infoMuted,
+    backgroundColor: c.pageBackground,
   },
-  sectionTitle: { fontSize: 18, fontWeight: '700', color: '#212121' },
-  sectionSubvalue: { fontSize: 13, color: '#757575', marginTop: 6 },
-  warningText: { fontSize: 12, color: '#f57c00', marginTop: 6 },
+  sectionTitle: { fontSize: 18, fontWeight: '700', color: c.textPrimary },
+  sectionSubvalue: { fontSize: 13, color: c.textSecondary, marginTop: 6 },
+  warningText: { fontSize: 12, color: c.warning, marginTop: 6 },
   loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
 
   summaryBlock: { marginTop: 10, marginBottom: 10 },
-  shopName: { fontSize: 16, fontWeight: '700', color: '#1f2937' },
-  shopAddress: { fontSize: 12, color: '#6b7280', marginTop: 2 },
+  shopName: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
+  shopAddress: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
 
-  logo: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#fff' },
+  logo: { width: 28, height: 28, borderRadius: 14, backgroundColor: c.cardBackground },
   logoFallback: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: '#e5e7eb',
+    backgroundColor: c.border,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  logoFallbackText: { fontSize: 11, fontWeight: '700', color: '#374151' },
+  logoFallbackText: { fontSize: 11, fontWeight: '700', color: c.textPrimary },
 
-  storeLabel: { fontSize: 13, color: '#374151', fontWeight: '600' },
+  storeLabel: { fontSize: 13, color: c.textPrimary, fontWeight: '600' },
 
   visitedBadge: {
     alignSelf: 'flex-start',
     marginTop: 4,
-    backgroundColor: '#eef2ff',
+    backgroundColor: c.surfaceMuted,
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 2,
   },
-  visitedBadgeText: { fontSize: 10, fontWeight: '700', color: '#374151' },
+  visitedBadgeText: { fontSize: 10, fontWeight: '700', color: c.textPrimary },
   compareBarFill: {
     height: '100%',
     borderRadius: 999,
@@ -273,7 +276,7 @@ const styles = StyleSheet.create({
   shopRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
 
   shopNameWrap: { flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1, paddingRight: 8 },
-  topDate: { fontSize: 12, color: '#6b7280', fontWeight: '600' },
+  topDate: { fontSize: 12, color: c.textSecondary, fontWeight: '600' },
 
   comparedHeader: {
     marginTop: 10,
@@ -283,7 +286,7 @@ const styles = StyleSheet.create({
   },
   storeAddressLine: {
     fontSize: 11,
-    color: '#6b7280',
+    color: c.textSecondary,
     marginTop: 2,
   },
 
@@ -294,7 +297,7 @@ const styles = StyleSheet.create({
     flexWrap: 'wrap',
   },
   visitedBadgeInline: {
-    backgroundColor: '#eef2ff',
+    backgroundColor: c.surfaceMuted,
     borderRadius: 999,
     paddingHorizontal: 8,
     paddingVertical: 2,
@@ -309,14 +312,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: c.surfaceMuted,
     borderRadius: 999,
     paddingHorizontal: 10,
     paddingVertical: 6,
   },
   comparedTitle: {
     fontSize: 13,
-    color: '#374151',
+    color: c.textPrimary,
     fontWeight: '600',
   },
 });

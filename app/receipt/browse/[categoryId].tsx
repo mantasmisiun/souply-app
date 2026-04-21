@@ -1,4 +1,4 @@
-import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, ActivityIndicator, Image, Alert } from 'react-native';
+import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, ActivityIndicator, Alert } from 'react-native';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +11,7 @@ import CreateStoreProductModal, {
     CreatedStoreProductPayload,
 } from '../../../components/receipt/CreateStoreProductModal';
 import { ProductImage } from '../../../components/ProductImage';
+import { useTheme, type AppTheme } from '../../../constants/theme';
 
 interface Category {
     id: number;
@@ -57,6 +58,8 @@ const safeDecode = (v?: string) => {
 };
 
 export default function ReceiptCategoryScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const { categoryId, name, chainId, productIndex, preselectL3, ocrName } = useLocalSearchParams<{
         categoryId: string;
         name: string;
@@ -246,8 +249,8 @@ export default function ReceiptCategoryScreen() {
     );
     const renderOtherCard = (p: OtherChainProductRow) => (
         <TouchableOpacity style={styles.productCard} onPress={() => handlePickOtherProduct(p)} activeOpacity={0.7}>
-            <View style={{ position: 'absolute', top: 8, left: 8, backgroundColor: '#ffecb3', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, zIndex: 1 }}>
-                <Text style={{ fontSize: 11, color: '#8d6e63', fontWeight: '600' }}>Kitur</Text>
+            <View style={{ position: 'absolute', top: 8, left: 8, backgroundColor: colors.warningMuted, borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, zIndex: 1 }}>
+                <Text style={{ fontSize: 11, color: colors.onWarning, fontWeight: '600' }}>Kitur</Text>
             </View>
 
             <View style={styles.productImageContainer}>
@@ -278,7 +281,7 @@ export default function ReceiptCategoryScreen() {
                 <View style={styles.createProductPlaceholder}>
                     <Text style={styles.createBroccoli}>🥦</Text>
                     <View style={styles.createPlusBadge}>
-                        <Ionicons name="add" size={14} color="#ffffff" />
+                        <Ionicons name="add" size={14} color={colors.onPrimary} />
                     </View>
                 </View>
             </View>
@@ -291,7 +294,7 @@ export default function ReceiptCategoryScreen() {
         </TouchableOpacity>
     );
 
-    if (loading) return <ActivityIndicator style={styles.centered} size="large" color="#2e7d32" />;
+    if (loading) return <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />;
 
     return (
         <>
@@ -313,7 +316,7 @@ export default function ReceiptCategoryScreen() {
                             })}
                             style={{ marginRight: 12 }}
                         >
-                            <Ionicons name="search" size={24} color="#2e7d32" />
+                            <Ionicons name="search" size={24} color={colors.primary} />
                         </TouchableOpacity>
                     ),
                 }}
@@ -350,7 +353,7 @@ export default function ReceiptCategoryScreen() {
 
                 <View style={{ flex: 1 }}>
                     {loadingProducts ? (
-                        <ActivityIndicator style={styles.centered} size="large" color="#2e7d32" />
+                        <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />
                     ) : (
                         <FlatList<GridItem>
                             key="category-grid"
@@ -402,25 +405,25 @@ export default function ReceiptCategoryScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5' },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     bubblesRow: {
-        backgroundColor: 'white', borderBottomWidth: 0.5, borderBottomColor: '#e0e0e0',
+        backgroundColor: c.cardBackground, borderBottomWidth: 0.5, borderBottomColor: c.border,
         flexGrow: 0, flexShrink: 0,
     },
     bubblesContainer: { paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
     bubble: {
         paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
-        borderWidth: 1, borderColor: '#e0e0e0', backgroundColor: 'white',
+        borderWidth: 1, borderColor: c.border, backgroundColor: c.cardBackground,
     },
-    bubbleActive: { backgroundColor: '#2e7d32', borderColor: '#2e7d32' },
-    bubbleText: { fontSize: 13, color: '#424242' },
-    bubbleTextActive: { color: 'white', fontWeight: '600' },
+    bubbleActive: { backgroundColor: c.primary, borderColor: c.primary },
+    bubbleText: { fontSize: 13, color: c.textPrimary },
+    bubbleTextActive: { color: c.onPrimary, fontWeight: '600' },
     list: { padding: 12 },
     row: { gap: 12, marginBottom: 12 },
     productCard: {
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderRadius: 12,
         padding: 12,
         alignItems: 'center',
@@ -445,7 +448,7 @@ const styles = StyleSheet.create({
         height: '100%',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#f3f4f6',
+        backgroundColor: c.surfaceMuted,
         borderRadius: 8,
     },
     productImageEmoji: {
@@ -453,8 +456,8 @@ const styles = StyleSheet.create({
         opacity: 0.4,
     },
     productInfo: { flex: 1, width: '100%' },
-    productName: { fontSize: 13, color: '#212121', lineHeight: 18 },
-    amountText: { fontSize: 12, color: '#9e9e9e', marginTop: 2 },
+    productName: { fontSize: 13, color: c.textPrimary, lineHeight: 18 },
+    amountText: { fontSize: 12, color: c.textMuted, marginTop: 2 },
     createProductCard: {
         width: '100%',
         maxWidth: '100%',
@@ -466,7 +469,7 @@ const styles = StyleSheet.create({
         width: '100%',
         height: '100%',
         borderRadius: 10,
-        backgroundColor: '#f1f3f4',
+        backgroundColor: c.surfaceMuted,
         alignItems: 'center',
         justifyContent: 'center',
         position: 'relative',
@@ -482,7 +485,7 @@ const styles = StyleSheet.create({
         width: 22,
         height: 22,
         borderRadius: 11,
-        backgroundColor: '#9e9e9e',
+        backgroundColor: c.textMuted,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -494,7 +497,7 @@ const styles = StyleSheet.create({
     },
     emptyOverlayText: {
         fontSize: 15,
-        color: '#9e9e9e',
+        color: c.textMuted,
         textAlign: 'center',
     },
 

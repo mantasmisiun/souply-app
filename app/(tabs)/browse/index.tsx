@@ -1,8 +1,9 @@
 import { View, FlatList, TouchableOpacity, Text, StyleSheet, ActivityIndicator, LayoutAnimation, UIManager, Platform } from 'react-native';
-import { useEffect, useState } from 'react';
-import { useRouter, Stack } from 'expo-router';
+import { useEffect, useMemo, useState } from 'react';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../config/api';
+import { useTheme, type AppTheme } from '../../../constants/theme';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
     UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -29,6 +30,8 @@ const CATEGORY_ICONS: Record<string, string> = {
 };
 
 export default function BrowseIndex() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const [l1Categories, setL1Categories] = useState<Category[]>([]);
     const [l2Map, setL2Map] = useState<Record<number, Category[]>>({});
     const [expandedL1, setExpandedL1] = useState<number | null>(null);
@@ -58,11 +61,12 @@ export default function BrowseIndex() {
         }
     };
 
-    if (loading) return <ActivityIndicator style={styles.centered} size="large" color="#2e7d32" />;
+    if (loading) return <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />;
 
     return (
         <>
             <FlatList
+                style={styles.container}
                 data={l1Categories}
                 keyExtractor={item => item.id.toString()}
                 contentContainerStyle={styles.list}
@@ -70,9 +74,9 @@ export default function BrowseIndex() {
                     const isExpanded = expandedL1 === item.id;
                     const l2 = l2Map[item.id] || [];
                     return (
-                        <View style={styles.l1Container}>
+                        <View style={[styles.l1Container, isExpanded && styles.l1ContainerExpanded]}>
                             <TouchableOpacity
-                                style={styles.l1Row}
+                                style={[styles.l1Row, isExpanded && styles.l1RowExpanded]}
                                 onPress={() => toggleL1(item.id)}
                             >
                                 <Text style={styles.l1Icon}>{CATEGORY_ICONS[item.name] || '📦'}</Text>
@@ -80,13 +84,13 @@ export default function BrowseIndex() {
                                 <Ionicons
                                     name={isExpanded ? 'chevron-up' : 'chevron-down'}
                                     size={20}
-                                    color="#757575"
+                                    color={isExpanded ? colors.primary : colors.success}
                                 />
                             </TouchableOpacity>
                             {isExpanded && (
                                 <View style={styles.l2Container}>
                                     {l2.length === 0 ? (
-                                        <ActivityIndicator size="small" color="#2e7d32" style={{ padding: 12 }} />
+                                        <ActivityIndicator size="small" color={colors.primary} style={{ padding: 12 }} />
                                     ) : (
                                         l2.map((cat, index) => (
                                             <View key={cat.id}>
@@ -96,7 +100,7 @@ export default function BrowseIndex() {
                                                     onPress={() => router.push(`/browse/${cat.id}?name=${encodeURIComponent(cat.name)}`)}
                                                 >
                                                     <Text style={styles.l2Text}>{cat.name}</Text>
-                                                    <Ionicons name="chevron-forward" size={18} color="#9e9e9e" />
+                                                    <Ionicons name="chevron-forward" size={18} color={colors.primary} />
                                                 </TouchableOpacity>
                                             </View>
                                         ))
@@ -111,17 +115,23 @@ export default function BrowseIndex() {
     );
 }
 
-const styles = StyleSheet.create({
-    centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.pageBackground },
+    centered: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: c.pageBackground },
     list: { padding: 16 },
     l1Container: {
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderRadius: 12,
-        marginBottom: 8,
+        marginBottom: 10,
         overflow: 'hidden',
         elevation: 1,
         shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05, shadowRadius: 2,
+        shadowOpacity: 0.06, shadowRadius: 2,
+        borderLeftWidth: 3,
+        borderLeftColor: c.softAccent,
+    },
+    l1ContainerExpanded: {
+        borderLeftColor: c.primary,
     },
     l1Row: {
         flexDirection: 'row',
@@ -129,15 +139,18 @@ const styles = StyleSheet.create({
         paddingHorizontal: 16,
         paddingVertical: 14,
     },
+    l1RowExpanded: {
+        backgroundColor: c.softAccentWash,
+    },
     l1Text: {
         fontSize: 15,
         fontWeight: '600',
-        color: '#212121',
+        color: c.textPrimary,
         flex: 1,
     },
     l2Container: {
         borderTopWidth: 0.5,
-        borderTopColor: '#e0e0e0',
+        borderTopColor: c.softAccent,
     },
     l2Row: {
         flexDirection: 'row',
@@ -148,12 +161,12 @@ const styles = StyleSheet.create({
     },
     l2Text: {
         fontSize: 14,
-        color: '#424242',
+        color: c.textPrimary,
         flex: 1,
     },
     divider: {
         height: 0.5,
-        backgroundColor: '#f0f0f0',
+        backgroundColor: c.softAccent,
         marginLeft: 24,
     },
     l1Icon: {

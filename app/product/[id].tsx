@@ -1,10 +1,13 @@
-import { View, Text, FlatList, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Image, TextInput } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Image, TextInput } from 'react-native';
 import { ProductImage } from '../../components/ProductImage';
 import { useEffect, useState, useMemo } from 'react';
 import { useLocalSearchParams, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
-import Svg, { Line, Circle, Text as SvgText, Rect } from 'react-native-svg';
+import Svg, { Line, Circle, Text as SvgText } from 'react-native-svg';
+import { useTheme, type AppTheme } from '../../constants/theme';
+
+type Styles = ReturnType<typeof makeStyles>;
 
 interface StoreProduct {
     id: number;
@@ -57,11 +60,11 @@ interface Category {
 const CHART_WIDTH = 120;
 const CHART_HEIGHT = 50;
 
-function MiniPriceChart({ prices }: { prices: PricePoint[] }) {
+function MiniPriceChart({ prices, colors, styles }: { prices: PricePoint[]; colors: AppTheme; styles: Styles }) {
     if (!prices.length) {
         return (
             <View style={styles.chartEmpty}>
-                <Ionicons name="analytics-outline" size={20} color="#e0e0e0" />
+                <Ionicons name="analytics-outline" size={20} color={colors.border} />
             </View>
         );
     }
@@ -87,9 +90,9 @@ function MiniPriceChart({ prices }: { prices: PricePoint[] }) {
         return (
             <View style={styles.chartContainer}>
                 <Svg width={CHART_WIDTH} height={CHART_HEIGHT}>
-                    <Line x1={x} y1={y} x2={CHART_WIDTH - padding.right} y2={y} stroke="#2e7d32" strokeWidth={1.5} strokeDasharray="3,2" />
-                    <Circle cx={x} cy={y} r={3} fill="#2e7d32" />
-                    <SvgText x={x} y={CHART_HEIGHT - 2} fontSize={8} fill="#9e9e9e" textAnchor="middle">{dateStr}</SvgText>
+                    <Line x1={x} y1={y} x2={CHART_WIDTH - padding.right} y2={y} stroke={colors.primary} strokeWidth={1.5} strokeDasharray="3,2" />
+                    <Circle cx={x} cy={y} r={3} fill={colors.primary} />
+                    <SvgText x={x} y={CHART_HEIGHT - 2} fontSize={8} fill={colors.textMuted} textAnchor="middle">{dateStr}</SvgText>
                 </Svg>
                 <Text style={styles.chartPrice}>€{price.toFixed(2)}</Text>
             </View>
@@ -114,7 +117,7 @@ function MiniPriceChart({ prices }: { prices: PricePoint[] }) {
                             key={i}
                             x1={points[i - 1].x} y1={points[i - 1].y}
                             x2={p.x} y2={p.y}
-                            stroke="#2e7d32" strokeWidth={1.5}
+                            stroke={colors.primary} strokeWidth={1.5}
                         />
                     );
                 })}
@@ -125,11 +128,11 @@ function MiniPriceChart({ prices }: { prices: PricePoint[] }) {
                         y1={points[points.length - 1].y}
                         x2={CHART_WIDTH - padding.right}
                         y2={points[points.length - 1].y}
-                        stroke="#2e7d32" strokeWidth={1.5} strokeDasharray="3,2"
+                        stroke={colors.primary} strokeWidth={1.5} strokeDasharray="3,2"
                     />
                 )}
                 {points.map((p, i) => (
-                    <Circle key={i} cx={p.x} cy={p.y} r={2.5} fill="#2e7d32" />
+                    <Circle key={i} cx={p.x} cy={p.y} r={2.5} fill={colors.primary} />
                 ))}
             </Svg>
             <Text style={styles.chartPrice}>€{points[points.length - 1].price.toFixed(2)}</Text>
@@ -138,6 +141,8 @@ function MiniPriceChart({ prices }: { prices: PricePoint[] }) {
 }
 
 export default function ProductDetailScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const { id } = useLocalSearchParams<{ id: string }>();
     const [product, setProduct] = useState<Product | null>(null);
     const [storeProducts, setStoreProducts] = useState<StoreProduct[]>([]);
@@ -265,7 +270,7 @@ export default function ProductDetailScreen() {
         return priceCache[cacheKey] || [];
     };
 
-    if (loading) return <ActivityIndicator style={styles.centered} size="large" color="#2e7d32" />;
+    if (loading) return <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />;
     if (!product) return <Text style={styles.centered}>Produktas nerastas</Text>;
 
     const breadcrumb = categories.map(c => c.name).join(' → ');
@@ -352,30 +357,30 @@ export default function ProductDetailScreen() {
                         style={styles.dropdown}
                         onPress={() => setShowStorePicker(!showStorePicker)}
                     >
-                        <Ionicons name="storefront-outline" size={18} color="#424242" />
+                        <Ionicons name="storefront-outline" size={18} color={colors.textPrimary} />
                         <Text style={styles.dropdownText} numberOfLines={1}>
                             {selectedStoreId
                                 ? stores.find(s => s.id === selectedStoreId)?.name || 'Parduotuvė'
                                 : 'Visos parduotuvės'}
                         </Text>
-                        <Ionicons name={showStorePicker ? 'chevron-up' : 'chevron-down'} size={18} color="#757575" />
+                        <Ionicons name={showStorePicker ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
                     </TouchableOpacity>
 
                     {showStorePicker && (
                         <View style={styles.storePickerContainer}>
                             <View style={styles.searchInputContainer}>
-                                <Ionicons name="search" size={16} color="#9e9e9e" />
+                                <Ionicons name="search" size={16} color={colors.textMuted} />
                                 <TextInput
                                     style={styles.searchTextInput}
                                     placeholder="Ieškoti parduotuvės..."
-                                    placeholderTextColor="#9e9e9e"
+                                    placeholderTextColor={colors.textMuted}
                                     value={storeSearch}
                                     onChangeText={setStoreSearch}
                                     autoFocus
                                 />
                                 {storeSearch.length > 0 && (
                                     <TouchableOpacity onPress={() => setStoreSearch('')}>
-                                        <Ionicons name="close-circle" size={16} color="#9e9e9e" />
+                                        <Ionicons name="close-circle" size={16} color={colors.textMuted} />
                                     </TouchableOpacity>
                                 )}
                             </View>
@@ -408,7 +413,7 @@ export default function ProductDetailScreen() {
                 {/* StoreProduct list */}
                 {filteredStoreProducts.length === 0 ? (
                     <View style={styles.emptyContainer}>
-                        <Ionicons name="alert-circle-outline" size={40} color="#e0e0e0" />
+                        <Ionicons name="alert-circle-outline" size={40} color={colors.border} />
                         <Text style={styles.emptyText}>Šioje parduotuvių tinkle produktas nepasiekiamas</Text>
                     </View>
                 ) : (
@@ -453,7 +458,7 @@ export default function ProductDetailScreen() {
                                     </View>
                                 </View>
                                 <View style={styles.spRight}>
-                                    <MiniPriceChart prices={prices} />
+                                    <MiniPriceChart prices={prices} colors={colors} styles={styles} />
                                 </View>
                             </View>
                         );
@@ -465,18 +470,18 @@ export default function ProductDetailScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5' },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
     // Header
     header: {
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         alignItems: 'center',
         paddingVertical: 24,
         paddingHorizontal: 16,
         borderBottomWidth: 0.5,
-        borderBottomColor: '#e0e0e0',
+        borderBottomColor: c.border,
     },
     headerImageContainer: {
         width: 160,
@@ -489,27 +494,27 @@ const styles = StyleSheet.create({
     productName: {
         fontSize: 20,
         fontWeight: '700',
-        color: '#212121',
+        color: c.textPrimary,
         textAlign: 'center',
         marginBottom: 4,
     },
     breadcrumb: {
         fontSize: 12,
-        color: '#9e9e9e',
+        color: c.textMuted,
         textAlign: 'center',
         marginBottom: 4,
     },
     amountRange: {
         fontSize: 14,
-        color: '#757575',
+        color: c.textSecondary,
         marginTop: 4,
     },
 
     // Chain tabs
     tabsWrapper: {
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderBottomWidth: 0.5,
-        borderBottomColor: '#e0e0e0',
+        borderBottomColor: c.border,
         zIndex: 10,
     },
     tabsContainer: {
@@ -522,19 +527,19 @@ const styles = StyleSheet.create({
         height: 44,
         borderRadius: 10,
         borderWidth: 1.5,
-        borderColor: '#e0e0e0',
+        borderColor: c.border,
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         position: 'relative',
     },
     chainTabActive: {
-        borderColor: '#2e7d32',
-        backgroundColor: '#f1f8e9',
+        borderColor: c.primary,
+        backgroundColor: c.primaryMuted,
     },
     chainTabDisabled: {
         opacity: 0.4,
-        backgroundColor: '#fafafa',
+        backgroundColor: c.surfaceSubtle,
     },
     chainLogo: {
         width: 48,
@@ -547,7 +552,7 @@ const styles = StyleSheet.create({
         position: 'absolute',
         top: -6,
         right: -6,
-        backgroundColor: '#ef5350',
+        backgroundColor: c.error,
         borderRadius: 8,
         width: 16,
         height: 16,
@@ -555,7 +560,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
     },
     unavailableText: {
-        color: 'white',
+        color: c.textInverse,
         fontSize: 10,
         fontWeight: '700',
     },
@@ -568,25 +573,25 @@ const styles = StyleSheet.create({
     dropdown: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderRadius: 10,
         paddingHorizontal: 14,
         paddingVertical: 11,
         gap: 8,
         borderWidth: 1,
-        borderColor: '#e0e0e0',
+        borderColor: c.border,
     },
     dropdownText: {
         flex: 1,
         fontSize: 14,
-        color: '#424242',
+        color: c.textPrimary,
     },
     storePickerContainer: {
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderRadius: 10,
         marginTop: 8,
         borderWidth: 1,
-        borderColor: '#e0e0e0',
+        borderColor: c.border,
         maxHeight: 260,
         overflow: 'hidden',
     },
@@ -597,38 +602,38 @@ const styles = StyleSheet.create({
         paddingVertical: 10,
         gap: 8,
         borderBottomWidth: 0.5,
-        borderBottomColor: '#e0e0e0',
+        borderBottomColor: c.border,
     },
     searchInput: { flex: 1 },
-    searchPlaceholder: { fontSize: 13, color: '#9e9e9e' },
+    searchPlaceholder: { fontSize: 13, color: c.textMuted },
     storeList: { maxHeight: 200 },
     storeOption: {
         paddingHorizontal: 14,
         paddingVertical: 10,
         borderBottomWidth: 0.5,
-        borderBottomColor: '#f5f5f5',
+        borderBottomColor: c.borderSubtle,
     },
     storeOptionActive: {
-        backgroundColor: '#f1f8e9',
+        backgroundColor: c.primaryMuted,
     },
     storeOptionText: {
         fontSize: 13,
-        color: '#424242',
+        color: c.textPrimary,
     },
     storeOptionTextActive: {
-        color: '#2e7d32',
+        color: c.primary,
         fontWeight: '600',
     },
     storeAddress: {
         fontSize: 11,
-        color: '#9e9e9e',
+        color: c.textMuted,
         marginTop: 2,
     },
 
     // StoreProduct cards
     spCard: {
         flexDirection: 'row',
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         marginHorizontal: 16,
         marginTop: 10,
         borderRadius: 12,
@@ -653,7 +658,7 @@ const styles = StyleSheet.create({
         width: 52,
         height: 52,
         borderRadius: 8,
-        backgroundColor: '#f5f5f5',
+        backgroundColor: c.surfaceSubtle,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -665,7 +670,7 @@ const styles = StyleSheet.create({
         width: 120,
         height: 120,
         borderRadius: 12,
-        backgroundColor: '#f3f4f6',
+        backgroundColor: c.surfaceMuted,
         alignItems: 'center',
         justifyContent: 'center',
     },
@@ -679,13 +684,13 @@ const styles = StyleSheet.create({
     },
     spName: {
         fontSize: 13,
-        color: '#212121',
+        color: c.textPrimary,
         fontWeight: '500',
         lineHeight: 18,
     },
     spAmount: {
         fontSize: 12,
-        color: '#9e9e9e',
+        color: c.textMuted,
         marginTop: 2,
     },
     priceRow: {
@@ -697,18 +702,18 @@ const styles = StyleSheet.create({
     spPrice: {
         fontSize: 14,
         fontWeight: '700',
-        color: '#212121',
+        color: c.textPrimary,
     },
     spPriceStrike: {
         textDecorationLine: 'line-through',
-        color: '#9e9e9e',
+        color: c.textMuted,
         fontWeight: '400',
         fontSize: 12,
     },
     spPromoPrice: {
         fontSize: 14,
         fontWeight: '700',
-        color: '#d32f2f',
+        color: c.primary,
     },
     spRight: {
         justifyContent: 'center',
@@ -727,7 +732,7 @@ const styles = StyleSheet.create({
     },
     chartPrice: {
         fontSize: 10,
-        color: '#2e7d32',
+        color: c.primary,
         fontWeight: '600',
         marginTop: 2,
     },
@@ -741,13 +746,13 @@ const styles = StyleSheet.create({
     },
     emptyText: {
         fontSize: 14,
-        color: '#9e9e9e',
+        color: c.textMuted,
         textAlign: 'center',
     },
     searchTextInput: {
         flex: 1,
         fontSize: 13,
-        color: '#424242',
+        color: c.textPrimary,
         paddingVertical: 0,
     },
 });

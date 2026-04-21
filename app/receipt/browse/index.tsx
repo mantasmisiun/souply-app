@@ -1,8 +1,9 @@
 import { View, FlatList, TouchableOpacity, Text, StyleSheet, ActivityIndicator, LayoutAnimation, UIManager, Platform } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../config/api';
+import { useTheme, type AppTheme } from '../../../constants/theme';
 
 if (Platform.OS === 'android' && UIManager.setLayoutAnimationEnabledExperimental) {
     UIManager.setLayoutAnimationEnabledExperimental(true);
@@ -29,6 +30,8 @@ const CATEGORY_ICONS: Record<string, string> = {
 };
 
 export default function ReceiptBrowseIndex() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const { chainId, productIndex, preselectL1, ocrName } = useLocalSearchParams<{
         chainId: string;
         productIndex: string;
@@ -76,7 +79,7 @@ export default function ReceiptBrowseIndex() {
         }
     };
 
-    if (loading) return <ActivityIndicator style={styles.centered} size="large" color="#2e7d32" />;
+    if (loading) return <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />;
 
     return (
         <>
@@ -97,7 +100,7 @@ export default function ReceiptBrowseIndex() {
                             })}
                             style={{ marginRight: 12 }}
                         >
-                            <Ionicons name="search" size={24} color="#2e7d32" />
+                            <Ionicons name="search" size={24} color={colors.primary} />
                         </TouchableOpacity>
                     ),
                 }}
@@ -116,13 +119,13 @@ export default function ReceiptBrowseIndex() {
                                 <Text style={styles.l1Text}>{item.name}</Text>
                                 <Ionicons
                                     name={isExpanded ? 'chevron-up' : 'chevron-down'}
-                                    size={20} color="#757575"
+                                    size={20} color={colors.textSecondary}
                                 />
                             </TouchableOpacity>
                             {isExpanded && (
                                 <View style={styles.l2Container}>
                                     {l2.length === 0 ? (
-                                        <ActivityIndicator size="small" color="#2e7d32" style={{ padding: 12 }} />
+                                        <ActivityIndicator size="small" color={colors.primary} style={{ padding: 12 }} />
                                     ) : (
                                         l2.map((cat, index) => (
                                             <View key={cat.id}>
@@ -141,7 +144,7 @@ export default function ReceiptBrowseIndex() {
                                                      })}
                                                 >
                                                     <Text style={styles.l2Text}>{cat.name}</Text>
-                                                    <Ionicons name="chevron-forward" size={18} color="#9e9e9e" />
+                                                    <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
                                                 </TouchableOpacity>
                                             </View>
                                         ))
@@ -156,22 +159,22 @@ export default function ReceiptBrowseIndex() {
     );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: AppTheme) => StyleSheet.create({
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     list: { padding: 16 },
     l1Container: {
-        backgroundColor: 'white', borderRadius: 12, marginBottom: 8, overflow: 'hidden',
+        backgroundColor: c.cardBackground, borderRadius: 12, marginBottom: 8, overflow: 'hidden',
         elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.05, shadowRadius: 2,
     },
     l1Row: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 14 },
-    l1Text: { fontSize: 15, fontWeight: '600', color: '#212121', flex: 1 },
-    l2Container: { borderTopWidth: 0.5, borderTopColor: '#e0e0e0' },
+    l1Text: { fontSize: 15, fontWeight: '600', color: c.textPrimary, flex: 1 },
+    l2Container: { borderTopWidth: 0.5, borderTopColor: c.border },
     l2Row: {
         flexDirection: 'row', alignItems: 'center',
         paddingHorizontal: 16, paddingVertical: 12, paddingLeft: 24,
     },
-    l2Text: { fontSize: 14, color: '#424242', flex: 1 },
-    divider: { height: 0.5, backgroundColor: '#f0f0f0', marginLeft: 24 },
+    l2Text: { fontSize: 14, color: c.textPrimary, flex: 1 },
+    divider: { height: 0.5, backgroundColor: c.borderSubtle, marginLeft: 24 },
     l1Icon: { fontSize: 20, marginRight: 12 },
 });

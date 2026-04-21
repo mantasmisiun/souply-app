@@ -1,11 +1,12 @@
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, Alert } from 'react-native';
-import { useRef, useState, useCallback } from 'react';
+import { useRef, useState, useCallback, useMemo } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetScrollView } from '@gorhom/bottom-sheet';
 import { Keyboard } from 'react-native';
 import { API_BASE_URL } from '../config/api';
 import { useReceiptEditStore } from '../state/receiptEditState';
+import { useTheme, type AppTheme } from '../constants/theme';
 
 interface ReceiptItem {
     priceId: number;
@@ -26,6 +27,8 @@ interface Props {
 
 export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Props) {
     const router = useRouter();
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const bottomSheetRef = useRef<BottomSheet>(null);
     const snapPoints = ['75%', '95%'];
 
@@ -193,7 +196,7 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
                             <Text style={editCategoryName ? styles.categorySelected : styles.categoryPlaceholder}>
                                 {editCategoryName || 'Pasirinkti kategoriją...'}
                             </Text>
-                            <Ionicons name="chevron-forward" size={18} color="#757575" />
+                            <Ionicons name="chevron-forward" size={18} color={colors.textSecondary} />
                         </TouchableOpacity>
 
                         <Text style={styles.label}>Kaina (€)</Text>
@@ -221,7 +224,7 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
                             <Ionicons
                                 name={isWeighable ? 'scale' : 'scale-outline'}
                                 size={20}
-                                color={isWeighable ? '#2e7d32' : '#9e9e9e'}
+                                color={isWeighable ? colors.primary : colors.textMuted}
                             />
                             <Text style={[styles.weighableText, isWeighable && styles.weighableTextActive]}>
                                 {isWeighable ? 'Taip' : 'Ne'}
@@ -241,36 +244,36 @@ export default function ReceiptItemEditSheet({ receiptId, chainId, onSaved }: Pr
 ReceiptItemEditSheet.open = (_item: any) => {};
 ReceiptItemEditSheet.openNew = () => {};
 
-const styles = StyleSheet.create({
-    sheetTitle: { fontSize: 16, fontWeight: '700', color: '#212121', marginBottom: 16 },
-    label: { fontSize: 12, color: '#757575', marginBottom: 4, marginTop: 12 },
-    input: { borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8, padding: 10, fontSize: 14, color: '#212121' },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    sheetTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginBottom: 16 },
+    label: { fontSize: 12, color: c.textSecondary, marginBottom: 4, marginTop: 12 },
+    input: { borderWidth: 1, borderColor: c.border, borderRadius: 8, padding: 10, fontSize: 14, color: c.textPrimary },
     categoryButton: {
-        borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8,
+        borderWidth: 1, borderColor: c.border, borderRadius: 8,
         padding: 10, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     },
-    categorySelected: { fontSize: 14, color: '#212121', flex: 1 },
-    categoryPlaceholder: { fontSize: 14, color: '#9e9e9e', flex: 1 },
+    categorySelected: { fontSize: 14, color: c.textPrimary, flex: 1 },
+    categoryPlaceholder: { fontSize: 14, color: c.textMuted, flex: 1 },
     suggestionsContainer: {
-        borderWidth: 1, borderColor: '#e0e0e0', borderRadius: 8,
-        backgroundColor: 'white', marginTop: 2,
+        borderWidth: 1, borderColor: c.border, borderRadius: 8,
+        backgroundColor: c.cardBackground, marginTop: 2,
     },
-    suggestionItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
-    suggestionText: { fontSize: 14, color: '#212121' },
+    suggestionItem: { padding: 12, borderBottomWidth: 1, borderBottomColor: c.borderSubtle },
+    suggestionText: { fontSize: 14, color: c.textPrimary },
     doneButton: {
-        backgroundColor: '#2e7d32', borderRadius: 12, padding: 16,
+        backgroundColor: c.primary, borderRadius: 12, padding: 16,
         alignItems: 'center', marginTop: 24, marginBottom: 16,
     },
-    doneButtonText: { color: 'white', fontWeight: '700', fontSize: 16 },
+    doneButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 16 },
     weighableButton: {
         flexDirection: 'row',
         alignItems: 'center',
         borderWidth: 1,
-        borderColor: '#e0e0e0',
+        borderColor: c.border,
         borderRadius: 8,
         padding: 10,
         gap: 8,
     },
-    weighableText: { fontSize: 14, color: '#9e9e9e' },
-    weighableTextActive: { color: '#2e7d32' },
+    weighableText: { fontSize: 14, color: c.textMuted },
+    weighableTextActive: { color: c.primary },
 });

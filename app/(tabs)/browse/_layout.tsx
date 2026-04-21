@@ -1,12 +1,21 @@
 import { Stack, useRouter } from 'expo-router';
 import { TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTheme } from '../../../constants/theme';
 
 export default function BrowseLayout() {
     const router = useRouter();
+    const colors = useTheme();
 
     return (
-        <Stack>
+        <Stack
+            screenOptions={{
+                headerStyle: { backgroundColor: colors.pageBackground },
+                headerTintColor: colors.textPrimary,
+                headerShadowVisible: false,
+                contentStyle: { backgroundColor: colors.pageBackground },
+            }}
+        >
             <Stack.Screen
                 name="index"
                 options={{
@@ -21,7 +30,7 @@ export default function BrowseLayout() {
                             }
                             style={{ marginRight: 12 }}
                         >
-                            <Ionicons name="search" size={24} color="#2e7d32" />
+                            <Ionicons name="search" size={24} color={colors.primary} />
                         </TouchableOpacity>
                     ),
                 }}

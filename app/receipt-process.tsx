@@ -2,7 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { usePreventRemove, useNavigation } from "@react-navigation/native";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -19,6 +19,7 @@ import ReceiptComparisonSection from "../components/receipt/ReceiptComparisonSec
 import { API_BASE_URL } from "../config/api";
 import { getUserId } from "../config/user";
 import { useReceiptComparison } from "../hooks/useReceiptComparison";
+import { useTheme, type AppTheme } from "../constants/theme";
 import {
     useReceiptCreateContext,
     useReceiptPickerState,
@@ -121,7 +122,6 @@ function RegionPreview({
         height: displayHeight,
         overflow: "hidden",
         borderRadius: 6,
-        backgroundColor: "#fafafa",
       }}
     >
       <Image
@@ -172,6 +172,8 @@ export default function ProcessReceiptScreen() {
   const isExistingMode = Number.isFinite(existingReceiptId);
   const router = useRouter();
   const navigation = useNavigation();
+  const colors = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState("Nuskaitomas kvitas...");
   const isHydratingRef = useRef(false);
@@ -1142,7 +1144,7 @@ export default function ProcessReceiptScreen() {
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#2e7d32" />
+        <ActivityIndicator size="large" color={colors.primary} />
         <Text style={styles.loadingText}>{loadingMessage}</Text>
       </View>
     );
@@ -1152,9 +1154,9 @@ export default function ProcessReceiptScreen() {
   const renderStatusBadge = () => {
     if (saveStatus === "idle") return null;
     const config = {
-      saving: { bg: "#e3f2fd", color: "#1565c0", text: "Saugoma…" },
-      saved: { bg: "#e8f5e9", color: "#2e7d32", text: "Išsaugota" },
-      error: { bg: "#ffebee", color: "#c62828", text: "Nepavyko išsaugoti" },
+      saving: { bg: colors.infoMuted, color: colors.info, text: "Saugoma…" },
+      saved: { bg: colors.primaryMuted, color: colors.primary, text: "Išsaugota" },
+      error: { bg: colors.errorMuted, color: colors.error, text: "Nepavyko išsaugoti" },
     }[saveStatus];
     return (
       <View style={styles.statusOverlay}>
@@ -1182,7 +1184,7 @@ export default function ProcessReceiptScreen() {
         {hasAsyncError && (
           <View style={styles.errorBanner}>
             <View style={styles.errorHeaderRow}>
-              <Ionicons name="alert-circle" size={20} color="#c62828" />
+              <Ionicons name="alert-circle" size={20} color={colors.error} />
               <Text style={styles.errorTitle}>Apdorojimas nepavyko</Text>
             </View>
             {postStatus === "error" && (
@@ -1262,7 +1264,7 @@ export default function ProcessReceiptScreen() {
           onPress={() => setProductsExpanded((v) => !v)}
         >
           <View style={styles.productsHeaderLeft}>
-            <Ionicons name="cart-outline" size={20} color="#2e7d32" />
+            <Ionicons name="cart-outline" size={20} color={colors.primary} />
             <View style={styles.productsHeaderTextWrap}>
               <Text style={styles.productsTitle}>
                 Prekės ({products.length})
@@ -1275,7 +1277,7 @@ export default function ProcessReceiptScreen() {
           <Ionicons
             name={productsExpanded ? "chevron-up" : "chevron-down"}
             size={18}
-            color="#757575"
+            color={colors.textSecondary}
           />
         </TouchableOpacity>
         {productsExpanded && (
@@ -1316,7 +1318,7 @@ export default function ProcessReceiptScreen() {
                           <Ionicons
                             name="checkmark-circle"
                             size={16}
-                            color="#2e7d32"
+                            color={colors.primary}
                           />
                           {"  "}
                           {product.matchedName}
@@ -1334,8 +1336,8 @@ export default function ProcessReceiptScreen() {
                           size={16}
                           color={
                             isCompletelyUnrecognized(product)
-                              ? "#c62828"
-                              : "#f57c00"
+                              ? colors.error
+                              : colors.warning
                           }
                         />
                         {"  "}
@@ -1415,7 +1417,7 @@ export default function ProcessReceiptScreen() {
                           <Ionicons
                             name="add-circle"
                             size={22}
-                            color="#2e7d32"
+                            color={colors.primary}
                             style={styles.optionCardAddIcon}
                           />
                         </View>
@@ -1469,12 +1471,12 @@ export default function ProcessReceiptScreen() {
                               scheduleManualRematch(index, text);
                             }}
                             placeholder="Įveskite produkto pavadinimą"
-                            placeholderTextColor="#9e9e9e"
+                            placeholderTextColor={colors.textMuted}
                           />
                           {rematchLoadingByIndex[index] && (
                             <ActivityIndicator
                               size="small"
-                              color="#2e7d32"
+                              color={colors.primary}
                               style={styles.editInputLoader}
                             />
                           )}
@@ -1572,7 +1574,7 @@ export default function ProcessReceiptScreen() {
                           }
                           size={16}
                           color={
-                            priceEditorIndex === index ? "#ffffff" : "#2e7d32"
+                            priceEditorIndex === index ? colors.onPrimary : colors.primary
                           }
                         />
                         <Text
@@ -1596,7 +1598,7 @@ export default function ProcessReceiptScreen() {
                           <Ionicons
                             name="grid-outline"
                             size={16}
-                            color="#2e7d32"
+                            color={colors.primary}
                           />
                           <Text style={styles.actionButtonText}>
                             Surasti produktą
@@ -1612,7 +1614,7 @@ export default function ProcessReceiptScreen() {
         )}
         {products.length === 0 && (
           <View style={styles.emptyProducts}>
-            <Ionicons name="alert-circle-outline" size={32} color="#e0e0e0" />
+            <Ionicons name="alert-circle-outline" size={32} color={colors.border} />
             <Text style={styles.emptyText}>Prekės neatpažintos</Text>
           </View>
         )}
@@ -1625,12 +1627,12 @@ export default function ProcessReceiptScreen() {
           }
         >
           <View style={styles.sectionHeader}>
-            <Ionicons name="document-text-outline" size={20} color="#2e7d32" />
+            <Ionicons name="document-text-outline" size={20} color={colors.primary} />
             <Text style={styles.sectionTitle}>Kvito duomenys</Text>
             <Ionicons
               name={editingSection === "footer" ? "chevron-up" : "chevron-down"}
               size={18}
-              color="#757575"
+              color={colors.textSecondary}
             />
           </View>
           <View style={styles.footerContent}>
@@ -1674,7 +1676,7 @@ export default function ProcessReceiptScreen() {
       {isProcessing && (
         <View style={styles.processingOverlay} pointerEvents="auto">
           <View style={styles.processingCard}>
-            <ActivityIndicator size="large" color="#2e7d32" />
+            <ActivityIndicator size="large" color={colors.primary} />
             <Text style={styles.processingTitle}>Kvitas apdorojamas</Text>
             {!!processingStep && (
               <Text style={styles.processingStep}>{processingStep}</Text>
@@ -1686,19 +1688,19 @@ export default function ProcessReceiptScreen() {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: AppTheme) => StyleSheet.create({
   processingOverlay: {
     position: "absolute",
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: "rgba(17, 24, 39, 0.45)",
+    backgroundColor: c.overlayBackdrop,
     alignItems: "center",
     justifyContent: "center",
   },
   processingCard: {
-    backgroundColor: "#ffffff",
+    backgroundColor: c.cardBackground,
     borderRadius: 14,
     paddingVertical: 24,
     paddingHorizontal: 28,
@@ -1714,16 +1716,16 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontSize: 15,
     fontWeight: "700",
-    color: "#111827",
+    color: c.textPrimary,
   },
   processingStep: {
     marginTop: 4,
     fontSize: 13,
-    color: "#6b7280",
+    color: c.textSecondary,
   },
   errorBanner: {
-    backgroundColor: "#fff5f5",
-    borderColor: "#fecaca",
+    backgroundColor: c.errorMuted,
+    borderColor: c.softAccent,
     borderWidth: 1,
     marginHorizontal: 16,
     marginTop: 12,
@@ -1739,7 +1741,7 @@ const styles = StyleSheet.create({
   errorTitle: {
     fontSize: 14,
     fontWeight: "700",
-    color: "#991b1b",
+    color: c.errorStrong,
   },
   errorRow: {
     flexDirection: "row",
@@ -1750,16 +1752,16 @@ const styles = StyleSheet.create({
   errorMsg: {
     flex: 1,
     fontSize: 12,
-    color: "#7f1d1d",
+    color: c.errorStrong,
   },
   retryBtn: {
-    backgroundColor: "#c62828",
+    backgroundColor: c.error,
     paddingVertical: 6,
     paddingHorizontal: 10,
     borderRadius: 8,
   },
   retryBtnText: {
-    color: "#ffffff",
+    color: c.textInverse,
     fontSize: 12,
     fontWeight: "700",
   },
@@ -1792,12 +1794,12 @@ const styles = StyleSheet.create({
   },
 
   actionButtonPrimary: {
-    backgroundColor: "#2e7d32",
-    borderColor: "#2e7d32",
+    backgroundColor: c.primary,
+    borderColor: c.primary,
   },
 
   actionButtonTextPrimary: {
-    color: "#ffffff",
+    color: c.onPrimary,
   },
   actionsRow: {
     flexDirection: "row",
@@ -1812,12 +1814,12 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#b7ebc7",
-    backgroundColor: "#ecfdf3",
+    borderColor: c.primaryMuted,
+    backgroundColor: c.primaryMuted,
   },
   actionButtonText: {
     fontSize: 13,
-    color: "#2e7d32",
+    color: c.primary,
     fontWeight: "600",
   },
   inlineMatchSection: {
@@ -1830,29 +1832,29 @@ const styles = StyleSheet.create({
   },
   optionCard: {
     width: 150,
-    backgroundColor: "#fff",
+    backgroundColor: c.cardBackground,
     borderWidth: 1,
-    borderColor: "#e5e7eb",
+    borderColor: c.border,
     borderRadius: 10,
     padding: 10,
   },
   optionCardSelected: {
-    borderColor: "#2e7d32",
+    borderColor: c.primary,
     borderWidth: 2,
-    backgroundColor: "#f1f8f2",
+    backgroundColor: c.primaryMuted,
   },
   optionCardImage: {
     width: "100%",
     height: 70,
     borderRadius: 6,
-    backgroundColor: "#fafafa",
+    backgroundColor: c.surfaceSubtle,
     marginBottom: 8,
   },
   optionCardImagePlaceholder: {
     width: "100%",
     height: 70,
     borderRadius: 6,
-    backgroundColor: "#f3f4f6",
+    backgroundColor: c.surfaceMuted,
     marginBottom: 8,
   },
   optionCardEmojiWrap: {
@@ -1860,7 +1862,7 @@ const styles = StyleSheet.create({
     width: "100%",
     height: 70,
     borderRadius: 6,
-    backgroundColor: "#f3f4f6",
+    backgroundColor: c.surfaceMuted,
     marginBottom: 8,
     alignItems: "center",
     justifyContent: "center",
@@ -1873,22 +1875,22 @@ const styles = StyleSheet.create({
     position: "absolute",
     right: 4,
     bottom: 4,
-    backgroundColor: "#ffffff",
+    backgroundColor: c.cardBackground,
     borderRadius: 11,
   },
   optionCardName: {
     fontSize: 12,
     fontWeight: "600",
-    color: "#1f2937",
+    color: c.textPrimary,
   },
   optionCardMeta: {
     marginTop: 6,
     fontSize: 12,
-    color: "#4b5563",
+    color: c.textSecondary,
     fontWeight: "600",
   },
   productRowCard: {
-    backgroundColor: "white",
+    backgroundColor: c.cardBackground,
     marginHorizontal: 16,
     marginTop: 0,
     borderRadius: 0,
@@ -1896,7 +1898,7 @@ const styles = StyleSheet.create({
     borderLeftWidth: 1,
     borderRightWidth: 1,
     borderBottomWidth: 1,
-    borderColor: "#edf2f7",
+    borderColor: c.borderSubtle,
   },
   productRowCardLast: {
     borderBottomLeftRadius: 12,
@@ -1909,7 +1911,7 @@ const styles = StyleSheet.create({
   productsHint: {
     marginTop: 2,
     fontSize: 12,
-    color: "#ef6c00", // attention-grabbing but still warm/material
+    color: c.warning,
     fontWeight: "600",
   },
   productsHeader: {
@@ -1922,13 +1924,13 @@ const styles = StyleSheet.create({
     borderBottomLeftRadius: 0,
     borderBottomRightRadius: 0,
     borderBottomWidth: 0,
-    backgroundColor: "#fff",
+    backgroundColor: c.cardBackground,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderWidth: 1,
-    borderColor: "#edf2f7",
-    overflow: "hidden", // keeps icon inside rounded box
+    borderColor: c.borderSubtle,
+    overflow: "hidden",
   },
   productsHeaderLeft: {
     flexDirection: "row",
@@ -1940,18 +1942,18 @@ const styles = StyleSheet.create({
   productsTitle: {
     fontSize: 15,
     fontWeight: "600",
-    color: "#212121",
-    flexShrink: 1, // prevents pushing chevron out
+    color: c.textPrimary,
+    flexShrink: 1,
   },
-  container: { flex: 1, backgroundColor: "#f5f5f5" },
+  container: { flex: 1, backgroundColor: c.pageBackground },
   loadingContainer: {
     flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#f5f5f5",
+    backgroundColor: c.pageBackground,
     gap: 16,
   },
-  loadingText: { fontSize: 15, color: "#757575" },
+  loadingText: { fontSize: 15, color: c.textSecondary },
 
   statusBadgeWrap: {
     alignItems: "center",
@@ -1968,7 +1970,7 @@ const styles = StyleSheet.create({
   },
 
   sectionCard: {
-    backgroundColor: "white",
+    backgroundColor: c.cardBackground,
     marginHorizontal: 16,
     marginTop: 16,
     borderRadius: 12,
@@ -1980,45 +1982,45 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
   },
   sectionHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
-  sectionTitle: { flex: 1, fontSize: 15, fontWeight: "600", color: "#212121" },
-  sectionSubvalue: { fontSize: 13, color: "#757575", marginTop: 2 },
-  warningText: { fontSize: 12, color: "#f57c00", marginTop: 4 },
+  sectionTitle: { flex: 1, fontSize: 15, fontWeight: "600", color: c.textPrimary },
+  sectionSubvalue: { fontSize: 13, color: c.textSecondary, marginTop: 2 },
+  warningText: { fontSize: 12, color: c.warning, marginTop: 4 },
   productRow: { flexDirection: "row", alignItems: "center" },
   productInfo: { flex: 1 },
-  productName: { fontSize: 14, color: "#212121", fontWeight: "500" },
-  matchedName: { fontSize: 14, color: "#2e7d32", fontWeight: "600" },
-  ocrName: { fontSize: 11, color: "#9e9e9e", marginTop: 2 },
-  productQuantity: { fontSize: 12, color: "#757575", marginTop: 2 },
+  productName: { fontSize: 14, color: c.textPrimary, fontWeight: "500" },
+  matchedName: { fontSize: 14, color: c.primary, fontWeight: "600" },
+  ocrName: { fontSize: 11, color: c.textMuted, marginTop: 2 },
+  productQuantity: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
   productPriceCol: { alignItems: "flex-end", marginRight: 8 },
-  productPrice: { fontSize: 15, fontWeight: "700", color: "#212121" },
+  productPrice: { fontSize: 15, fontWeight: "700", color: c.textPrimary },
 
   editSection: {
     marginTop: 12,
     paddingTop: 12,
   },
-  rawTextLabel: { fontSize: 11, color: "#9e9e9e", marginBottom: 4 },
+  rawTextLabel: { fontSize: 11, color: c.textMuted, marginBottom: 4 },
   rawText: {
     fontSize: 12,
-    color: "#757575",
+    color: c.textSecondary,
     fontFamily: "monospace",
-    backgroundColor: "#fafafa",
+    backgroundColor: c.surfaceSubtle,
     padding: 8,
     borderRadius: 6,
     marginBottom: 10,
   },
   editInput: {
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: c.border,
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
-    color: "#212121",
+    color: c.textPrimary,
     marginBottom: 8,
   },
   editRow: { flexDirection: "row", gap: 8 },
   editField: { flex: 1 },
-  editLabel: { fontSize: 11, color: "#9e9e9e", marginBottom: 4 },
+  editLabel: { fontSize: 11, color: c.textMuted, marginBottom: 4 },
 
   footerContent: { marginTop: 10 },
   footerRow: {
@@ -2026,24 +2028,24 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     marginTop: 4,
   },
-  footerLabel: { fontSize: 13, color: "#757575" },
-  footerValue: { fontSize: 13, fontWeight: "600", color: "#212121" },
+  footerLabel: { fontSize: 13, color: c.textSecondary },
+  footerValue: { fontSize: 13, fontWeight: "600", color: c.textPrimary },
 
   emptyProducts: { alignItems: "center", padding: 32, gap: 8 },
-  emptyText: { fontSize: 14, color: "#9e9e9e" },
+  emptyText: { fontSize: 14, color: c.textMuted },
 
   productThumb: {
     width: 48,
     height: 48,
     borderRadius: 6,
-    backgroundColor: "#fafafa",
+    backgroundColor: c.surfaceSubtle,
     marginRight: 10,
   },
   productThumbPlaceholder: {
     width: 48,
     height: 48,
     borderRadius: 6,
-    backgroundColor: "#f3f4f6",
+    backgroundColor: c.surfaceMuted,
     marginRight: 10,
     alignItems: "center",
     justifyContent: "center",
@@ -2057,22 +2059,22 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    backgroundColor: "#2e7d32",
+    backgroundColor: c.primary,
     borderRadius: 8,
     paddingVertical: 10,
     marginTop: 12,
   },
-  browseButtonText: { color: "white", fontSize: 14, fontWeight: "600" },
+  browseButtonText: { color: c.onPrimary, fontSize: 14, fontWeight: "600" },
   savingsCard: {
     borderWidth: 1,
-    borderColor: "#a5d6a7",
-    backgroundColor: "#e8f5e9",
+    borderColor: c.primaryMuted,
+    backgroundColor: c.primaryMuted,
   },
   savingsText: {
     marginTop: 6,
     fontSize: 14,
     fontWeight: "700",
-    color: "#1b5e20",
+    color: c.primary,
   },
   statusOverlay: {
     position: "absolute",

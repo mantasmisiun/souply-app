@@ -1,11 +1,12 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
+import { useTheme, type AppTheme } from '../../constants/theme';
 
-function Badge({ count }: { count: number }) {
+function Badge({ count, styles }: { count: number; styles: ReturnType<typeof makeStyles> }) {
     if (count === 0) return null;
     return (
         <View style={styles.badge}>
@@ -15,6 +16,8 @@ function Badge({ count }: { count: number }) {
 }
 
 export default function TabLayout() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const [basketCount, setBasketCount] = useState(0);
     const [listCount, setListCount] = useState(0);
 
@@ -50,8 +53,15 @@ export default function TabLayout() {
     return (
         <Tabs
             screenOptions={{
-                tabBarActiveTintColor: '#2e7d32',
-                tabBarInactiveTintColor: 'gray',
+                tabBarActiveTintColor: colors.primary,
+                tabBarInactiveTintColor: colors.textSecondary,
+                tabBarStyle: {
+                    backgroundColor: colors.pageBackground,
+                    borderTopColor: colors.borderSubtle,
+                },
+                headerStyle: { backgroundColor: colors.pageBackground },
+                headerTintColor: colors.textPrimary,
+                headerShadowVisible: false,
             }}
         >
             <Tabs.Screen
@@ -71,7 +81,7 @@ export default function TabLayout() {
                     tabBarIcon: ({ focused, color, size }) => (
                         <View>
                             <Ionicons name={focused ? 'cart' : 'cart-outline'} size={size} color={color} />
-                            <Badge count={basketCount} />
+                            <Badge count={basketCount} styles={styles} />
                         </View>
                     ),
                 }}
@@ -83,7 +93,7 @@ export default function TabLayout() {
                     tabBarIcon: ({ focused, color, size }) => (
                         <View>
                             <Ionicons name={focused ? 'list' : 'list-outline'} size={size} color={color} />
-                            <Badge count={listCount} />
+                            <Badge count={listCount} styles={styles} />
                         </View>
                     ),
                 }}
@@ -101,12 +111,12 @@ export default function TabLayout() {
     );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: AppTheme) => StyleSheet.create({
     badge: {
         position: 'absolute',
         top: -4,
         right: -8,
-        backgroundColor: '#c62828',
+        backgroundColor: c.primary,
         borderRadius: 10,
         minWidth: 16,
         height: 16,
@@ -114,5 +124,5 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         paddingHorizontal: 3,
     },
-    badgeText: { color: 'white', fontSize: 9, fontWeight: '700' },
+    badgeText: { color: c.onPrimary, fontSize: 9, fontWeight: '700' },
 });

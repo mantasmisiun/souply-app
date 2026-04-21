@@ -1,9 +1,10 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../config/api';
 import { useReceiptEditStore } from '../../../state/receiptEditState';
+import { useTheme, type AppTheme } from '../../../constants/theme';
 
 interface Category {
     id: number;
@@ -16,6 +17,8 @@ interface Product {
 }
 
 export default function CategoryPickerScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const { itemIndex, chainId } = useLocalSearchParams<{ itemIndex: string; chainId: string }>();
     const router = useRouter();
     const setPendingSelection = useReceiptEditStore(s => s.setPendingSelection);
@@ -113,7 +116,7 @@ export default function CategoryPickerScreen() {
         return breadcrumb[breadcrumb.length - 1].name;
     };
 
-    if (loading) return <ActivityIndicator style={{ flex: 1 }} size="large" color="#2e7d32" />;
+    if (loading) return <ActivityIndicator style={{ flex: 1 }} size="large" color={colors.primary} />;
 
     return (
         <>
@@ -121,7 +124,7 @@ export default function CategoryPickerScreen() {
                 title: getTitle(),
                 headerLeft: breadcrumb.length > 0 ? () => (
                     <TouchableOpacity onPress={handleBack} style={{ marginLeft: 8 }}>
-                        <Ionicons name="arrow-back" size={24} color="#2e7d32" />
+                        <Ionicons name="arrow-back" size={24} color={colors.primary} />
                     </TouchableOpacity>
                 ) : undefined,
             }} />
@@ -132,7 +135,7 @@ export default function CategoryPickerScreen() {
                 contentContainerStyle={styles.list}
                 ListHeaderComponent={isL3 ? (
                     <TouchableOpacity style={styles.noProductButton} onPress={handleNoProduct}>
-                        <Ionicons name="add-circle-outline" size={20} color="#2e7d32" />
+                        <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
                         <Text style={styles.noProductText}>Tokio produkto nėra</Text>
                     </TouchableOpacity>
                 ) : null}
@@ -150,7 +153,7 @@ export default function CategoryPickerScreen() {
                         }
                     >
                         <Text style={styles.cardText}>{item.name}</Text>
-                        {!isL3 && <Ionicons name="chevron-forward" size={20} color="#757575" />}
+                        {!isL3 && <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />}
                     </TouchableOpacity>
                 )}
             />
@@ -158,19 +161,19 @@ export default function CategoryPickerScreen() {
     );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: AppTheme) => StyleSheet.create({
     list: { padding: 16 },
     card: {
-        backgroundColor: 'white', borderRadius: 12, padding: 16, marginBottom: 10,
+        backgroundColor: c.cardBackground, borderRadius: 12, padding: 16, marginBottom: 10,
         flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
         elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.1, shadowRadius: 2,
     },
-    cardText: { fontSize: 15, color: '#212121', flex: 1 },
+    cardText: { fontSize: 15, color: c.textPrimary, flex: 1 },
     noProductButton: {
-        backgroundColor: '#e8f5e9', borderRadius: 12, padding: 16, marginBottom: 10,
+        backgroundColor: c.primaryMuted, borderRadius: 12, padding: 16, marginBottom: 10,
         flexDirection: 'row', alignItems: 'center', gap: 8,
     },
-    noProductText: { fontSize: 15, color: '#2e7d32', fontWeight: '600' },
-    emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: '#757575' },
+    noProductText: { fontSize: 15, color: c.primary, fontWeight: '600' },
+    emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: c.textSecondary },
 });

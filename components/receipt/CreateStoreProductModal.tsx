@@ -1,6 +1,6 @@
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -18,6 +18,7 @@ import {
 import { API_BASE_URL } from "../../config/api";
 import { useReceiptCreateContext } from "../../state/basketState";
 import { parseProductName } from "../../utils/productNameParser";
+import { useTheme, type AppTheme } from "../../constants/theme";
 
 interface L3CategoryOption {
   id: number;
@@ -51,6 +52,9 @@ export default function CreateStoreProductModal({
   initialCategoryId,
   onCreated,
 }: CreateStoreProductModalProps) {
+  const colors = useTheme();
+  const styles = useMemo(() => makeStyles(colors), [colors]);
+
   const [draftName, setDraftName] = useState("");
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(
     null,
@@ -351,7 +355,7 @@ export default function CreateStoreProductModal({
             onChangeText={setDraftName}
             style={styles.input}
             placeholder="Įveskite produkto pavadinimą"
-            placeholderTextColor="#9e9e9e"
+            placeholderTextColor={colors.textMuted}
           />
 
           <Text style={styles.label}>Kategorija (L3)</Text>
@@ -364,13 +368,13 @@ export default function CreateStoreProductModal({
             }}
             style={styles.input}
             placeholder="Rašykite kategorijos pavadinimą"
-            placeholderTextColor="#9e9e9e"
+            placeholderTextColor={colors.textMuted}
           />
 
           {searchingCategories && (
             <ActivityIndicator
               size="small"
-              color="#2e7d32"
+              color={colors.primary}
               style={{ marginTop: 6 }}
             />
           )}
@@ -443,62 +447,62 @@ export default function CreateStoreProductModal({
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: AppTheme) => StyleSheet.create({
   overlay: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.35)",
+    backgroundColor: c.overlayBackdrop,
     justifyContent: "center",
     padding: 20,
   },
   card: {
-    backgroundColor: "#fff",
+    backgroundColor: c.cardBackground,
     borderRadius: 12,
     padding: 16,
   },
   title: {
     fontSize: 16,
     fontWeight: "700",
-    color: "#212121",
+    color: c.textPrimary,
     marginBottom: 10,
   },
   label: {
     fontSize: 13,
-    color: "#616161",
+    color: c.textPrimary,
     marginBottom: 6,
     marginTop: 8,
   },
   input: {
     borderWidth: 1,
-    borderColor: "#e0e0e0",
+    borderColor: c.border,
     borderRadius: 8,
     paddingHorizontal: 10,
     paddingVertical: 9,
     fontSize: 14,
-    color: "#212121",
-    backgroundColor: "#fff",
+    color: c.textPrimary,
+    backgroundColor: c.cardBackground,
   },
   dropdown: {
     marginTop: 6,
     maxHeight: 140,
     borderWidth: 1,
-    borderColor: "#eceff1",
+    borderColor: c.borderSubtle,
     borderRadius: 8,
-    backgroundColor: "#fff",
+    backgroundColor: c.cardBackground,
   },
   dropdownItem: {
     paddingHorizontal: 10,
     paddingVertical: 9,
     borderBottomWidth: 1,
-    borderBottomColor: "#f3f3f3",
+    borderBottomColor: c.borderSubtle,
   },
   dropdownText: {
     fontSize: 13,
-    color: "#37474f",
+    color: c.textPrimary,
   },
   categoryHint: {
     marginTop: 6,
     fontSize: 12,
-    color: "#757575",
+    color: c.textSecondary,
   },
   imageButton: {
     marginTop: 10,
@@ -506,12 +510,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "#cfd8dc",
+    borderColor: c.border,
     alignSelf: "flex-start",
   },
   imageButtonText: {
     fontSize: 12,
-    color: "#455a64",
+    color: c.textSecondary,
     fontWeight: "600",
   },
   previewImage: {
@@ -519,7 +523,7 @@ const styles = StyleSheet.create({
     width: 110,
     height: 110,
     borderRadius: 10,
-    backgroundColor: "#f5f5f5",
+    backgroundColor: c.surfaceSubtle,
     alignSelf: "flex-start",
   },
   actions: {
@@ -534,18 +538,18 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   cancelBtn: {
-    backgroundColor: "#f3f3f3",
+    backgroundColor: c.surfaceMuted,
   },
   confirmBtn: {
-    backgroundColor: "#2e7d32",
+    backgroundColor: c.primary,
   },
   cancelText: {
-    color: "#424242",
+    color: c.textPrimary,
     fontWeight: "600",
     fontSize: 13,
   },
   confirmText: {
-    color: "#fff",
+    color: c.onPrimary,
     fontWeight: "700",
     fontSize: 13,
   },

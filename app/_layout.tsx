@@ -4,6 +4,7 @@ import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
+import { useTheme } from '../constants/theme';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -11,10 +12,33 @@ export const unstable_settings = {
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
+  const colors = useTheme();
+
+  // Derive React Navigation's theme from our app theme so every default
+  // surface (headers, cards, borders) picks up the palette automatically.
+  const navTheme = {
+    ...(colorScheme === 'dark' ? DarkTheme : DefaultTheme),
+    colors: {
+      ...(colorScheme === 'dark' ? DarkTheme : DefaultTheme).colors,
+      background: colors.pageBackground,
+      card: colors.pageBackground,
+      text: colors.textPrimary,
+      border: colors.border,
+      primary: colors.primary,
+      notification: colors.primary,
+    },
+  };
 
   return (
-    <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-      <Stack>
+    <ThemeProvider value={navTheme}>
+      <Stack
+        screenOptions={{
+          headerStyle: { backgroundColor: colors.pageBackground },
+          headerTintColor: colors.textPrimary,
+          headerShadowVisible: false,
+          contentStyle: { backgroundColor: colors.pageBackground },
+        }}
+      >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         <Stack.Screen name="product" options={{ headerShown: false }} />
@@ -25,7 +49,7 @@ export default function RootLayout() {
         <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
         <Stack.Screen name="receipt-process" options={{ title: 'Kvito peržiūra' }} />
       </Stack>
-      <StatusBar style="auto" />
+      <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
     </ThemeProvider>
   );
 }

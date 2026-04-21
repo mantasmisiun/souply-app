@@ -1,10 +1,11 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
-import { useState, useCallback } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
 import { API_BASE_URL } from '../../../config/api';
+import { useTheme, type AppTheme } from '../../../constants/theme';
 
 interface ItemResult {
     productId: number;
@@ -36,6 +37,8 @@ interface StoreResult {
 }
 
 export default function BasketResultsScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const { id } = useLocalSearchParams();
     const router = useRouter();
     const [results, setResults] = useState<StoreResult[]>([]);
@@ -153,7 +156,7 @@ export default function BasketResultsScreen() {
                 title: 'Palyginimo rezultatai',
                 headerRight: () => (
                     <TouchableOpacity onPress={handleRecalculate} style={{ marginRight: 12 }}>
-                        <Ionicons name="refresh-outline" size={22} color="#2e7d32" />
+                        <Ionicons name="refresh-outline" size={22} color={colors.primary} />
                     </TouchableOpacity>
                 ),
             }} />
@@ -161,7 +164,7 @@ export default function BasketResultsScreen() {
             <View style={styles.container}>
                 {loading ? (
                     <Animated.View entering={FadeIn} style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color="#2e7d32" />
+                        <ActivityIndicator size="large" color={colors.primary} />
                         <Text style={styles.loadingText}>Skaičiuojamos kainos...</Text>
                     </Animated.View>
                 ) : (
@@ -212,7 +215,7 @@ export default function BasketResultsScreen() {
                                         <View style={styles.cardContent}>
                                             <Text style={styles.storeName}>{item.storeAddress}</Text>
                                             <View style={styles.metaRow}>
-                                                <Ionicons name="location-outline" size={12} color="#9e9e9e" />
+                                                <Ionicons name="location-outline" size={12} color={colors.textMuted} />
                                                 <Text style={styles.distance}>{item.distance} km</Text>
                                                 {item.isApproximated && (
                                                     <View style={styles.approxBadge}>
@@ -232,11 +235,11 @@ export default function BasketResultsScreen() {
                 {selectedStore && (
                     <Animated.View entering={FadeInDown} style={styles.bottomBar}>
                         <TouchableOpacity style={styles.navigateButton} onPress={handleNavigate}>
-                            <Ionicons name="navigate-outline" size={20} color="#2e7d32" />
+                            <Ionicons name="navigate-outline" size={20} color={colors.primary} />
                             <Text style={styles.navigateText}>Vykti</Text>
                         </TouchableOpacity>
                         <TouchableOpacity style={styles.shoppingListButton} onPress={handleCreateShoppingList}>
-                            <Ionicons name="list-outline" size={20} color="white" />
+                            <Ionicons name="list-outline" size={20} color={colors.onPrimary} />
                             <Text style={styles.shoppingListText}>Pirkinių sąrašas</Text>
                         </TouchableOpacity>
                     </Animated.View>
@@ -246,60 +249,60 @@ export default function BasketResultsScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5' },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
-    loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, backgroundColor: '#f5f5f5' },
-    loadingText: { fontSize: 15, color: '#757575' },
+    loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, backgroundColor: c.pageBackground },
+    loadingText: { fontSize: 15, color: c.textSecondary },
     list: { padding: 16, paddingBottom: 100 },
     card: {
-        backgroundColor: 'white', borderRadius: 12, padding: 16, marginBottom: 10,
+        backgroundColor: c.cardBackground, borderRadius: 12, padding: 16, marginBottom: 10,
         flexDirection: 'row', alignItems: 'center',
         elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.1, shadowRadius: 2,
+        shadowOpacity: 0.08, shadowRadius: 2,
     },
-    cardCheapest: { borderWidth: 2, borderColor: '#2e7d32' },
-    cardClosest: { borderWidth: 2, borderColor: '#1565c0' },
-    cardSelected: { backgroundColor: '#f0f7f0' },
+    cardCheapest: { borderWidth: 2, borderColor: c.primary },
+    cardClosest: { borderWidth: 2, borderColor: c.info },
+    cardSelected: { backgroundColor: c.primaryMuted },
     cheapestBadge: {
         position: 'absolute', top: -8, left: 16,
-        backgroundColor: '#2e7d32', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8,
+        backgroundColor: c.primary, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8,
     },
-    cheapestBadgeText: { color: 'white', fontSize: 10, fontWeight: '700' },
+    cheapestBadgeText: { color: c.onPrimary, fontSize: 10, fontWeight: '700' },
     closestBadge: {
         position: 'absolute', top: -8, left: 16,
-        backgroundColor: '#1565c0', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8,
+        backgroundColor: c.info, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8,
     },
-    closestBadgeText: { color: 'white', fontSize: 10, fontWeight: '700' },
+    closestBadgeText: { color: c.textInverse, fontSize: 10, fontWeight: '700' },
     cardLeft: { marginRight: 12 },
     logo: { width: 48, height: 48, borderRadius: 8 },
     logoPlaceholder: {
         width: 48, height: 48, borderRadius: 8,
-        backgroundColor: '#e0e0e0', alignItems: 'center', justifyContent: 'center',
+        backgroundColor: c.border, alignItems: 'center', justifyContent: 'center',
     },
-    logoPlaceholderText: { fontSize: 20, fontWeight: '700', color: '#757575' },
+    logoPlaceholderText: { fontSize: 20, fontWeight: '700', color: c.textSecondary },
     cardContent: { flex: 1 },
-    storeName: { fontSize: 14, fontWeight: '600', color: '#212121' },
+    storeName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
     metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 },
-    distance: { fontSize: 11, color: '#9e9e9e' },
+    distance: { fontSize: 11, color: c.textMuted },
     approxBadge: {
-        backgroundColor: '#fff3e0', paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginLeft: 4,
+        backgroundColor: c.warningMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginLeft: 4,
     },
-    approxText: { fontSize: 10, color: '#e65100' },
-    price: { fontSize: 18, fontWeight: '700', color: '#2e7d32', marginLeft: 8 },
+    approxText: { fontSize: 10, color: c.warning },
+    price: { fontSize: 18, fontWeight: '700', color: c.primary, marginLeft: 8 },
     bottomBar: {
         flexDirection: 'row', padding: 12, gap: 10,
-        backgroundColor: 'white', borderTopWidth: 1, borderTopColor: '#e0e0e0',
+        backgroundColor: c.cardBackground, borderTopWidth: 1, borderTopColor: c.border,
     },
-    emptyText: { fontSize: 16, color: '#757575' },
+    emptyText: { fontSize: 16, color: c.textSecondary },
     shoppingListButton: {
-        flex: 2, backgroundColor: '#2e7d32', borderRadius: 12,
+        flex: 2, backgroundColor: c.primary, borderRadius: 12,
         padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     },
-    shoppingListText: { color: 'white', fontWeight: '700', fontSize: 15 },
+    shoppingListText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
     navigateButton: {
-        flex: 1, borderWidth: 1, borderColor: '#2e7d32', borderRadius: 12,
+        flex: 1, borderWidth: 1, borderColor: c.primary, borderRadius: 12,
         padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     },
-    navigateText: { color: '#2e7d32', fontWeight: '600', fontSize: 15 },
+    navigateText: { color: c.primary, fontWeight: '600', fontSize: 15 },
 });

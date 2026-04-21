@@ -1,23 +1,26 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { ReceiptViewModel } from '../../types/receipt-view';
+import { useTheme, type AppTheme } from '../../constants/theme';
 
 type Props = {
   vm: ReceiptViewModel;
   status: string;
 };
 
-const getStatusColor = (status: string) => {
+const getStatusColor = (status: string, c: AppTheme) => {
   switch (status) {
-    case 'completed': return '#2e7d32';
-    case 'processing': return '#f57c00';
-    case 'failed': return '#c62828';
-    default: return '#757575';
+    case 'completed': return c.primary;
+    case 'processing': return c.warning;
+    case 'failed': return c.error;
+    default: return c.textSecondary;
   }
 };
 
 export default function ReceiptSummarySections({ vm, status }: Props) {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const [expanded, setExpanded] = useState(false);
   return (
     <>
@@ -27,7 +30,7 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
           <Ionicons
             name="checkmark-circle"
             size={20}
-            color={getStatusColor(status)}
+            color={getStatusColor(status, colors)}
             style={{ marginLeft: 8 }}
           />
         </View>
@@ -40,13 +43,13 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
 
       <TouchableOpacity style={styles.productsHeader} onPress={() => setExpanded((v) => !v)}>
         <View style={styles.productsHeaderLeft}>
-            <Ionicons name="cart-outline" size={20} color="#2e7d32" />
+            <Ionicons name="cart-outline" size={20} color={colors.primary} />
             <Text style={styles.sectionTitle}>Prekės ({vm.products.length})</Text>
         </View>
         <Ionicons
             name={expanded ? 'chevron-up' : 'chevron-down'}
             size={18}
-            color="#757575"
+            color={colors.textSecondary}
         />
         </TouchableOpacity>
         {expanded && (
@@ -57,7 +60,7 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
                     <View style={styles.productInfo}>
                     {product.matchedName ? (
                         <>
-                        <Text style={[styles.matchedName, product.matchConfirmed === false && { color: '#f57c00' }]}>
+                        <Text style={[styles.matchedName, product.matchConfirmed === false && { color: colors.warning }]}>
                             {product.matchedName}
                         </Text>
                         <Text style={styles.ocrName}>{product.name}</Text>
@@ -85,7 +88,7 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
                     <Ionicons
                         name={product.matchConfirmed ? 'checkmark-circle' : 'warning'}
                         size={20}
-                        color={product.matchConfirmed ? '#2e7d32' : '#f57c00'}
+                        color={product.matchConfirmed ? colors.primary : colors.warning}
                     />
                     </View>
                 </View>
@@ -93,7 +96,7 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
             ))}
             {vm.products.length === 0 && (
                 <View style={styles.emptyProducts}>
-                    <Ionicons name="alert-circle-outline" size={32} color="#e0e0e0" />
+                    <Ionicons name="alert-circle-outline" size={32} color={colors.border} />
                     <Text style={styles.emptyText}>Prekės neatpažintos</Text>
                 </View>
                 )}
@@ -102,7 +105,7 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
 
       {vm.products.length === 0 && (
         <View style={styles.emptyProducts}>
-          <Ionicons name="alert-circle-outline" size={32} color="#e0e0e0" />
+          <Ionicons name="alert-circle-outline" size={32} color={colors.border} />
           <Text style={styles.emptyText}>Prekės neatpažintos</Text>
         </View>
       )}
@@ -130,9 +133,9 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
   );
 }
 
-const styles = StyleSheet.create({
+const makeStyles = (c: AppTheme) => StyleSheet.create({
 sectionCard: {
-    backgroundColor: 'white',
+    backgroundColor: c.cardBackground,
     marginHorizontal: 16,
     marginTop: 16,
     borderRadius: 12,
@@ -143,14 +146,14 @@ sectionCard: {
     shadowOpacity: 0.05,
     shadowRadius: 2,
 },
-sectionTitle: { flex: 1, fontSize: 15, fontWeight: '600', color: '#212121' },
-sectionSubvalue: { fontSize: 13, color: '#757575', marginTop: 4 },
+sectionTitle: { flex: 1, fontSize: 15, fontWeight: '600', color: c.textPrimary },
+sectionSubvalue: { fontSize: 13, color: c.textSecondary, marginTop: 4 },
 
 chainRow: { flexDirection: 'row', alignItems: 'center' },
-chainBadge: { fontSize: 18, fontWeight: '700', color: '#212121' },
-storeName: { fontSize: 14, color: '#424242', marginTop: 4 },
+chainBadge: { fontSize: 18, fontWeight: '700', color: c.textPrimary },
+storeName: { fontSize: 14, color: c.textPrimary, marginTop: 4 },
 productCard: {
-    backgroundColor: 'white',
+    backgroundColor: c.cardBackground,
     marginHorizontal: 16,
     marginTop: 8,
     borderRadius: 12,
@@ -163,23 +166,23 @@ productCard: {
     },
     productRow: { flexDirection: 'row', alignItems: 'center' },
     productInfo: { flex: 1 },
-    productName: { fontSize: 14, color: '#212121', fontWeight: '500' },
-    matchedName: { fontSize: 14, color: '#2e7d32', fontWeight: '600' },
-    ocrName: { fontSize: 11, color: '#9e9e9e', marginTop: 2 },
-    productQuantity: { fontSize: 12, color: '#757575', marginTop: 2 },
+    productName: { fontSize: 14, color: c.textPrimary, fontWeight: '500' },
+    matchedName: { fontSize: 14, color: c.primary, fontWeight: '600' },
+    ocrName: { fontSize: 11, color: c.textMuted, marginTop: 2 },
+    productQuantity: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
     productPriceCol: { alignItems: 'flex-end', marginRight: 8 },
-    productPrice: { fontSize: 15, fontWeight: '700', color: '#212121' },
-    productPriceStrike: { fontSize: 12, color: '#9e9e9e', textDecorationLine: 'line-through' },
-    productPromoPrice: { fontSize: 15, fontWeight: '700', color: '#d32f2f' },
+    productPrice: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
+    productPriceStrike: { fontSize: 12, color: c.textMuted, textDecorationLine: 'line-through' },
+    productPromoPrice: { fontSize: 15, fontWeight: '700', color: c.error },
     matchIndicator: { marginLeft: 4 },
 
     footerContent: { marginTop: 10 },
     footerRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
-    footerLabel: { fontSize: 13, color: '#757575' },
-    footerValue: { fontSize: 13, fontWeight: '600', color: '#212121' },
+    footerLabel: { fontSize: 13, color: c.textSecondary },
+    footerValue: { fontSize: 13, fontWeight: '600', color: c.textPrimary },
 
     emptyProducts: { alignItems: 'center', padding: 32, gap: 8 },
-    emptyText: { fontSize: 14, color: '#9e9e9e' },
+    emptyText: { fontSize: 14, color: c.textMuted },
 
 productsHeader: {
     flexDirection: 'row',
@@ -188,12 +191,12 @@ productsHeader: {
     marginHorizontal: 16,
     marginTop: 20,
     marginBottom: 4,
-    backgroundColor: '#ffffff',
+    backgroundColor: c.cardBackground,
     borderRadius: 12,
     paddingHorizontal: 14,
     paddingVertical: 12,
     borderWidth: 1,
-    borderColor: '#edf2f7',
+    borderColor: c.borderSubtle,
 },
     productsHeaderLeft: {
     flexDirection: 'row',

@@ -1,13 +1,13 @@
-import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, ActivityIndicator, Image } from 'react-native';
-import { useEffect, useState } from 'react';
+import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../config/api';
-import { Alert } from 'react-native';
 import { useBasketState } from '../../../state/basketState';
 import { addProductToBasket } from '../../../utils/basketUtils';
 import AmountPickerModal from '../../../components/AmountPickerModal';
 import { ProductImage } from '../../../components/ProductImage';
+import { useTheme, type AppTheme } from '../../../constants/theme';
 
 interface Category {
     id: number;
@@ -26,6 +26,8 @@ interface Product {
 }
 
 export default function CategoryScreen() {
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const { categoryId, name } = useLocalSearchParams<{ categoryId: string; name: string }>();
     const [l3Categories, setL3Categories] = useState<Category[]>([]);
     const [products, setProducts] = useState<Product[]>([]);
@@ -95,7 +97,7 @@ export default function CategoryScreen() {
         }
     };
 
-    if (loading) return <ActivityIndicator style={styles.centered} size="large" color="#2e7d32" />;
+    if (loading) return <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />;
 
     return (
         <>
@@ -132,7 +134,7 @@ export default function CategoryScreen() {
 
                 <View style={{ flex: 1 }}>
                     {loadingProducts ? (
-                        <ActivityIndicator style={styles.centered} size="large" color="#2e7d32" />
+                        <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />
                     ) : (
                         <FlatList
                             data={products}
@@ -229,7 +231,7 @@ export default function CategoryScreen() {
                                                         }
                                                     }}
                                                 >
-                                                    <Ionicons name="remove" size={16} color="#2e7d32" />
+                                                    <Ionicons name="remove" size={16} color={colors.primary} />
                                                 </TouchableOpacity>
                                                 <Text style={styles.qtyText}>
                                                     {Number.isInteger(quantity) ? quantity : quantity.toFixed(1)}
@@ -255,7 +257,7 @@ export default function CategoryScreen() {
                                                         } catch {}
                                                     }}
                                                 >
-                                                    <Ionicons name="add" size={16} color="#2e7d32" />
+                                                    <Ionicons name="add" size={16} color={colors.primary} />
                                                 </TouchableOpacity>
                                             </View>
                                         )}
@@ -295,13 +297,13 @@ export default function CategoryScreen() {
     );
 }
 
-const styles = StyleSheet.create({
-    container: { flex: 1, backgroundColor: '#f5f5f5' },
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
     bubblesRow: {
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderBottomWidth: 0.5,
-        borderBottomColor: '#e0e0e0',
+        borderBottomColor: c.border,
         flexGrow: 0,
         flexShrink: 0,
     },
@@ -315,19 +317,19 @@ const styles = StyleSheet.create({
         paddingVertical: 7,
         borderRadius: 20,
         borderWidth: 1,
-        borderColor: '#e0e0e0',
-        backgroundColor: 'white',
+        borderColor: c.border,
+        backgroundColor: c.cardBackground,
     },
     bubbleActive: {
-        backgroundColor: '#2e7d32',
-        borderColor: '#2e7d32',
+        backgroundColor: c.primary,
+        borderColor: c.primary,
     },
     bubbleText: {
         fontSize: 13,
-        color: '#424242',
+        color: c.textPrimary,
     },
     bubbleTextActive: {
-        color: 'white',
+        color: c.onPrimary,
         fontWeight: '600',
     },
     list: {
@@ -338,7 +340,7 @@ const styles = StyleSheet.create({
         marginBottom: 12,
     },
     productCard: {
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         borderRadius: 12,
         padding: 12,
         alignItems: 'center',
@@ -364,7 +366,7 @@ const styles = StyleSheet.create({
         height: '100%',
         alignItems: 'center',
         justifyContent: 'center',
-        backgroundColor: '#f3f4f6',
+        backgroundColor: c.surfaceMuted,
         borderRadius: 8,
     },
     productImageEmoji: {
@@ -378,34 +380,34 @@ const styles = StyleSheet.create({
     },
     productName: {
         fontSize: 13,
-        color: '#212121',
+        color: c.textPrimary,
         lineHeight: 18,
     },
     addButton: {
         width: '100%',
-        backgroundColor: '#2e7d32',
+        backgroundColor: c.primary,
         borderRadius: 8,
         paddingVertical: 10,
         alignItems: 'center',
     },
     addButtonText: {
-        color: 'white',
+        color: c.onPrimary,
         fontSize: 13,
         fontWeight: '600',
     },
-    brandText: { fontSize: 12, color: '#9e9e9e', marginTop: 2 },
-    emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: '#757575' },
+    brandText: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+    emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: c.textSecondary },
     productRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        backgroundColor: 'white',
+        backgroundColor: c.cardBackground,
         paddingHorizontal: 16,
         paddingVertical: 12,
         gap: 12,
     },
     productIcon: {
         width: 36, height: 36, borderRadius: 8,
-        backgroundColor: '#f5f5f5',
+        backgroundColor: c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
     },
     quantityControl: {
@@ -414,7 +416,7 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'space-between',
         borderWidth: 1,
-        borderColor: '#2e7d32',
+        borderColor: c.primary,
         borderRadius: 8,
         paddingVertical: 6,
         paddingHorizontal: 10,
@@ -425,13 +427,13 @@ const styles = StyleSheet.create({
     qtyText: {
         fontSize: 14,
         fontWeight: '700',
-        color: '#2e7d32',
+        color: c.primary,
         minWidth: 20,
         textAlign: 'center',
     },
     amountText: {
         fontSize: 12,
-        color: '#9e9e9e',
+        color: c.textMuted,
         marginTop: 2,
     },
 });
