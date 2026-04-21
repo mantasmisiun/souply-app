@@ -1365,17 +1365,28 @@ export default function ProcessReceiptScreen() {
                           </TouchableOpacity>
                         );
                       })}
-                    </ScrollView>
 
-                    <TouchableOpacity
-                      style={styles.searchOtherButton}
-                      onPress={() => handleBrowseCategories(index)}
-                    >
-                      <Ionicons name="grid-outline" size={16} color="#2e7d32" />
-                      <Text style={styles.searchOtherButtonText}>
-                        Ieškoti kito produkto
-                      </Text>
-                    </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.optionCard}
+                        onPress={() => handleBrowseCategories(index)}
+                      >
+                        <View style={styles.optionCardEmojiWrap}>
+                          <Text style={styles.optionCardEmoji}>🥦</Text>
+                          <Ionicons
+                            name="add-circle"
+                            size={22}
+                            color="#2e7d32"
+                            style={styles.optionCardAddIcon}
+                          />
+                        </View>
+                        <Text
+                          numberOfLines={2}
+                          style={styles.optionCardName}
+                        >
+                          Ieškoti kito produkto
+                        </Text>
+                      </TouchableOpacity>
+                    </ScrollView>
                   </View>
                 )}
 
@@ -1802,6 +1813,27 @@ const styles = StyleSheet.create({
     backgroundColor: "#f3f4f6",
     marginBottom: 8,
   },
+  optionCardEmojiWrap: {
+    position: "relative",
+    width: "100%",
+    height: 70,
+    borderRadius: 6,
+    backgroundColor: "#f3f4f6",
+    marginBottom: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  optionCardEmoji: {
+    fontSize: 40,
+    opacity: 0.4,
+  },
+  optionCardAddIcon: {
+    position: "absolute",
+    right: 4,
+    bottom: 4,
+    backgroundColor: "#ffffff",
+    borderRadius: 11,
+  },
   optionCardName: {
     fontSize: 12,
     fontWeight: "600",
@@ -1811,23 +1843,6 @@ const styles = StyleSheet.create({
     marginTop: 6,
     fontSize: 12,
     color: "#4b5563",
-    fontWeight: "600",
-  },
-  searchOtherButton: {
-    alignSelf: "flex-start",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 8,
-    backgroundColor: "#ecfdf3",
-    borderWidth: 1,
-    borderColor: "#b7ebc7",
-  },
-  searchOtherButtonText: {
-    color: "#2e7d32",
-    fontSize: 13,
     fontWeight: "600",
   },
   productRowCard: {
