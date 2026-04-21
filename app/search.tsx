@@ -101,8 +101,6 @@ export default function SearchScreen() {
 
     const canCreateInStoreMode =
     effectiveMode === 'store-products' &&
-    Number.isFinite(createCategoryId) &&
-    createCategoryId > 0 &&
     Number.isFinite(chainId) &&
     chainId > 0;
 
@@ -112,14 +110,11 @@ export default function SearchScreen() {
 
   const closeAfterReceiptPick = () => {
     if (source === "receipt-category") {
-      router.back();
-      router.back();
-      router.back();
+      router.dismiss(3);
       return;
     }
     if (source === "receipt-index") {
-      router.back();
-      router.back();
+      router.dismiss(2);
       return;
     }
     router.back();
@@ -517,9 +512,9 @@ export default function SearchScreen() {
             productId: created.productId,
             storeProductName: created.storeProductName,
             imageUrl: created.imageUrl,
-            amount: null,
-            unit: null,
-            priceVerified: true,
+            amount: created.amount,
+            unit: created.unit,
+            priceVerified: false,
           });
           closeAfterReceiptPick();
         }}

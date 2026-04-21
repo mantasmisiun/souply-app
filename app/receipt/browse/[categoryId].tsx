@@ -3,7 +3,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../config/api';
-import { useReceiptPickerState } from '../../../state/basketState';
+import {
+    useReceiptCreateContext,
+    useReceiptPickerState,
+} from '../../../state/basketState';
 import CreateStoreProductModal, {
     CreatedStoreProductPayload,
 } from '../../../components/receipt/CreateStoreProductModal';
@@ -52,6 +55,7 @@ export default function ReceiptCategoryScreen() {
     }>();
     const router = useRouter();
     const { setPendingPick } = useReceiptPickerState();
+    const createContext = useReceiptCreateContext((s) => s.context);
     const [createModalVisible, setCreateModalVisible] = useState(false);
     const [l3Categories, setL3Categories] = useState<Category[]>([]);
     const [selectedL3, setSelectedL3] = useState<number | null>(null);
@@ -114,8 +118,7 @@ export default function ReceiptCategoryScreen() {
             amount: sp.amount,
             unit: sp.unit,
         });
-        router.back();
-        router.back();
+        router.dismiss(2);
     };
     const handlePickOtherProduct = async (p: OtherChainProductRow) => {
         Alert.alert(
@@ -139,6 +142,47 @@ export default function ReceiptCategoryScreen() {
                             const created = await res.json();
                             if (!res.ok || !created?.id) throw new Error(created?.error || 'Nepavyko sukurti StoreProduct');
 
+                            // Attach OCR'd Price to the newly-cloned StoreProduct so the
+                            // comparison has something to anchor on. priceVerified=false until
+                            // someone reviews it. Server propagates fallbacks automatically.
+                            if (
+                                createContext &&
+                                Number.isFinite(createContext.receiptId) &&
+                                Number.isFinite(createContext.storeId) &&
+                                createContext.ocrPrice > 0
+                            ) {
+                                const priceDate = createContext.receiptDate
+                                    ? new Date(createContext.receiptDate.replace(' ', 'T'))
+                                    : new Date();
+                                try {
+                                    const priceRes = await fetch(`${API_BASE_URL}/api/prices`, {
+                                        method: 'POST',
+                                        headers: { 'Content-Type': 'application/json' },
+                                        body: JSON.stringify({
+                                            storeProductId: created.id,
+                                            storeId: createContext.storeId,
+                                            price: createContext.ocrPrice,
+                                            promoPrice: createContext.ocrPromoPrice,
+                                            promoEnd: null,
+                                            isFallback: false,
+                                            date: priceDate.toISOString(),
+                                            priceVerified: false,
+                                            receiptId: createContext.receiptId,
+                                        }),
+                                    });
+                                    if (!priceRes.ok) {
+                                        const priceData = await priceRes.json().catch(() => ({}));
+                                        throw new Error(priceData?.error || `HTTP ${priceRes.status}`);
+                                    }
+                                } catch (priceErr: any) {
+                                    console.warn('Price creation for cloned StoreProduct failed:', priceErr);
+                                    Alert.alert(
+                                        'Įspėjimas',
+                                        `Produktas sukurtas, bet kainos išsaugoti nepavyko: ${priceErr?.message ?? 'nežinoma klaida'}.`,
+                                    );
+                                }
+                            }
+
                             setPendingPick({
                                 productIndex: Number(productIndex),
                                 storeProductId: created.id,
@@ -147,10 +191,10 @@ export default function ReceiptCategoryScreen() {
                                 imageUrl: p.imageUrl ?? null,
                                 amount: null,
                                 unit: null,
+                                priceVerified: false,
                             });
 
-                            router.back();
-                            router.back();
+                            router.dismiss(2);
                         } catch (e: any) {
                             Alert.alert('Klaida', e?.message || 'Nepavyko pridėti produkto');
                         }
@@ -332,13 +376,12 @@ export default function ReceiptCategoryScreen() {
                         productId: created.productId,
                         storeProductName: created.storeProductName,
                         imageUrl: created.imageUrl,
-                        amount: null,
-                        unit: null,
-                        priceVerified: true,
+                        amount: created.amount,
+                        unit: created.unit,
+                        priceVerified: false,
                     });
 
-                    router.back();
-                    router.back();
+                    router.dismiss(2);
                 }}
             />
         </>

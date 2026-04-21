@@ -19,7 +19,10 @@ import ReceiptComparisonSection from "../components/receipt/ReceiptComparisonSec
 import { API_BASE_URL } from "../config/api";
 import { getUserId } from "../config/user";
 import { useReceiptComparison } from "../hooks/useReceiptComparison";
-import { useReceiptPickerState } from "../state/basketState";
+import {
+    useReceiptCreateContext,
+    useReceiptPickerState,
+} from "../state/basketState";
 import {
     isRimiReceipt,
     parseRimiHeaderOnly,
@@ -185,6 +188,7 @@ export default function ProcessReceiptScreen() {
     height: number;
   } | null>(null);
   const { pendingPick, clearPendingPick } = useReceiptPickerState();
+  const setCreateContext = useReceiptCreateContext((s) => s.setContext);
   const [productsExpanded, setProductsExpanded] = useState(false);
   // Save state
   const [receiptId, setReceiptId] = useState<number | null>(null);
@@ -704,6 +708,7 @@ export default function ProcessReceiptScreen() {
         storeProductImageUrl: alt.imageUrl,
         matchConfidence: alt.confidence,
         matchConfirmed: true,
+        priceVerified: false,
       };
       return updated;
     });
@@ -772,6 +777,37 @@ export default function ProcessReceiptScreen() {
     const product = products[idx];
     const topMatch = product.altMatches[0];
 
+    // Guard: need a resolved chain + store + receipt to meaningfully create/link products.
+    const chainId = header?.chainId;
+    const storeId = header?.storeId;
+    if (
+      !Number.isFinite(chainId) ||
+      !Number.isFinite(storeId) ||
+      !Number.isFinite(receiptId)
+    ) {
+      Alert.alert(
+        "Palaukite",
+        "Parduotuvė ar kvitas dar neatpažinti. Pabandykite po akimirkos.",
+      );
+      return;
+    }
+
+    setCreateContext({
+      receiptId: Number(receiptId),
+      storeId: Number(storeId),
+      chainId: Number(chainId),
+      receiptDate: footer?.date ?? null,
+      ocrName: product.name,
+      ocrPrice: Number(product.price),
+      ocrPromoPrice:
+        product.promoPrice === null || product.promoPrice === undefined
+          ? null
+          : Number(product.promoPrice),
+      ocrQuantity: Number(product.quantity),
+      ocrUnit: product.unit || null,
+      ocrIsWeighable: product.pricePerUnit !== null,
+    });
+
     let preselectL1: string | undefined;
     let preselectL2: string | undefined;
     let preselectL3: string | undefined;
@@ -790,7 +826,6 @@ export default function ProcessReceiptScreen() {
       }
     }
 
-    const chainId = header?.chainId ?? 2;
     if (preselectL1 && preselectL2) {
       router.push({
         pathname: "/receipt/browse",
@@ -1025,6 +1060,9 @@ export default function ProcessReceiptScreen() {
         storeProductImageUrl: top?.imageUrl ?? null,
         matchConfidence: top?.confidence ?? null,
         matchConfirmed: autoApply,
+        // Auto-matched items start as "system-verified" — flipped to false the
+        // moment the user intervenes (alt pick, browse pick, create, edit).
+        priceVerified: autoApply,
         altMatches,
         price: rp.price,
         promoPrice: rp.promoPrice,
@@ -1260,23 +1298,49 @@ export default function ProcessReceiptScreen() {
                 }
               >
                 <View style={styles.productRow}>
-                  {product.matchConfirmed && product.storeProductImageUrl && (
+                  {product.matchConfirmed && product.storeProductImageUrl ? (
                     <Image
                       source={{ uri: product.storeProductImageUrl }}
                       style={styles.productThumb}
                       resizeMode="contain"
                     />
+                  ) : (
+                    <View style={styles.productThumbPlaceholder}>
+                      <Text style={styles.productThumbEmoji}>🥦</Text>
+                    </View>
                   )}
                   <View style={styles.productInfo}>
                     {product.matchConfirmed && product.matchedName ? (
                       <>
                         <Text style={styles.matchedName}>
+                          <Ionicons
+                            name="checkmark-circle"
+                            size={16}
+                            color="#2e7d32"
+                          />
+                          {"  "}
                           {product.matchedName}
                         </Text>
                         <Text style={styles.ocrName}>{product.name}</Text>
                       </>
                     ) : (
-                      <Text style={styles.productName}>{product.name}</Text>
+                      <Text style={styles.productName}>
+                        <Ionicons
+                          name={
+                            isCompletelyUnrecognized(product)
+                              ? "help-circle"
+                              : "alert-circle"
+                          }
+                          size={16}
+                          color={
+                            isCompletelyUnrecognized(product)
+                              ? "#c62828"
+                              : "#f57c00"
+                          }
+                        />
+                        {"  "}
+                        {product.name}
+                      </Text>
                     )}
                     {product.quantity !== 1 && (
                       <Text style={styles.productQuantity}>
@@ -1288,38 +1352,14 @@ export default function ProcessReceiptScreen() {
                     )}
                   </View>
                   <View style={styles.productPriceCol}>
-                    {product.promoPrice !== null ? (
-                      <>
-                        <Text style={styles.productPriceStrike}>
-                          €{product.price.toFixed(2)}
-                        </Text>
-                        <Text style={styles.productPromoPrice}>
-                          €{product.promoPrice.toFixed(2)}
-                        </Text>
-                      </>
-                    ) : (
-                      <Text style={styles.productPrice}>
-                        €{product.price.toFixed(2)}
-                      </Text>
-                    )}
+                    <Text style={styles.productPrice}>
+                      €
+                      {(
+                        (product.promoPrice ?? product.price) *
+                        product.quantity
+                      ).toFixed(2)}
+                    </Text>
                   </View>
-                  {product.matchConfirmed && (
-                    <View style={styles.matchIndicator}>
-                      {product.matchConfirmed ? (
-                        <Ionicons
-                          name="checkmark-circle"
-                          size={20}
-                          color="#2e7d32"
-                        />
-                      ) : isCompletelyUnrecognized(product) ? (
-                        <Ionicons
-                          name="alert-circle"
-                          size={20}
-                          color="#c62828"
-                        />
-                      ) : null}
-                    </View>
-                  )}
                 </View>
                 {!product.matchConfirmed && product.altMatches.length > 0 && (
                   <View style={styles.inlineMatchSection}>
@@ -1475,6 +1515,7 @@ export default function ProcessReceiptScreen() {
                                   updated[index] = {
                                     ...updated[index],
                                     price: parseFloat(text) || 0,
+                                    priceVerified: false,
                                   };
                                   return updated;
                                 });
@@ -1496,6 +1537,7 @@ export default function ProcessReceiptScreen() {
                                     promoPrice: text
                                       ? parseFloat(text) || null
                                       : null,
+                                    priceVerified: false,
                                   };
                                   return updated;
                                 });
@@ -1949,13 +1991,6 @@ const styles = StyleSheet.create({
   productQuantity: { fontSize: 12, color: "#757575", marginTop: 2 },
   productPriceCol: { alignItems: "flex-end", marginRight: 8 },
   productPrice: { fontSize: 15, fontWeight: "700", color: "#212121" },
-  productPriceStrike: {
-    fontSize: 12,
-    color: "#9e9e9e",
-    textDecorationLine: "line-through",
-  },
-  productPromoPrice: { fontSize: 15, fontWeight: "700", color: "#d32f2f" },
-  matchIndicator: { marginLeft: 4 },
 
   editSection: {
     marginTop: 12,
@@ -2003,6 +2038,19 @@ const styles = StyleSheet.create({
     borderRadius: 6,
     backgroundColor: "#fafafa",
     marginRight: 10,
+  },
+  productThumbPlaceholder: {
+    width: 48,
+    height: 48,
+    borderRadius: 6,
+    backgroundColor: "#f3f4f6",
+    marginRight: 10,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  productThumbEmoji: {
+    fontSize: 26,
+    opacity: 0.4,
   },
   browseButton: {
     flexDirection: "row",

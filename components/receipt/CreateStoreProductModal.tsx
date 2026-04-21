@@ -16,6 +16,8 @@ import {
     View,
 } from "react-native";
 import { API_BASE_URL } from "../../config/api";
+import { useReceiptCreateContext } from "../../state/basketState";
+import { parseProductName } from "../../utils/productNameParser";
 
 interface L3CategoryOption {
   id: number;
@@ -28,6 +30,8 @@ export interface CreatedStoreProductPayload {
   storeProductId: number;
   storeProductName: string;
   imageUrl: string | null;
+  amount: number | null;
+  unit: string | null;
 }
 
 interface CreateStoreProductModalProps {
@@ -59,6 +63,7 @@ export default function CreateStoreProductModal({
   const [searchingCategories, setSearchingCategories] = useState(false);
   const [createImageUri, setCreateImageUri] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const createContext = useReceiptCreateContext((s) => s.context);
 
   useEffect(() => {
     if (!visible) return;
@@ -229,12 +234,19 @@ export default function CreateStoreProductModal({
         ? await uploadCreateImage(createImageUri)
         : null;
 
+      // Strip weight / unit tail from the OCR-sourced name. Keep the fully
+      // stripped version for both Product.name and StoreProduct.storeProductName;
+      // amount + unit only set when "g" is present in the stripped tail (per spec).
+      const isWeighable = createContext?.ocrIsWeighable ?? false;
+      const parsed = parseProductName(trimmedName, isWeighable);
+      const finalName = parsed.strippedName || trimmedName;
+
       const pRes = await fetch(`${API_BASE_URL}/api/products`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           categoryId: Number(selectedCategoryId),
-          name: trimmedName,
+          name: finalName,
           imageUrl: uploadedImageUrl,
         }),
       });
@@ -249,7 +261,11 @@ export default function CreateStoreProductModal({
         body: JSON.stringify({
           productId: pData.id,
           chainId: Number(chainId),
-          storeProductName: trimmedName,
+          storeProductName: finalName,
+          brandName: null,
+          isWeighable,
+          amount: parsed.amount,
+          unit: parsed.unit,
           imageUrl: uploadedImageUrl,
         }),
       });
@@ -260,11 +276,53 @@ export default function CreateStoreProductModal({
         );
       }
 
+      // Create the user-verified-false Price row linked to the receipt,
+      // and let the server propagate fallbacks to other stores in the chain.
+      if (
+        createContext &&
+        Number.isFinite(createContext.receiptId) &&
+        Number.isFinite(createContext.storeId) &&
+        createContext.ocrPrice > 0
+      ) {
+        const priceDate = createContext.receiptDate
+          ? new Date(createContext.receiptDate.replace(" ", "T"))
+          : new Date();
+        try {
+          const priceRes = await fetch(`${API_BASE_URL}/api/prices`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              storeProductId: spData.id,
+              storeId: createContext.storeId,
+              price: createContext.ocrPrice,
+              promoPrice: createContext.ocrPromoPrice,
+              promoEnd: null,
+              isFallback: false,
+              date: priceDate.toISOString(),
+              priceVerified: false,
+              receiptId: createContext.receiptId,
+            }),
+          });
+          const priceData = await priceRes.json().catch(() => ({}));
+          if (!priceRes.ok) {
+            throw new Error(priceData?.error || `HTTP ${priceRes.status}`);
+          }
+        } catch (e: any) {
+          console.warn("Price creation failed:", e);
+          Alert.alert(
+            "Įspėjimas",
+            `Produktas sukurtas, bet kainos išsaugoti nepavyko: ${e?.message ?? "nežinoma klaida"}. Galite pabandyti dar kartą vėliau.`,
+          );
+        }
+      }
+
       await onCreated({
         productId: pData.id,
         storeProductId: spData.id,
-        storeProductName: trimmedName,
+        storeProductName: finalName,
         imageUrl: uploadedImageUrl,
+        amount: parsed.amount,
+        unit: parsed.unit,
       });
       onClose();
     } catch (e: any) {

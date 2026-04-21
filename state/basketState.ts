@@ -47,3 +47,30 @@ export const useReceiptPickerState = create<ReceiptPickerState>((set) => ({
   setPendingPick: (pick) => set({ pendingPick: pick }),
   clearPendingPick: () => set({ pendingPick: null }),
 }));
+
+export interface ReceiptCreateContext {
+  receiptId: number;
+  storeId: number;
+  chainId: number;
+  receiptDate: string | null;
+  ocrName: string;
+  ocrPrice: number;
+  ocrPromoPrice: number | null;
+  ocrQuantity: number;
+  ocrUnit: string | null;
+  ocrIsWeighable: boolean;
+}
+
+interface ReceiptCreateContextState {
+  context: ReceiptCreateContext | null;
+  setContext: (ctx: ReceiptCreateContext | null) => void;
+  clearContext: () => void;
+}
+
+export const useReceiptCreateContext = create<ReceiptCreateContextState>(
+  (set) => ({
+    context: null,
+    setContext: (ctx) => set({ context: ctx }),
+    clearContext: () => set({ context: null }),
+  }),
+);
