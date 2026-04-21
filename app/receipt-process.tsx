@@ -1,9 +1,11 @@
 import { Ionicons } from "@expo/vector-icons";
+import { usePreventRemove, useNavigation } from "@react-navigation/native";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useRef, useState } from "react";
 import {
     ActivityIndicator,
+    Alert,
     Dimensions,
     Image,
     ScrollView,
@@ -48,6 +50,7 @@ interface ProductLine {
   storeProductImageUrl: string | null;
   matchConfidence: number | null;
   matchConfirmed: boolean;
+  priceVerified?: boolean;
   altMatches: ProductMatchOption[];
   price: number;
   promoPrice: number | null;
@@ -89,22 +92,8 @@ interface RegionPreviewProps {
   region: Region;
   cardWidth: number;
 }
-interface ComparisonChain {
-  chainId: number;
-  chainName: string;
-  storeId: number;
-  storeName: string;
-  storeAddress: string;
-  distanceKm: number;
-  total: number;
-  savings: number;
-  comparedItems: number;
-  missingItems: number;
-  note?: string;
-  chainLogoUrl: string | null;
-}
-
 type SaveStatus = "idle" | "saving" | "saved" | "error";
+type AsyncStatus = "idle" | "pending" | "done" | "error";
 
 const CARD_WIDTH = Dimensions.get("window").width - 32 - 32;
 
@@ -179,6 +168,7 @@ export default function ProcessReceiptScreen() {
   const existingReceiptId = receiptIdParam ? Number(receiptIdParam) : null;
   const isExistingMode = Number.isFinite(existingReceiptId);
   const router = useRouter();
+  const navigation = useNavigation();
   const [loading, setLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState("Nuskaitomas kvitas...");
   const isHydratingRef = useRef(false);
@@ -200,8 +190,29 @@ export default function ProcessReceiptScreen() {
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [imageFilePath, setImageFilePath] = useState<string | null>(null);
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
-  const { comparison, comparisonLoading, comparisonError, fetchComparison } =
+  const [postStatus, setPostStatus] = useState<AsyncStatus>("idle");
+  const [postErr, setPostErr] = useState<string | null>(null);
+  const [uploadStatus, setUploadStatus] = useState<AsyncStatus>("idle");
+  const [uploadErr, setUploadErr] = useState<string | null>(null);
+  const [comparisonStatus, setComparisonStatus] = useState<AsyncStatus>("idle");
+  const [firstCompleteReached, setFirstCompleteReached] = useState(false);
+  const { comparison, comparisonLoading, comparisonError, fetchComparison, setComparison } =
     useReceiptComparison();
+
+  // Derive comparisonStatus from the hook
+  useEffect(() => {
+    if (comparisonLoading) setComparisonStatus("pending");
+    else if (comparisonError) setComparisonStatus("error");
+    else if (comparison) setComparisonStatus("done");
+  }, [comparisonLoading, comparisonError, comparison]);
+
+  // Flip to true once the comparison has loaded for the first time after a
+  // fresh scan / receipt open. Subsequent refetches (on edits) won't re-block.
+  useEffect(() => {
+    if (comparison && !firstCompleteReached) {
+      setFirstCompleteReached(true);
+    }
+  }, [comparison, firstCompleteReached]);
   const rematchSpinnerTimersRef = useRef<
     Record<number, ReturnType<typeof setTimeout> | null>
   >({});
@@ -215,8 +226,6 @@ export default function ProcessReceiptScreen() {
   const comparisonKeyRef = useRef("");
   const shouldRefreshComparisonRef = useRef(false);
   const isFullyRecognized = (p: ProductLine) => p.matchConfirmed;
-  const isPartiallyRecognized = (p: ProductLine) =>
-    !p.matchConfirmed && p.altMatches.length > 0;
   const canExpandProduct = (p: ProductLine) =>
     isFullyRecognized(p) || isCompletelyUnrecognized(p);
 
@@ -389,6 +398,7 @@ export default function ProcessReceiptScreen() {
           matchConfidence:
             typeof p.matchConfidence === "number" ? p.matchConfidence : null,
           matchConfirmed: !!p.matchConfirmed,
+          priceVerified: !!p.priceVerified,
           altMatches: Array.isArray(p.altMatches) ? p.altMatches : [],
           price: Number(p.price ?? 0),
           promoPrice: p.promoPrice == null ? null : Number(p.promoPrice),
@@ -481,6 +491,32 @@ export default function ProcessReceiptScreen() {
     })();
   }, []);
 
+  // Reset state when a new scan uri arrives, so a second scan on the same
+  // screen instance doesn't inherit the previous receipt's receiptId /
+  // imageFilePath / status flags.
+  useEffect(() => {
+    console.log("[receipt-process] uri effect", { uri, isExistingMode });
+    if (isExistingMode) return;
+    if (!uri) return;
+    setReceiptId(null);
+    setImageFilePath(null);
+    setImageDims(null);
+    setHeader(null);
+    setFooter(null);
+    setProducts([]);
+    setSaveStatus("idle");
+    setPostStatus("idle");
+    setPostErr(null);
+    setUploadStatus("idle");
+    setUploadErr(null);
+    setComparisonStatus("idle");
+    setFirstCompleteReached(false);
+    setComparison(null);
+    hasPostedRef.current = false;
+    comparisonKeyRef.current = "";
+    shouldRefreshComparisonRef.current = false;
+  }, [uri, isExistingMode, setComparison]);
+
   // Kick off OCR when uri is provided
   useEffect(() => {
     if (isExistingMode && existingReceiptId) {
@@ -498,7 +534,13 @@ export default function ProcessReceiptScreen() {
   // Apply user's manual pick from the category browser
   useEffect(() => {
     if (!pendingPick) return;
-    const { productIndex, storeProductId, storeProductName, imageUrl } =
+    const {
+      productIndex,
+      storeProductId,
+      storeProductName,
+      imageUrl,
+      priceVerified,
+    } =
       pendingPick;
 
     setProducts((prev) => {
@@ -511,6 +553,7 @@ export default function ProcessReceiptScreen() {
         storeProductImageUrl: imageUrl,
         matchConfidence: 1,
         matchConfirmed: true,
+        priceVerified: !!priceVerified,
       };
       return updated;
     });
@@ -519,88 +562,117 @@ export default function ProcessReceiptScreen() {
   }, [pendingPick, clearPendingPick]);
 
   // Step 1: POST receipt once OCR + store match + product match have all completed
+  const runPost = async () => {
+    if (!header || !footer) return;
+    if (header.matchLoading) return;
+    setPostStatus("pending");
+    setPostErr(null);
+    try {
+      const userId = userIdRef.current ?? (await getUserId());
+      userIdRef.current = userId;
+
+      const parsedData = buildParsedData(
+        header,
+        products,
+        footer,
+        imageDims ? { uri: imageUri, ...imageDims } : null,
+        imageFilePath,
+      );
+
+      const res = await fetch(`${API_BASE_URL}/api/receipts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId, filePath: "", parsedData }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.id) {
+        throw new Error(data?.error || `HTTP ${res.status}`);
+      }
+      setReceiptId(data.id);
+      setSaveStatus("saved");
+      setPostStatus("done");
+      setComparisonStatus("pending");
+      fetchComparison(data.id);
+    } catch (e: any) {
+      console.warn("Receipt POST failed:", e);
+      setSaveStatus("error");
+      setPostStatus("error");
+      setPostErr(e?.message || "Nepavyko išsaugoti kvito");
+      hasPostedRef.current = false;
+    }
+  };
+
   useEffect(() => {
     if (isExistingMode) return;
     if (hasPostedRef.current) return;
-    if (!header || !footer) return; // parsing not done
-    if (header.matchLoading) return; // store match still running
-    // products may be empty array (receipt with no recognized items), that's fine
-
+    if (!header || !footer) return;
+    if (header.matchLoading) return;
     hasPostedRef.current = true;
-    (async () => {
-      try {
-        const userId = userIdRef.current ?? (await getUserId());
-        userIdRef.current = userId;
-
-        const parsedData = buildParsedData(
-          header,
-          products,
-          footer,
-          imageDims ? { uri: imageUri, ...imageDims } : null,
-          imageFilePath,
-        );
-
-        const res = await fetch(`${API_BASE_URL}/api/receipts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ userId, filePath: "", parsedData }),
-        });
-        const data = await res.json();
-        if (data?.id) {
-          setReceiptId(data.id);
-          setSaveStatus("saved");
-          fetchComparison(data.id); // immediate first fetch
-        } else {
-          console.warn("Receipt POST returned no id:", data);
-          setSaveStatus("error");
-          hasPostedRef.current = false; // allow retry on next state change
-        }
-      } catch (e) {
-        console.warn("Receipt POST failed:", e);
-        setSaveStatus("error");
-        hasPostedRef.current = false;
-      }
-    })();
+    runPost();
   }, [header, footer, products]);
 
+  const retryPost = () => {
+    hasPostedRef.current = true;
+    runPost();
+  };
+
   // Step 2: MinIO upload — runs in parallel with POST, PATCH filePath once done
+  const runUpload = async () => {
+    if (!imageUri || !receiptId) return;
+    setUploadStatus("pending");
+    setUploadErr(null);
+    try {
+      const urlRes = await fetch(`${API_BASE_URL}/api/receipts/upload-url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: `receipt-${receiptId}.jpg`,
+          mimeType: "image/jpeg",
+        }),
+      });
+      if (!urlRes.ok) throw new Error(`upload-url HTTP ${urlRes.status}`);
+      const { uploadUrl, filePath } = await urlRes.json();
+      if (!uploadUrl || !filePath) throw new Error("upload-url atsakyme trūksta laukų");
+
+      const imageBlob = await (await fetch(imageUri)).blob();
+      const putRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": "image/jpeg" },
+        body: imageBlob,
+      });
+      if (!putRes.ok) throw new Error(`MinIO PUT HTTP ${putRes.status}`);
+
+      const patchRes = await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/file-path`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ filePath }),
+      });
+      if (!patchRes.ok) throw new Error(`PATCH HTTP ${patchRes.status}`);
+
+      setImageFilePath(filePath);
+      setUploadStatus("done");
+    } catch (e: any) {
+      console.warn("MinIO upload failed:", e);
+      setUploadStatus("error");
+      setUploadErr(e?.message || "Nepavyko įkelti nuotraukos");
+    }
+  };
+
   useEffect(() => {
     if (!imageUri || !receiptId || imageFilePath) return;
-
-    (async () => {
-      try {
-        // Get presigned PUT URL
-        const urlRes = await fetch(`${API_BASE_URL}/api/receipts/upload-url`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            filename: `receipt-${receiptId}.jpg`,
-            mimeType: "image/jpeg",
-          }),
-        });
-        const { uploadUrl, filePath } = await urlRes.json();
-
-        // Upload the image bytes (fetch(uri) returns a blob for local files)
-        const imageBlob = await (await fetch(imageUri)).blob();
-        await fetch(uploadUrl, {
-          method: "PUT",
-          headers: { "Content-Type": "image/jpeg" },
-          body: imageBlob,
-        });
-
-        // PATCH the receipt with the filePath
-        await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/file-path`, {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filePath }),
-        });
-
-        setImageFilePath(filePath);
-      } catch (e) {
-        console.warn("MinIO upload failed:", e);
-      }
-    })();
+    if (uploadStatus === "pending" || uploadStatus === "error") return;
+    runUpload();
   }, [imageUri, receiptId, imageFilePath]);
+
+  const retryUpload = () => {
+    runUpload();
+  };
+
+  const retryComparison = () => {
+    if (!receiptId) return;
+    setComparisonStatus("pending");
+    fetchComparison(receiptId);
+  };
 
   // Step 3: debounced PUT on any parsedData change
   useEffect(() => {
@@ -719,7 +791,6 @@ export default function ProcessReceiptScreen() {
     }
 
     const chainId = header?.chainId ?? 2;
-
     if (preselectL1 && preselectL2) {
       router.push({
         pathname: "/receipt/browse",
@@ -1005,6 +1076,31 @@ export default function ProcessReceiptScreen() {
     });
   };
 
+  const isProcessing =
+    !firstCompleteReached &&
+    (postStatus === "pending" ||
+      uploadStatus === "pending" ||
+      comparisonStatus === "pending");
+  const hasAsyncError =
+    postStatus === "error" ||
+    uploadStatus === "error" ||
+    comparisonStatus === "error";
+
+  usePreventRemove(isProcessing, ({ data }) => {
+    Alert.alert(
+      "Kvitas dar apdorojamas",
+      "Jei išeisite dabar, apdorojimas tęsis fone, bet galite matyti nepilną rezultatą.",
+      [
+        { text: "Palaukti", style: "cancel", onPress: () => {} },
+        {
+          text: "Išeiti",
+          style: "destructive",
+          onPress: () => navigation.dispatch(data.action),
+        },
+      ],
+    );
+  });
+
   if (loading) {
     return (
       <View style={styles.loadingContainer}>
@@ -1033,10 +1129,59 @@ export default function ProcessReceiptScreen() {
     );
   };
 
+  const processingStep = postStatus === "pending"
+    ? "Siunčiami kvito duomenys…"
+    : uploadStatus === "pending"
+    ? "Siunčiama nuotrauka…"
+    : comparisonStatus === "pending"
+    ? "Skaičiuojamas palyginimas…"
+    : null;
+
   return (
     <>
       <Stack.Screen options={{ title: "Kvito analizė" }} />
       <ScrollView style={styles.container}>
+        {hasAsyncError && (
+          <View style={styles.errorBanner}>
+            <View style={styles.errorHeaderRow}>
+              <Ionicons name="alert-circle" size={20} color="#c62828" />
+              <Text style={styles.errorTitle}>Apdorojimas nepavyko</Text>
+            </View>
+            {postStatus === "error" && (
+              <View style={styles.errorRow}>
+                <Text style={styles.errorMsg}>
+                  Kvito išsaugojimas: {postErr ?? "klaida"}
+                </Text>
+                <TouchableOpacity style={styles.retryBtn} onPress={retryPost}>
+                  <Text style={styles.retryBtnText}>Bandyti dar kartą</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {uploadStatus === "error" && (
+              <View style={styles.errorRow}>
+                <Text style={styles.errorMsg}>
+                  Nuotraukos įkėlimas: {uploadErr ?? "klaida"}
+                </Text>
+                <TouchableOpacity style={styles.retryBtn} onPress={retryUpload}>
+                  <Text style={styles.retryBtnText}>Bandyti dar kartą</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+            {comparisonStatus === "error" && (
+              <View style={styles.errorRow}>
+                <Text style={styles.errorMsg}>
+                  Palyginimas: {comparisonError ?? "klaida"}
+                </Text>
+                <TouchableOpacity
+                  style={styles.retryBtn}
+                  onPress={retryComparison}
+                >
+                  <Text style={styles.retryBtnText}>Bandyti dar kartą</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
         <ReceiptComparisonSection
           comparison={comparison}
           loading={comparisonLoading && !comparison}
@@ -1473,11 +1618,98 @@ export default function ProcessReceiptScreen() {
         <View style={{ height: 40 }} />
       </ScrollView>
       {renderStatusBadge()}
+      {isProcessing && (
+        <View style={styles.processingOverlay} pointerEvents="auto">
+          <View style={styles.processingCard}>
+            <ActivityIndicator size="large" color="#2e7d32" />
+            <Text style={styles.processingTitle}>Kvitas apdorojamas</Text>
+            {!!processingStep && (
+              <Text style={styles.processingStep}>{processingStep}</Text>
+            )}
+          </View>
+        </View>
+      )}
     </>
   );
 }
 
 const styles = StyleSheet.create({
+  processingOverlay: {
+    position: "absolute",
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: "rgba(17, 24, 39, 0.45)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  processingCard: {
+    backgroundColor: "#ffffff",
+    borderRadius: 14,
+    paddingVertical: 24,
+    paddingHorizontal: 28,
+    minWidth: 220,
+    alignItems: "center",
+    shadowColor: "#000",
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
+  },
+  processingTitle: {
+    marginTop: 12,
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#111827",
+  },
+  processingStep: {
+    marginTop: 4,
+    fontSize: 13,
+    color: "#6b7280",
+  },
+  errorBanner: {
+    backgroundColor: "#fff5f5",
+    borderColor: "#fecaca",
+    borderWidth: 1,
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 12,
+    padding: 12,
+    gap: 8,
+  },
+  errorHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  errorTitle: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#991b1b",
+  },
+  errorRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
+  errorMsg: {
+    flex: 1,
+    fontSize: 12,
+    color: "#7f1d1d",
+  },
+  retryBtn: {
+    backgroundColor: "#c62828",
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+  },
+  retryBtnText: {
+    color: "#ffffff",
+    fontSize: 12,
+    fontWeight: "700",
+  },
   editInputLoaderWrap: {
     position: "relative",
     marginBottom: 8,

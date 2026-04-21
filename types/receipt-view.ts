@@ -7,8 +7,9 @@ export interface ReceiptComparisonChain {
   distanceKm: number;
   total: number;
   savings: number;
-  comparedItems: number;
-  missingItems: number;
+  knownItems: number;
+  imputedItems: number;
+  flatItems: number;
   note?: string;
   chainLogoUrl: string | null;
 }
@@ -21,14 +22,16 @@ export interface ReceiptComparison {
     storeName: string;
     storeAddress: string;
     total: number;
-    comparedItems: number;
-    missingItems: number;
+    knownItems: number;
+    imputedItems: number;
+    flatItems: number;
     chainLogoUrl: string | null;
   };
   alternatives: ReceiptComparisonChain[];
   summary: {
     recognizedItems: number;
-    excludedItems: number;
+    unrecognizedItems: number;
+    invalidItems: number;
     note?: string;
   };
 }

@@ -4,12 +4,21 @@ import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../config/api';
 import { useReceiptPickerState } from '../../../state/basketState';
+import CreateStoreProductModal, {
+    CreatedStoreProductPayload,
+} from '../../../components/receipt/CreateStoreProductModal';
 
 interface Category {
     id: number;
     name: string;
 }
-
+interface OtherChainProductRow {
+    productId: number;
+    productName: string;
+    categoryId: number;
+    imageUrl: string | null;
+    sourceChainLogoUrl?: string | null;
+}
 interface StoreProductRow {
     id: number;
     productId: number;
@@ -19,7 +28,10 @@ interface StoreProductRow {
     imageUrl: string | null;
 }
 
-type GridItem = { kind: 'product'; data: StoreProductRow } | { kind: 'create' };
+type GridItem =
+  | { kind: 'local'; data: StoreProductRow }
+  | { kind: 'other'; data: OtherChainProductRow }
+  | { kind: 'create' };
 
 const safeDecode = (v?: string) => {
     try {
@@ -40,18 +52,20 @@ export default function ReceiptCategoryScreen() {
     }>();
     const router = useRouter();
     const { setPendingPick } = useReceiptPickerState();
-
+    const [createModalVisible, setCreateModalVisible] = useState(false);
     const [l3Categories, setL3Categories] = useState<Category[]>([]);
-    const [products, setProducts] = useState<StoreProductRow[]>([]);
     const [selectedL3, setSelectedL3] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
     const [loadingProducts, setLoadingProducts] = useState(false);
-    const [creating, setCreating] = useState(false);
-
     const baseName = safeDecode(typeof ocrName === 'string' ? ocrName : '').trim();
     const createCategoryId = selectedL3 ?? Number(categoryId);
-    const canCreate = Number.isFinite(createCategoryId) && createCategoryId > 0 && !!baseName;
-
+    const canCreate =
+        Number.isFinite(createCategoryId) &&
+        createCategoryId > 0 &&
+        Number.isFinite(Number(chainId)) &&
+        Number(chainId) > 0;
+    const [localResults, setLocalResults] = useState<StoreProductRow[]>([]);
+    const [otherResults, setOtherResults] = useState<OtherChainProductRow[]>([]);
     useEffect(() => {
         (async () => {
             setLoading(true);
@@ -63,27 +77,28 @@ export default function ReceiptCategoryScreen() {
                 const preselId = preselectL3 ? Number(preselectL3) : null;
                 if (preselId) setSelectedL3(preselId);
                 const targetId = preselId ?? Number(categoryId);
-                const prodRes = await fetch(
-                    `${API_BASE_URL}/api/categories/${targetId}/store-products?chainId=${chainId}`
+                const unifiedRes = await fetch(
+                    `${API_BASE_URL}/api/store-products/search-unified?chainId=${chainId}&categoryId=${targetId}`
                 );
-                const prodData = await prodRes.json();
-                setProducts(Array.isArray(prodData) ? prodData : []);
+                const unifiedData = await unifiedRes.json();
+                setLocalResults(Array.isArray(unifiedData?.localStoreProducts) ? unifiedData.localStoreProducts : []);
+                setOtherResults(Array.isArray(unifiedData?.otherChainProducts) ? unifiedData.otherChainProducts : []);
             } finally {
                 setLoading(false);
             }
         })();
     }, [categoryId, preselectL3, chainId]);
-
     const selectL3 = async (l3Id: number | null) => {
         setSelectedL3(l3Id);
         setLoadingProducts(true);
         try {
             const target = l3Id ?? Number(categoryId);
             const res = await fetch(
-                `${API_BASE_URL}/api/categories/${target}/store-products?chainId=${chainId}`
+            `${API_BASE_URL}/api/store-products/search-unified?chainId=${chainId}&categoryId=${target}`
             );
             const data = await res.json();
-            setProducts(Array.isArray(data) ? data : []);
+            setLocalResults(Array.isArray(data?.localStoreProducts) ? data.localStoreProducts : []);
+            setOtherResults(Array.isArray(data?.otherChainProducts) ? data.otherChainProducts : []);
         } finally {
             setLoadingProducts(false);
         }
@@ -102,62 +117,56 @@ export default function ReceiptCategoryScreen() {
         router.back();
         router.back();
     };
+    const handlePickOtherProduct = async (p: OtherChainProductRow) => {
+        Alert.alert(
+            'Kitur rastas produktas',
+            `Pridėti „${p.productName}“ į šios parduotuvės sąrašą?`,
+            [
+                { text: 'Atšaukti', style: 'cancel' },
+                {
+                    text: 'Pridėti',
+                    onPress: async () => {
+                        try {
+                            const res = await fetch(`${API_BASE_URL}/api/store-products`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    productId: p.productId,
+                                    chainId: Number(chainId),
+                                    storeProductName: p.productName,
+                                }),
+                            });
+                            const created = await res.json();
+                            if (!res.ok || !created?.id) throw new Error(created?.error || 'Nepavyko sukurti StoreProduct');
 
-    const handleCreateProduct = async () => {
-        if (!baseName) {
-            Alert.alert('Trūksta pavadinimo', 'Nepavyko nustatyti OCR produkto pavadinimo.');
-            return;
-        }
+                            setPendingPick({
+                                productIndex: Number(productIndex),
+                                storeProductId: created.id,
+                                productId: p.productId,
+                                storeProductName: p.productName,
+                                imageUrl: p.imageUrl ?? null,
+                                amount: null,
+                                unit: null,
+                            });
 
-        try {
-            setCreating(true);
-
-            const pRes = await fetch(`${API_BASE_URL}/api/products`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    categoryId: createCategoryId,
-                    name: baseName,
-                }),
-            });
-            const pData = await pRes.json();
-            if (!pRes.ok || !pData?.id) throw new Error(pData?.error || 'Nepavyko sukurti produkto');
-
-            const spRes = await fetch(`${API_BASE_URL}/api/store-products`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    productId: pData.id,
-                    chainId: Number(chainId),
-                    storeProductName: baseName,
-                }),
-            });
-            const spData = await spRes.json();
-            if (!spRes.ok || !spData?.id) throw new Error(spData?.error || 'Nepavyko sukurti parduotuvės produkto');
-
-            setPendingPick({
-                productIndex: Number(productIndex),
-                storeProductId: spData.id,
-                productId: pData.id,
-                storeProductName: baseName,
-                imageUrl: null,
-                amount: null,
-                unit: null,
-            });
-
-            router.back();
-            router.back();
-        } catch (e: any) {
-            Alert.alert('Klaida', e?.message || 'Nepavyko sukurti produkto');
-        } finally {
-            setCreating(false);
-        }
+                            router.back();
+                            router.back();
+                        } catch (e: any) {
+                            Alert.alert('Klaida', e?.message || 'Nepavyko pridėti produkto');
+                        }
+                    },
+                },
+            ]
+        );
     };
-
-    const gridData = useMemo<GridItem[]>(
-        () => [...products.map((p) => ({ kind: 'product' as const, data: p })), { kind: 'create' as const }],
-        [products]
-    );
+    const gridData = useMemo<GridItem[]>(() => {
+    const rows: GridItem[] = [
+        ...localResults.map((p): GridItem => ({ kind: 'local', data: p })),
+        ...otherResults.map((p): GridItem => ({ kind: 'other', data: p })),
+        { kind: 'create' },
+    ];
+    return rows;
+    }, [localResults, otherResults]);
 
     const renderProductCard = (sp: StoreProductRow) => (
         <TouchableOpacity style={styles.productCard} onPress={() => handlePick(sp)} activeOpacity={0.7}>
@@ -178,16 +187,33 @@ export default function ReceiptCategoryScreen() {
             </View>
         </TouchableOpacity>
     );
+    const renderOtherCard = (p: OtherChainProductRow) => (
+        <TouchableOpacity style={styles.productCard} onPress={() => handlePickOtherProduct(p)} activeOpacity={0.7}>
+            <View style={{ position: 'absolute', top: 8, left: 8, backgroundColor: '#ffecb3', borderRadius: 8, paddingHorizontal: 6, paddingVertical: 2, zIndex: 1 }}>
+                <Text style={{ fontSize: 11, color: '#8d6e63', fontWeight: '600' }}>Kitur</Text>
+            </View>
 
+            <View style={styles.productImageContainer}>
+                {p.imageUrl ? (
+                    <Image source={{ uri: p.imageUrl }} style={styles.productImage} resizeMode="contain" />
+                ) : (
+                    <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
+                )}
+            </View>
+            <View style={styles.productInfo}>
+                <Text style={styles.productName} numberOfLines={3}>{p.productName}</Text>
+            </View>
+        </TouchableOpacity>
+    );
     const renderCreateCard = () => (
         <TouchableOpacity
             style={[
                 styles.productCard,
                 styles.createProductCard,
-                (creating || !canCreate) && styles.createProductCardDisabled,
+                !canCreate && styles.createProductCardDisabled,
             ]}
-            disabled={creating || !canCreate}
-            onPress={handleCreateProduct}
+            disabled={!canCreate}
+            onPress={() => setCreateModalVisible(true)}
             activeOpacity={0.8}
         >
             <View style={styles.productImageContainer}>
@@ -271,24 +297,50 @@ export default function ReceiptCategoryScreen() {
                         <FlatList<GridItem>
                             key="category-grid"
                             data={gridData}
-                            keyExtractor={(item, idx) =>
-                                item.kind === 'create' ? `create-${idx}` : `p-${item.data.id}-${idx}`
-                            }
+                            keyExtractor={(item, idx) => {
+                                if (item.kind === 'create') return `create-${idx}`;
+                                if (item.kind === 'local') return `local-${item.data.id}-${idx}`;
+                                return `other-${item.data.productId}-${idx}`;
+                            }}
                             contentContainerStyle={styles.list}
                             numColumns={2}
                             columnWrapperStyle={styles.row}
-                            renderItem={({ item }) =>
-                                item.kind === 'create' ? renderCreateCard() : renderProductCard(item.data)
-                            }
+                            renderItem={({ item }) => {
+                                if (item.kind === 'create') return renderCreateCard();
+                                if (item.kind === 'other') return renderOtherCard(item.data);
+                                return renderProductCard(item.data);
+                            }}
                         />
                     )}
-                    {products.length === 0 && (
+                    {localResults.length + otherResults.length === 0 && (
                         <View pointerEvents="none" style={styles.emptyOverlay}>
                             <Text style={styles.emptyOverlayText}>Ši kategorija neturi produktų</Text>
                         </View>
                     )}
                 </View>
             </View>
+            <CreateStoreProductModal
+                visible={createModalVisible}
+                onClose={() => setCreateModalVisible(false)}
+                chainId={Number(chainId)}
+                initialName={baseName}
+                initialCategoryId={Number.isFinite(createCategoryId) ? createCategoryId : null}
+                onCreated={(created: CreatedStoreProductPayload) => {
+                    setPendingPick({
+                        productIndex: Number(productIndex),
+                        storeProductId: created.storeProductId,
+                        productId: created.productId,
+                        storeProductName: created.storeProductName,
+                        imageUrl: created.imageUrl,
+                        amount: null,
+                        unit: null,
+                        priceVerified: true,
+                    });
+
+                    router.back();
+                    router.back();
+                }}
+            />
         </>
     );
 }
@@ -376,4 +428,5 @@ const styles = StyleSheet.create({
         color: '#9e9e9e',
         textAlign: 'center',
     },
+
 });

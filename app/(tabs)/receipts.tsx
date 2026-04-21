@@ -27,7 +27,6 @@ export default function ReceiptsScreen() {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
-  const [uploading, setUploading] = useState(false);
   const [lastUploadedId, setLastUploadedId] = useState<number | null>(null);
 
   const fetchReceipts = async (removePlaceholder = false) => {
@@ -37,12 +36,13 @@ export default function ReceiptsScreen() {
         `${API_BASE_URL}/api/users/${userId}/receipts`,
       );
       const data = await response.json();
+      const rows = Array.isArray(data) ? data : [];
       setReceipts((prev) => {
         const hasPlaceholder = prev.some((r) => r.id === -1);
         if (hasPlaceholder && !removePlaceholder) {
-          return [prev.find((r) => r.id === -1)!, ...data];
+          return [prev.find((r) => r.id === -1)!, ...rows];
         }
-        return data;
+        return rows;
       });
     } catch (error) {
       console.error("Failed to fetch receipts:", error);

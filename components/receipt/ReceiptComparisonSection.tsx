@@ -28,15 +28,25 @@ type Row = {
   isVisited: boolean;
 };
 
-const getInitials = (value: string) =>
-  value
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() || '')
-    .join('');
+const getInitials = (value?: string) => {
+  if (!value) return '';
+  return value.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('');
+};
 
 export default function ReceiptComparisonSection({ comparison, loading, error, summary }: Props) {
+  const progress = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    if (!comparison) return;
+    progress.setValue(0);
+    Animated.timing(progress, {
+      toValue: 1,
+      duration: 700,
+      easing: Easing.out(Easing.cubic),
+      useNativeDriver: false,
+    }).start();
+  }, [comparison, progress]);
+
   if (loading) {
     return (
       <View style={styles.sectionCard}>
@@ -48,17 +58,6 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
     );
   }
   if (!comparison) return null;
-  const progress = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    progress.setValue(0);
-    Animated.timing(progress, {
-      toValue: 1,
-      duration: 700,
-      easing: Easing.out(Easing.cubic),
-      useNativeDriver: false,
-    }).start();
-  }, [comparison, progress]);
 
   const rows: Row[] = [
     {
@@ -91,7 +90,11 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
   const productCount = summary?.productCount ?? comparison.summary.recognizedItems;
   const receiptDate = summary?.receiptDate || null;
   const comparedCount = comparison.summary.recognizedItems;
-  const totalCount = summary?.productCount ?? (comparison.summary.recognizedItems + comparison.summary.excludedItems);
+  const totalCount = summary?.productCount ?? (
+    comparison.summary.recognizedItems +
+    comparison.summary.unrecognizedItems +
+    comparison.summary.invalidItems
+  );
   const hasUnrecognized = comparedCount < totalCount;
   const formattedDate = (() => {
     if (!receiptDate) return null;

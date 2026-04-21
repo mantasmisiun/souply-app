@@ -17,6 +17,9 @@ import { useReceiptPickerState } from "../state/basketState";
 import { useBasketState } from '../state/basketState';
 import { addProductToBasket } from '../utils/basketUtils';
 import BasketProductCard from '../components/browse/BasketProductCard';
+import CreateStoreProductModal, {
+  CreatedStoreProductPayload,
+} from "../components/receipt/CreateStoreProductModal";
 
 type SearchMode = "products" | "store-products";
 
@@ -34,9 +37,21 @@ interface StoreProductRow {
   amount: number | null;
   unit: string | null;
   imageUrl: string | null;
+  chainLogoUrl?: string | null;
 }
 
-type StoreGridItem = StoreProductRow | { kind: "create" };
+interface OtherChainProductRow {
+  productId: number;
+  productName: string;
+  categoryId: number;
+  imageUrl: string | null;
+  sourceChainLogoUrl?: string | null;
+}
+
+type StoreGridItem =
+  | { kind: "local"; data: StoreProductRow }
+  | { kind: "other"; data: OtherChainProductRow }
+  | { kind: "create" };
 
 const safeDecode = (v?: string) => {
   try {
@@ -44,10 +59,6 @@ const safeDecode = (v?: string) => {
   } catch {
     return v ?? "";
   }
-};
-
-const isCreateRow = (item: StoreGridItem): item is { kind: "create" } => {
-  return (item as { kind?: string }).kind === "create";
 };
 
 export default function SearchScreen() {
@@ -63,29 +74,26 @@ export default function SearchScreen() {
     const { setPendingPick } = useReceiptPickerState();
     const { draftBasketId, setDraftBasketId } = useBasketState();
     const [basketQuantities, setBasketQuantities] = useState<Record<number, number>>({});
-
-  const chainId =
-    typeof params.chainId === "string" ? Number(params.chainId) : NaN;
-  const productIndex =
-    typeof params.productIndex === "string" ? Number(params.productIndex) : NaN;
-  const createCategoryId =
-    typeof params.createCategoryId === "string"
-      ? Number(params.createCategoryId)
-      : NaN;
-  const ocrName = safeDecode(
-    typeof params.ocrName === "string" ? params.ocrName : "",
-  ).trim();
-
+    const chainId =
+        typeof params.chainId === "string" ? Number(params.chainId) : NaN;
+    const productIndex =
+        typeof params.productIndex === "string" ? Number(params.productIndex) : NaN;
+    const createCategoryId =
+        typeof params.createCategoryId === "string"
+        ? Number(params.createCategoryId)
+        : NaN;
+    const ocrName = safeDecode(
+        typeof params.ocrName === "string" ? params.ocrName : "",
+    ).trim();
+    const [createModalVisible, setCreateModalVisible] = useState(false);
     const [query, setQuery] = useState("");
     const [searching, setSearching] = useState(false);
     const [inputKey, setInputKey] = useState(0);
-    const [creating, setCreating] = useState(false);
     const [productResults, setProductResults] = useState<ProductRow[]>([]);
-    const [storeResults, setStoreResults] = useState<StoreProductRow[]>([]);
     const source = typeof params.source === 'string' ? params.source : '';
     const isReceiptSource = source === 'receipt-index' || source === 'receipt-category';
-
-    // Only receipt routes can ever use store-products mode.
+    const [localResults, setLocalResults] = useState<StoreProductRow[]>([]);
+    const [otherResults, setOtherResults] = useState<OtherChainProductRow[]>([]);
     const effectiveMode: SearchMode =
     isReceiptSource && params.mode === 'store-products'
         ? 'store-products'
@@ -117,86 +125,135 @@ export default function SearchScreen() {
     router.back();
   };
     
+    useEffect(() => {
+        setLocalResults([]);
+        setOtherResults([]);
+        setProductResults([]);
+    }, [effectiveMode]);
 
-
-useEffect(() => {
-  setStoreResults([]);
-  setProductResults([]);
-}, [effectiveMode]);
-
-useEffect(() => {
-  const q = query.trim();
-  if (!q) {
-    setProductResults([]);
-    setStoreResults([]);
-    setSearching(false);
-    return;
-  }
-
-  let cancelled = false;
-  const timer = setTimeout(async () => {
-    try {
-      setSearching(true);
-
-      if (effectiveMode === "store-products") {
-        if (!Number.isFinite(chainId)) {
-          if (!cancelled) {
-            setStoreResults([]);
-            setProductResults([]);
-          }
-          return;
+    useEffect(() => {
+    const q = query.trim();
+        if (!q) {
+        setProductResults([]);
+        setLocalResults([]);
+        setOtherResults([]);
+        setSearching(false);
+        return;
         }
 
-        const res = await fetch(
-          `${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(q)}&chainId=${chainId}`
-        );
-        const data = await res.json();
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+        try {
+        setSearching(true);
+
+        if (effectiveMode === "store-products") {
+            if (!Number.isFinite(chainId)) {
+            if (!cancelled) {
+                setLocalResults([]);
+                setOtherResults([]);
+                setProductResults([]);
+            }
+            return;
+            }
+
+            const categoryPart =
+                Number.isFinite(createCategoryId) && createCategoryId > 0
+                    ? `&categoryId=${createCategoryId}`
+                    : "";
+
+                const res = await fetch(
+                `${API_BASE_URL}/api/store-products/search-unified?chainId=${chainId}&name=${encodeURIComponent(q)}${categoryPart}`
+                );
+                const data = await res.json();
+
+                if (!cancelled) {
+                setLocalResults(Array.isArray(data?.localStoreProducts) ? data.localStoreProducts : []);
+                setOtherResults(Array.isArray(data?.otherChainProducts) ? data.otherChainProducts : []);
+                setProductResults([]);
+                }
+        } else {
+            const res = await fetch(
+            `${API_BASE_URL}/api/products/search?q=${encodeURIComponent(q)}`
+            );
+            const data = await res.json();
+            const qLower = q.toLowerCase();
+
+            const cleaned: ProductRow[] = (Array.isArray(data) ? data : [])
+            .filter((p: any) =>
+                p &&
+                Number.isFinite(Number(p.id)) &&
+                Number(p.id) > 0 &&
+                Number.isFinite(Number(p.categoryId)) &&
+                Number(p.categoryId) > 0 &&
+                typeof p.name === "string" &&
+                p.name.trim().length > 0 &&
+                !(String(p.name).trim().toLowerCase() === qLower && !p.imageUrl)
+            )
+            .map((p: any) => ({
+                id: Number(p.id),
+                categoryId: Number(p.categoryId),
+                name: String(p.name).trim(),
+                imageUrl: p.imageUrl ?? null,
+            }));
 
         if (!cancelled) {
-          setStoreResults(Array.isArray(data) ? data : []);
-          setProductResults([]);
+                setProductResults(cleaned);
+                setLocalResults([]);
+                setOtherResults([]);
+                }
         }
-      } else {
-        const res = await fetch(
-          `${API_BASE_URL}/api/products/search?q=${encodeURIComponent(q)}`
-        );
-        const data = await res.json();
-        const qLower = q.toLowerCase();
-
-        const cleaned: ProductRow[] = (Array.isArray(data) ? data : [])
-          .filter((p: any) =>
-            p &&
-            Number.isFinite(Number(p.id)) &&
-            Number(p.id) > 0 &&
-            Number.isFinite(Number(p.categoryId)) &&
-            Number(p.categoryId) > 0 &&
-            typeof p.name === "string" &&
-            p.name.trim().length > 0 &&
-            !(String(p.name).trim().toLowerCase() === qLower && !p.imageUrl)
-          )
-          .map((p: any) => ({
-            id: Number(p.id),
-            categoryId: Number(p.categoryId),
-            name: String(p.name).trim(),
-            imageUrl: p.imageUrl ?? null,
-          }));
-
-        if (!cancelled) {
-          setProductResults(cleaned);
-          setStoreResults([]);
+        } finally {
+        if (!cancelled) setSearching(false);
         }
-      }
-    } finally {
-      if (!cancelled) setSearching(false);
-    }
-  }, 300);
+    }, 300);
 
-  return () => {
-    cancelled = true;
-    clearTimeout(timer);
-  };
-}, [query, effectiveMode, chainId]);
+    return () => {
+        cancelled = true;
+        clearTimeout(timer);
+    };
+    }, [query, effectiveMode, chainId]);
+    const handlePickOtherProduct = async (p: OtherChainProductRow) => {
+    if (!Number.isFinite(chainId) || !Number.isFinite(productIndex)) return;
 
+    Alert.alert(
+        "Kitur rastas produktas",
+        `Pridėti „${p.productName}“ į šios parduotuvės sąrašą?`,
+        [
+        { text: "Atšaukti", style: "cancel" },
+        {
+            text: "Pridėti",
+            onPress: async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/store-products`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    productId: p.productId,
+                    chainId,
+                    storeProductName: p.productName,
+                }),
+                });
+                const created = await res.json();
+                if (!res.ok || !created?.id) throw new Error("Nepavyko sukurti StoreProduct");
+
+                setPendingPick({
+                productIndex: Number(productIndex),
+                storeProductId: created.id,
+                productId: p.productId,
+                storeProductName: p.productName,
+                imageUrl: p.imageUrl ?? null,
+                amount: null,
+                unit: null,
+                });
+                closeAfterReceiptPick();
+            } catch (e: any) {
+                Alert.alert("Klaida", e?.message || "Nepavyko pridėti produkto");
+            }
+            },
+        },
+        ]
+    );
+    };
   const handlePickStoreProduct = (sp: StoreProductRow) => {
     if (!Number.isFinite(productIndex)) {
       router.back();
@@ -214,73 +271,14 @@ useEffect(() => {
     closeAfterReceiptPick();
   };
 
-  const handleCreateStoreProduct = async () => {
-    const draftName = (query.trim() || ocrName).trim();
-    if (!draftName) {
-      Alert.alert("Trūksta pavadinimo", "Įveskite produkto pavadinimą.");
-      return;
-    }
-    if (!canCreateInStoreMode) {
-      Alert.alert("Klaida", "Šioje vietoje produkto kūrimas negalimas.");
-      return;
-    }
-    if (!Number.isFinite(productIndex)) {
-      Alert.alert("Klaida", "Nerastas redaguojamas kvito produktas.");
-      return;
-    }
-
-    try {
-      setCreating(true);
-
-      const pRes = await fetch(`${API_BASE_URL}/api/products`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ categoryId: createCategoryId, name: draftName }),
-      });
-      const pData = await pRes.json();
-      if (!pRes.ok || !pData?.id)
-        throw new Error(pData?.error || "Nepavyko sukurti produkto");
-
-      const spRes = await fetch(`${API_BASE_URL}/api/store-products`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          productId: pData.id,
-          chainId,
-          storeProductName: draftName,
-        }),
-      });
-      const spData = await spRes.json();
-      if (!spRes.ok || !spData?.id)
-        throw new Error(
-          spData?.error || "Nepavyko sukurti parduotuvės produkto",
-        );
-
-      setPendingPick({
-        productIndex: Number(productIndex),
-        storeProductId: spData.id,
-        productId: pData.id,
-        storeProductName: draftName,
-        imageUrl: null,
-        amount: null,
-        unit: null,
-      });
-
-      closeAfterReceiptPick();
-    } catch (e: any) {
-      Alert.alert("Klaida", e?.message || "Nepavyko sukurti produkto");
-    } finally {
-      setCreating(false);
-    }
-  };
-
-  const storeGridData = useMemo<StoreGridItem[]>(
-    () =>
-      canCreateInStoreMode
-        ? [...storeResults, { kind: "create" }]
-        : storeResults,
-    [storeResults, canCreateInStoreMode],
-  );
+    const storeGridData = useMemo<StoreGridItem[]>(() => {
+    const items: StoreGridItem[] = [
+        ...localResults.map((r): StoreGridItem => ({ kind: "local", data: r })),
+        ...otherResults.map((r): StoreGridItem => ({ kind: "other", data: r })),
+    ];
+    if (canCreateInStoreMode) items.push({ kind: "create" });
+    return items;
+    }, [localResults, otherResults, canCreateInStoreMode]);
 
   const renderStoreCard = (sp: StoreProductRow) => (
     <TouchableOpacity
@@ -312,9 +310,46 @@ useEffect(() => {
     </TouchableOpacity>
   );
 
+  const renderOtherCard = (p: OtherChainProductRow) => (
+  <TouchableOpacity
+    style={styles.productCard}
+    onPress={() => handlePickOtherProduct(p)}
+    activeOpacity={0.7}
+  >
+    <View
+      style={{
+        position: "absolute",
+        top: 8,
+        left: 8,
+        backgroundColor: "#ffecb3",
+        borderRadius: 8,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        zIndex: 1,
+      }}
+    >
+      <Text style={{ fontSize: 11, color: "#8d6e63", fontWeight: "600" }}>Kitur</Text>
+    </View>
+
+    <View style={styles.productImageContainer}>
+      {p.imageUrl ? (
+        <Image source={{ uri: p.imageUrl }} style={styles.productImage} resizeMode="contain" />
+      ) : (
+        <Ionicons name="cube-outline" size={40} color="#e0e0e0" />
+      )}
+    </View>
+
+    <View style={styles.productInfo}>
+      <Text style={styles.productName} numberOfLines={3}>
+        {p.productName}
+      </Text>
+    </View>
+  </TouchableOpacity>
+);
+
   const renderCreateCard = () => {
     const draftName = (query.trim() || ocrName).trim();
-    const disabled = creating || !draftName || !canCreateInStoreMode;
+    const disabled = !canCreateInStoreMode;
     return (
       <TouchableOpacity
         style={[
@@ -323,7 +358,7 @@ useEffect(() => {
           disabled && styles.createProductCardDisabled,
         ]}
         disabled={disabled}
-        onPress={handleCreateStoreProduct}
+        onPress={() => setCreateModalVisible(true)}
         activeOpacity={0.8}
       >
         <View style={styles.productImageContainer}>
@@ -385,9 +420,11 @@ useEffect(() => {
           <FlatList<StoreGridItem>
             key="store-products-search-grid"
             data={storeGridData}
-            keyExtractor={(item, idx) =>
-              isCreateRow(item) ? `create-${idx}` : `sp-${item.id}-${idx}`
-            }
+            keyExtractor={(item, idx) => {
+                if (item.kind === "create") return `create-${idx}`;
+                if (item.kind === "local") return `local-${item.data.id}-${idx}`;
+                return `other-${item.data.productId}-${idx}`;
+            }}
             contentContainerStyle={styles.list}
             numColumns={2}
             columnWrapperStyle={styles.row}
@@ -396,9 +433,11 @@ useEffect(() => {
                 {query.trim() ? "Produktų nerasta" : "Įveskite paieškos tekstą"}
               </Text>
             }
-            renderItem={({ item }) =>
-            isCreateRow(item) ? renderCreateCard() : renderStoreCard(item)
-            }
+            renderItem={({ item }) => {
+                if (item.kind === "create") return renderCreateCard();
+                if (item.kind === "other") return renderOtherCard(item.data);
+                return renderStoreCard(item.data);
+            }}
           />
         ) : (
           <FlatList<ProductRow>
@@ -462,6 +501,29 @@ useEffect(() => {
           />
         )}
       </View>
+      <CreateStoreProductModal
+        visible={createModalVisible}
+        onClose={() => setCreateModalVisible(false)}
+        chainId={chainId}
+        initialName={query.trim() || ocrName}
+        initialCategoryId={Number.isFinite(createCategoryId) ? createCategoryId : null}
+        onCreated={(created: CreatedStoreProductPayload) => {
+          if (!Number.isFinite(productIndex)) {
+            throw new Error("Nerastas redaguojamas kvito produktas.");
+          }
+          setPendingPick({
+            productIndex: Number(productIndex),
+            storeProductId: created.storeProductId,
+            productId: created.productId,
+            storeProductName: created.storeProductName,
+            imageUrl: created.imageUrl,
+            amount: null,
+            unit: null,
+            priceVerified: true,
+          });
+          closeAfterReceiptPick();
+        }}
+      />
     </>
   );
 }

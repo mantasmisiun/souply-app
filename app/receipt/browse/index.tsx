@@ -131,14 +131,14 @@ export default function ReceiptBrowseIndex() {
                                                     style={styles.l2Row}
                                                     onPress={() => router.push({
                                                         pathname: `/receipt/browse/[categoryId]`,
-                                                        params: {
-                                                            categoryId: String(cat.id),
-                                                            name: cat.name,
-                                                            chainId,
-                                                            productIndex,
-                                                            ocrName,
-                                                        },
-                                                    })}
+                                                         params: {
+                                                             categoryId: String(cat.id),
+                                                             name: cat.name,
+                                                             chainId,
+                                                             productIndex,
+                                                             ocrName,
+                                                         },
+                                                     })}
                                                 >
                                                     <Text style={styles.l2Text}>{cat.name}</Text>
                                                     <Ionicons name="chevron-forward" size={18} color="#9e9e9e" />
