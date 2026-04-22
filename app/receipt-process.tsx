@@ -1750,6 +1750,31 @@ export default function ProcessReceiptScreen() {
           }}
         />
 
+        {/* Swipe-to-help entry point. Only shown once the receipt is persisted
+            (receiptId is set) and there's at least one product to potentially
+            validate. Preview mode never persists, so this never appears there. */}
+        {receiptId && products.length > 0 && (
+          <TouchableOpacity
+            style={styles.swipeEntryCard}
+            activeOpacity={0.85}
+            onPress={() =>
+              router.push({
+                pathname: "/receipt/swipe/[id]",
+                params: { id: String(receiptId) },
+              })
+            }
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.swipeEntryCount}>
+                Atpažintos prekės{" "}
+                {products.filter((p) => p.matchConfirmed).length} / {products.length}
+              </Text>
+              <Text style={styles.swipeEntryCta}>Padėk atpažinti</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={22} color={colors.onPrimary} />
+          </TouchableOpacity>
+        )}
+
         {editingSection === "header" &&
           header?.region &&
           pageMetas.length > 0 && (
@@ -2187,6 +2212,34 @@ export default function ProcessReceiptScreen() {
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
+  swipeEntryCard: {
+    marginTop: 12,
+    marginHorizontal: 16,
+    backgroundColor: c.primary,
+    borderRadius: 14,
+    paddingVertical: 14,
+    paddingHorizontal: 18,
+    flexDirection: "row",
+    alignItems: "center",
+    shadowColor: c.primaryShadow,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  swipeEntryCount: {
+    color: c.onPrimary,
+    opacity: 0.9,
+    fontSize: 12,
+    fontWeight: "600",
+    letterSpacing: 0.5,
+  },
+  swipeEntryCta: {
+    color: c.onPrimary,
+    fontSize: 17,
+    fontWeight: "700",
+    marginTop: 2,
+  },
   processingOverlay: {
     position: "absolute",
     top: 0,
