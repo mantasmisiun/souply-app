@@ -75,7 +75,12 @@ export default function SwipeScreen() {
   const [rankIdx, setRankIdx] = useState(0);
   const [undoVisible, setUndoVisible] = useState(false);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const lastSnapshotRef = useRef<{ itemIdx: number; rankIdx: number } | null>(null);
+  const lastSnapshotRef = useRef<{
+    itemIdx: number;
+    rankIdx: number;
+    receiptLineIdx: number;
+    candidateStoreProductId: number;
+  } | null>(null);
   const cardShownAtRef = useRef<number>(Date.now());
   const userIdRef = useRef<string | null>(null);
 
@@ -143,7 +148,12 @@ export default function SwipeScreen() {
     const cand = currentCandidate;
     if (!item || !cand) return;
 
-    lastSnapshotRef.current = { itemIdx, rankIdx };
+    lastSnapshotRef.current = {
+      itemIdx,
+      rankIdx,
+      receiptLineIdx: item.receiptLineIdx,
+      candidateStoreProductId: cand.storeProductId,
+    };
     setUndoVisible(true);
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     undoTimerRef.current = setTimeout(() => setUndoVisible(false), 3000);
@@ -170,14 +180,34 @@ export default function SwipeScreen() {
     cardShownAtRef.current = Date.now();
   };
 
-  const handleUndo = () => {
-    if (!lastSnapshotRef.current) return;
-    setItemIdx(lastSnapshotRef.current.itemIdx);
-    setRankIdx(lastSnapshotRef.current.rankIdx);
+  const handleUndo = async () => {
+    const snap = lastSnapshotRef.current;
+    if (!snap) return;
+    setItemIdx(snap.itemIdx);
+    setRankIdx(snap.rankIdx);
     setUndoVisible(false);
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
     lastSnapshotRef.current = null;
     cardShownAtRef.current = Date.now();
+
+    // Fire-and-forget: reverse the vote on the backend so the vote ledger
+    // + Product merges + Price.isVerified all roll back to pre-swipe state.
+    const userId = userIdRef.current ?? (await getUserId());
+    userIdRef.current = userId;
+    try {
+      await fetch(`${API_BASE_URL}/api/swipe-votes/undo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          receiptId,
+          receiptLineIdx: snap.receiptLineIdx,
+          candidateStoreProductId: snap.candidateStoreProductId,
+        }),
+      });
+    } catch (e) {
+      console.warn("Undo POST failed:", e);
+    }
   };
 
   const pan = Gesture.Pan()
