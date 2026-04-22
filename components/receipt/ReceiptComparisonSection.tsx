@@ -60,7 +60,38 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
       </View>
     );
   }
-  if (!comparison) return null;
+  // No comparison yet (e.g. preview mode, which never POSTs the receipt so
+  // no comparison is ever fetched). Still surface the store-recognition
+  // header if we have summary info, otherwise there's nothing to show.
+  if (!comparison) {
+    if (!summary?.shopName && !summary?.shopAddress) return null;
+    const previewDate = (() => {
+      if (!summary.receiptDate) return null;
+      const raw = String(summary.receiptDate).trim();
+      const dateOnly = raw.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? raw;
+      const d = new Date(dateOnly);
+      if (Number.isNaN(d.getTime())) return dateOnly;
+      return d.toLocaleDateString("lt-LT");
+    })();
+    return (
+      <View style={[styles.sectionCard, styles.heroCard]}>
+        <View style={styles.shopRow}>
+          <View style={styles.shopNameWrap}>
+            <Text style={styles.shopName}>
+              {summary.shopName || "Neatpažinta parduotuvė"}
+            </Text>
+            {!!summary.storeRecognized && (
+              <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+            )}
+          </View>
+          {!!previewDate && <Text style={styles.topDate}>{previewDate}</Text>}
+        </View>
+        {!!summary.shopAddress && (
+          <Text style={styles.shopAddress}>{summary.shopAddress}</Text>
+        )}
+      </View>
+    );
+  }
 
   const rows: Row[] = [
     {

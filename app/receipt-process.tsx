@@ -25,6 +25,14 @@ import {
     useReceiptPickerState,
 } from "../state/basketState";
 import {
+    isMaximaReceipt,
+    parseMaximaHeaderOnly,
+    parseMaximaReceipt,
+    type MaximaFooter,
+    type MaximaHeader,
+    type MaximaProduct,
+} from "../utils/maximaParser";
+import {
     isRimiReceipt,
     parseRimiHeaderOnly,
     parseRimiReceipt,
@@ -89,10 +97,28 @@ interface FooterData {
   region: Region;
 }
 
+/**
+ * Per-page OCR context needed to render RegionPreview correctly for both
+ * single-image scans and multi-page PDFs. Regions carry yTop/yBottom in the
+ * merged-scaled OCR space; this maps them back to page-local image pixels.
+ */
+interface PageMeta {
+  uri: string;
+  pixelWidth: number;
+  pixelHeight: number;
+  /** scale applied to MLKit coords when populating lines/regions */
+  frameScale: number;
+  /** start of this page in merged-y space */
+  yOffsetScaled: number;
+  /** how much merged-y this page occupies (excludes +50 buffer) */
+  pageMaxYScaled: number;
+  /** horizontal bounds of the receipt text on this page, in merged/scaled space */
+  receiptXLeftScaled: number;
+  receiptXRightScaled: number;
+}
+
 interface RegionPreviewProps {
-  imageUri: string;
-  imageWidth: number;
-  imageHeight: number;
+  pages: PageMeta[];
   region: Region;
   cardWidth: number;
 }
@@ -101,35 +127,66 @@ type AsyncStatus = "idle" | "pending" | "done" | "error";
 
 const CARD_WIDTH = Dimensions.get("window").width - 32 - 32;
 
-function RegionPreview({
-  imageUri,
-  imageWidth,
-  imageHeight,
-  region,
-  cardWidth,
-}: RegionPreviewProps) {
-  if (region.yBottom <= region.yTop || region.xRight <= region.xLeft)
-    return null;
+function RegionPreview({ pages, region, cardWidth }: RegionPreviewProps) {
+  if (region.yBottom <= region.yTop) return null;
+  if (pages.length === 0) return null;
 
-  const scale = cardWidth / imageWidth;
-  const regionHeight = region.yBottom - region.yTop;
-  const displayHeight = regionHeight * scale;
+  // Pick the page that contains region.yTop; fall back to last page if beyond range.
+  let pageIdx = 0;
+  let page: PageMeta = pages[0];
+  for (let i = 0; i < pages.length; i++) {
+    const p = pages[i];
+    if (
+      region.yTop >= p.yOffsetScaled &&
+      region.yTop < p.yOffsetScaled + p.pageMaxYScaled + 50
+    ) {
+      page = p;
+      pageIdx = i;
+      break;
+    }
+    page = p;
+    pageIdx = i;
+  }
+
+  // region.yTop and page.receiptXLeftScaled are ALREADY in image-pixel space
+  // (scaleY was applied at OCR time), so no further division by frameScale.
+  const localYPixelTop = region.yTop - page.yOffsetScaled;
+  const localYPixelBottom = Math.min(
+    region.yBottom - page.yOffsetScaled,
+    page.pageMaxYScaled,
+  );
+
+  console.log(
+    `[RegionPreview] region yTop=${Math.round(region.yTop)} yBot=${Math.round(region.yBottom)} -> page ${pageIdx + 1}/${pages.length} (yOffset=${Math.round(page.yOffsetScaled)}, maxY=${Math.round(page.pageMaxYScaled)}, pxH=${page.pixelHeight}), localY=[${Math.round(localYPixelTop)}..${Math.round(localYPixelBottom)}]`,
+  );
+
+  // Horizontal viewport = receipt text bounds (skips A4 whitespace on PDF receipts).
+  const pad = 20;
+  const receiptLeftPx = Math.max(0, page.receiptXLeftScaled - pad);
+  const receiptRightPx = Math.min(
+    page.pixelWidth,
+    page.receiptXRightScaled + pad,
+  );
+  const viewWidthPx = Math.max(1, receiptRightPx - receiptLeftPx);
+  const scale = cardWidth / viewWidthPx;
+  const regionHeightPx = Math.max(1, localYPixelBottom - localYPixelTop);
 
   return (
     <View
       style={{
         width: cardWidth,
-        height: displayHeight,
+        height: regionHeightPx * scale,
         overflow: "hidden",
         borderRadius: 6,
       }}
     >
       <Image
-        source={{ uri: imageUri }}
+        source={{ uri: page.uri }}
         style={{
-          width: imageWidth * scale,
-          height: imageHeight * scale,
-          marginTop: -region.yTop * scale,
+          width: page.pixelWidth * scale,
+          height: page.pixelHeight * scale,
+          marginLeft: -receiptLeftPx * scale,
+          marginTop: -localYPixelTop * scale,
         }}
         resizeMode="cover"
       />
@@ -164,12 +221,31 @@ function buildParsedData(
 }
 
 export default function ProcessReceiptScreen() {
-  const { uri, receiptId: receiptIdParam } = useLocalSearchParams<{
+  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam } = useLocalSearchParams<{
     uri?: string;
+    uris?: string;
     receiptId?: string;
+    preview?: string;
   }>();
   const existingReceiptId = receiptIdParam ? Number(receiptIdParam) : null;
   const isExistingMode = Number.isFinite(existingReceiptId);
+
+  // `uris` (comma-separated) is used for multi-page PDF receipts where each
+  // page is OCR'd separately; `uri` stays for the single-image cases.
+  const imageUriList = useMemo<string[]>(() => {
+    if (urisParam) {
+      return urisParam
+        .split(",")
+        .map((u) => decodeURIComponent(u.trim()))
+        .filter((u) => u.length > 0);
+    }
+    if (uri) return [decodeURIComponent(uri)];
+    return [];
+  }, [uri, urisParam]);
+  // Preview mode: OCR + parsing populate the UI, but nothing is POSTed to
+  // the API. No receiptId ever set, no MinIO upload, no comparison fetch.
+  // Used for iterating on parser accuracy without cluttering the database.
+  const isPreviewMode = previewParam === "true";
   const router = useRouter();
   const navigation = useNavigation();
   const colors = useTheme();
@@ -189,6 +265,9 @@ export default function ProcessReceiptScreen() {
     width: number;
     height: number;
   } | null>(null);
+  // Per-page metadata for RegionPreview (multi-page PDFs + horizontal
+  // receipt-area crop to skip A4 whitespace).
+  const [pageMetas, setPageMetas] = useState<PageMeta[]>([]);
   const { pendingPick, clearPendingPick } = useReceiptPickerState();
   const setCreateContext = useReceiptCreateContext((s) => s.setContext);
   const [productsExpanded, setProductsExpanded] = useState(false);
@@ -451,17 +530,36 @@ export default function ProcessReceiptScreen() {
           const parsedWidth = Number(parsed?.image?.width);
           const parsedHeight = Number(parsed?.image?.height);
 
+          const applyDims = (w: number, h: number) => {
+            setImageDims({ width: w, height: h });
+            // Existing receipts are saved as a single image; saved region
+            // coords are in that image's pixel space, so frameScale=1 and
+            // the full image width is used as the horizontal viewport.
+            setPageMetas([
+              {
+                uri: imageData.url,
+                pixelWidth: w,
+                pixelHeight: h,
+                frameScale: 1,
+                yOffsetScaled: 0,
+                pageMaxYScaled: h,
+                receiptXLeftScaled: 0,
+                receiptXRightScaled: w,
+              },
+            ]);
+          };
+
           if (
             Number.isFinite(parsedWidth) &&
             Number.isFinite(parsedHeight) &&
             parsedWidth > 0 &&
             parsedHeight > 0
           ) {
-            setImageDims({ width: parsedWidth, height: parsedHeight });
+            applyDims(parsedWidth, parsedHeight);
           } else {
             Image.getSize(
               imageData.url,
-              (width, height) => setImageDims({ width, height }),
+              (width, height) => applyDims(width, height),
               () => {},
             );
           }
@@ -530,12 +628,11 @@ export default function ProcessReceiptScreen() {
       return;
     }
 
-    if (uri) {
-      const decoded = decodeURIComponent(uri);
-      setImageUri(decoded);
-      processReceipt(decoded);
+    if (imageUriList.length > 0) {
+      setImageUri(imageUriList[0]); // first page used for region previews
+      processReceipt(imageUriList);
     }
-  }, [uri, isExistingMode, existingReceiptId]);
+  }, [imageUriList, isExistingMode, existingReceiptId]);
 
   // Apply user's manual pick from the category browser
   useEffect(() => {
@@ -610,12 +707,13 @@ export default function ProcessReceiptScreen() {
 
   useEffect(() => {
     if (isExistingMode) return;
+    if (isPreviewMode) return; // preview: skip receipt creation
     if (hasPostedRef.current) return;
     if (!header || !footer) return;
     if (header.matchLoading) return;
     hasPostedRef.current = true;
     runPost();
-  }, [header, footer, products]);
+  }, [header, footer, products, isPreviewMode]);
 
   const retryPost = () => {
     hasPostedRef.current = true;
@@ -665,10 +763,11 @@ export default function ProcessReceiptScreen() {
   };
 
   useEffect(() => {
+    if (isPreviewMode) return; // preview: skip MinIO upload + PATCH
     if (!imageUri || !receiptId || imageFilePath) return;
     if (uploadStatus === "pending" || uploadStatus === "error") return;
     runUpload();
-  }, [imageUri, receiptId, imageFilePath]);
+  }, [imageUri, receiptId, imageFilePath, isPreviewMode]);
 
   const retryUpload = () => {
     runUpload();
@@ -682,6 +781,7 @@ export default function ProcessReceiptScreen() {
 
   // Step 3: debounced PUT on any parsedData change
   useEffect(() => {
+    if (isPreviewMode) return; // preview: no PUT / no save
     if (!receiptId) return; // POST hasn't completed yet
     if (!header || !footer) return;
     if (isHydratingRef.current) return;
@@ -863,45 +963,10 @@ export default function ProcessReceiptScreen() {
     }
   };
 
-  const processReceipt = async (imageUri: string) => {
+  const processReceipt = async (imageUris: string[]) => {
     try {
       setLoading(true);
       setLoadingMessage("Atpažįstamas tekstas...");
-
-      const dims = await new Promise<{ width: number; height: number }>(
-        (resolve, reject) => {
-          Image.getSize(
-            imageUri,
-            (width, height) => resolve({ width, height }),
-            reject,
-          );
-        },
-      );
-      setImageDims(dims);
-
-      const result = await TextRecognition.recognize(imageUri);
-
-      let mlkitMaxX = 0,
-        mlkitMaxY = 0;
-      for (const block of result.blocks) {
-        for (const line of block.lines) {
-          if (line.frame) {
-            mlkitMaxX = Math.max(mlkitMaxX, line.frame.left + line.frame.width);
-            mlkitMaxY = Math.max(mlkitMaxY, line.frame.top + line.frame.height);
-          }
-        }
-      }
-
-      const scaleX = dims.width / mlkitMaxX;
-      const scaleY = dims.height / mlkitMaxY;
-      const frameScale = (scaleX + scaleY) / 2;
-
-      console.log("=== COORDINATE NORMALIZATION ===");
-      console.log(`Image dims: ${dims.width} x ${dims.height}`);
-      console.log(`MLKit max: ${mlkitMaxX} x ${mlkitMaxY}`);
-      console.log(
-        `Scale X: ${scaleX.toFixed(3)}, Y: ${scaleY.toFixed(3)}, using: ${frameScale.toFixed(3)}`,
-      );
 
       interface LineWithFrame {
         text: string;
@@ -912,19 +977,141 @@ export default function ProcessReceiptScreen() {
       }
 
       const allLines: LineWithFrame[] = [];
-      for (const block of result.blocks) {
-        for (const line of block.lines) {
-          if (line.frame && line.text.trim()) {
-            allLines.push({
-              text: line.text.trim(),
-              yTop: line.frame.top * frameScale,
-              yBottom: (line.frame.top + line.frame.height) * frameScale,
-              xLeft: line.frame.left * frameScale,
-              xRight: (line.frame.left + line.frame.width) * frameScale,
-            });
+      let combinedFrameScale = 1;
+      let yOffset = 0; // running accumulator across pages in Image-pixel space
+      let firstPageDims: { width: number; height: number } | null = null;
+      const collectedPageMetas: PageMeta[] = [];
+
+      for (let pageIdx = 0; pageIdx < imageUris.length; pageIdx++) {
+        const pageUri = imageUris[pageIdx];
+
+        const pageDims = await new Promise<{ width: number; height: number }>(
+          (resolve, reject) => {
+            Image.getSize(
+              pageUri,
+              (width, height) => resolve({ width, height }),
+              reject,
+            );
+          },
+        );
+        if (pageIdx === 0) firstPageDims = pageDims;
+
+        const pageResult = await TextRecognition.recognize(pageUri);
+
+        let mlkitMaxX = 0;
+        let mlkitMaxY = 0;
+        for (const block of pageResult.blocks) {
+          for (const line of block.lines) {
+            if (line.frame) {
+              mlkitMaxX = Math.max(mlkitMaxX, line.frame.left + line.frame.width);
+              mlkitMaxY = Math.max(mlkitMaxY, line.frame.top + line.frame.height);
+            }
           }
         }
+
+        const scaleX = mlkitMaxX > 0 ? pageDims.width / mlkitMaxX : 1;
+        const scaleY = mlkitMaxY > 0 ? pageDims.height / mlkitMaxY : 1;
+        // Android's BitmapFactory auto-downsamples large bitmaps by a power
+        // of 2 before handing them to Image.getSize, while MLKit reads the
+        // full-resolution file. So the true MLKit→pixel scale is always a
+        // simple fraction (1, 1/2, 1/4, 1/8). We estimate from the tightest
+        // axis (whichever text fills more fully) then round to the nearest
+        // fraction — otherwise the few-percent drift from text not quite
+        // reaching the page edge shifts every region ~1 text line down.
+        const estimatedScale = Math.min(1, scaleX, scaleY);
+        const roundedInv = Math.max(
+          1,
+          Math.min(8, Math.round(1 / estimatedScale)),
+        );
+        const frameScale = 1 / roundedInv;
+        if (pageIdx === 0) combinedFrameScale = frameScale;
+
+        console.log(`=== PAGE ${pageIdx + 1}/${imageUris.length} ===`);
+        console.log(`Image dims: ${pageDims.width} x ${pageDims.height}`);
+        console.log(`MLKit max: ${mlkitMaxX} x ${mlkitMaxY}`);
+        console.log(
+          `Scale X: ${scaleX.toFixed(3)}, Y: ${scaleY.toFixed(3)}, using: ${frameScale.toFixed(3)}, yOffset: ${yOffset.toFixed(0)}`,
+        );
+
+        let pageMaxYScaled = 0;
+        const pageLineBounds: { l: number; r: number }[] = [];
+        for (const block of pageResult.blocks) {
+          for (const line of block.lines) {
+            if (line.frame && line.text.trim()) {
+              const yTopScaled = line.frame.top * frameScale;
+              const yBottomScaled = (line.frame.top + line.frame.height) * frameScale;
+              const xLeftScaled = line.frame.left * frameScale;
+              const xRightScaled = (line.frame.left + line.frame.width) * frameScale;
+              if (yBottomScaled > pageMaxYScaled) pageMaxYScaled = yBottomScaled;
+              pageLineBounds.push({ l: xLeftScaled, r: xRightScaled });
+              allLines.push({
+                text: line.text.trim(),
+                yTop: yTopScaled + yOffset,
+                yBottom: yBottomScaled + yOffset,
+                xLeft: xLeftScaled,
+                xRight: xRightScaled,
+              });
+            }
+          }
+        }
+
+        // Receipt horizontal bounds via text-density histogram.
+        // Percentile bounds fail when many "edge" lines (dividers, logos,
+        // multi-line address text) reach close to the page edge — their
+        // count exceeds the percentile cutoff and the crop degrades to full
+        // width. Instead: bucket x into 20-px bins, count how many lines
+        // cover each bin, keep bins with >=8% of peak coverage, and take
+        // the outermost kept bins as the receipt column.
+        // Histogram domain = pixel-space width (pageDims.width), which is
+        // the same space `l`/`r` live in (frameScale was already applied).
+        const BIN = 20;
+        const nBins = Math.max(1, Math.ceil(pageDims.width / BIN));
+        const hist = new Array(nBins).fill(0);
+        for (const { l, r } of pageLineBounds) {
+          const lo = Math.max(0, Math.floor(l / BIN));
+          const hi = Math.min(nBins - 1, Math.floor((Math.max(l, r - 1)) / BIN));
+          for (let b = lo; b <= hi; b++) hist[b]++;
+        }
+        const peak = hist.reduce((m, v) => Math.max(m, v), 0);
+        const densityThresh = Math.max(1, peak * 0.08);
+        let leftBin = 0;
+        while (leftBin < nBins && hist[leftBin] < densityThresh) leftBin++;
+        let rightBin = nBins - 1;
+        while (rightBin >= 0 && hist[rightBin] < densityThresh) rightBin--;
+        let receiptXLeftScaled = leftBin * BIN;
+        let receiptXRightScaled = (rightBin + 1) * BIN;
+        if (receiptXRightScaled <= receiptXLeftScaled) {
+          receiptXLeftScaled = 0;
+          receiptXRightScaled = pageDims.width;
+        }
+        console.log(
+          `PAGE ${pageIdx + 1} receipt x-bounds (pixels): left=${Math.round(receiptXLeftScaled)}, right=${Math.round(receiptXRightScaled)}, pageW=${pageDims.width}, yExtent=${Math.round(pageMaxYScaled)}, yOffset=${Math.round(yOffset)}, peak=${peak}`,
+        );
+
+        collectedPageMetas.push({
+          uri: pageUri,
+          pixelWidth: pageDims.width,
+          pixelHeight: pageDims.height,
+          frameScale,
+          yOffsetScaled: yOffset,
+          pageMaxYScaled,
+          receiptXLeftScaled,
+          receiptXRightScaled,
+        });
+
+        // Offset subsequent pages by the actual scaled content extent of this
+        // page (not pageDims.height, which can report a decoder-sampled size
+        // smaller than the real MLKit coordinate space, causing pages to
+        // overlap during merging). +50 px buffer to keep last-line-of-page-N
+        // safely separated from first-line-of-page-N+1.
+        yOffset += pageMaxYScaled + 50;
       }
+
+      setPageMetas(collectedPageMetas);
+
+      const dims = firstPageDims ?? { width: 0, height: 0 };
+      setImageDims(dims);
+      const frameScale = combinedFrameScale;
       allLines.sort((a, b) => a.yTop - b.yTop);
 
       const mergedLines: LineWithFrame[] = [];
@@ -980,6 +1167,25 @@ export default function ProcessReceiptScreen() {
 
         const parsed = parseRimiReceipt(mergedLines);
         await applyRimiResult(parsed.header, parsed.products, parsed.footer);
+      } else if (isMaximaReceipt(lineTexts)) {
+        const earlyHeader = parseMaximaHeaderOnly(mergedLines);
+        setHeader({
+          chainName: "MAXIMA",
+          chainId: 1,
+          storeCode: earlyHeader.storeCode,
+          storeAddress: earlyHeader.storeAddress,
+          storeId: null,
+          storeName: null,
+          storeAddressMatched: null,
+          matchConfidence: null,
+          matchLoading: true,
+          rawText: earlyHeader.rawText,
+          region: earlyHeader.region,
+        });
+        setLoading(false);
+
+        const parsed = parseMaximaReceipt(mergedLines);
+        await applyMaximaResult(parsed.header, parsed.products, parsed.footer);
       } else {
         applyGenericResult(lineTexts);
         setLoading(false);
@@ -1090,6 +1296,103 @@ export default function ProcessReceiptScreen() {
     });
   };
 
+  const applyMaximaResult = async (
+    mHeader: MaximaHeader,
+    mProducts: MaximaProduct[],
+    mFooter: MaximaFooter,
+  ) => {
+    const chainId = 1;
+
+    let storeId: number | null = null;
+    let storeName: string | null = null;
+    let storeAddressMatched: string | null = null;
+    let matchConfidence: number | null = null;
+
+    if (mHeader.storeAddress) {
+      try {
+        const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(mHeader.storeAddress)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data?.match) {
+          storeId = data.match.storeId;
+          storeName = data.match.storeName;
+          storeAddressMatched = data.match.address;
+          matchConfidence = data.match.confidence;
+        }
+      } catch (e) {
+        console.warn("Store match failed:", e);
+      }
+    }
+
+    setHeader({
+      chainName: "MAXIMA",
+      chainId,
+      storeCode: mHeader.storeCode,
+      storeAddress: mHeader.storeAddress,
+      storeId,
+      storeName,
+      storeAddressMatched,
+      matchConfidence,
+      matchLoading: false,
+      rawText: mHeader.rawText,
+      region: mHeader.region,
+    });
+
+    const AUTO_APPLY_THRESHOLD = 0.85;
+
+    const matchPromises = mProducts.map(async (mp) => {
+      let altMatches: ProductMatchOption[] = [];
+
+      try {
+        const params = new URLSearchParams({
+          chainId: String(chainId),
+          name: mp.name,
+        });
+        const res = await fetch(
+          `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
+        );
+        const data = await res.json();
+        if (Array.isArray(data?.matches)) altMatches = data.matches;
+      } catch (e) {
+        console.warn(`Product match failed for "${mp.name}":`, e);
+      }
+
+      const top = altMatches[0] || null;
+      const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
+
+      return {
+        name: mp.name,
+        matchedName: top?.name ?? null,
+        storeProductId: autoApply ? top!.storeProductId : null,
+        storeProductImageUrl: top?.imageUrl ?? null,
+        matchConfidence: top?.confidence ?? null,
+        matchConfirmed: autoApply,
+        priceVerified: autoApply,
+        altMatches,
+        price: mp.price,
+        promoPrice: mp.promoPrice,
+        quantity: mp.quantity,
+        unit: mp.unit,
+        pricePerUnit: mp.pricePerUnit,
+        rawLines: mp.rawLines,
+        region: mp.region,
+      } as ProductLine;
+    });
+
+    const productLines = await Promise.all(matchPromises);
+    setProducts(productLines);
+
+    setFooter({
+      total: mFooter.total,
+      date: mFooter.date,
+      time: mFooter.time,
+      receiptNo: mFooter.receiptNo,
+      totalSavings: mFooter.totalSavings,
+      rawText: mFooter.rawText,
+      region: mFooter.region,
+    });
+  };
+
   const applyGenericResult = (lines: string[]) => {
     setHeader({
       chainName: "Neatpažinta",
@@ -1179,7 +1482,11 @@ export default function ProcessReceiptScreen() {
 
   return (
     <>
-      <Stack.Screen options={{ title: "Kvito analizė" }} />
+      <Stack.Screen
+        options={{
+          title: isPreviewMode ? "Kvito peržiūra (neišsaugoma)" : "Kvito analizė",
+        }}
+      />
       <ScrollView style={styles.container}>
         {hasAsyncError && (
           <View style={styles.errorBanner}>
@@ -1244,14 +1551,11 @@ export default function ProcessReceiptScreen() {
 
         {editingSection === "header" &&
           header?.region &&
-          imageUri &&
-          imageDims && (
+          pageMetas.length > 0 && (
             <View style={styles.editSection}>
               <Text style={styles.rawTextLabel}>Nuskaitytas regionas:</Text>
               <RegionPreview
-                imageUri={imageUri}
-                imageWidth={imageDims.width}
-                imageHeight={imageDims.height}
+                pages={pageMetas}
                 region={header.region}
                 cardWidth={CARD_WIDTH}
               />
@@ -1439,12 +1743,10 @@ export default function ProcessReceiptScreen() {
                         <Text style={styles.rawTextLabel}>
                           Nuskaitytas regionas:
                         </Text>
-                        {imageUri && imageDims && (
+                        {pageMetas.length > 0 && (
                           <View style={styles.regionPreviewWrap}>
                             <RegionPreview
-                              imageUri={imageUri}
-                              imageWidth={imageDims.width}
-                              imageHeight={imageDims.height}
+                              pages={pageMetas}
                               region={product.region}
                               cardWidth={CARD_WIDTH - 40}
                             />
@@ -1490,12 +1792,10 @@ export default function ProcessReceiptScreen() {
                             <Text style={styles.rawTextLabel}>
                               Nuskaitytas regionas:
                             </Text>
-                            {imageUri && imageDims && (
+                            {pageMetas.length > 0 && (
                               <View style={styles.regionPreviewWrap}>
                                 <RegionPreview
-                                  imageUri={imageUri}
-                                  imageWidth={imageDims.width}
-                                  imageHeight={imageDims.height}
+                                  pages={pageMetas}
                                   region={product.region}
                                   cardWidth={CARD_WIDTH - 40}
                                 />
@@ -1655,14 +1955,11 @@ export default function ProcessReceiptScreen() {
           </View>
           {editingSection === "footer" &&
             footer?.region &&
-            imageUri &&
-            imageDims && (
+            pageMetas.length > 0 && (
               <View style={styles.editSection}>
                 <Text style={styles.rawTextLabel}>Nuskaitytas regionas:</Text>
                 <RegionPreview
-                  imageUri={imageUri}
-                  imageWidth={imageDims.width}
-                  imageHeight={imageDims.height}
+                  pages={pageMetas}
                   region={footer.region}
                   cardWidth={CARD_WIDTH}
                 />

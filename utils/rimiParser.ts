@@ -80,10 +80,13 @@ export function isRimiReceipt(lines: string[]): boolean {
 
 const PRICE_PATTERN = /^(\d+[.,]\s?\d{2})\s*[AB]\s*$/;
 const WEIGHT_PATTERN =
-  /(\d+[.,]\d{1,3})\s*kg\s*[xX×]\s*(\d+[.,]\s?\d{1,2})\s*(EUR|€)/i;
+  /(\d+[.,]\s?\d{1,3})\s*kg\s*[xX×]\s*(\d+[.,]\s?\d{1,2})\s*(EUR|€)/i;
+// The OCR sometimes produces `Galut,` (comma) instead of `Galut.`, and
+// stuffs a space inside decimals like `1, 10`. Tolerating both prevents the
+// next product's lookback from swallowing this discount row as a name line.
 const DISCOUNT_PATTERN =
-  /Nuo[li]\s*\.\s*-(\d+[.,]\d{2})\s+Gal[uūü]t\s*\.?\s*k?aina\s*(\d+[.,]\d{2})/i;
-const MULTI_PATTERN = /(\d+)\s*vnt\s*\.?\s*[xX×]\s*(\d+[.,]\d{1,2})\s*(EUR)?/i;
+  /Nuo[li]\s*\.?\s*-(\d+[.,]\s?\d{2})\s+Gal[uūü]t\s*[.,]?\s*k?aina\s*(\d+[.,]\s?\d{2})/i;
+const MULTI_PATTERN = /(\d+)\s*vnt\s*\.?\s*[xX×]\s*(\d+[.,]\s?\d{1,2})\s*(EUR)?/i;
 const DEPOSIT_PATTERN = /[uūü]žstat/i;
 
 export function parseRimiReceipt(lines: RimiLine[]): RimiParseResult {
@@ -313,33 +316,46 @@ function parseFooter(lines: RimiLine[]): RimiFooter {
   for (let i = 0; i < lines.length; i++) {
     const text = lines[i].text.trim();
 
-    const moketiMatch = text.match(/Mok[eėèé]ti\s+(\d+)[.,\s]+(\d{2})/i);
-    if (moketiMatch) total = parseFloat(moketiMatch[1] + "." + moketiMatch[2]);
+    // OCR sometimes reads `1` as `l` (lowercase L) or `I`, so "Mokėti 16,89"
+    // comes through as "Mokėti l6,89". Tolerate those in the amount capture.
+    const moketiMatch = text.match(/Mok[eėèé]ti\s+([lI\d]+)[.,\s]+(\d{2})/i);
+    if (moketiMatch) {
+      const intStr = moketiMatch[1].replace(/[lI]/gi, "1");
+      const intVal = parseInt(intStr, 10);
+      if (!isNaN(intVal)) total = parseFloat(intVal + "." + moketiMatch[2]);
+    }
 
     if (/^Mok[eėèé]ti$/i.test(text) && i + 1 < lines.length) {
-      const m = lines[i + 1].text.trim().match(/(\d+)[.,\s]+(\d{2})/);
-      if (m) total = parseFloat(m[1] + "." + m[2]);
+      const m = lines[i + 1].text.trim().match(/([lI\d]+)[.,\s]+(\d{2})/);
+      if (m) {
+        const intStr = m[1].replace(/[lI]/gi, "1");
+        const intVal = parseInt(intStr, 10);
+        if (!isNaN(intVal)) total = parseFloat(intVal + "." + m[2]);
+      }
     }
 
-    const laikasMatch = text.match(
-      /LAIKAS\s+(\d{4}-\d{2}-\d{2})\s+(\d{2}\s?:\s?\d{2}\s?:\s?\d{2})/i,
-    );
-    if (laikasMatch) {
-      date = laikasMatch[1];
-      time = laikasMatch[2].replace(/\s/g, "");
-    }
-    if (/^LAIKAS$/i.test(text) && i + 1 < lines.length) {
-      const d = lines[i + 1].text
-        .trim()
-        .match(/(\d{4}-\d{2}-\d{2})\s+(\d{2}\s?:\s?\d{2}\s?:\s?\d{2})/);
-      if (d) {
-        date = d[1];
-        time = d[2].replace(/\s/g, "");
+    // Date/time can appear either before or after the "LAIKAS" word; the
+    // common pattern is `YYYY-MM-DD HH:MM:SS LAIKAS`. Match the date/time
+    // pattern directly — any line that contains it counts.
+    if (!date) {
+      const dt = text.match(
+        /(\d{4}-\d{2}-\d{2})\s+(\d{2}\s?:\s?\d{2}\s?:\s?\d{2})/,
+      );
+      if (dt) {
+        date = dt[1];
+        time = dt[2].replace(/\s/g, "");
       }
     }
 
     const nrMatch = text.match(/Kvito\s+Nr\.?\s*(.+)/i);
-    if (nrMatch) receiptNo = nrMatch[1].trim();
+    if (nrMatch) {
+      // Strip trailing "Kasa NNNN" cashier counter — it's not part of the
+      // receipt number, and leaving it in bloats the stored value.
+      receiptNo = nrMatch[1]
+        .replace(/\s*Kasa\s+\d+.*$/i, "")
+        .replace(/\s+/g, "")
+        .trim();
+    }
 
     const numMatch = text.match(/Kvito\s+numeris\s+(\d+)/i);
     if (numMatch && !receiptNo) receiptNo = numMatch[1];

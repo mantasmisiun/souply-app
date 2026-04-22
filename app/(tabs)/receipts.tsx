@@ -1,4 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
+import * as DocumentPicker from "expo-document-picker";
+import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -6,6 +8,8 @@ import {
     ActivityIndicator,
     Alert,
     FlatList,
+    Modal,
+    Pressable,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -31,6 +35,88 @@ export default function ReceiptsScreen() {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
   const [lastUploadedId, setLastUploadedId] = useState<number | null>(null);
+  const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
+  const [previewOnly, setPreviewOnly] = useState(false);
+  const [pdfConverting, setPdfConverting] = useState(false);
+
+  const goToProcess = (uri: string) => {
+    const params = new URLSearchParams({ uri });
+    if (previewOnly) params.set("preview", "true");
+    router.push(`/receipt-process?${params.toString()}` as any);
+  };
+
+  const onPickCamera = () => {
+    setUploadMenuOpen(false);
+    if (previewOnly) {
+      // Camera preview mode still needs a URI path; capture screen handles it.
+      router.push(`/receipt/capture?preview=true` as any);
+    } else {
+      router.push("/receipt/capture" as any);
+    }
+  };
+
+  const onPickGallery = async () => {
+    setUploadMenuOpen(false);
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images"],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets[0]) {
+      goToProcess(result.assets[0].uri);
+    }
+  };
+
+  const onPickPdf = async () => {
+    const picked = await DocumentPicker.getDocumentAsync({
+      type: "application/pdf",
+      copyToCacheDirectory: true,
+    });
+    if (picked.canceled || !picked.assets?.[0]) return;
+
+    const asset = picked.assets[0];
+    setUploadMenuOpen(false);
+    setPdfConverting(true);
+    try {
+      const pdfBase64 = await FileSystem.readAsStringAsync(asset.uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+
+      const res = await fetch(`${API_BASE_URL}/api/receipts/pdf-to-image`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pdfBase64 }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err?.error || `HTTP ${res.status}`);
+      }
+      const { images } = await res.json();
+      if (!Array.isArray(images) || images.length === 0) {
+        throw new Error("Serverio atsakyme trūksta nuotraukų");
+      }
+
+      const timestamp = Date.now();
+      const outPaths: string[] = [];
+      for (let i = 0; i < images.length; i++) {
+        const path = `${FileSystem.cacheDirectory}receipt-pdf-${timestamp}-p${i}.jpg`;
+        await FileSystem.writeAsStringAsync(path, images[i], {
+          encoding: FileSystem.EncodingType.Base64,
+        });
+        outPaths.push(path);
+      }
+
+      const params = new URLSearchParams({ uris: outPaths.join(",") });
+      if (previewOnly) params.set("preview", "true");
+      router.push(`/receipt-process?${params.toString()}` as any);
+    } catch (e: any) {
+      Alert.alert(
+        "Nepavyko apdoroti PDF",
+        e?.message ?? "Nežinoma klaida konvertuojant PDF į paveikslėlį."
+      );
+    } finally {
+      setPdfConverting(false);
+    }
+  };
 
   const fetchReceipts = async (removePlaceholder = false) => {
     try {
@@ -219,32 +305,78 @@ export default function ReceiptsScreen() {
       />
       <TouchableOpacity
         style={styles.fab}
-        onPress={() => {
-          Alert.alert("Kvito įkėlimas", "Pasirinkite būdą", [
-            {
-              text: "Fotografuoti",
-              onPress: () => router.push("/receipt/capture" as any),
-            },
-            {
-              text: "Iš galerijos",
-              onPress: async () => {
-                const result = await ImagePicker.launchImageLibraryAsync({
-                  mediaTypes: ["images"],
-                  quality: 0.8,
-                });
-                if (!result.canceled && result.assets[0]) {
-                  router.push(
-                    `/receipt-process?uri=${encodeURIComponent(result.assets[0].uri)}` as any,
-                  );
-                }
-              },
-            },
-            { text: "Atšaukti", style: "cancel" },
-          ]);
-        }}
+        onPress={() => setUploadMenuOpen(true)}
       >
         <Ionicons name="add" size={28} color={colors.onPrimary} />
       </TouchableOpacity>
+
+      <Modal
+        visible={pdfConverting}
+        transparent
+        animationType="fade"
+      >
+        <View style={styles.menuBackdrop}>
+          <View style={[styles.menuCard, { alignItems: "center", gap: 12 }]}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={styles.menuTitle}>Konvertuojama į paveikslėlį…</Text>
+            <Text style={styles.previewToggleHint}>
+              PDF paverčiamas nuotrauka serveryje, kad ML Kit galėtų nuskaityti tekstą.
+            </Text>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={uploadMenuOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setUploadMenuOpen(false)}
+      >
+        <Pressable style={styles.menuBackdrop} onPress={() => setUploadMenuOpen(false)}>
+          <Pressable style={styles.menuCard} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.menuTitle}>Kvito įkėlimas</Text>
+
+            <TouchableOpacity style={styles.menuRow} onPress={onPickCamera}>
+              <Ionicons name="camera-outline" size={22} color={colors.primary} />
+              <Text style={styles.menuRowText}>Fotografuoti</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.menuRow} onPress={onPickGallery}>
+              <Ionicons name="images-outline" size={22} color={colors.primary} />
+              <Text style={styles.menuRowText}>Iš galerijos</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.menuRow} onPress={onPickPdf}>
+              <Ionicons name="document-text-outline" size={22} color={colors.primary} />
+              <Text style={styles.menuRowText}>Iš PDF</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.previewToggle}
+              onPress={() => setPreviewOnly((v) => !v)}
+            >
+              <Ionicons
+                name={previewOnly ? "checkbox" : "square-outline"}
+                size={20}
+                color={previewOnly ? colors.primary : colors.textMuted}
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.previewToggleText}>Peržiūra — neišsaugoti</Text>
+                <Text style={styles.previewToggleHint}>
+                  OCR ir parserio išvestis rodoma, bet kvitas nesukuriamas duomenų bazėje.
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.menuCancel}
+              onPress={() => setUploadMenuOpen(false)}
+            >
+              <Text style={styles.menuCancelText}>Atšaukti</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -303,5 +435,66 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   placeholderText: {
     fontSize: 14,
     color: c.textSecondary,
+  },
+  menuBackdrop: {
+    flex: 1,
+    backgroundColor: c.overlayBackdrop,
+    justifyContent: "center",
+    padding: 24,
+  },
+  menuCard: {
+    backgroundColor: c.cardBackground,
+    borderRadius: 14,
+    padding: 16,
+    gap: 6,
+  },
+  menuTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: c.textPrimary,
+    marginBottom: 4,
+  },
+  menuRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+  },
+  menuRowText: {
+    fontSize: 15,
+    color: c.textPrimary,
+    fontWeight: "500",
+  },
+  previewToggle: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 8,
+    marginTop: 4,
+    borderTopWidth: 1,
+    borderTopColor: c.borderSubtle,
+  },
+  previewToggleText: {
+    fontSize: 14,
+    color: c.textPrimary,
+    fontWeight: "600",
+  },
+  previewToggleHint: {
+    fontSize: 11,
+    color: c.textMuted,
+    marginTop: 2,
+  },
+  menuCancel: {
+    alignItems: "center",
+    paddingVertical: 12,
+    marginTop: 4,
+  },
+  menuCancelText: {
+    fontSize: 14,
+    color: c.textSecondary,
+    fontWeight: "600",
   },
 });

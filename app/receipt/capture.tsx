@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { CameraView, useCameraPermissions } from "expo-camera";
-import { useRouter } from "expo-router";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import { useMemo, useRef, useState } from "react";
 import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useTheme, type AppTheme } from "../../constants/theme";
@@ -12,6 +12,8 @@ export default function CaptureReceiptScreen() {
   const [photo, setPhoto] = useState<string | null>(null);
   const cameraRef = useRef<CameraView>(null);
   const router = useRouter();
+  const { preview } = useLocalSearchParams<{ preview?: string }>();
+  const isPreview = preview === "true";
 
   if (!permission) {
     return <View style={styles.container} />;
@@ -45,8 +47,9 @@ export default function CaptureReceiptScreen() {
 
   const confirmPhoto = async () => {
     if (!photo) return;
-    // Navigate to processing screen with the photo URI
-    router.push(`/receipt-process?uri=${encodeURIComponent(photo)}` as any);
+    const params = new URLSearchParams({ uri: photo });
+    if (isPreview) params.set("preview", "true");
+    router.push(`/receipt-process?${params.toString()}` as any);
   };
 
   const retakePhoto = () => {
