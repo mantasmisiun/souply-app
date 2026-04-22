@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { usePreventRemove, useNavigation } from "@react-navigation/native";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
+import * as ImageManipulator from "expo-image-manipulator";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -24,6 +25,14 @@ import {
     useReceiptCreateContext,
     useReceiptPickerState,
 } from "../state/basketState";
+import {
+    isIkiReceipt,
+    parseIkiHeaderOnly,
+    parseIkiReceipt,
+    type IkiFooter,
+    type IkiHeader,
+    type IkiProduct,
+} from "../utils/ikiParser";
 import {
     isMaximaReceipt,
     parseMaximaHeaderOnly,
@@ -126,6 +135,51 @@ type SaveStatus = "idle" | "saving" | "saved" | "error";
 type AsyncStatus = "idle" | "pending" | "done" | "error";
 
 const CARD_WIDTH = Dimensions.get("window").width - 32 - 32;
+
+/**
+ * Camera photos of receipts often land in landscape (user holding phone
+ * sideways, EXIF auto-rotation already baked into the bitmap). The downstream
+ * parser + region preview assume a portrait receipt — horizontal rows from
+ * different parts of the receipt otherwise merge on the same y and become
+ * unparseable. If the image is landscape, try rotating both ±90° and pick
+ * the rotation whose OCR produces more lines (the upright one always wins
+ * because letters are legible). Returns the URI to use downstream (original
+ * if already portrait, rotated variant otherwise).
+ */
+async function ensurePortraitOrientation(uri: string): Promise<string> {
+  const dims = await new Promise<{ width: number; height: number }>(
+    (resolve, reject) => {
+      Image.getSize(uri, (width, height) => resolve({ width, height }), reject);
+    },
+  );
+  if (dims.height >= dims.width) return uri;
+
+  const [rotatedCW, rotatedCCW] = await Promise.all([
+    ImageManipulator.manipulateAsync(
+      uri,
+      [{ rotate: 90 }],
+      { compress: 1, format: ImageManipulator.SaveFormat.JPEG },
+    ),
+    ImageManipulator.manipulateAsync(
+      uri,
+      [{ rotate: -90 }],
+      { compress: 1, format: ImageManipulator.SaveFormat.JPEG },
+    ),
+  ]);
+
+  const [ocrCW, ocrCCW] = await Promise.all([
+    TextRecognition.recognize(rotatedCW.uri),
+    TextRecognition.recognize(rotatedCCW.uri),
+  ]);
+  const scoreLines = (r: { blocks: { lines: { text: string }[] }[] }) =>
+    r.blocks.reduce((sum, b) => sum + b.lines.length, 0);
+  const cwScore = scoreLines(ocrCW);
+  const ccwScore = scoreLines(ocrCCW);
+  console.log(
+    `[ensurePortraitOrientation] landscape ${dims.width}x${dims.height} -> CW lines=${cwScore}, CCW lines=${ccwScore}`,
+  );
+  return cwScore >= ccwScore ? rotatedCW.uri : rotatedCCW.uri;
+}
 
 function RegionPreview({ pages, region, cardWidth }: RegionPreviewProps) {
   if (region.yBottom <= region.yTop) return null;
@@ -688,6 +742,26 @@ export default function ProcessReceiptScreen() {
         body: JSON.stringify({ userId, filePath: "", parsedData }),
       });
       const data = await res.json();
+      // Duplicate detection (e.g. re-photographing the same IKI receipt).
+      // Navigate to the existing receipt instead of creating a parallel one.
+      if (res.status === 409 && data?.existingReceiptId) {
+        Alert.alert(
+          "Kvitas jau įkeltas",
+          "Šis kvitas jau yra jūsų sąraše. Atidarome ankstesnį įrašą.",
+          [
+            {
+              text: "Gerai",
+              onPress: () =>
+                router.replace({
+                  pathname: "/receipt-process",
+                  params: { receiptId: String(data.existingReceiptId) },
+                }),
+            },
+          ],
+        );
+        setPostStatus("done");
+        return;
+      }
       if (!res.ok || !data?.id) {
         throw new Error(data?.error || `HTTP ${res.status}`);
       }
@@ -983,7 +1057,10 @@ export default function ProcessReceiptScreen() {
       const collectedPageMetas: PageMeta[] = [];
 
       for (let pageIdx = 0; pageIdx < imageUris.length; pageIdx++) {
-        const pageUri = imageUris[pageIdx];
+        // Camera photos held sideways come through as landscape — rotate to
+        // portrait first so the parser sees the receipt upright. No-op for
+        // PDFs / screenshots that already arrive in portrait.
+        const pageUri = await ensurePortraitOrientation(imageUris[pageIdx]);
 
         const pageDims = await new Promise<{ width: number; height: number }>(
           (resolve, reject) => {
@@ -1186,6 +1263,25 @@ export default function ProcessReceiptScreen() {
 
         const parsed = parseMaximaReceipt(mergedLines);
         await applyMaximaResult(parsed.header, parsed.products, parsed.footer);
+      } else if (isIkiReceipt(lineTexts)) {
+        const earlyHeader = parseIkiHeaderOnly(mergedLines);
+        setHeader({
+          chainName: "IKI",
+          chainId: 3,
+          storeCode: earlyHeader.storeCode,
+          storeAddress: earlyHeader.storeAddress,
+          storeId: null,
+          storeName: null,
+          storeAddressMatched: null,
+          matchConfidence: null,
+          matchLoading: true,
+          rawText: earlyHeader.rawText,
+          region: earlyHeader.region,
+        });
+        setLoading(false);
+
+        const parsed = parseIkiReceipt(mergedLines);
+        await applyIkiResult(parsed.header, parsed.products, parsed.footer);
       } else {
         applyGenericResult(lineTexts);
         setLoading(false);
@@ -1393,6 +1489,105 @@ export default function ProcessReceiptScreen() {
     });
   };
 
+  const applyIkiResult = async (
+    iHeader: IkiHeader,
+    iProducts: IkiProduct[],
+    iFooter: IkiFooter,
+  ) => {
+    const chainId = 3;
+
+    let storeId: number | null = null;
+    let storeName: string | null = null;
+    let storeAddressMatched: string | null = null;
+    let matchConfidence: number | null = null;
+
+    if (iHeader.storeAddress) {
+      try {
+        const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(iHeader.storeAddress)}`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data?.match) {
+          storeId = data.match.storeId;
+          storeName = data.match.storeName;
+          storeAddressMatched = data.match.address;
+          matchConfidence = data.match.confidence;
+        }
+      } catch (e) {
+        console.warn("Store match failed:", e);
+      }
+    }
+
+    setHeader({
+      chainName: "IKI",
+      chainId,
+      storeCode: iHeader.storeCode,
+      storeAddress: iHeader.storeAddress,
+      storeId,
+      // Prefer DB-matched name, fall back to OCR-extracted so the header card
+      // shows something identifiable even when the store isn't in the DB yet.
+      storeName: storeName ?? (iHeader.storeName || null),
+      storeAddressMatched,
+      matchConfidence,
+      matchLoading: false,
+      rawText: iHeader.rawText,
+      region: iHeader.region,
+    });
+
+    const AUTO_APPLY_THRESHOLD = 0.85;
+
+    const matchPromises = iProducts.map(async (ip) => {
+      let altMatches: ProductMatchOption[] = [];
+
+      try {
+        const params = new URLSearchParams({
+          chainId: String(chainId),
+          name: ip.name,
+        });
+        const res = await fetch(
+          `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
+        );
+        const data = await res.json();
+        if (Array.isArray(data?.matches)) altMatches = data.matches;
+      } catch (e) {
+        console.warn(`Product match failed for "${ip.name}":`, e);
+      }
+
+      const top = altMatches[0] || null;
+      const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
+
+      return {
+        name: ip.name,
+        matchedName: top?.name ?? null,
+        storeProductId: autoApply ? top!.storeProductId : null,
+        storeProductImageUrl: top?.imageUrl ?? null,
+        matchConfidence: top?.confidence ?? null,
+        matchConfirmed: autoApply,
+        priceVerified: autoApply,
+        altMatches,
+        price: ip.price,
+        promoPrice: ip.promoPrice,
+        quantity: ip.quantity,
+        unit: ip.unit,
+        pricePerUnit: ip.pricePerUnit,
+        rawLines: ip.rawLines,
+        region: ip.region,
+      } as ProductLine;
+    });
+
+    const productLines = await Promise.all(matchPromises);
+    setProducts(productLines);
+
+    setFooter({
+      total: iFooter.total,
+      date: iFooter.date,
+      time: iFooter.time,
+      receiptNo: iFooter.receiptNo,
+      totalSavings: iFooter.totalSavings,
+      rawText: iFooter.rawText,
+      region: iFooter.region,
+    });
+  };
+
   const applyGenericResult = (lines: string[]) => {
     setHeader({
       chainName: "Neatpažinta",
@@ -1534,8 +1729,14 @@ export default function ProcessReceiptScreen() {
           loading={comparisonLoading && !comparison}
           error={comparisonError}
           summary={{
+            // Prefer "Chain · Store" when both are known; fall back to chain
+            // alone (better than "Neatpažinta" when we at least identified
+            // the chain), then to the comparison source, then the last-resort
+            // placeholder.
             shopName:
-              header?.storeName ||
+              (header?.chainName && header?.storeName
+                ? `${header.chainName} · ${header.storeName}`
+                : header?.storeName || header?.chainName) ||
               comparison?.currentChain.storeName ||
               "Neatpažinta parduotuvė",
             shopAddress:
