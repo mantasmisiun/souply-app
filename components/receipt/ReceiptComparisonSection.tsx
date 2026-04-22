@@ -60,37 +60,10 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
       </View>
     );
   }
-  // No comparison yet (e.g. preview mode, which never POSTs the receipt so
-  // no comparison is ever fetched). Still surface the store-recognition
-  // header if we have summary info, otherwise there's nothing to show.
+  // No comparison yet (preview mode or pre-persist state). Shop info already
+  // lives in the navbar — render nothing here until the comparison is loaded.
   if (!comparison) {
-    if (!summary?.shopName && !summary?.shopAddress) return null;
-    const previewDate = (() => {
-      if (!summary.receiptDate) return null;
-      const raw = String(summary.receiptDate).trim();
-      const dateOnly = raw.match(/^\d{4}-\d{2}-\d{2}/)?.[0] ?? raw;
-      const d = new Date(dateOnly);
-      if (Number.isNaN(d.getTime())) return dateOnly;
-      return d.toLocaleDateString("lt-LT");
-    })();
-    return (
-      <View style={[styles.sectionCard, styles.heroCard]}>
-        <View style={styles.shopRow}>
-          <View style={styles.shopNameWrap}>
-            <Text style={styles.shopName}>
-              {summary.shopName || "Neatpažinta parduotuvė"}
-            </Text>
-            {!!summary.storeRecognized && (
-              <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
-            )}
-          </View>
-          {!!previewDate && <Text style={styles.topDate}>{previewDate}</Text>}
-        </View>
-        {!!summary.shopAddress && (
-          <Text style={styles.shopAddress}>{summary.shopAddress}</Text>
-        )}
-      </View>
-    );
+    return null;
   }
 
   const rows: Row[] = [
@@ -139,75 +112,142 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
     return d.toLocaleDateString('lt-LT');
   })();
 
+  // Shop name + address + date moved to the screen's navbar.
+  void shopName;
+  void shopAddress;
+  void formattedDate;
+
+  const visitedTotal = visitedRow?.total ?? null;
+  // If every row totals the same, there's nothing to celebrate or nudge
+  // about — don't crown a winner, don't show deltas, don't print a prose
+  // summary. The bars + totals are enough; everything else would be noise.
+  const anyPriceSpread = maxTotal - cheapestTotal > 0.005;
+  const bestSaving =
+    visitedTotal !== null ? visitedTotal - cheapestTotal : 0;
+  const summaryMessage =
+    !anyPriceSpread || visitedTotal === null
+      ? null
+      : visitedIsCheapest
+        ? `Pigiausia vieta — sutaupėte ${(maxTotal - cheapestTotal).toFixed(2)} €`
+        : `Galėjote sutaupyti ${bestSaving.toFixed(2)} € pirkdami pigiausioje parduotuvėje`;
+
   return (
-    <View style={[styles.sectionCard, styles.heroCard]}>
-
-      <View style={styles.shopRow}>
-        <View style={styles.shopNameWrap}>
-          <Text style={styles.shopName}>{shopName}</Text>
-          {!!summary?.storeRecognized && (
-            <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
-          )}
-        </View>
-        {!!formattedDate && <Text style={styles.topDate}>{formattedDate}</Text>}
+    <View style={styles.sectionCard}>
+      <View style={styles.sectionHeader}>
+        <Ionicons name="analytics-outline" size={20} color={colors.primary} />
+        <Text style={styles.sectionTitle}>
+          Apsipirkimo analizė ({comparedCount}/{totalCount})
+        </Text>
+        {hasUnrecognized && (
+          <Ionicons name="alert-circle" size={18} color={colors.warning} />
+        )}
       </View>
+      {!!summaryMessage && (
+        <Text
+          style={[
+            styles.summaryLine,
+            visitedIsCheapest ? styles.summaryWin : styles.summaryNudge,
+          ]}
+        >
+          {summaryMessage}
+        </Text>
+      )}
+      {rows.map((row) => {
+        // Only label/style a row as the winner when there's an actual spread;
+        // if everyone's tied, no row is "the" cheapest.
+        const isCheapest =
+          anyPriceSpread && Math.abs(row.total - cheapestTotal) < 0.0001;
+        const delta =
+          anyPriceSpread && visitedTotal !== null ? row.total - visitedTotal : 0;
+        const showDeltaSave = !row.isVisited && delta < -0.005;
+        const showDeltaSpend = !row.isVisited && delta > 0.005;
 
-      {!!shopAddress && <Text style={styles.shopAddress}>{shopAddress}</Text>}
+        // Gradient: cheapest is teal (success), most expensive is beet (primary).
+        const span = Math.max(maxTotal - cheapestTotal, 0.01);
+        const position = (row.total - cheapestTotal) / span;
+        const fillColor = lerpColor(colors.success, colors.primary, position);
 
-      <View style={styles.comparedHeaderWrap}>
-        <View style={styles.comparedChip}>
-          <Text style={styles.comparedTitle}>Palygintos prekės ({comparedCount}/{totalCount})</Text>
-          {hasUnrecognized && <Ionicons name="alert-circle" size={16} color={colors.warning} />}
-        </View>
-      </View>
-        {rows.map((row) => {
-          const fillColor = row.isVisited
-            ? visitedIsCheapest
-              ? colors.primary
-              : colors.error
-            : colors.info;
-
-          return (
-            <View key={`${row.chainId}-${row.storeId}`} style={styles.rowWrap}>
-              <View style={styles.rowHeader}>
-                <View style={styles.storeInfo}>
-                  {row.chainLogoUrl ? (
-                    <Image source={{ uri: row.chainLogoUrl }} style={styles.logo} resizeMode="contain" />
-                  ) : (
-                    <View style={styles.logoFallback}>
-                      <Text style={styles.logoFallbackText}>{getInitials(row.storeName || row.chainName)}</Text>
-                    </View>
-                  )}
-
-                  <View style={{ flex: 1 }}>
-                    <View style={styles.storeTitleRow}>
-                      <Text style={styles.storeLabel}>{row.storeName}</Text>
-                      {row.isVisited && (
-                        <View style={styles.visitedBadgeInline}>
-                          <Text style={styles.visitedBadgeText}>Jūsų parduotuvė</Text>
-                        </View>
-                      )}
-                    </View>
-                    {!!row.storeAddress && <Text style={styles.storeAddressLine}>{row.storeAddress}</Text>}
+        return (
+          <View
+            key={`${row.chainId}-${row.storeId}`}
+            style={[styles.rowWrap, isCheapest && styles.rowWinner]}
+          >
+            <View style={styles.rowHeader}>
+              <View style={styles.storeInfo}>
+                {row.chainLogoUrl ? (
+                  <Image source={{ uri: row.chainLogoUrl }} style={styles.logo} resizeMode="contain" />
+                ) : (
+                  <View style={styles.logoFallback}>
+                    <Text style={styles.logoFallbackText}>{getInitials(row.storeName || row.chainName)}</Text>
                   </View>
-                </View>
+                )}
 
-                <Text style={styles.totalText}>€{row.total.toFixed(2)}</Text>
+                <View style={{ flex: 1 }}>
+                  <View style={styles.storeTitleRow}>
+                    <Text style={styles.storeLabel}>{row.storeName}</Text>
+                    {isCheapest && (
+                      <View style={styles.winnerChip}>
+                        <Ionicons name="trophy" size={11} color={colors.onPrimary} />
+                        <Text style={styles.winnerChipText}>Pigiausia</Text>
+                      </View>
+                    )}
+                    {row.isVisited && !isCheapest && (
+                      <View style={styles.visitedBadgeInline}>
+                        <Text style={styles.visitedBadgeText}>Jūs pirkote</Text>
+                      </View>
+                    )}
+                  </View>
+                  {!!row.storeAddress && <Text style={styles.storeAddressLine}>{row.storeAddress}</Text>}
+                </View>
               </View>
 
-              <View style={styles.compareBarTrack}>
-                <Animated.View
-                  style={[
-                    styles.compareBarFill,
-                    { width: animatedBarWidth(row.total), backgroundColor: fillColor },
-                  ]}
-                />
+              <View style={styles.priceColumn}>
+                <Text style={styles.totalText}>{row.total.toFixed(2)} €</Text>
+                {showDeltaSave && (
+                  <Text style={styles.deltaSave}>
+                    −{Math.abs(delta).toFixed(2)} €
+                  </Text>
+                )}
+                {showDeltaSpend && (
+                  <Text style={styles.deltaSpend}>
+                    +{delta.toFixed(2)} €
+                  </Text>
+                )}
+                {row.isVisited && isCheapest && (
+                  <Text style={styles.deltaNeutral}>pirkote čia</Text>
+                )}
               </View>
             </View>
-          );
-        })}
-      </View>
+
+            <View style={styles.compareBarTrack}>
+              <Animated.View
+                style={[
+                  styles.compareBarFill,
+                  { width: animatedBarWidth(row.total), backgroundColor: fillColor },
+                ]}
+              />
+            </View>
+          </View>
+        );
+      })}
+    </View>
   );
+}
+
+/** Lerp between two hex colours. `t` is clamped to [0, 1]. */
+function lerpColor(hex1: string, hex2: string, t: number): string {
+  const clamp = Math.max(0, Math.min(1, t));
+  const parse = (h: string) => {
+    const s = h.replace('#', '');
+    return [parseInt(s.slice(0, 2), 16), parseInt(s.slice(2, 4), 16), parseInt(s.slice(4, 6), 16)];
+  };
+  const [r1, g1, b1] = parse(hex1);
+  const [r2, g2, b2] = parse(hex2);
+  const r = Math.round(r1 + (r2 - r1) * clamp);
+  const g = Math.round(g1 + (g2 - g1) * clamp);
+  const b = Math.round(b1 + (b2 - b1) * clamp);
+  const hex = (n: number) => n.toString(16).padStart(2, '0');
+  return `#${hex(r)}${hex(g)}${hex(b)}`;
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
@@ -264,12 +304,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 2,
   },
-  heroCard: {
-    borderWidth: 1,
-    borderColor: c.infoMuted,
-    backgroundColor: c.pageBackground,
-  },
-  sectionTitle: { fontSize: 18, fontWeight: '700', color: c.textPrimary },
+  // Match receipt-process.tsx's own section styling exactly so this card
+  // sits among the others without an odd border or a larger heading.
+  sectionHeader: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  sectionTitle: { flex: 1, fontSize: 15, fontWeight: '600', color: c.textPrimary },
   sectionSubvalue: { fontSize: 13, color: c.textSecondary, marginTop: 6 },
   warningText: { fontSize: 12, color: c.warning, marginTop: 6 },
   loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
@@ -334,23 +372,39 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     paddingVertical: 2,
   },
 
-  comparedHeaderWrap: {
-    marginTop: 14,
-    marginBottom: 6,
+
+  // Hero message right under the title chip — "you saved" or "you could have
+  // saved" depending on whether the visited store was the cheapest.
+  summaryLine: { marginTop: 8, fontSize: 13, fontWeight: '600' },
+  summaryWin:   { color: c.success },
+  summaryNudge: { color: c.primary },
+
+  // Cheapest row stands out with a soft tint + accent border.
+  rowWinner: {
+    backgroundColor: c.successMuted,
+    borderColor: c.success,
   },
-  comparedChip: {
-    alignSelf: 'flex-start',
+
+  // "Pigiausia" chip — trophy + label on the cheapest row.
+  winnerChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: c.surfaceMuted,
+    gap: 3,
+    backgroundColor: c.success,
     borderRadius: 999,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
   },
-  comparedTitle: {
-    fontSize: 13,
-    color: c.textPrimary,
-    fontWeight: '600',
+  winnerChipText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: c.onSuccess,
+    letterSpacing: 0.4,
   },
+
+  // Right-aligned column holding total + delta under it.
+  priceColumn: { alignItems: 'flex-end', minWidth: 82 },
+  deltaSave:    { marginTop: 2, fontSize: 12, fontWeight: '700', color: c.success },
+  deltaSpend:   { marginTop: 2, fontSize: 12, fontWeight: '500', color: c.textMuted },
+  deltaNeutral: { marginTop: 2, fontSize: 11, fontStyle: 'italic', color: c.textMuted },
 });

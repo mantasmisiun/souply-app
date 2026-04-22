@@ -8,6 +8,7 @@ import {
     ActivityIndicator,
     Alert,
     FlatList,
+    Image,
     Modal,
     Pressable,
     StyleSheet,
@@ -26,6 +27,10 @@ interface Receipt {
   processingStatus: string;
   receiptDate: string | null;
   receiptNo: string | null;
+  chainName: string | null;
+  chainLogoUrl: string | null;
+  storeName: string | null;
+  storeAddress: string | null;
 }
 
 export default function ReceiptsScreen() {
@@ -217,13 +222,17 @@ export default function ReceiptsScreen() {
     const imageBase64 = asset.base64;
     const userId = await getUserId();
 
-    const placeholder = {
+    const placeholder: Receipt = {
       id: -1,
       filePath: "",
       fileType: "",
       processingStatus: "uploading",
       receiptDate: null,
       receiptNo: null,
+      chainName: null,
+      chainLogoUrl: null,
+      storeName: null,
+      storeAddress: null,
     };
     setReceipts((prev) => [placeholder, ...prev]);
 
@@ -269,6 +278,14 @@ export default function ReceiptsScreen() {
               </View>
             );
           }
+          // Chain identity is carried by the logo on the left — the text row
+          // just needs the specific store so we don't visually repeat.
+          const shopHeadline =
+            item.storeName || item.chainName || "Neatpažinta parduotuvė";
+          const shopAddress = item.storeAddress || null;
+          const dateLabel = item.receiptDate
+            ? new Date(item.receiptDate).toLocaleDateString("lt-LT")
+            : "—";
           return (
             <TouchableOpacity
               style={styles.card}
@@ -277,27 +294,38 @@ export default function ReceiptsScreen() {
               }}
             >
               <View style={styles.cardLeft}>
-                <Ionicons name="receipt-outline" size={28} color={colors.primary} />
+                {item.chainLogoUrl ? (
+                  <Image
+                    source={{ uri: item.chainLogoUrl }}
+                    style={styles.cardLogo}
+                    resizeMode="contain"
+                  />
+                ) : (
+                  <Ionicons name="receipt-outline" size={28} color={colors.primary} />
+                )}
               </View>
               <View style={styles.cardContent}>
-                <Text style={styles.cardTitle}>
-                  {item.receiptNo ? `Kvitas Nr. ${item.receiptNo}` : "Kvitas"}
+                <Text style={styles.cardTitle} numberOfLines={1}>
+                  {shopHeadline}
                 </Text>
-                <Text style={styles.cardDate}>
-                  {item.receiptDate
-                    ? new Date(item.receiptDate).toLocaleDateString("lt-LT")
-                    : "Data nenurodyta"}
-                </Text>
+                {shopAddress && (
+                  <Text style={styles.cardAddress} numberOfLines={1}>
+                    {shopAddress}
+                  </Text>
+                )}
               </View>
-              <View
-                style={[
-                  styles.statusBadge,
-                  { backgroundColor: getStatusColor(item.processingStatus) },
-                ]}
-              >
-                <Text style={styles.statusText}>
-                  {getStatusText(item.processingStatus)}
-                </Text>
+              <View style={styles.cardRight}>
+                <Text style={styles.cardDate}>{dateLabel}</Text>
+                <View
+                  style={[
+                    styles.statusBadge,
+                    { backgroundColor: getStatusColor(item.processingStatus) },
+                  ]}
+                >
+                  <Text style={styles.statusText}>
+                    {getStatusText(item.processingStatus)}
+                  </Text>
+                </View>
               </View>
             </TouchableOpacity>
           );
@@ -400,10 +428,13 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     borderLeftWidth: 3,
     borderLeftColor: c.softAccent,
   },
-  cardLeft: { marginRight: 12 },
-  cardContent: { flex: 1 },
+  cardLeft: { marginRight: 12, width: 36, alignItems: "center", justifyContent: "center" },
+  cardLogo: { width: 32, height: 32 },
+  cardContent: { flex: 1, minWidth: 0 },
   cardTitle: { fontSize: 15, fontWeight: "600", color: c.textPrimary },
-  cardDate: { fontSize: 13, color: c.textSecondary, marginTop: 2 },
+  cardAddress: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
+  cardRight: { alignItems: "flex-end", marginLeft: 8 },
+  cardDate: { fontSize: 12, color: c.textSecondary, marginBottom: 6 },
   statusBadge: {
     paddingHorizontal: 8,
     paddingVertical: 4,

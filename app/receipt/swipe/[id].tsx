@@ -102,7 +102,15 @@ export default function SwipeScreen() {
     (async () => {
       try {
         setLoading(true);
-        const res = await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/swipe-queue`);
+        const userId = userIdRef.current ?? (await getUserId());
+        userIdRef.current = userId;
+        // Pass userId so the backend can filter out cards this user has
+        // already voted on (cross-pair votes) or confirmed via self-pair
+        // (priceVerified=true). Otherwise re-entering the screen shows the
+        // same cards again.
+        const res = await fetch(
+          `${API_BASE_URL}/api/receipts/${receiptId}/swipe-queue?userId=${encodeURIComponent(userId)}`
+        );
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const data = await res.json();
         const validItems: QueueItem[] = (data?.items ?? []).filter(

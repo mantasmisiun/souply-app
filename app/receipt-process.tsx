@@ -1,7 +1,8 @@
 import { Ionicons } from "@expo/vector-icons";
-import { usePreventRemove, useNavigation } from "@react-navigation/native";
+import { usePreventRemove, useNavigation, useFocusEffect } from "@react-navigation/native";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
 import * as ImageManipulator from "expo-image-manipulator";
+import * as ImagePicker from "expo-image-picker";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -9,6 +10,8 @@ import {
     Alert,
     Dimensions,
     Image,
+    Modal,
+    Pressable,
     ScrollView,
     StyleSheet,
     Text,
@@ -20,6 +23,7 @@ import ReceiptComparisonSection from "../components/receipt/ReceiptComparisonSec
 import { API_BASE_URL } from "../config/api";
 import { getUserId } from "../config/user";
 import { useReceiptComparison } from "../hooks/useReceiptComparison";
+import { DEV_MODE } from "../constants/flags";
 import { useTheme, type AppTheme } from "../constants/theme";
 import {
     useReceiptCreateContext,
@@ -252,6 +256,46 @@ function RegionPreview({ pages, region, cardWidth }: RegionPreviewProps) {
  * Build the parsedData payload sent to the backend.
  * Mirrors the shape agreed on in receiptSaveService.ts on the API side.
  */
+/**
+ * Render a per-line quantity label that covers the three cases:
+ *  - Weighable (unit=kg): `0,236 kg × 12,94 €/kg`
+ *  - Multi-buy (quantity > 1, unit=vnt): `2 vnt. × 1,09 €`
+ *  - Single unit with a known SP amount: `300 g`
+ *  - Single unit otherwise: `1 vnt.`
+ *
+ * Uses European decimal comma for consistency with the rest of the UI.
+ */
+function anyIssueChecked(flags: {
+  name: boolean;
+  price: boolean;
+  amount: boolean;
+  discount: boolean;
+  image: boolean;
+}): boolean {
+  return flags.name || flags.price || flags.amount || flags.discount || flags.image;
+}
+
+function formatAmountLabel(p: ProductLine): string {
+  const fmt = (n: number, digits: number) => n.toFixed(digits).replace(".", ",");
+  const unit = (p.unit ?? "vnt").toLowerCase();
+  const perUnit = p.pricePerUnit ?? p.price;
+
+  if (unit === "kg") {
+    return `${fmt(p.quantity, 3)} kg × ${fmt(perUnit, 2)} €/kg`;
+  }
+  if (p.quantity > 1) {
+    return `${p.quantity} ${unit}. × ${fmt(perUnit, 2)} €`;
+  }
+  // quantity === 1 — try to show the matched SP's own amount label.
+  const matchedSp = p.altMatches?.find(
+    (a) => a.storeProductId === p.storeProductId,
+  );
+  if (matchedSp?.amount && matchedSp.unit) {
+    return `${fmt(Number(matchedSp.amount), Number(matchedSp.amount) >= 10 ? 0 : 2)} ${matchedSp.unit}`;
+  }
+  return "1 vnt.";
+}
+
 function buildParsedData(
   header: HeaderData,
   products: ProductLine[],
@@ -307,7 +351,6 @@ export default function ProcessReceiptScreen() {
   const [loading, setLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState("Nuskaitomas kvitas...");
   const isHydratingRef = useRef(false);
-  const [priceEditorIndex, setPriceEditorIndex] = useState<number | null>(null);
   const [header, setHeader] = useState<HeaderData | null>(null);
   const [products, setProducts] = useState<ProductLine[]>([]);
   const [footer, setFooter] = useState<FooterData | null>(null);
@@ -328,6 +371,21 @@ export default function ProcessReceiptScreen() {
   // Save state
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [imageFilePath, setImageFilePath] = useState<string | null>(null);
+  // How many swipe cards are currently waiting for this user on this receipt.
+  // Fetched on mount and whenever the screen refocuses (so it updates after
+  // the user returns from the swipe screen).
+  const [swipeQueueCount, setSwipeQueueCount] = useState<number>(0);
+  // Per-row three-dots menu state. null = closed.
+  const [menuOpenForIndex, setMenuOpenForIndex] = useState<number | null>(null);
+  // Issue-report modal (opened from the three-dots menu).
+  const [issueModalForIndex, setIssueModalForIndex] = useState<number | null>(null);
+  const [issueFlags, setIssueFlags] = useState({
+    name: false,
+    price: false,
+    amount: false,
+    discount: false,
+    image: false,
+  });
   const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [postStatus, setPostStatus] = useState<AsyncStatus>("idle");
   const [postErr, setPostErr] = useState<string | null>(null);
@@ -365,8 +423,11 @@ export default function ProcessReceiptScreen() {
   const comparisonKeyRef = useRef("");
   const shouldRefreshComparisonRef = useRef(false);
   const isFullyRecognized = (p: ProductLine) => p.matchConfirmed;
-  const canExpandProduct = (p: ProductLine) =>
-    isFullyRecognized(p) || isCompletelyUnrecognized(p);
+  // In production, product rows are flat — there's nothing useful to show
+  // in the expanded drawer. The three-dots menu handles issue reporting and
+  // photo upload; the swipe flow handles OCR-name correction. Expand is
+  // only live under DEV_MODE so we can still inspect region previews.
+  const canExpandProduct = (_p: ProductLine) => DEV_MODE;
 
   const buildComparisonKey = (h: HeaderData | null, items: ProductLine[]) =>
     JSON.stringify({
@@ -397,9 +458,8 @@ export default function ProcessReceiptScreen() {
     if (!p) return;
     if (!canExpandProduct(p)) {
       setEditingSection(null);
-      if (priceEditorIndex === editingSection) setPriceEditorIndex(null);
     }
-  }, [products, editingSection, priceEditorIndex]);
+  }, [products, editingSection]);
   const rematchProductByName = async (
     index: number,
     newName: string,
@@ -565,7 +625,8 @@ export default function ProcessReceiptScreen() {
       });
 
       setReceiptId(id);
-      setSaveStatus("saved");
+      // Intentionally leave saveStatus as 'idle' on load — the badge
+      // ("Išsaugoma"/"Išsaugota") should only surface on real user edits.
       hasPostedRef.current = true;
 
       if (parsed?.image?.filePath) {
@@ -687,6 +748,43 @@ export default function ProcessReceiptScreen() {
       processReceipt(imageUriList);
     }
   }, [imageUriList, isExistingMode, existingReceiptId]);
+
+  // Refresh the swipe-queue count every time the receipt screen regains
+  // focus (initial mount + returning from /receipt/swipe/[id]). Backend's
+  // filter already excludes votes this user has cast, so the count we get
+  // back IS exactly "cards remaining for this user".
+  useFocusEffect(
+    useMemo(
+      () => () => {
+        if (!receiptId) return;
+        let cancelled = false;
+        (async () => {
+          try {
+            const userId = await getUserId();
+            const res = await fetch(
+              `${API_BASE_URL}/api/receipts/${receiptId}/swipe-queue?userId=${encodeURIComponent(userId)}`
+            );
+            if (!res.ok) return;
+            const data = await res.json();
+            const queueSize = Array.isArray(data?.items)
+              ? data.items.reduce(
+                  (sum: number, it: any) =>
+                    sum + (Array.isArray(it.candidates) ? it.candidates.length : 0),
+                  0
+                )
+              : 0;
+            if (!cancelled) setSwipeQueueCount(queueSize);
+          } catch {
+            /* swallow — it's advisory UI */
+          }
+        })();
+        return () => {
+          cancelled = true;
+        };
+      },
+      [receiptId]
+    )
+  );
 
   // Apply user's manual pick from the category browser
   useEffect(() => {
@@ -847,6 +945,114 @@ export default function ProcessReceiptScreen() {
     runUpload();
   };
 
+  /**
+   * Issue-report: write a row into ReceiptLineIssue with the flagged fields,
+   * and flip the line's Price.priceVerified back to 0 so the item no longer
+   * contributes to trusted comparison totals until an admin reviews it.
+   */
+  const submitIssueReport = async (
+    lineIdx: number,
+    flags: { name: boolean; price: boolean; amount: boolean; discount: boolean; image: boolean },
+  ) => {
+    if (!receiptId) return;
+    try {
+      const userId = await getUserId();
+      const res = await fetch(
+        `${API_BASE_URL}/api/receipts/${receiptId}/lines/${lineIdx}/report-issue`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ userId, flags }),
+        },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    } catch (e: any) {
+      console.warn("Issue report failed:", e?.message ?? e);
+      Alert.alert("Nepavyko išsiųsti", "Bandykite dar kartą vėliau.");
+    }
+  };
+
+  /**
+   * Capture or pick an image, upload to MinIO via the same presigned-URL
+   * pattern receipts use, then PATCH StoreProduct.imageUrl so every receipt
+   * referencing this SP picks up the new photo.
+   */
+  const handleAddProductPhoto = async (lineIdx: number) => {
+    const line = products[lineIdx];
+    if (!line?.storeProductId) {
+      Alert.alert(
+        "Produktas neatpažintas",
+        "Nuotraukos galima pridėti tik prie atpažintų produktų.",
+      );
+      return;
+    }
+    try {
+      // Permission check — expo-image-picker v15+ refuses silently without it.
+      const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(
+          "Nėra prieigos",
+          "Leiskite prieigą prie galerijos, kad pridėtumėte nuotrauką.",
+        );
+        return;
+      }
+      // expo-image-picker v17 dropped `MediaTypeOptions.Images`; the new API
+      // takes a string array — "images" means photos only (no videos).
+      const picked = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        quality: 0.8,
+        base64: false,
+      });
+      if (picked.canceled || !picked.assets?.[0]) return;
+      const asset = picked.assets[0];
+
+      // Hit the product-image-specific presigned-URL endpoint so the upload
+      // lands in the product-images bucket, not the receipts bucket.
+      const urlRes = await fetch(`${API_BASE_URL}/api/store-products/upload-url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          filename: `sp-${line.storeProductId}-${Date.now()}.jpg`,
+          mimeType: asset.mimeType || "image/jpeg",
+        }),
+      });
+      if (!urlRes.ok) throw new Error(`upload-url HTTP ${urlRes.status}`);
+      const { uploadUrl, filePath } = await urlRes.json();
+      if (!uploadUrl || !filePath) throw new Error("Bad upload-url payload");
+
+      const blob = await (await fetch(asset.uri)).blob();
+      const putRes = await fetch(uploadUrl, {
+        method: "PUT",
+        headers: { "Content-Type": asset.mimeType || "image/jpeg" },
+        body: blob,
+      });
+      if (!putRes.ok) throw new Error(`MinIO PUT HTTP ${putRes.status}`);
+
+      const patchRes = await fetch(
+        `${API_BASE_URL}/api/store-products/${line.storeProductId}/image`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filePath }),
+        },
+      );
+      if (!patchRes.ok) throw new Error(`image PATCH HTTP ${patchRes.status}`);
+      const { imageUrl } = await patchRes.json();
+
+      // Update the local ProductLine so the thumbnail appears immediately.
+      setProducts((prev) => {
+        const next = [...prev];
+        if (next[lineIdx]) {
+          next[lineIdx] = { ...next[lineIdx], storeProductImageUrl: imageUrl };
+        }
+        return next;
+      });
+    } catch (e: any) {
+      console.warn("Photo upload failed:", e?.message ?? e);
+      Alert.alert("Nuotraukos įkėlimas nepavyko", "Bandykite dar kartą.");
+    }
+  };
+
   const retryComparison = () => {
     if (!receiptId) return;
     setComparisonStatus("pending");
@@ -947,94 +1153,6 @@ export default function ProcessReceiptScreen() {
       }
       saveTimerRef.current = null;
     }, 1500);
-  };
-
-  const handleBrowseCategories = async (idx: number) => {
-    const product = products[idx];
-    const topMatch = product.altMatches[0];
-
-    // Guard: need a resolved chain + store + receipt to meaningfully create/link products.
-    const chainId = header?.chainId;
-    const storeId = header?.storeId;
-    if (
-      !Number.isFinite(chainId) ||
-      !Number.isFinite(storeId) ||
-      !Number.isFinite(receiptId)
-    ) {
-      Alert.alert(
-        "Palaukite",
-        "Parduotuvė ar kvitas dar neatpažinti. Pabandykite po akimirkos.",
-      );
-      return;
-    }
-
-    setCreateContext({
-      receiptId: Number(receiptId),
-      storeId: Number(storeId),
-      chainId: Number(chainId),
-      receiptDate: footer?.date ?? null,
-      ocrName: product.name,
-      ocrPrice: Number(product.price),
-      ocrPromoPrice:
-        product.promoPrice === null || product.promoPrice === undefined
-          ? null
-          : Number(product.promoPrice),
-      ocrQuantity: Number(product.quantity),
-      ocrUnit: product.unit || null,
-      ocrIsWeighable: product.pricePerUnit !== null,
-    });
-
-    let preselectL1: string | undefined;
-    let preselectL2: string | undefined;
-    let preselectL3: string | undefined;
-
-    if (topMatch) {
-      try {
-        const res = await fetch(
-          `${API_BASE_URL}/api/categories/${topMatch.categoryId}/ancestors`,
-        );
-        const data = await res.json();
-        if (data?.l1) preselectL1 = String(data.l1.id);
-        if (data?.l2) preselectL2 = String(data.l2.id);
-        if (data?.l3) preselectL3 = String(data.l3.id);
-      } catch (e) {
-        console.warn("Ancestor lookup failed:", e);
-      }
-    }
-
-    if (preselectL1 && preselectL2) {
-      router.push({
-        pathname: "/receipt/browse",
-        params: {
-          chainId: String(chainId),
-          productIndex: String(idx),
-          preselectL1,
-          ocrName: product.name,
-        },
-      });
-      setTimeout(() => {
-        router.push({
-          pathname: "/receipt/browse/[categoryId]",
-          params: {
-            categoryId: preselectL2!,
-            name: "",
-            chainId: String(chainId),
-            productIndex: String(idx),
-            ocrName: product.name,
-            ...(preselectL3 ? { preselectL3 } : {}),
-          },
-        });
-      }, 50);
-    } else {
-      router.push({
-        pathname: "/receipt/browse",
-        params: {
-          chainId: String(chainId),
-          productIndex: String(idx),
-          ocrName: product.name,
-        },
-      });
-    }
   };
 
   const processReceipt = async (imageUris: string[]) => {
@@ -1679,7 +1797,39 @@ export default function ProcessReceiptScreen() {
     <>
       <Stack.Screen
         options={{
-          title: isPreviewMode ? "Kvito peržiūra (neišsaugoma)" : "Kvito analizė",
+          headerTitle: () => {
+            if (isPreviewMode) {
+              return (
+                <Text style={styles.navTitle} numberOfLines={1}>
+                  Kvito peržiūra (neišsaugoma)
+                </Text>
+              );
+            }
+            // Compose the shop line the same way the hero card used to —
+            // prefer "Chain · Store" when both are known, fall back gracefully.
+            const shopLine =
+              (header?.chainName && header?.storeName
+                ? `${header.chainName} · ${header.storeName}`
+                : header?.storeName || header?.chainName) ||
+              "Kvito analizė";
+            const addr = header?.storeAddressMatched || header?.storeAddress || null;
+            const dateLabel = footer?.date
+              ? new Date(footer.date).toLocaleDateString("lt-LT")
+              : null;
+            const subtitle = [addr, dateLabel].filter(Boolean).join(" · ");
+            return (
+              <View style={styles.navHeaderWrap}>
+                <Text style={styles.navTitle} numberOfLines={1}>
+                  {shopLine}
+                </Text>
+                {!!subtitle && (
+                  <Text style={styles.navSubtitle} numberOfLines={1}>
+                    {subtitle}
+                  </Text>
+                )}
+              </View>
+            );
+          },
         }}
       />
       <ScrollView style={styles.container}>
@@ -1750,10 +1900,11 @@ export default function ProcessReceiptScreen() {
           }}
         />
 
-        {/* Swipe-to-help entry point. Only shown once the receipt is persisted
-            (receiptId is set) and there's at least one product to potentially
-            validate. Preview mode never persists, so this never appears there. */}
-        {receiptId && products.length > 0 && (
+        {/* Swipe-to-help entry point. Hidden when there's nothing left for
+            this user to act on (queue is empty) so it doesn't dangle as a
+            dead button after all cards are swiped. Preview mode never
+            persists, so this never appears there. */}
+        {receiptId && swipeQueueCount > 0 && (
           <TouchableOpacity
             style={styles.swipeEntryCard}
             activeOpacity={0.85}
@@ -1765,11 +1916,10 @@ export default function ProcessReceiptScreen() {
             }
           >
             <View style={{ flex: 1 }}>
+              <Text style={styles.swipeEntryCta}>Pagerink prekių atpažinimą</Text>
               <Text style={styles.swipeEntryCount}>
-                Atpažintos prekės{" "}
-                {products.filter((p) => p.matchConfirmed).length} / {products.length}
+                Kortelių eilėje: {swipeQueueCount}
               </Text>
-              <Text style={styles.swipeEntryCta}>Padėk atpažinti</Text>
             </View>
             <Ionicons name="chevron-forward" size={22} color={colors.onPrimary} />
           </TouchableOpacity>
@@ -1798,9 +1948,6 @@ export default function ProcessReceiptScreen() {
             <View style={styles.productsHeaderTextWrap}>
               <Text style={styles.productsTitle}>
                 Prekės ({products.length})
-              </Text>
-              <Text style={styles.productsHint}>
-                Padėkite atpažinti prekes tikslesnei analizei.
               </Text>
             </View>
           </View>
@@ -1843,18 +1990,15 @@ export default function ProcessReceiptScreen() {
                   )}
                   <View style={styles.productInfo}>
                     {product.matchConfirmed && product.matchedName ? (
-                      <>
-                        <Text style={styles.matchedName}>
-                          <Ionicons
-                            name="checkmark-circle"
-                            size={16}
-                            color={colors.primary}
-                          />
-                          {"  "}
-                          {product.matchedName}
-                        </Text>
-                        <Text style={styles.ocrName}>{product.name}</Text>
-                      </>
+                      <Text style={styles.matchedName}>
+                        <Ionicons
+                          name="checkmark-circle"
+                          size={16}
+                          color={colors.primary}
+                        />
+                        {"  "}
+                        {product.matchedName}
+                      </Text>
                     ) : (
                       <Text style={styles.productName}>
                         <Ionicons
@@ -1874,24 +2018,41 @@ export default function ProcessReceiptScreen() {
                         {product.name}
                       </Text>
                     )}
-                    {product.quantity !== 1 && (
-                      <Text style={styles.productQuantity}>
-                        {product.quantity} {product.unit}
-                        {product.pricePerUnit
-                          ? ` × €${product.pricePerUnit.toFixed(2)}/${product.unit}`
-                          : ""}
+                    <Text style={styles.productQuantity}>
+                      {formatAmountLabel(product)}
+                    </Text>
+                  </View>
+                  <View style={styles.productPriceCol}>
+                    {product.promoPrice != null &&
+                    product.promoPrice < product.price ? (
+                      <>
+                        <Text style={styles.productPrice}>
+                          {(product.promoPrice * product.quantity).toFixed(2)} €
+                        </Text>
+                        <Text style={styles.productPriceStrike}>
+                          {(product.price * product.quantity).toFixed(2)} €
+                        </Text>
+                      </>
+                    ) : (
+                      <Text style={styles.productPrice}>
+                        {(product.price * product.quantity).toFixed(2)} €
                       </Text>
                     )}
                   </View>
-                  <View style={styles.productPriceCol}>
-                    <Text style={styles.productPrice}>
-                      €
-                      {(
-                        (product.promoPrice ?? product.price) *
-                        product.quantity
-                      ).toFixed(2)}
-                    </Text>
-                  </View>
+                  <TouchableOpacity
+                    style={styles.productRowMenuBtn}
+                    onPress={(e) => {
+                      e.stopPropagation?.();
+                      setMenuOpenForIndex(index);
+                    }}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons
+                      name="ellipsis-vertical"
+                      size={18}
+                      color={colors.textSecondary}
+                    />
+                  </TouchableOpacity>
                 </View>
                 {!product.matchConfirmed && product.altMatches.length > 0 && (
                   <View style={styles.inlineMatchSection}>
@@ -1938,26 +2099,6 @@ export default function ProcessReceiptScreen() {
                         );
                       })}
 
-                      <TouchableOpacity
-                        style={styles.optionCard}
-                        onPress={() => handleBrowseCategories(index)}
-                      >
-                        <View style={styles.optionCardEmojiWrap}>
-                          <Text style={styles.optionCardEmoji}>🥦</Text>
-                          <Ionicons
-                            name="add-circle"
-                            size={22}
-                            color={colors.primary}
-                            style={styles.optionCardAddIcon}
-                          />
-                        </View>
-                        <Text
-                          numberOfLines={2}
-                          style={styles.optionCardName}
-                        >
-                          Ieškoti kito produkto
-                        </Text>
-                      </TouchableOpacity>
                     </ScrollView>
                   </View>
                 )}
@@ -1966,19 +2107,6 @@ export default function ProcessReceiptScreen() {
                   <View style={styles.editSection}>
                     {isCompletelyUnrecognized(product) && (
                       <View style={styles.unrecognizedBlock}>
-                        <Text style={styles.rawTextLabel}>
-                          Nuskaitytas regionas:
-                        </Text>
-                        {pageMetas.length > 0 && (
-                          <View style={styles.regionPreviewWrap}>
-                            <RegionPreview
-                              pages={pageMetas}
-                              region={product.region}
-                              cardWidth={CARD_WIDTH - 40}
-                            />
-                          </View>
-                        )}
-
                         <Text style={styles.editLabel}>OCR pavadinimas</Text>
                         <View style={styles.editInputLoaderWrap}>
                           <TextInput
@@ -2011,127 +2139,23 @@ export default function ProcessReceiptScreen() {
                         </View>
                       </View>
                     )}
-                    {priceEditorIndex === index && (
-                      <View style={styles.priceEditorInline}>
-                        {!isCompletelyUnrecognized(product) && (
-                          <>
-                            <Text style={styles.rawTextLabel}>
-                              Nuskaitytas regionas:
-                            </Text>
-                            {pageMetas.length > 0 && (
-                              <View style={styles.regionPreviewWrap}>
-                                <RegionPreview
-                                  pages={pageMetas}
-                                  region={product.region}
-                                  cardWidth={CARD_WIDTH - 40}
-                                />
-                              </View>
-                            )}
-                            <View style={{ height: 10 }} />
-                          </>
-                        )}
 
-                        <View style={styles.editRow}>
-                          <View style={styles.editField}>
-                            <Text style={styles.editLabel}>Kaina</Text>
-                            <TextInput
-                              style={styles.editInput}
-                              value={product.price.toString()}
-                              onChangeText={(text) => {
-                                setProducts((prev) => {
-                                  const updated = [...prev];
-                                  updated[index] = {
-                                    ...updated[index],
-                                    price: parseFloat(text) || 0,
-                                    priceVerified: false,
-                                  };
-                                  return updated;
-                                });
-                              }}
-                              keyboardType="decimal-pad"
-                            />
-                          </View>
-
-                          <View style={styles.editField}>
-                            <Text style={styles.editLabel}>Galutinė kaina</Text>
-                            <TextInput
-                              style={styles.editInput}
-                              value={product.promoPrice?.toString() || ""}
-                              onChangeText={(text) => {
-                                setProducts((prev) => {
-                                  const updated = [...prev];
-                                  updated[index] = {
-                                    ...updated[index],
-                                    promoPrice: text
-                                      ? parseFloat(text) || null
-                                      : null,
-                                    priceVerified: false,
-                                  };
-                                  return updated;
-                                });
-                              }}
-                              keyboardType="decimal-pad"
-                              placeholder="—"
-                            />
-                          </View>
-                        </View>
+                    {/* Raw OCR region preview — dev-only surface, gated by
+                        DEV_MODE so end users don't see it. Useful for
+                        debugging parser/geometry issues against the source
+                        image. */}
+                    {DEV_MODE && pageMetas.length > 0 && (
+                      <View style={styles.regionPreviewWrap}>
+                        <Text style={styles.rawTextLabel}>
+                          Nuskaitytas regionas (dev):
+                        </Text>
+                        <RegionPreview
+                          pages={pageMetas}
+                          region={product.region}
+                          cardWidth={CARD_WIDTH - 40}
+                        />
                       </View>
                     )}
-                    <View style={styles.actionsRow}>
-                      <TouchableOpacity
-                        style={[
-                          styles.actionButton,
-                          priceEditorIndex === index &&
-                            styles.actionButtonPrimary,
-                        ]}
-                        onPress={() => {
-                          if (priceEditorIndex === index) {
-                            setPriceEditorIndex(null); // collapse editor, autosave already handles persistence
-                          } else {
-                            setPriceEditorIndex(index);
-                          }
-                        }}
-                      >
-                        <Ionicons
-                          name={
-                            priceEditorIndex === index
-                              ? "checkmark"
-                              : "pricetag-outline"
-                          }
-                          size={16}
-                          color={
-                            priceEditorIndex === index ? colors.onPrimary : colors.primary
-                          }
-                        />
-                        <Text
-                          style={[
-                            styles.actionButtonText,
-                            priceEditorIndex === index &&
-                              styles.actionButtonTextPrimary,
-                          ]}
-                        >
-                          {priceEditorIndex === index
-                            ? "Patvirtinti"
-                            : "Netinkama kaina"}
-                        </Text>
-                      </TouchableOpacity>
-
-                      {priceEditorIndex !== index && (
-                        <TouchableOpacity
-                          style={styles.actionButton}
-                          onPress={() => handleBrowseCategories(index)}
-                        >
-                          <Ionicons
-                            name="grid-outline"
-                            size={16}
-                            color={colors.primary}
-                          />
-                          <Text style={styles.actionButtonText}>
-                            Surasti produktą
-                          </Text>
-                        </TouchableOpacity>
-                      )}
-                    </View>
                   </View>
                 )}
               </TouchableOpacity>
@@ -2207,11 +2231,142 @@ export default function ProcessReceiptScreen() {
           </View>
         </View>
       )}
+
+      {/* Per-row three-dots action menu. Sits as a modal sheet so it doesn't
+          interfere with the ScrollView above. */}
+      <Modal
+        visible={menuOpenForIndex !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setMenuOpenForIndex(null)}
+      >
+        <Pressable
+          style={styles.sheetBackdrop}
+          onPress={() => setMenuOpenForIndex(null)}
+        >
+          <Pressable style={styles.sheetCard} onPress={() => {}}>
+            {menuOpenForIndex !== null &&
+              (() => {
+                const target = products[menuOpenForIndex];
+                if (!target) return null;
+                const hasImage =
+                  !!target.storeProductImageUrl &&
+                  String(target.storeProductImageUrl).length > 0;
+                // Only offer photo upload for matched lines that don't yet
+                // have an image. Unrecognized lines have no StoreProduct to
+                // attach to — showing the option would just confuse.
+                const canAddPhoto = !!target.storeProductId && !hasImage;
+                return (
+                  <>
+                    {canAddPhoto && (
+                      <TouchableOpacity
+                        style={styles.sheetItem}
+                        onPress={() => {
+                          const idx = menuOpenForIndex;
+                          setMenuOpenForIndex(null);
+                          if (idx !== null) handleAddProductPhoto(idx);
+                        }}
+                      >
+                        <Ionicons name="camera-outline" size={20} color={colors.textPrimary} />
+                        <Text style={styles.sheetItemText}>Pridėti nuotrauką</Text>
+                      </TouchableOpacity>
+                    )}
+                    <TouchableOpacity
+                      style={styles.sheetItem}
+                      onPress={() => {
+                        const idx = menuOpenForIndex;
+                        setMenuOpenForIndex(null);
+                        setIssueFlags({ name: false, price: false, amount: false, discount: false, image: false });
+                        if (idx !== null) setIssueModalForIndex(idx);
+                      }}
+                    >
+                      <Ionicons name="flag-outline" size={20} color={colors.textPrimary} />
+                      <Text style={styles.sheetItemText}>Neteisingi duomenys</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.sheetItem, styles.sheetCancel]}
+                      onPress={() => setMenuOpenForIndex(null)}
+                    >
+                      <Text style={styles.sheetCancelText}>Atšaukti</Text>
+                    </TouchableOpacity>
+                  </>
+                );
+              })()}
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Issue-reporting modal — 4 checkboxes + Siųsti. */}
+      <Modal
+        visible={issueModalForIndex !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIssueModalForIndex(null)}
+      >
+        <Pressable
+          style={styles.sheetBackdrop}
+          onPress={() => setIssueModalForIndex(null)}
+        >
+          <Pressable style={styles.issueModalCard} onPress={() => {}}>
+            <Text style={styles.issueModalTitle}>Kas neteisinga?</Text>
+            {(
+              [
+                { key: "name",     label: "Neteisingas pavadinimas" },
+                { key: "price",    label: "Neteisinga kaina" },
+                { key: "amount",   label: "Neteisingas kiekis" },
+                { key: "discount", label: "Neteisinga nuolaida" },
+                { key: "image",    label: "Neteisinga nuotrauka" },
+              ] as const
+            ).map(({ key, label }) => (
+              <TouchableOpacity
+                key={key}
+                style={styles.checkboxRow}
+                onPress={() =>
+                  setIssueFlags((prev) => ({ ...prev, [key]: !prev[key] }))
+                }
+              >
+                <Ionicons
+                  name={issueFlags[key] ? "checkbox" : "square-outline"}
+                  size={22}
+                  color={issueFlags[key] ? colors.primary : colors.textSecondary}
+                />
+                <Text style={styles.checkboxLabel}>{label}</Text>
+              </TouchableOpacity>
+            ))}
+            <View style={styles.issueModalBtnRow}>
+              <TouchableOpacity
+                style={[styles.issueModalBtn, styles.issueModalBtnSecondary]}
+                onPress={() => setIssueModalForIndex(null)}
+              >
+                <Text style={styles.issueModalBtnTextSecondary}>Atšaukti</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[
+                  styles.issueModalBtn,
+                  styles.issueModalBtnPrimary,
+                  !anyIssueChecked(issueFlags) && styles.issueModalBtnDisabled,
+                ]}
+                disabled={!anyIssueChecked(issueFlags)}
+                onPress={() => {
+                  const idx = issueModalForIndex;
+                  if (idx !== null) submitIssueReport(idx, issueFlags);
+                  setIssueModalForIndex(null);
+                }}
+              >
+                <Text style={styles.issueModalBtnTextPrimary}>Siųsti</Text>
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </>
   );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
+  navHeaderWrap: { alignItems: "center", maxWidth: 240 },
+  navTitle: { fontSize: 15, fontWeight: "700", color: c.textPrimary },
+  navSubtitle: { fontSize: 11, color: c.textSecondary, marginTop: 1 },
   swipeEntryCard: {
     marginTop: 12,
     marginHorizontal: 16,
@@ -2227,18 +2382,18 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     shadowRadius: 6,
     elevation: 3,
   },
+  swipeEntryCta: {
+    color: c.onPrimary,
+    fontSize: 17,
+    fontWeight: "700",
+  },
   swipeEntryCount: {
     color: c.onPrimary,
     opacity: 0.9,
     fontSize: 12,
     fontWeight: "600",
     letterSpacing: 0.5,
-  },
-  swipeEntryCta: {
-    color: c.onPrimary,
-    fontSize: 17,
-    fontWeight: "700",
-    marginTop: 2,
+    marginTop: 3,
   },
   processingOverlay: {
     position: "absolute",
@@ -2542,8 +2697,89 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   matchedName: { fontSize: 14, color: c.primary, fontWeight: "600" },
   ocrName: { fontSize: 11, color: c.textMuted, marginTop: 2 },
   productQuantity: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
-  productPriceCol: { alignItems: "flex-end", marginRight: 8 },
+  productPriceCol: { alignItems: "flex-end", marginRight: 4 },
   productPrice: { fontSize: 15, fontWeight: "700", color: c.textPrimary },
+  productPriceStrike: {
+    fontSize: 12,
+    color: c.textMuted,
+    textDecorationLine: "line-through",
+    marginTop: 2,
+  },
+  productRowMenuBtn: { padding: 6, marginLeft: 2 },
+
+  // Three-dots action sheet
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: c.overlayBackdrop,
+    justifyContent: "flex-end",
+  },
+  sheetCard: {
+    backgroundColor: c.cardBackground,
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    paddingVertical: 8,
+    paddingHorizontal: 8,
+  },
+  sheetItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+  },
+  sheetItemText: { fontSize: 15, color: c.textPrimary, fontWeight: "500" },
+  sheetCancel: { justifyContent: "center", marginTop: 4 },
+  sheetCancelText: { fontSize: 14, color: c.textSecondary, fontWeight: "600" },
+
+  // Issue-report modal
+  issueModalCard: {
+    backgroundColor: c.cardBackground,
+    marginHorizontal: 24,
+    borderRadius: 16,
+    padding: 20,
+    alignSelf: "center",
+    marginTop: "auto",
+    marginBottom: "auto",
+    width: "88%",
+  },
+  issueModalTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: c.textPrimary,
+    marginBottom: 14,
+  },
+  checkboxRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 8,
+  },
+  checkboxLabel: { fontSize: 15, color: c.textPrimary },
+  issueModalBtnRow: {
+    flexDirection: "row",
+    gap: 10,
+    marginTop: 16,
+    justifyContent: "flex-end",
+  },
+  issueModalBtn: {
+    paddingVertical: 10,
+    paddingHorizontal: 18,
+    borderRadius: 10,
+  },
+  issueModalBtnSecondary: { backgroundColor: c.surfaceMuted },
+  issueModalBtnPrimary: { backgroundColor: c.primary },
+  issueModalBtnDisabled: { opacity: 0.4 },
+  issueModalBtnTextSecondary: {
+    color: c.textPrimary,
+    fontWeight: "600",
+    fontSize: 14,
+  },
+  issueModalBtnTextPrimary: {
+    color: c.onPrimary,
+    fontWeight: "700",
+    fontSize: 14,
+  },
 
   editSection: {
     marginTop: 12,
