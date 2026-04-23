@@ -1079,22 +1079,6 @@ export default function ProcessReceiptScreen() {
     comparisonKeyRef.current = nextComparisonKey;
     scheduleDebouncedSave(parsedData);
   }, [header, products, footer, receiptId, imageFilePath]);
-  const applyAltMatch = (productIndex: number, alt: ProductMatchOption) => {
-    setProducts((prev) => {
-      if (productIndex < 0 || productIndex >= prev.length) return prev;
-      const updated = [...prev];
-      updated[productIndex] = {
-        ...updated[productIndex],
-        matchedName: alt.name,
-        storeProductId: alt.storeProductId,
-        storeProductImageUrl: alt.imageUrl,
-        matchConfidence: alt.confidence,
-        matchConfirmed: true,
-        priceVerified: false,
-      };
-      return updated;
-    });
-  };
   // Unmount flush
   useEffect(() => {
     return () => {
@@ -1900,10 +1884,12 @@ export default function ProcessReceiptScreen() {
           }}
         />
 
-        {/* Swipe-to-help entry point. Hidden when there's nothing left for
-            this user to act on (queue is empty) so it doesn't dangle as a
-            dead button after all cards are swiped. Preview mode never
-            persists, so this never appears there. */}
+        {/* Swipe-to-help entry point. When this receipt still has items for
+            the user to act on (queue > 0), show the primary pink CTA. Once
+            drained, swap to a less-accented "Man patinka padėti" button that
+            routes into the cross-chain orphan queue — users who enjoyed the
+            receipt swipe can keep contributing to the matching dataset.
+            Preview mode never persists, so neither appears there. */}
         {receiptId && swipeQueueCount > 0 && (
           <TouchableOpacity
             style={styles.swipeEntryCard}
@@ -1922,6 +1908,21 @@ export default function ProcessReceiptScreen() {
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={22} color={colors.onPrimary} />
+          </TouchableOpacity>
+        )}
+        {receiptId && swipeQueueCount === 0 && (
+          <TouchableOpacity
+            style={styles.swipeHelpMoreCard}
+            activeOpacity={0.85}
+            onPress={() => router.push("/swipe/extra")}
+          >
+            <View style={{ flex: 1 }}>
+              <Text style={styles.swipeHelpMoreCta}>Man patinka padėti</Text>
+              <Text style={styles.swipeHelpMoreSubtitle}>
+                Padėk atpažinti daugiau prekių iš kitų parduotuvių
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.primary} />
           </TouchableOpacity>
         )}
 
@@ -2054,55 +2055,6 @@ export default function ProcessReceiptScreen() {
                     />
                   </TouchableOpacity>
                 </View>
-                {!product.matchConfirmed && product.altMatches.length > 0 && (
-                  <View style={styles.inlineMatchSection}>
-                    <ScrollView
-                      horizontal
-                      showsHorizontalScrollIndicator={false}
-                      contentContainerStyle={styles.optionCardsRow}
-                    >
-                      {product.altMatches.slice(0, 3).map((alt) => {
-                        const selected =
-                          product.storeProductId === alt.storeProductId;
-                        const shownPrice = alt.promoPrice ?? alt.price ?? null;
-
-                        return (
-                          <TouchableOpacity
-                            key={alt.storeProductId}
-                            style={[
-                              styles.optionCard,
-                              selected && styles.optionCardSelected,
-                            ]}
-                            onPress={() => applyAltMatch(index, alt)}
-                          >
-                            {alt.imageUrl ? (
-                              <Image
-                                source={{ uri: alt.imageUrl }}
-                                style={styles.optionCardImage}
-                                resizeMode="contain"
-                              />
-                            ) : (
-                              <View style={styles.optionCardImagePlaceholder} />
-                            )}
-                            <Text
-                              numberOfLines={2}
-                              style={styles.optionCardName}
-                            >
-                              {alt.name}
-                            </Text>
-                            <Text style={styles.optionCardMeta}>
-                              {typeof shownPrice === "number"
-                                ? `€${shownPrice.toFixed(2)}`
-                                : `Tikimybė ${Math.round(alt.confidence * 100)}%`}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-
-                    </ScrollView>
-                  </View>
-                )}
-
                 {editingSection === index && canExpandProduct(product) && (
                   <View style={styles.editSection}>
                     {isCompletelyUnrecognized(product) && (
@@ -2395,6 +2347,29 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     letterSpacing: 0.5,
     marginTop: 3,
   },
+  swipeHelpMoreCard: {
+    marginTop: 12,
+    marginHorizontal: 16,
+    backgroundColor: c.cardBackground,
+    borderWidth: 1,
+    borderColor: c.primary,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  swipeHelpMoreCta: {
+    color: c.primary,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  swipeHelpMoreSubtitle: {
+    color: c.textSecondary,
+    fontSize: 12,
+    fontWeight: "500",
+    marginTop: 2,
+  },
   processingOverlay: {
     position: "absolute",
     top: 0,
@@ -2526,73 +2501,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   actionButtonText: {
     fontSize: 13,
     color: c.primary,
-    fontWeight: "600",
-  },
-  inlineMatchSection: {
-    marginTop: 10,
-    gap: 10,
-  },
-  optionCardsRow: {
-    gap: 10,
-    paddingRight: 16,
-  },
-  optionCard: {
-    width: 150,
-    backgroundColor: c.cardBackground,
-    borderWidth: 1,
-    borderColor: c.border,
-    borderRadius: 10,
-    padding: 10,
-  },
-  optionCardSelected: {
-    borderColor: c.primary,
-    borderWidth: 2,
-    backgroundColor: c.primaryMuted,
-  },
-  optionCardImage: {
-    width: "100%",
-    height: 70,
-    borderRadius: 6,
-    backgroundColor: c.surfaceSubtle,
-    marginBottom: 8,
-  },
-  optionCardImagePlaceholder: {
-    width: "100%",
-    height: 70,
-    borderRadius: 6,
-    backgroundColor: c.surfaceMuted,
-    marginBottom: 8,
-  },
-  optionCardEmojiWrap: {
-    position: "relative",
-    width: "100%",
-    height: 70,
-    borderRadius: 6,
-    backgroundColor: c.surfaceMuted,
-    marginBottom: 8,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  optionCardEmoji: {
-    fontSize: 40,
-    opacity: 0.4,
-  },
-  optionCardAddIcon: {
-    position: "absolute",
-    right: 4,
-    bottom: 4,
-    backgroundColor: c.cardBackground,
-    borderRadius: 11,
-  },
-  optionCardName: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: c.textPrimary,
-  },
-  optionCardMeta: {
-    marginTop: 6,
-    fontSize: 12,
-    color: c.textSecondary,
     fontWeight: "600",
   },
   productRowCard: {

@@ -69,10 +69,16 @@ export default function SwipeScreen() {
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [loading, setLoading] = useState(true);
+  const [refetching, setRefetching] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<QueueItem[]>([]);
   const [itemIdx, setItemIdx] = useState(0);
   const [rankIdx, setRankIdx] = useState(0);
+  // exhausted flips true only after a refetch confirms nothing more is
+  // available for this user — not just when the in-memory queue ends. Keeps
+  // the "Ačiū" screen from flashing prematurely when the server still has
+  // rank-2+ candidates waiting.
+  const [exhausted, setExhausted] = useState(false);
   const [undoVisible, setUndoVisible] = useState(false);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastSnapshotRef = useRef<{
@@ -93,6 +99,21 @@ export default function SwipeScreen() {
     })();
   }, []);
 
+  // Fetch the receipt's swipe queue (filtered server-side by already-voted
+  // pairs + self-pair verified prices). Returns the filtered item list.
+  const loadQueue = async (): Promise<QueueItem[]> => {
+    const userId = userIdRef.current ?? (await getUserId());
+    userIdRef.current = userId;
+    const res = await fetch(
+      `${API_BASE_URL}/api/receipts/${receiptId}/swipe-queue?userId=${encodeURIComponent(userId)}`
+    );
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    return (data?.items ?? []).filter(
+      (it: QueueItem) => Array.isArray(it.candidates) && it.candidates.length > 0
+    );
+  };
+
   useEffect(() => {
     if (!Number.isFinite(receiptId)) {
       setError("Neteisingas kvito ID");
@@ -102,21 +123,11 @@ export default function SwipeScreen() {
     (async () => {
       try {
         setLoading(true);
-        const userId = userIdRef.current ?? (await getUserId());
-        userIdRef.current = userId;
-        // Pass userId so the backend can filter out cards this user has
-        // already voted on (cross-pair votes) or confirmed via self-pair
-        // (priceVerified=true). Otherwise re-entering the screen shows the
-        // same cards again.
-        const res = await fetch(
-          `${API_BASE_URL}/api/receipts/${receiptId}/swipe-queue?userId=${encodeURIComponent(userId)}`
-        );
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = await res.json();
-        const validItems: QueueItem[] = (data?.items ?? []).filter(
-          (it: QueueItem) => Array.isArray(it.candidates) && it.candidates.length > 0
-        );
+        const validItems = await loadQueue();
         setItems(validItems);
+        setItemIdx(0);
+        setRankIdx(0);
+        setExhausted(validItems.length === 0);
         cardShownAtRef.current = Date.now();
       } catch (e: any) {
         setError(e?.message || "Nepavyko gauti eilės");
@@ -124,11 +135,42 @@ export default function SwipeScreen() {
         setLoading(false);
       }
     })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [receiptId]);
+
+  // Once we've swiped past the last in-memory card, try one refetch to see
+  // whether the server has more (rank-2+ candidates surface here after the
+  // rank-1 vote is recorded). If new items come in, continue the session.
+  // If not, mark exhausted — only then does the Ačiū screen appear.
+  useEffect(() => {
+    if (loading || error || refetching || exhausted) return;
+    if (items.length === 0) return; // initial empty already handled
+    if (itemIdx < items.length) return; // still have cards in memory
+    (async () => {
+      try {
+        setRefetching(true);
+        const more = await loadQueue();
+        if (more.length > 0) {
+          setItems(more);
+          setItemIdx(0);
+          setRankIdx(0);
+          cardShownAtRef.current = Date.now();
+        } else {
+          setExhausted(true);
+        }
+      } catch {
+        // Fail closed: don't block the Ačiū screen on a transient error.
+        setExhausted(true);
+      } finally {
+        setRefetching(false);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemIdx, items.length, loading, error, refetching, exhausted]);
 
   const currentItem = items[itemIdx];
   const currentCandidate = currentItem?.candidates[rankIdx];
-  const done = !loading && !error && (items.length === 0 || itemIdx >= items.length);
+  const done = !loading && !error && !refetching && exhausted;
 
   const sendVote = async (vote: Vote, item: QueueItem, cand: Candidate, dwellMs: number) => {
     const userId = userIdRef.current ?? (await getUserId());
@@ -286,13 +328,13 @@ export default function SwipeScreen() {
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.pageBackground }}>
       <Stack.Screen options={{ title: "Padėk atpažinti" }} />
 
-      {loading && (
+      {(loading || refetching) && (
         <View style={styles.centered}>
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       )}
 
-      {!loading && error && (
+      {!loading && !refetching && error && (
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error}</Text>
           <TouchableOpacity style={styles.closeBtn} onPress={() => router.back()}>
@@ -301,7 +343,7 @@ export default function SwipeScreen() {
         </View>
       )}
 
-      {!loading && !error && done && (
+      {!loading && !refetching && !error && done && (
         <View style={styles.centered}>
           <Ionicons name="checkmark-circle" size={72} color={colors.primary} />
           <Text style={styles.doneTitle}>Ačiū!</Text>
@@ -310,13 +352,21 @@ export default function SwipeScreen() {
               ? "Šiame kvite nėra prekių atpažinimui."
               : "Peržiūrėjai visus kvito produktus."}
           </Text>
-          <TouchableOpacity style={styles.closeBtn} onPress={() => router.back()}>
-            <Text style={styles.closeBtnText}>Grįžti į kvitą</Text>
-          </TouchableOpacity>
+          <View style={styles.buttonRow}>
+            <TouchableOpacity style={styles.closeBtn} onPress={() => router.back()}>
+              <Text style={styles.closeBtnText}>Grįžti į kvitą</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.closeBtn, styles.secondaryBtn]}
+              onPress={() => router.push("/swipe/extra")}
+            >
+              <Text style={styles.secondaryBtnText}>Gal dar?</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       )}
 
-      {!loading && !error && !done && currentItem && currentCandidate && (
+      {!loading && !refetching && !error && !done && currentItem && currentCandidate && (
         <View style={styles.stage}>
           {undoVisible && (
             <TouchableOpacity style={styles.toast} onPress={handleUndo} activeOpacity={0.8}>
@@ -413,6 +463,13 @@ const makeStyles = (c: AppTheme) =>
       borderRadius: 12,
     },
     closeBtnText: { color: c.onPrimary, fontWeight: "600", fontSize: 15 },
+    buttonRow: { flexDirection: "row", gap: 12 },
+    secondaryBtn: {
+      backgroundColor: c.cardBackground,
+      borderWidth: 1,
+      borderColor: c.primary,
+    },
+    secondaryBtnText: { color: c.primary, fontWeight: "600", fontSize: 15 },
 
     stage: { flex: 1, padding: 16, alignItems: "center", justifyContent: "center" },
 

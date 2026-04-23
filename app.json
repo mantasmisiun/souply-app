@@ -9,7 +9,8 @@
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.anonymous.basketapp"
     },
     "android": {
       "adaptiveIcon": {
@@ -29,8 +30,8 @@
       [
         "expo-splash-screen",
         {
-          "image": "./assets/images/icon-splash.png",
-          "imageWidth": 200,
+          "image": "./assets/images/icon.png",
+          "imageWidth": 220,
           "resizeMode": "contain",
           "backgroundColor": "#FBF3E6",
           "dark": {
