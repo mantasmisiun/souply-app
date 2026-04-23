@@ -7,20 +7,32 @@ import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
 import { API_BASE_URL } from '../../../config/api';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 
+/** Lithuanian plural inflection for "prekė":
+ *    1  → prekės     (gen. sg.) "1 prekės"
+ *    2–9, 22–29 … → prekių (gen. pl.)
+ *    10–19, 20, 30 … → prekių
+ *  Simplified to two forms since the badge only shows positive counts. */
+function pluralizePrekes(n: number): string {
+    if (n === 1) return 'prekės';
+    return 'prekių';
+}
+
 interface ItemResult {
     productId: number;
     productName: string;
     quantity: number;
+    matchMode: 'sku' | 'base';
     price: number | null;
     promoPrice: number | null;
     effectivePrice: number | null;
-    isApproximated: boolean;
+    isMissing: boolean;
     isFallback: boolean;
     isWeighable: boolean;
     packsNeeded: number | null;
     totalPrice: number | null;
     storeProductName: string | null;
     storeProductId: number | null;
+    resolvedProductId: number | null;
 }
 
 interface StoreResult {
@@ -33,6 +45,7 @@ interface StoreResult {
     distance: number;
     total: number;
     isApproximated: boolean;
+    missingItemNames: string[];
     items: ItemResult[];
 }
 
@@ -217,12 +230,20 @@ export default function BasketResultsScreen() {
                                             <View style={styles.metaRow}>
                                                 <Ionicons name="location-outline" size={12} color={colors.textMuted} />
                                                 <Text style={styles.distance}>{item.distance} km</Text>
-                                                {item.isApproximated && (
-                                                    <View style={styles.approxBadge}>
-                                                        <Text style={styles.approxText}>Apytikslė</Text>
+                                                {item.missingItemNames && item.missingItemNames.length > 0 && (
+                                                    <View style={styles.missingBadge}>
+                                                        <Ionicons name="alert-circle-outline" size={11} color={colors.warning} />
+                                                        <Text style={styles.missingBadgeText}>
+                                                            Trūksta {item.missingItemNames.length} {pluralizePrekes(item.missingItemNames.length)}
+                                                        </Text>
                                                     </View>
                                                 )}
                                             </View>
+                                            {isSelected && item.missingItemNames && item.missingItemNames.length > 0 && (
+                                                <Text style={styles.missingList} numberOfLines={3}>
+                                                    Nėra: {item.missingItemNames.join(', ')}
+                                                </Text>
+                                            )}
                                         </View>
                                         <Text style={styles.price}>€{item.total.toFixed(2)}</Text>
                                     </TouchableOpacity>
@@ -285,6 +306,27 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     storeName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
     metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 },
     distance: { fontSize: 11, color: c.textMuted },
+    missingBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 2,
+        marginLeft: 6,
+        paddingHorizontal: 6,
+        paddingVertical: 1,
+        borderRadius: 8,
+        backgroundColor: c.warningMuted,
+    },
+    missingBadgeText: {
+        fontSize: 10,
+        color: c.warning,
+        fontWeight: '600',
+    },
+    missingList: {
+        marginTop: 4,
+        fontSize: 11,
+        color: c.textSecondary,
+        fontStyle: 'italic',
+    },
     approxBadge: {
         backgroundColor: c.warningMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginLeft: 4,
     },

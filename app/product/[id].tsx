@@ -1,11 +1,12 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Image, TextInput } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Image, TextInput, Modal, Dimensions } from 'react-native';
 import { ProductImage } from '../../components/ProductImage';
 import { useEffect, useState, useMemo } from 'react';
 import { useLocalSearchParams, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
-import Svg, { Line, Circle, Text as SvgText } from 'react-native-svg';
+import Svg, { Line, Circle, Polygon, Text as SvgText } from 'react-native-svg';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 
 type Styles = ReturnType<typeof makeStyles>;
 
@@ -57,11 +58,315 @@ interface Category {
     parentCategoryId: number | null;
 }
 
-const CHART_WIDTH = 120;
-const CHART_HEIGHT = 50;
+const MINI_CHART_WIDTH = 140;
+const MINI_CHART_HEIGHT = 64;
+const MINI_CHART_MAX_POINTS = 6;
 
-function MiniPriceChart({ prices, colors, styles }: { prices: PricePoint[]; colors: AppTheme; styles: Styles }) {
-    if (!prices.length) {
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+const MODAL_CHART_HEIGHT = 260;
+// Modal chart's min width fits the card (screen width minus outer padding)
+// so very short histories don't look squished. Longer histories grow the
+// SVG width horizontally, and the parent ScrollView handles the overflow.
+const MODAL_CHART_MIN_WIDTH = SCREEN_WIDTH - 80;
+
+/**
+ * Normalize/filter prices into a rendering-ready sequence:
+ *   - Prefer non-fallback rows when ANY exist; otherwise use fallbacks
+ *     (so freshly-scraped SPs that have never had a real receipt still
+ *     show something instead of the empty state).
+ *   - Sort ascending by date (left = old, right = new).
+ *   - Optionally cap to the last N points (mini chart).
+ */
+function preparePriceData(prices: PricePoint[], maxPoints?: number): PricePoint[] {
+    if (!prices.length) return [];
+    const nonFallback = prices.filter(p => !p.isFallback);
+    const base = nonFallback.length > 0 ? nonFallback : prices;
+    const sorted = [...base].sort(
+        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+    if (maxPoints && sorted.length > maxPoints) return sorted.slice(-maxPoints);
+    return sorted;
+}
+
+const shortDate = (d: string) =>
+    new Date(d).toLocaleDateString('lt-LT', { month: 'short', day: 'numeric' });
+
+/**
+ * Dual-series price chart. Regular price line in muted gray, promo price
+ * line in primary (pink), with the area between them filled at low opacity
+ * to signal the discount band. Points without a promoPrice render only on
+ * the regular line, so the fill polygon "pinches" at those x-positions —
+ * visually taking the user's hint that "we don't know exactly when the
+ * discount started/ended, just draw back to neighbouring points without
+ * discount".
+ *
+ * Edge case: a single data point that has BOTH price and promoPrice
+ * renders as two dots vertically connected by a thin primary-color line
+ * (the degenerate fill polygon). Dashed extensions run from each series'
+ * last point to the right edge.
+ *
+ * API:
+ *   - data: sorted-asc, already-filtered PricePoint[]
+ *   - width/height: SVG canvas size
+ *   - Returns just the SVG; the caller decides how to position price
+ *     labels / tap targets around it.
+ */
+/** Right-padding reserved for an externally-drawn price label that sits
+ *  to the right of the dashed extension line. Both the mini chart and the
+ *  modal chart overlay a React Native Text at the last-point Y using this
+ *  reserved space. */
+const CHART_LABEL_MARGIN = 48;
+
+function computeChartPadding(reserveLabelSpace: boolean) {
+    return {
+        top: 10,
+        bottom: 18,
+        left: 10,
+        right: reserveLabelSpace ? CHART_LABEL_MARGIN : 10,
+    };
+}
+
+/**
+ * Mirror the Y-axis math from PriceChartSvg so callers can overlay native
+ * text labels at the precise Y of the last data point's regular and promo
+ * prices. We can't rely on react-native-svg's SvgText for this — text-
+ * anchor + strikethrough combined with the 48-px label margin hit platform
+ * clipping/rendering quirks. RN Text anchored to `right` + fixed top in
+ * an absolutely-positioned overlay is rock-solid by comparison.
+ */
+function computeLastPointYs(
+    data: PricePoint[],
+    height: number,
+    reserveLabelSpace: boolean
+): { priceY: number; promoY: number | null } | null {
+    if (!data.length) return null;
+    const padding = computeChartPadding(reserveLabelSpace);
+    const chartH = height - padding.top - padding.bottom;
+    const allPriceValues: number[] = [];
+    for (const d of data) {
+        if (d.price !== null && d.price !== undefined) allPriceValues.push(Number(d.price));
+        if (d.promoPrice !== null && d.promoPrice !== undefined) allPriceValues.push(Number(d.promoPrice));
+    }
+    const minPrice = Math.min(...allPriceValues);
+    const maxPrice = Math.max(...allPriceValues);
+    const range = maxPrice - minPrice;
+    const ypos = (v: number) =>
+        range === 0
+            ? padding.top + chartH / 2
+            : padding.top + chartH - ((v - minPrice) / range) * chartH;
+    const last = data[data.length - 1];
+    return {
+        priceY: ypos(Number(last.price)),
+        promoY:
+            last.promoPrice !== null && last.promoPrice !== undefined
+                ? ypos(Number(last.promoPrice))
+                : null,
+    };
+}
+
+function PriceChartSvg({
+    data,
+    width,
+    height,
+    colors,
+    reserveLabelSpace = false,
+}: {
+    data: PricePoint[];
+    width: number;
+    height: number;
+    colors: AppTheme;
+    /** Reserve horizontal padding on the right so the caller can overlay a
+     *  price label aligned with the dashed extension line. Affects layout
+     *  math only; no label is drawn inside the SVG. */
+    reserveLabelSpace?: boolean;
+}) {
+    if (!data.length) return null;
+
+    const padding = computeChartPadding(reserveLabelSpace);
+    const chartW = width - padding.left - padding.right;
+    const chartH = height - padding.top - padding.bottom;
+
+    // Y-axis min/max covers BOTH series combined so they share a scale.
+    const allPriceValues: number[] = [];
+    for (const d of data) {
+        if (d.price !== null && d.price !== undefined) allPriceValues.push(Number(d.price));
+        if (d.promoPrice !== null && d.promoPrice !== undefined) allPriceValues.push(Number(d.promoPrice));
+    }
+    const minPrice = Math.min(...allPriceValues);
+    const maxPrice = Math.max(...allPriceValues);
+    const range = maxPrice - minPrice;
+
+    // When every price in the window is the same, there's no y-axis
+    // variation to show. Center the constant line vertically so dots land
+    // in the middle of the chart body instead of the bottom edge
+    // (which is what `range || 1` in the old formula produced).
+    const ypos = (v: number) => {
+        if (range === 0) return padding.top + chartH / 2;
+        return padding.top + chartH - ((v - minPrice) / range) * chartH;
+    };
+
+    const points = data.map((d, i) => {
+        const x = data.length === 1
+            ? padding.left + chartW / 2
+            : padding.left + (i / (data.length - 1)) * chartW;
+        const priceY = ypos(Number(d.price));
+        const promoY = d.promoPrice !== null && d.promoPrice !== undefined
+            ? ypos(Number(d.promoPrice))
+            : null;
+        return { x, priceY, promoY, date: d.date };
+    });
+
+    // Closed polygon between the two series. Top edge: regular price line.
+    // Bottom edge (reversed): promoY where defined, priceY where not —
+    // so the fill collapses to zero-height at points without promo,
+    // "tapering" into neighbors without a discount.
+    const hasAnyPromo = points.some(p => p.promoY !== null);
+    const topEdge = points.map(p => `${p.x},${p.priceY}`);
+    const bottomEdge = [...points]
+        .reverse()
+        .map(p => `${p.x},${p.promoY ?? p.priceY}`);
+    const fillPolygonPoints = [...topEdge, ...bottomEdge].join(' ');
+
+    const last = points[points.length - 1];
+    const dateLabelX = last.x;
+
+    return (
+        <Svg width={width} height={height}>
+            {/* Discount fill — only render if at least one point has promo */}
+            {hasAnyPromo && (
+                <Polygon
+                    points={fillPolygonPoints}
+                    fill={colors.primary}
+                    fillOpacity={0.18}
+                    stroke="none"
+                />
+            )}
+
+            {/* Single-point dual-price vertical connector (degenerate fill) */}
+            {points.length === 1 && points[0].promoY !== null && (
+                <Line
+                    x1={points[0].x}
+                    y1={points[0].priceY}
+                    x2={points[0].x}
+                    y2={points[0].promoY!}
+                    stroke={colors.primary}
+                    strokeOpacity={0.5}
+                    strokeWidth={1.5}
+                />
+            )}
+
+            {/* Regular price line — continuous across all points */}
+            {points.length > 1 &&
+                points.map((p, i) => {
+                    if (i === 0) return null;
+                    const prev = points[i - 1];
+                    return (
+                        <Line
+                            key={`rl-${i}`}
+                            x1={prev.x}
+                            y1={prev.priceY}
+                            x2={p.x}
+                            y2={p.priceY}
+                            stroke={colors.textSecondary}
+                            strokeWidth={1.5}
+                        />
+                    );
+                })}
+
+            {/* Promo line — only drawn between consecutive points that BOTH
+                have a promoPrice. Where promo is missing on either side,
+                the line effectively terminates into the fill polygon's
+                tapering edge. */}
+            {points.length > 1 &&
+                points.map((p, i) => {
+                    if (i === 0) return null;
+                    const prev = points[i - 1];
+                    if (prev.promoY === null || p.promoY === null) return null;
+                    return (
+                        <Line
+                            key={`pl-${i}`}
+                            x1={prev.x}
+                            y1={prev.promoY}
+                            x2={p.x}
+                            y2={p.promoY}
+                            stroke={colors.primary}
+                            strokeWidth={1.5}
+                        />
+                    );
+                })}
+
+            {/* Dashed extensions from last point to the right edge */}
+            <Line
+                x1={last.x}
+                y1={last.priceY}
+                x2={width - padding.right}
+                y2={last.priceY}
+                stroke={colors.textSecondary}
+                strokeWidth={1.25}
+                strokeDasharray="3,2"
+            />
+            {last.promoY !== null && (
+                <Line
+                    x1={last.x}
+                    y1={last.promoY}
+                    x2={width - padding.right}
+                    y2={last.promoY}
+                    stroke={colors.primary}
+                    strokeWidth={1.25}
+                    strokeDasharray="3,2"
+                />
+            )}
+
+            {/* Dots */}
+            {points.map((p, i) => (
+                <Circle
+                    key={`dot-r-${i}`}
+                    cx={p.x}
+                    cy={p.priceY}
+                    r={2.5}
+                    fill={colors.textSecondary}
+                />
+            ))}
+            {points.map((p, i) =>
+                p.promoY !== null ? (
+                    <Circle
+                        key={`dot-p-${i}`}
+                        cx={p.x}
+                        cy={p.promoY}
+                        r={2.5}
+                        fill={colors.primary}
+                    />
+                ) : null
+            )}
+
+            {/* Last-date label */}
+            <SvgText
+                x={dateLabelX}
+                y={height - 3}
+                fontSize={9}
+                fill={colors.textMuted}
+                textAnchor="middle"
+            >
+                {shortDate(last.date)}
+            </SvgText>
+        </Svg>
+    );
+}
+
+function MiniPriceChart({
+    prices,
+    colors,
+    styles,
+    onTap,
+}: {
+    prices: PricePoint[];
+    colors: AppTheme;
+    styles: Styles;
+    onTap?: () => void;
+}) {
+    const data = preparePriceData(prices, MINI_CHART_MAX_POINTS);
+
+    if (!data.length) {
         return (
             <View style={styles.chartEmpty}>
                 <Ionicons name="analytics-outline" size={20} color={colors.border} />
@@ -69,74 +374,78 @@ function MiniPriceChart({ prices, colors, styles }: { prices: PricePoint[]; colo
         );
     }
 
-    const nonFallback = prices.filter(p => !p.isFallback);
-    const data = nonFallback.length > 0 ? nonFallback : prices;
-    
-    const priceValues = data.map(p => Number(p.promoPrice || p.price));
-    const minPrice = Math.min(...priceValues);
-    const maxPrice = Math.max(...priceValues);
-    const range = maxPrice - minPrice || 1;
-    
-    const padding = { top: 12, bottom: 16, left: 8, right: 8 };
-    const chartW = CHART_WIDTH - padding.left - padding.right;
-    const chartH = CHART_HEIGHT - padding.top - padding.bottom;
+    const ys = computeLastPointYs(data, MINI_CHART_HEIGHT, true)!;
+    const lastRow = data[data.length - 1];
+    const rawPrice = Number(lastRow.price);
+    const rawPromo =
+        lastRow.promoPrice !== null && lastRow.promoPrice !== undefined
+            ? Number(lastRow.promoPrice)
+            : null;
+    const lastPriceY = ys.priceY;
+    const lastPromoY = ys.promoY;
 
-    if (data.length === 1) {
-        const x = padding.left + chartW / 2;
-        const y = padding.top + chartH / 2;
-        const price = Number(data[0].promoPrice || data[0].price);
-        const dateStr = new Date(data[0].date).toLocaleDateString('lt-LT', { month: 'short', day: 'numeric' });
-
-        return (
-            <View style={styles.chartContainer}>
-                <Svg width={CHART_WIDTH} height={CHART_HEIGHT}>
-                    <Line x1={x} y1={y} x2={CHART_WIDTH - padding.right} y2={y} stroke={colors.primary} strokeWidth={1.5} strokeDasharray="3,2" />
-                    <Circle cx={x} cy={y} r={3} fill={colors.primary} />
-                    <SvgText x={x} y={CHART_HEIGHT - 2} fontSize={8} fill={colors.textMuted} textAnchor="middle">{dateStr}</SvgText>
-                </Svg>
-                <Text style={styles.chartPrice}>€{price.toFixed(2)}</Text>
-            </View>
-        );
-    }
-
-    // Multiple points
-    const points = data.map((d, i) => {
-        const x = padding.left + (i / (data.length - 1)) * chartW;
-        const price = Number(d.promoPrice || d.price);
-        const y = padding.top + chartH - ((price - minPrice) / range) * chartH;
-        return { x, y, price, date: d.date };
-    });
+    // Approximate line-height for the RN Text label (fontSize 11 × ~1.35).
+    // Used to shift the top so the text baseline sits roughly at lastPriceY.
+    const LABEL_LINE = 15;
 
     return (
-        <View style={styles.chartContainer}>
-            <Svg width={CHART_WIDTH} height={CHART_HEIGHT}>
-                {points.map((p, i) => {
-                    if (i === 0) return null;
-                    return (
-                        <Line
-                            key={i}
-                            x1={points[i - 1].x} y1={points[i - 1].y}
-                            x2={p.x} y2={p.y}
-                            stroke={colors.primary} strokeWidth={1.5}
-                        />
-                    );
-                })}
-                {/* Extend last point as dashed line */}
-                {points.length > 0 && (
-                    <Line
-                        x1={points[points.length - 1].x}
-                        y1={points[points.length - 1].y}
-                        x2={CHART_WIDTH - padding.right}
-                        y2={points[points.length - 1].y}
-                        stroke={colors.primary} strokeWidth={1.5} strokeDasharray="3,2"
-                    />
+        <TouchableOpacity
+            style={styles.chartContainer}
+            activeOpacity={0.7}
+            onPress={onTap}
+            disabled={!onTap}
+        >
+            <View style={{ width: MINI_CHART_WIDTH, height: MINI_CHART_HEIGHT, position: 'relative' }}>
+                <PriceChartSvg
+                    data={data}
+                    width={MINI_CHART_WIDTH}
+                    height={MINI_CHART_HEIGHT}
+                    colors={colors}
+                    reserveLabelSpace
+                />
+                {rawPromo !== null ? (
+                    <>
+                        <Text
+                            style={[
+                                styles.chartOverlayLabel,
+                                {
+                                    top: lastPriceY - LABEL_LINE / 2,
+                                    color: colors.textMuted,
+                                    textDecorationLine: 'line-through',
+                                },
+                            ]}
+                        >
+                            €{rawPrice.toFixed(2)}
+                        </Text>
+                        <Text
+                            style={[
+                                styles.chartOverlayLabel,
+                                {
+                                    top: (lastPromoY ?? lastPriceY) - LABEL_LINE / 2,
+                                    color: colors.textPrimary,
+                                    fontWeight: '700',
+                                },
+                            ]}
+                        >
+                            €{rawPromo.toFixed(2)}
+                        </Text>
+                    </>
+                ) : (
+                    <Text
+                        style={[
+                            styles.chartOverlayLabel,
+                            {
+                                top: lastPriceY - LABEL_LINE / 2,
+                                color: colors.textPrimary,
+                                fontWeight: '600',
+                            },
+                        ]}
+                    >
+                        €{rawPrice.toFixed(2)}
+                    </Text>
                 )}
-                {points.map((p, i) => (
-                    <Circle key={i} cx={p.x} cy={p.y} r={2.5} fill={colors.primary} />
-                ))}
-            </Svg>
-            <Text style={styles.chartPrice}>€{points[points.length - 1].price.toFixed(2)}</Text>
-        </View>
+            </View>
+        </TouchableOpacity>
     );
 }
 
@@ -154,6 +463,8 @@ export default function ProductDetailScreen() {
     const [storeSearch, setStoreSearch] = useState('');
     const [priceCache, setPriceCache] = useState<{ [key: string]: PricePoint[] }>({});
     const [categories, setCategories] = useState<Category[]>([]);
+    const [chartModalSp, setChartModalSp] = useState<StoreProduct | null>(null);
+    const { mode, ready: prefReady } = useDisplayMode();
 
     // Get unique chains from store products
     const chains = useMemo(() => {
@@ -188,12 +499,17 @@ export default function ProductDetailScreen() {
 
     // Fetch product and store products
     useEffect(() => {
+        if (!prefReady) return; // wait for AsyncStorage-backed mode load
         const fetchData = async () => {
             setLoading(true);
             try {
+                // In base mode, the SP fetch returns the whole cluster
+                // (head + all variants) so chain tabs + the list below show
+                // every variant side-by-side. In sku mode it's exactly this
+                // Product's SPs, same as pre-Phase-1.
                 const [prodRes, spRes] = await Promise.all([
                     fetch(`${API_BASE_URL}/api/products/${id}`),
-                    fetch(`${API_BASE_URL}/api/store-products/product/${id}`),
+                    fetch(`${API_BASE_URL}/api/store-products/product/${id}?mode=${mode}`),
                 ]);
                 const prodData = await prodRes.json();
                 const spData = await spRes.json();
@@ -223,7 +539,7 @@ export default function ProductDetailScreen() {
             }
         };
         fetchData();
-    }, [id]);
+    }, [id, mode, prefReady]);
 
     // Fetch stores when chain changes
     useEffect(() => {
@@ -277,9 +593,11 @@ export default function ProductDetailScreen() {
 
     return (
         <>
-            <Stack.Screen options={{ 
+            <Stack.Screen options={{
                 title: product.name,
                 headerBackTitle: 'Atgal',
+                headerStyle: { backgroundColor: colors.cardBackground },
+                headerShadowVisible: false,
             }} />
                 <ScrollView style={styles.container} stickyHeaderIndices={[1]}>
                 {/* Header */}
@@ -458,7 +776,12 @@ export default function ProductDetailScreen() {
                                     </View>
                                 </View>
                                 <View style={styles.spRight}>
-                                    <MiniPriceChart prices={prices} colors={colors} styles={styles} />
+                                    <MiniPriceChart
+                                        prices={prices}
+                                        colors={colors}
+                                        styles={styles}
+                                        onTap={() => setChartModalSp(sp)}
+                                    />
                                 </View>
                             </View>
                         );
@@ -466,6 +789,162 @@ export default function ProductDetailScreen() {
                 )}
                 <View style={{ height: 40 }} />
             </ScrollView>
+
+            <Modal
+                visible={chartModalSp !== null}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setChartModalSp(null)}
+            >
+                <TouchableOpacity
+                    style={styles.chartModalBackdrop}
+                    activeOpacity={1}
+                    onPress={() => setChartModalSp(null)}
+                >
+                    <TouchableOpacity
+                        style={styles.chartModalCard}
+                        activeOpacity={1}
+                        onPress={() => {}}
+                    >
+                        <Text style={styles.chartModalTitle} numberOfLines={2}>
+                            {chartModalSp?.storeProductName}
+                        </Text>
+                        <Text style={styles.chartModalSub}>Kainų istorija</Text>
+                        {chartModalSp && (() => {
+                            const prices = getPricesForSp(chartModalSp.id);
+                            const data = preparePriceData(prices); // all points, no cap
+                            if (!data.length) {
+                                return (
+                                    <View style={styles.chartModalEmpty}>
+                                        <Ionicons
+                                            name="analytics-outline"
+                                            size={28}
+                                            color={colors.border}
+                                        />
+                                        <Text style={styles.chartModalEmptyText}>
+                                            Kainų istorija dar nesukaupta
+                                        </Text>
+                                    </View>
+                                );
+                            }
+                            // Horizontal scroll so many points don't cram into
+                            // one screen. Point spacing 48dp per data point
+                            // feels readable and matches the mini chart's
+                            // density. Clamp min width to the modal width so
+                            // short histories don't look stretched.
+                            const POINT_SPACING = 48;
+                            const minChartWidth = MODAL_CHART_MIN_WIDTH;
+                            const dynamicWidth = Math.max(
+                                minChartWidth,
+                                POINT_SPACING * Math.max(1, data.length - 1) + 40
+                            );
+                            const last = data[data.length - 1];
+                            const rawPrice = Number(last.price);
+                            const rawPromo =
+                                last.promoPrice !== null && last.promoPrice !== undefined
+                                    ? Number(last.promoPrice)
+                                    : null;
+
+                            const ys = computeLastPointYs(data, MODAL_CHART_HEIGHT, true)!;
+                            const LABEL_LINE_MODAL = 20;
+                            return (
+                                <>
+                                    <ScrollView
+                                        horizontal
+                                        showsHorizontalScrollIndicator={false}
+                                        contentContainerStyle={{ paddingVertical: 4 }}
+                                    >
+                                        <View
+                                            style={{
+                                                width: dynamicWidth,
+                                                height: MODAL_CHART_HEIGHT,
+                                                position: 'relative',
+                                            }}
+                                        >
+                                            <PriceChartSvg
+                                                data={data}
+                                                width={dynamicWidth}
+                                                height={MODAL_CHART_HEIGHT}
+                                                colors={colors}
+                                                reserveLabelSpace
+                                            />
+                                            {rawPromo !== null ? (
+                                                <>
+                                                    <Text
+                                                        style={[
+                                                            styles.chartOverlayLabelLarge,
+                                                            {
+                                                                top: ys.priceY - LABEL_LINE_MODAL / 2,
+                                                                color: colors.textMuted,
+                                                                textDecorationLine: 'line-through',
+                                                            },
+                                                        ]}
+                                                    >
+                                                        €{rawPrice.toFixed(2)}
+                                                    </Text>
+                                                    <Text
+                                                        style={[
+                                                            styles.chartOverlayLabelLarge,
+                                                            {
+                                                                top:
+                                                                    (ys.promoY ?? ys.priceY) -
+                                                                    LABEL_LINE_MODAL / 2,
+                                                                color: colors.textPrimary,
+                                                                fontWeight: '700',
+                                                            },
+                                                        ]}
+                                                    >
+                                                        €{rawPromo.toFixed(2)}
+                                                    </Text>
+                                                </>
+                                            ) : (
+                                                <Text
+                                                    style={[
+                                                        styles.chartOverlayLabelLarge,
+                                                        {
+                                                            top: ys.priceY - LABEL_LINE_MODAL / 2,
+                                                            color: colors.textPrimary,
+                                                            fontWeight: '600',
+                                                        },
+                                                    ]}
+                                                >
+                                                    €{rawPrice.toFixed(2)}
+                                                </Text>
+                                            )}
+                                        </View>
+                                    </ScrollView>
+                                    <View style={styles.chartModalFooter}>
+                                        <View style={styles.chartModalLegend}>
+                                            <View style={styles.chartModalLegendItem}>
+                                                <View
+                                                    style={[
+                                                        styles.chartModalLegendDot,
+                                                        { backgroundColor: colors.textSecondary },
+                                                    ]}
+                                                />
+                                                <Text style={styles.chartModalLegendLabel}>
+                                                    Įprasta
+                                                </Text>
+                                            </View>
+                                            <View style={styles.chartModalLegendItem}>
+                                                <View
+                                                    style={[
+                                                        styles.chartModalLegendDot,
+                                                        { backgroundColor: colors.primary },
+                                                    ]}
+                                                />
+                                                <Text style={styles.chartModalLegendLabel}>
+                                                    Akcija
+                                                </Text>
+                                            </View>
+                                        </View>
+                                    </View>
+                                </>
+                            );
+                        })()}
+                    </TouchableOpacity>
+                </TouchableOpacity>
+            </Modal>
         </>
     );
 }
@@ -725,16 +1204,122 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         alignItems: 'center',
     },
     chartEmpty: {
-        width: CHART_WIDTH,
-        height: CHART_HEIGHT,
+        width: MINI_CHART_WIDTH,
+        height: MINI_CHART_HEIGHT,
         alignItems: 'center',
         justifyContent: 'center',
     },
     chartPrice: {
-        fontSize: 10,
+        fontSize: 11,
         color: c.primary,
         fontWeight: '600',
         marginTop: 2,
+    },
+    chartPriceStack: {
+        alignItems: 'center',
+        marginTop: 2,
+        gap: 1,
+    },
+    chartPriceStrike: {
+        fontSize: 10,
+        color: c.textMuted,
+        textDecorationLine: 'line-through',
+    },
+    chartPricePromo: {
+        fontSize: 12,
+        color: c.primary,
+        fontWeight: '700',
+    },
+    // Overlay price label anchored to the right of the mini chart, at the
+    // Y of the last data point. Uses native Text so strikethrough renders
+    // reliably and text can't clip at the SVG edge like SvgText did.
+    chartOverlayLabel: {
+        position: 'absolute',
+        right: 4,
+        fontSize: 11,
+        lineHeight: 15,
+        minWidth: CHART_LABEL_MARGIN - 6,
+        textAlign: 'right',
+    },
+    // Modal-scale version of the same overlay — larger font for the full
+    // chart view. Same anchoring pattern.
+    chartOverlayLabelLarge: {
+        position: 'absolute',
+        right: 6,
+        fontSize: 14,
+        lineHeight: 20,
+        minWidth: CHART_LABEL_MARGIN - 6,
+        textAlign: 'right',
+    },
+
+    // Chart modal (tap-to-expand)
+    chartModalBackdrop: {
+        flex: 1,
+        backgroundColor: c.overlayBackdrop,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 20,
+    },
+    chartModalCard: {
+        backgroundColor: c.cardBackground,
+        borderRadius: 16,
+        padding: 20,
+        width: '100%',
+        maxWidth: 480,
+    },
+    chartModalTitle: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: c.textPrimary,
+    },
+    chartModalSub: {
+        fontSize: 12,
+        color: c.textSecondary,
+        marginTop: 2,
+        marginBottom: 12,
+    },
+    chartModalEmpty: {
+        height: MODAL_CHART_HEIGHT,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 10,
+    },
+    chartModalEmptyText: {
+        fontSize: 13,
+        color: c.textMuted,
+    },
+    chartModalFooter: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 12,
+    },
+    chartModalLegend: {
+        flexDirection: 'row',
+        gap: 14,
+    },
+    chartModalLegendItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+    },
+    chartModalLegendDot: {
+        width: 8,
+        height: 8,
+        borderRadius: 4,
+    },
+    chartModalLegendLabel: {
+        fontSize: 12,
+        color: c.textSecondary,
+        fontWeight: '500',
+    },
+    chartModalPriceStack: {
+        alignItems: 'flex-end',
+    },
+    chartModalLastPrice: {
+        fontSize: 16,
+        fontWeight: '700',
+        color: c.primary,
     },
 
     // Empty

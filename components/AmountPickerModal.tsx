@@ -9,6 +9,10 @@ interface AmountPickerModalProps {
     minAmount: number;
     maxAmount: number;
     unit: string;
+    /** True when the product is sold by weight (bulk fruit/veg/meat) rather
+     *  than in packs. Changes the modal subtitle + hint so the user isn't
+     *  told about package sizes that don't apply. */
+    isWeighable?: boolean;
     onConfirm: (amount: number) => void;
     onCancel: () => void;
 }
@@ -19,6 +23,7 @@ export default function AmountPickerModal({
     minAmount,
     maxAmount,
     unit,
+    isWeighable = false,
     onConfirm,
     onCancel,
 }: AmountPickerModalProps) {
@@ -57,10 +62,11 @@ export default function AmountPickerModal({
                 <View style={styles.modal}>
                     <Text style={styles.title}>{productName}</Text>
                     <Text style={styles.subtitle}>
-                        Pakuotės: {minAmount === maxAmount
-                            ? `${minAmount} ${unit}`
-                            : `${minAmount} – ${maxAmount} ${unit}`
-                        }
+                        {isWeighable
+                            ? 'Parduodama pagal svorį'
+                            : `Pakuotės: ${minAmount === maxAmount
+                                ? `${minAmount} ${unit}`
+                                : `${minAmount} – ${maxAmount} ${unit}`}`}
                     </Text>
 
                     <Text style={styles.label}>Kiek jums reikia?</Text>
@@ -87,7 +93,9 @@ export default function AmountPickerModal({
                     </View>
 
                     <Text style={styles.hint}>
-                        Kiekis bus suapvalintas pagal pakuotės dydį
+                        {isWeighable
+                            ? 'Kiekis bus pasvertas parduotuvėje'
+                            : 'Kiekis bus suapvalintas pagal pakuotės dydį'}
                     </Text>
 
                     <View style={styles.actions}>

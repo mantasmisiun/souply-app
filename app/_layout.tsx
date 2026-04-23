@@ -5,6 +5,7 @@ import 'react-native-reanimated';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '../constants/theme';
+import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -30,6 +31,7 @@ export default function RootLayout() {
   };
 
   return (
+    <DisplayPreferenceProvider>
     <ThemeProvider value={navTheme}>
       <Stack
         screenOptions={{
@@ -51,5 +53,6 @@ export default function RootLayout() {
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
     </ThemeProvider>
+    </DisplayPreferenceProvider>
   );
 }

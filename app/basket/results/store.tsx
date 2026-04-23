@@ -8,10 +8,11 @@ interface ItemResult {
     productId: number;
     productName: string;
     quantity: number;
+    matchMode: 'sku' | 'base';
     price: number | null;
     promoPrice: number | null;
     effectivePrice: number | null;
-    isApproximated: boolean;
+    isMissing: boolean;
     isFallback: boolean;
 }
 
@@ -21,6 +22,7 @@ interface StoreResult {
     chainName: string;
     total: number;
     isApproximated: boolean;
+    missingItemNames: string[];
     items: ItemResult[];
 }
 
@@ -54,7 +56,9 @@ export default function StoreBreakdownScreen() {
                 ListFooterComponent={
                     <View style={styles.totalRow}>
                         <Text style={styles.totalLabel}>
-                            Iš viso {store.isApproximated ? '(apytikslė)' : ''}
+                            Iš viso{store.missingItemNames.length > 0
+                                ? ` (be ${store.missingItemNames.length} prekių)`
+                                : ''}
                         </Text>
                         <Text style={styles.totalPrice}>€{store.total.toFixed(2)}</Text>
                     </View>
@@ -64,12 +68,12 @@ export default function StoreBreakdownScreen() {
                         <View style={styles.cardContent}>
                             <View style={styles.nameRow}>
                                 <Text style={styles.itemName}>{item.productName}</Text>
-                                {item.isApproximated && (
+                                {item.isMissing && (
                                     <View style={styles.approxBadge}>
-                                        <Text style={styles.approxText}>Apytikslė</Text>
+                                        <Text style={styles.approxText}>Nėra</Text>
                                     </View>
                                 )}
-                                {item.isFallback && !item.isApproximated && (
+                                {item.isFallback && !item.isMissing && (
                                     <View style={styles.fallbackBadge}>
                                         <Text style={styles.fallbackText}>Perkelta</Text>
                                     </View>
