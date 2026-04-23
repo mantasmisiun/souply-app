@@ -1,5 +1,5 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
-import { useMemo, useState, useCallback } from 'react';
+import { useMemo, useRef, useState, useCallback } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
@@ -17,15 +17,25 @@ interface Basket {
     itemCount: number;
 }
 
+const INITIAL_PAGE_SIZE = 10;
+const PAGE_INCREMENT = 10;
+
 export default function BasketScreen() {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [baskets, setBaskets] = useState<Basket[]>([]);
+    // `loading` = full-screen spinner on FIRST mount only.
+    // `refreshing` = small header pill shown on subsequent focus refetches
+    // so the list doesn't blank out every time the tab regains focus.
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
+    const [visibleCount, setVisibleCount] = useState(INITIAL_PAGE_SIZE);
+    const hasFetchedRef = useRef(false);
     const router = useRouter();
     const { setDraftBasketId } = useBasketState();
 
-    const fetchBaskets = async () => {
+    const fetchBaskets = async (silent: boolean) => {
+        if (silent) setRefreshing(true);
         try {
             const userId = await getUserId();
             const res = await fetch(`${API_BASE_URL}/api/baskets/user/${userId}`);
@@ -37,12 +47,15 @@ export default function BasketScreen() {
         } catch (error) {
             console.error('Failed to fetch baskets:', error);
         } finally {
+            if (silent) setRefreshing(false);
             setLoading(false);
         }
     };
 
     useFocusEffect(useCallback(() => {
-        fetchBaskets();
+        const silent = hasFetchedRef.current;
+        hasFetchedRef.current = true;
+        fetchBaskets(silent);
     }, []));
 
     const createBasket = async () => {
@@ -54,7 +67,7 @@ export default function BasketScreen() {
                 body: JSON.stringify({ userId }),
             });
             const data = await res.json();
-            await fetchBaskets();
+            await fetchBaskets(true);
             router.push(`/basket/${data.id}`);
         } catch (error) {
             Alert.alert('Klaida', 'Nepavyko sukurti krepšelio');
@@ -70,11 +83,15 @@ export default function BasketScreen() {
         await createBasket();
     };
 
+    // Basket lifecycle is exactly three states: draft (editable), compared
+    // (calculated, read-only until reverted), completed (shopping list
+    // wrapped up). 'active' was a leftover from an earlier plan and is
+    // never emitted by the backend — removed.
     const getStatusColor = (status: string) => {
         switch (status) {
             case 'draft': return colors.warning;
             case 'compared': return colors.info;
-            case 'active': return colors.primary;
+            case 'inProgress': return colors.primary;
             case 'completed': return colors.success;
             default: return colors.textSecondary;
         }
@@ -84,18 +101,27 @@ export default function BasketScreen() {
         switch (status) {
             case 'draft': return 'Juodraštis';
             case 'compared': return 'Palyginta';
-            case 'active': return 'Vykdomas';
-            case 'completed': return 'Baigtas';
+            case 'inProgress': return 'Vykdomas';
+            case 'completed': return 'Įvykdytas';
             default: return status;
         }
     };
 
     if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color={colors.primary} /></View>;
 
+    const visibleBaskets = baskets.slice(0, visibleCount);
+    const hasMore = baskets.length > visibleCount;
+
     return (
         <View style={styles.container}>
+            {refreshing && (
+                <View style={styles.refreshingBanner}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={styles.refreshingText}>Įkeliama…</Text>
+                </View>
+            )}
             <FlatList
-                data={baskets}
+                data={visibleBaskets}
                 keyExtractor={item => item.id.toString()}
                 contentContainerStyle={styles.list}
                 ListEmptyComponent={
@@ -103,6 +129,18 @@ export default function BasketScreen() {
                         <Text style={styles.emptyText}>Krepšelis tuščias</Text>
                         <Text style={styles.emptySubText}>Eikite į Naršyti ir pridėkite produktų</Text>
                     </View>
+                }
+                ListFooterComponent={
+                    hasMore ? (
+                        <TouchableOpacity
+                            style={styles.loadMoreButton}
+                            onPress={() => setVisibleCount(c => c + PAGE_INCREMENT)}
+                        >
+                            <Text style={styles.loadMoreText}>
+                                Rodyti daugiau ({baskets.length - visibleCount})
+                            </Text>
+                        </TouchableOpacity>
+                    ) : null
                 }
                 renderItem={({ item }) => (
                     <TouchableOpacity
@@ -187,4 +225,32 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingHorizontal: 4,
     },
     badgeText: { color: c.onPrimary, fontSize: 10, fontWeight: '700' },
+    refreshingBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 6,
+        paddingVertical: 4,
+        backgroundColor: c.surfaceSubtle,
+    },
+    refreshingText: {
+        fontSize: 11,
+        color: c.textSecondary,
+        fontWeight: '500',
+    },
+    loadMoreButton: {
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderRadius: 10,
+        borderWidth: 1,
+        borderColor: c.border,
+        alignItems: 'center',
+        backgroundColor: c.cardBackground,
+        marginTop: 4,
+    },
+    loadMoreText: {
+        fontSize: 13,
+        color: c.primary,
+        fontWeight: '600',
+    },
 });

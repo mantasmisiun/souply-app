@@ -6,9 +6,12 @@ import { API_BASE_URL } from '../../../config/api';
 import { useBasketState } from '../../../state/basketState';
 import { addProductToBasket } from '../../../utils/basketUtils';
 import AmountPickerModal from '../../../components/AmountPickerModal';
+import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../../components/ComparedBasketChoiceModal';
 import { ProductImage } from '../../../components/ProductImage';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { useDisplayMode } from '../../../contexts/DisplayPreferenceContext';
+import { getUserId } from '../../../config/user';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface Category {
     id: number;
@@ -37,9 +40,24 @@ export default function CategoryScreen() {
     const [loadingProducts, setLoadingProducts] = useState(false);
     const { draftBasketId, setDraftBasketId } = useBasketState();
     const [basketQuantities, setBasketQuantities] = useState<{[productId: number]: number}>({});
+    // Products whose "Į krepšelį" POST is currently in flight. Prevents
+    // rapid double-taps from firing a second add before the first lands
+    // and paints the quantity control over the button.
+    const [addingIds, setAddingIds] = useState<Set<number>>(() => new Set());
     const router = useRouter();
     const { mode, setMode, ready: prefReady } = useDisplayMode();
     const [helpOpen, setHelpOpen] = useState(false);
+    // When no draft basket exists but the user has ≥1 compared basket,
+    // adding a product opens this modal so they can choose "use existing
+    // (revert to draft)" or "create new". Fetched on focus alongside
+    // basketQuantities.
+    const [latestCompared, setLatestCompared] = useState<ComparedBasketChoice | null>(null);
+    type ComparedChoice = 'use-existing' | 'new' | 'cancel';
+    const [comparedModal, setComparedModal] = useState<{
+        visible: boolean;
+        resolve: (choice: ComparedChoice) => void;
+    }>({ visible: false, resolve: () => {} });
+
     // Pending mode switch: the Switch component optimistically renders the
     // next position the moment the user taps, but we want to confirm with a
     // modal first if the basket already has items (basket calc differs
@@ -97,10 +115,134 @@ export default function CategoryScreen() {
         loadBasketQuantities();
     }, [draftBasketId]);
 
+    // Fetch the user's most recent compared basket for the add-to-basket
+    // choice modal. Only matters when there's no draft — if a draft exists
+    // we silently add to it. Refetch on focus via a cheap single request.
+    useEffect(() => {
+        (async () => {
+            if (draftBasketId) {
+                setLatestCompared(null);
+                return;
+            }
+            try {
+                const userId = await getUserId();
+                const res = await fetch(`${API_BASE_URL}/api/baskets/user/${userId}`);
+                const baskets = await res.json();
+                if (!Array.isArray(baskets)) return;
+                const compared = baskets.find((b: any) => b.status === 'compared');
+                setLatestCompared(
+                    compared
+                        ? {
+                              id: compared.id,
+                              name: compared.name,
+                              itemCount: compared.itemCount ?? 0,
+                              updatedAt: compared.updatedAt,
+                          }
+                        : null
+                );
+            } catch {
+                setLatestCompared(null);
+            }
+        })();
+    }, [draftBasketId]);
+
     // True when the user has any item in their current draft basket.
     // basketQuantities can hold 0 values after a quantity decrement, so we
     // check for any strictly-positive entry.
     const hasBasketItems = Object.values(basketQuantities).some((q) => q > 0);
+
+    /**
+     * Discriminated resolution for "where does this add go?":
+     *   - 'draft'   — existing draft basket, no prep needed
+     *   - 'revert'  — user picked an existing compared basket from the
+     *                 modal; we need to flip it back to draft first
+     *   - 'new'     — create a fresh draft via the basketUtils singleton
+     *   - 'cancel'  — user dismissed the modal
+     *
+     * Earlier draft of this function returned `number | 'new' | null`
+     * which collapsed 'draft' and 'revert' into the same branch — every
+     * add fired an unnecessary PATCH /status and AsyncStorage work,
+     * making every tap 1–20s slower than it needed to be.
+     */
+    type ResolveResult =
+        | { kind: 'draft'; id: number }
+        | { kind: 'revert'; id: number }
+        | { kind: 'new' }
+        | { kind: 'cancel' };
+
+    const resolveBasketForAdd = async (): Promise<ResolveResult> => {
+        if (draftBasketId) return { kind: 'draft', id: draftBasketId };
+        // Re-fetch the user's baskets inline instead of trusting the
+        // `latestCompared` state — the on-mount useEffect may not have
+        // finished yet (user can tap faster than the network), and the
+        // state might also be stale if another screen changed basket
+        // status since the last focus. This adds one round-trip to the
+        // null-draft path but fully closes the race where a compared
+        // basket exists yet the modal never shows.
+        let compared = latestCompared;
+        try {
+            const userId = await getUserId();
+            const res = await fetch(`${API_BASE_URL}/api/baskets/user/${userId}`);
+            const baskets = await res.json();
+            if (Array.isArray(baskets)) {
+                const hit = baskets.find((b: any) => b.status === 'compared');
+                compared = hit
+                    ? {
+                          id: hit.id,
+                          name: hit.name,
+                          itemCount: hit.itemCount ?? 0,
+                          updatedAt: hit.updatedAt,
+                      }
+                    : null;
+                setLatestCompared(compared);
+            }
+        } catch {
+            // fall through with whatever state we had
+        }
+        if (!compared) return { kind: 'new' };
+
+        const choice = await new Promise<ComparedChoice>((resolve) => {
+            setComparedModal({
+                visible: true,
+                resolve: (c) => {
+                    setComparedModal({ visible: false, resolve: () => {} });
+                    resolve(c);
+                },
+            });
+        });
+        if (choice === 'use-existing') return { kind: 'revert', id: compared.id };
+        if (choice === 'new') return { kind: 'new' };
+        return { kind: 'cancel' };
+    };
+
+    const commitAdd = async (productId: number, quantity: number) => {
+        const target = await resolveBasketForAdd();
+        if (target.kind === 'cancel') return { success: false, message: 'Atšaukta' };
+
+        if (target.kind === 'revert') {
+            // Reusing a compared basket: flip it back to draft first.
+            try {
+                await fetch(`${API_BASE_URL}/api/baskets/${target.id}/status`, {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'draft' }),
+                });
+                await AsyncStorage.removeItem(`basket_results_${target.id}`);
+                setDraftBasketId(target.id);
+                setLatestCompared(null);
+            } catch {
+                // Fall through — add will fail with 400 if revert didn't land,
+                // and addProductToBasket's catch surfaces a user-visible error.
+            }
+            return addProductToBasket(productId, target.id, setDraftBasketId, quantity, mode);
+        }
+
+        // 'draft' (existing) or 'new' (singleton creates) — both go straight
+        // to addProductToBasket with zero pre-work. This is the hot path and
+        // must not do extra network hops.
+        const existing = target.kind === 'draft' ? target.id : null;
+        return addProductToBasket(productId, existing, setDraftBasketId, quantity, mode);
+    };
 
     const handleModeSwitchRequest = (nextOn: boolean) => {
         const target: 'base' | 'sku' = nextOn ? 'base' : 'sku';
@@ -292,8 +434,10 @@ export default function CategoryScreen() {
                                             </View>
                                         {quantity === 0 ? (
                                             <TouchableOpacity
-                                                style={styles.addButton}
+                                                style={[styles.addButton, addingIds.has(item.id) && { opacity: 0.5 }]}
+                                                disabled={addingIds.has(item.id)}
                                                 onPress={async () => {
+                                                    if (addingIds.has(item.id)) return;
                                                     const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
                                                     // Any of: varying pack sizes across SPs, or product is
                                                     // weighable (user buys by weight) → user should pick an
@@ -304,9 +448,22 @@ export default function CategoryScreen() {
                                                     if (needsPicker) {
                                                         setAmountModal({ visible: true, product: item });
                                                     } else {
-                                                        const result = await addProductToBasket(item.id, draftBasketId, setDraftBasketId, 1, mode);
-                                                        if (result.success) {
-                                                            setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
+                                                        setAddingIds(prev => {
+                                                            const n = new Set(prev);
+                                                            n.add(item.id);
+                                                            return n;
+                                                        });
+                                                        try {
+                                                            const result = await commitAdd(item.id, 1);
+                                                            if (result.success) {
+                                                                setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
+                                                            }
+                                                        } finally {
+                                                            setAddingIds(prev => {
+                                                                const n = new Set(prev);
+                                                                n.delete(item.id);
+                                                                return n;
+                                                            });
                                                         }
                                                     }
                                                 }}
@@ -464,6 +621,13 @@ export default function CategoryScreen() {
                     </TouchableOpacity>
                 </TouchableOpacity>
             </Modal>
+            <ComparedBasketChoiceModal
+                visible={comparedModal.visible}
+                compared={latestCompared}
+                onUseExisting={() => comparedModal.resolve('use-existing')}
+                onCreateNew={() => comparedModal.resolve('new')}
+                onCancel={() => comparedModal.resolve('cancel')}
+            />
             <AmountPickerModal
                 visible={amountModal.visible}
                 productName={amountModal.product?.name || ''}
@@ -474,13 +638,7 @@ export default function CategoryScreen() {
                 onCancel={() => setAmountModal({ visible: false, product: null })}
                 onConfirm={async (amount) => {
                     if (amountModal.product) {
-                        const result = await addProductToBasket(
-                            amountModal.product.id,
-                            draftBasketId,
-                            setDraftBasketId,
-                            amount,
-                            mode
-                        );
+                        const result = await commitAdd(amountModal.product.id, amount);
                         if (result.success) {
                             setBasketQuantities(prev => ({
                                 ...prev,

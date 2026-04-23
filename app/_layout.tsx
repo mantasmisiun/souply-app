@@ -45,8 +45,12 @@ export default function RootLayout() {
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         <Stack.Screen name="product" options={{ headerShown: false }} />
         <Stack.Screen name="basket/[id]" options={{ title: 'Krepšelis' }} />
-        <Stack.Screen name="basket/results/[id]" options={{ title: 'Rezultatai' }} />
-        <Stack.Screen name="basket/results/store" options={{ title: 'Parduotuvė' }} />
+        {/* basket/results/[id] intentionally configures its own <Stack.Screen>
+            options from inside the screen — registering a default here
+            (title: 'Rezultatai' or a stub headerRight) would win on
+            initial-mount timing and leave the refresh button missing
+            until the child's options apply. File-based routing picks the
+            screen up without this entry. */}
         <Stack.Screen name="shopping-list/[id]" options={{ title: 'Pirkinių sąrašas' }} />
         <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
         <Stack.Screen name="receipt-process" options={{ title: 'Kvito peržiūra' }} />

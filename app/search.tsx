@@ -502,8 +502,19 @@ export default function SearchScreen() {
                     quantity={quantity}
                     onOpen={() => router.push(`/product/${item.id}` as any)}
                     onAdd={async () => {
+                        // Optimistic flip to 1: paints the quantity control in
+                        // place of the add button immediately, so a rapid
+                        // re-tap hits the qty control instead of re-adding.
+                        // Rolls back on failure.
+                        setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
                         const result = await addProductToBasket(item.id, draftBasketId, setDraftBasketId);
-                        if (result.success) setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
+                        if (!result.success) {
+                            setBasketQuantities(prev => {
+                                const next = { ...prev };
+                                delete next[item.id];
+                                return next;
+                            });
+                        }
                     }}
                     onDec={() => syncQty(Number((quantity - 1).toFixed(1)))}
                     onInc={() => syncQty(Number((quantity + 1).toFixed(1)))}

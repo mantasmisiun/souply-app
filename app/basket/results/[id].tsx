@@ -1,6 +1,6 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert } from 'react-native';
-import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
-import { useMemo, useState, useCallback } from 'react';
+import { useLocalSearchParams, useRouter, useFocusEffect, useNavigation, Stack } from 'expo-router';
+import { useMemo, useState, useCallback, useLayoutEffect } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
@@ -28,6 +28,8 @@ interface ItemResult {
     isMissing: boolean;
     isFallback: boolean;
     isWeighable: boolean;
+    isSubstituted: boolean;
+    isCrossChainAverage: boolean;
     packsNeeded: number | null;
     totalPrice: number | null;
     storeProductName: string | null;
@@ -54,37 +56,40 @@ export default function BasketResultsScreen() {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { id } = useLocalSearchParams();
     const router = useRouter();
+    const navigation = useNavigation();
     const [results, setResults] = useState<StoreResult[]>([]);
     const [loading, setLoading] = useState(true);
     const [visibleCount, setVisibleCount] = useState(0);
     const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
 
     const loadResults = async () => {
+        // Detail screen now awaits the calc before pushing to this route,
+        // so the cache is always populated on entry. The previous 30-second
+        // polling loop was a workaround for the old fire-and-navigate
+        // pattern and is no longer needed. If we still find an empty cache
+        // (e.g., the user reverted the basket to draft from a parallel
+        // stack, wiping this key), render the empty state immediately.
         setLoading(true);
         setVisibleCount(0);
         setSelectedStoreId(null);
 
-        let stored = await AsyncStorage.getItem(`basket_results_${id}`);
-        let attempts = 0;
-        while (!stored && attempts < 30) {
-            await new Promise(r => setTimeout(r, 1000));
-            stored = await AsyncStorage.getItem(`basket_results_${id}`);
-            attempts++;
-        }
-
+        const stored = await AsyncStorage.getItem(`basket_results_${id}`);
         if (stored) {
             const parsed = JSON.parse(stored);
             setResults(parsed);
-            setLoading(false);
             for (let i = 0; i <= parsed.length; i++) {
                 setTimeout(() => setVisibleCount(i), i * 150);
             }
         } else {
-            setLoading(false);
+            setResults([]);
         }
+        setLoading(false);
     };
 
     useFocusEffect(useCallback(() => {
+        // Re-fetch on every focus so a revert-to-draft from the detail
+        // screen (which wipes the AsyncStorage cache) is reflected here
+        // the moment the user navigates back in.
         loadResults();
     }, [id]));
 
@@ -93,8 +98,17 @@ export default function BasketResultsScreen() {
         setVisibleCount(0);
         setSelectedStoreId(null);
         try {
+            // Recalc uses the previously-cached coordinates so the user
+            // doesn't get re-prompted for location on every refresh.
+            // Falls back silently to the backend's Vilnius default if the
+            // cache is empty (edge case: fresh install recalcing a pre-
+            // existing basket).
+            const { loadCachedCoords } = await import('../../../utils/location');
+            const coords = await loadCachedCoords();
             const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
                 method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(coords ? { lat: coords.lat, lng: coords.lng } : {}),
             });
             const newResults = await res.json();
             await AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults));
@@ -108,6 +122,25 @@ export default function BasketResultsScreen() {
             setLoading(false);
         }
     };
+
+    // Imperative header config. The declarative <Stack.Screen options> has
+    // flaky timing when this route is reached from a cached AsyncStorage
+    // load — the header commits before the screen's options apply, so the
+    // refresh button blinks in and out. `useLayoutEffect` + setOptions
+    // runs synchronously before paint so the button is always there.
+    useLayoutEffect(() => {
+        navigation.setOptions({
+            title: 'Palyginimo rezultatai',
+            headerRight: () => (
+                <TouchableOpacity onPress={handleRecalculate} style={{ marginRight: 12 }}>
+                    <Ionicons name="refresh-outline" size={22} color={colors.primary} />
+                </TouchableOpacity>
+            ),
+        });
+        // handleRecalculate reference changes every render; that's fine,
+        // setOptions is cheap.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    });
 
     const closestStoreId = results.length > 0
         ? [...results].sort((a, b) => a.distance - b.distance)[0].storeId
@@ -136,21 +169,37 @@ export default function BasketResultsScreen() {
             const listData = await listRes.json();
             const listId = listData.id;
 
-            await Promise.all(selectedStore.items.map(item =>
-                fetch(`${API_BASE_URL}/api/list-items`, {
+            await Promise.all(selectedStore.items.map(item => {
+                // If the calc substituted or cross-chain-averaged to get a
+                // price, the priced SP belongs to a DIFFERENT Product.
+                // Linking the shopping-list row to that SP would make the
+                // backend's COALESCE(sp.name, p.name) display the
+                // substitute's name, violating user intent. Drop the
+                // storeProductId for those rows so the list shows the
+                // user's original Product.name.
+                const wasSubstituted = (item as any).isSubstituted
+                    || (item as any).isCrossChainAverage;
+                return fetch(`${API_BASE_URL}/api/list-items`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
                         listId,
                         productId: item.productId,
-                        storeProductId: item.storeProductId || null,
-                        quantity: item.storeProductId 
-                            ? (item.isWeighable ? item.quantity : item.packsNeeded || item.quantity)
-                            : item.quantity,
+                        // Preserve the SP link ONLY for clean direct matches.
+                        storeProductId: wasSubstituted ? null : (item.storeProductId || null),
+                        // Substituted rows: keep the user's ORIGINAL quantity
+                        // (in their units); pack math of a substitute's SP
+                        // would just confuse the list. Direct matches keep
+                        // packsNeeded as before.
+                        quantity: wasSubstituted
+                            ? item.quantity
+                            : (item.storeProductId
+                                ? (item.isWeighable ? item.quantity : item.packsNeeded || item.quantity)
+                                : item.quantity),
                         price: item.totalPrice,
                     }),
-                })
-            ));
+                });
+            }));
 
             // Navigate only after all items are saved
             router.replace('/(tabs)/shoppingList' as any);
@@ -165,15 +214,20 @@ export default function BasketResultsScreen() {
 
     return (
         <>
-            <Stack.Screen options={{
-                title: 'Palyginimo rezultatai',
-                headerRight: () => (
-                    <TouchableOpacity onPress={handleRecalculate} style={{ marginRight: 12 }}>
-                        <Ionicons name="refresh-outline" size={22} color={colors.primary} />
-                    </TouchableOpacity>
-                ),
-            }} />
-
+            {/* Declarative options for the first-mount case. Mirrored by
+                useLayoutEffect above so re-renders keep the button
+                attached even if expo-router's initial push timing hides
+                it briefly. */}
+            <Stack.Screen
+                options={{
+                    title: 'Palyginimo rezultatai',
+                    headerRight: () => (
+                        <TouchableOpacity onPress={handleRecalculate} style={{ marginRight: 12 }}>
+                            <Ionicons name="refresh-outline" size={22} color={colors.primary} />
+                        </TouchableOpacity>
+                    ),
+                }}
+            />
             <View style={styles.container}>
                 {loading ? (
                     <Animated.View entering={FadeIn} style={styles.loadingContainer}>
@@ -235,6 +289,25 @@ export default function BasketResultsScreen() {
                                                         <Ionicons name="alert-circle-outline" size={11} color={colors.warning} />
                                                         <Text style={styles.missingBadgeText}>
                                                             Trūksta {item.missingItemNames.length} {pluralizePrekes(item.missingItemNames.length)}
+                                                        </Text>
+                                                    </View>
+                                                )}
+                                                {item.items.some(i => i.isSubstituted) && (
+                                                    // Tier-3: a name-similar variant was found in THIS
+                                                    // chain — user would physically grab that product.
+                                                    <View style={styles.substitutedBadge}>
+                                                        <Text style={styles.substitutedBadgeText}>
+                                                            Panašus produktas
+                                                        </Text>
+                                                    </View>
+                                                )}
+                                                {item.items.some(i => i.isCrossChainAverage) && (
+                                                    // Tier-4: no in-chain candidate passed the similarity
+                                                    // gate, so the price was estimated from other chains'
+                                                    // stores. Lower confidence — muted styling.
+                                                    <View style={styles.approxBadge}>
+                                                        <Text style={styles.approxBadgeText}>
+                                                            Apytikslė kaina
                                                         </Text>
                                                     </View>
                                                 )}
@@ -327,10 +400,41 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         color: c.textSecondary,
         fontStyle: 'italic',
     },
-    approxBadge: {
-        backgroundColor: c.warningMuted, paddingHorizontal: 6, paddingVertical: 2, borderRadius: 6, marginLeft: 4,
+    // Tier-3 substitute: the store carries a name-similar product, just
+    // not the user's exact one. Blue = "decent confidence, something to
+    // grab off the shelf".
+    substitutedBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 2,
+        marginLeft: 6,
+        paddingHorizontal: 6,
+        paddingVertical: 1,
+        borderRadius: 8,
+        backgroundColor: c.infoMuted,
     },
-    approxText: { fontSize: 10, color: c.warning },
+    substitutedBadgeText: {
+        fontSize: 10,
+        color: c.info,
+        fontWeight: '600',
+    },
+    // Tier-4 cross-chain average: the price is an estimate, the store
+    // doesn't actually carry anything close. Muted = "take with salt".
+    approxBadge: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 2,
+        marginLeft: 6,
+        paddingHorizontal: 6,
+        paddingVertical: 1,
+        borderRadius: 8,
+        backgroundColor: c.surfaceMuted,
+    },
+    approxBadgeText: {
+        fontSize: 10,
+        color: c.textMuted,
+        fontWeight: '600',
+    },
     price: { fontSize: 18, fontWeight: '700', color: c.primary, marginLeft: 8 },
     bottomBar: {
         flexDirection: 'row', padding: 12, gap: 10,
