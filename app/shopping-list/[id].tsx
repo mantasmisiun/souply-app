@@ -1,8 +1,10 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Image, Keyboard, Platform  } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Image, Keyboard, Platform, Modal  } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { FadeInDown } from 'react-native-reanimated';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import QRCode from 'react-native-qrcode-svg';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -44,17 +46,13 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
 }) {
     const swipeableRef = useRef<SwipeableMethods>(null);
 
+    // Matches the list-tab pattern: swipe-left = immediate delete with a
+    // 3-second undo toast in the parent. No modal alert — the swipe is
+    // the confirmation, and the toast covers slip-ups.
     const handleSwipeOpen = (direction: 'left' | 'right') => {
+        swipeableRef.current?.close();
         if (direction === 'left') {
-            swipeableRef.current?.close();
-            Alert.alert(
-                'Pašalinti',
-                `Pašalinti "${item.productName}" iš sąrašo?`,
-                [
-                    { text: 'Atšaukti', style: 'cancel' as const },
-                    { text: 'Pašalinti', style: 'destructive' as const, onPress: () => onRemove(item.id) },
-                ]
-            );
+            onRemove(item.id);
         }
     };
 
@@ -125,7 +123,27 @@ export default function ShoppingListScreen() {
     const [items, setItems] = useState<ShoppingListItem[]>([]);
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
-    const [searchVisible, setSearchVisible] = useState(false);
+    // Inline search+add input at the top of the item list. Typing runs a
+    // chain-scoped StoreProduct search and shows suggestions inline;
+    // Enter on a non-empty value adds it as a custom item.
+    const [quickAddText, setQuickAddText] = useState('');
+    // Item-level swipe-delete undo: we keep the pending item + timer
+    // out-of-render in a ref (so the timeout callback reads fresh
+    // state), and force re-renders with a tick counter when the toast
+    // needs to appear/disappear.
+    const pendingDeleteRef = useRef<{ item: ShoppingListItem; timer: ReturnType<typeof setTimeout> } | null>(null);
+    const [pendingDeleteTick, setPendingDeleteTick] = useState(0);
+    void pendingDeleteTick; // read by render below
+    // Item-level mutation guard for the live-sync poll. When a local
+    // toggle or add is in flight, we record the item id with a timestamp
+    // — the poll merger keeps the local copy of that row until the
+    // guard window expires, so a stale server read can't revert an
+    // optimistic change mid-request.
+    const inFlightItemsRef = useRef<Map<number, number>>(new Map());
+    const FLIGHT_HOLD_MS = 1500;
+    const markInFlight = (itemId: number) => {
+        inFlightItemsRef.current.set(itemId, Date.now());
+    };
     const [searchResults, setSearchResults] = useState<any[]>([]);
     const [visibleCount, setVisibleCount] = useState(0);
     const [menuVisible, setMenuVisible] = useState(false);
@@ -140,6 +158,65 @@ export default function ShoppingListScreen() {
     const [quantityInput, setQuantityInput] = useState('1');
     const [modalIsWeighable, setModalIsWeighable] = useState(false);
     const [keyboardHeight, setKeyboardHeight] = useState(0);
+    // Share-modal state. shareToken is null until the POST returns; the
+    // QR is only rendered once we have a real token.
+    const [shareOpen, setShareOpen] = useState(false);
+    const [shareToken, setShareToken] = useState<string | null>(null);
+    const [shareStatus, setShareStatus] = useState<'pending' | 'claimed' | 'expired' | 'error'>('pending');
+    const [shareLoading, setShareLoading] = useState(false);
+
+    const openShare = async () => {
+        setShareOpen(true);
+        setShareToken(null);
+        setShareStatus('pending');
+        setShareLoading(true);
+        try {
+            const userId = await getUserId();
+            const res = await fetch(`${API_BASE_URL}/api/shopping-lists/${id}/share`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            if (typeof data?.token !== 'string') throw new Error('Missing token');
+            setShareToken(data.token);
+        } catch {
+            setShareStatus('error');
+        } finally {
+            setShareLoading(false);
+        }
+    };
+
+    const closeShare = () => {
+        setShareOpen(false);
+        setShareToken(null);
+        setShareStatus('pending');
+    };
+
+    // Poll the token status while the share modal is open. 1.5s cadence
+    // is a reasonable middle ground — users perceive the "scanned"
+    // confirmation as near-instant, and server load stays trivial for a
+    // thesis-scale deployment. Interval is torn down on unmount, on
+    // status transition (claimed/expired), and on modal close.
+    useEffect(() => {
+        if (!shareOpen || !shareToken) return;
+        if (shareStatus === 'claimed' || shareStatus === 'expired') return;
+        let cancelled = false;
+        const poll = async () => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/shopping-lists/share/${shareToken}/status`);
+                if (!res.ok) return;
+                const data = await res.json();
+                if (cancelled) return;
+                if (data.status === 'claimed') setShareStatus('claimed');
+                else if (data.status === 'expired') setShareStatus('expired');
+            } catch {}
+        };
+        poll();
+        const interval = setInterval(poll, 1500);
+        return () => { cancelled = true; clearInterval(interval); };
+    }, [shareOpen, shareToken, shareStatus]);
     useEffect(() => {
         const show = Keyboard.addListener('keyboardDidShow', e => setKeyboardHeight(e.endCoordinates.height));
         const hide = Keyboard.addListener('keyboardDidHide', () => setKeyboardHeight(0));
@@ -187,7 +264,57 @@ export default function ShoppingListScreen() {
         fetchList();
         pollItems();
 
-        return () => { cancelled = true; };
+        // Live sync — while this screen is open, re-fetch items every
+        // 3s so collaborative edits from other list members show up
+        // without needing a focus change. Merger below respects
+        // in-flight local mutations so we don't clobber an optimistic
+        // toggle or a swipe-delete that's still inside its undo window.
+        const syncItems = async () => {
+            if (cancelled) return;
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/shopping-lists/${id}/items`);
+                if (!res.ok) return;
+                const server = await res.json();
+                if (!Array.isArray(server) || cancelled) return;
+
+                // Expire stale in-flight guards — a dead request
+                // shouldn't freeze its row forever.
+                const now = Date.now();
+                for (const [k, ts] of Array.from(inFlightItemsRef.current.entries())) {
+                    if (now - ts > FLIGHT_HOLD_MS) inFlightItemsRef.current.delete(k);
+                }
+
+                setItems(prev => {
+                    const byId = new Map<number, ShoppingListItem>(prev.map(p => [p.id, p]));
+                    const merged: ShoppingListItem[] = server.map((s: any) => {
+                        // Keep the local copy while a mutation on this row
+                        // is still racing the server.
+                        if (inFlightItemsRef.current.has(s.id)) {
+                            return byId.get(s.id) ?? s;
+                        }
+                        return s;
+                    });
+                    // Row is locally-deleted and within the 3s undo
+                    // window — drop the server version so it doesn't
+                    // flash back in.
+                    const pendDel = pendingDeleteRef.current?.item.id;
+                    const filtered = pendDel != null
+                        ? merged.filter(m => m.id !== pendDel)
+                        : merged;
+                    filtered.sort((a, b) => {
+                        if (a.isChecked !== b.isChecked) return Number(a.isChecked) - Number(b.isChecked);
+                        return a.productName.localeCompare(b.productName);
+                    });
+                    return filtered;
+                });
+                // Keep the staggered reveal in sync — any newly-added
+                // rows from other members should be visible immediately.
+                setVisibleCount(c => Math.max(c, server.length));
+            } catch {}
+        };
+        const syncInterval = setInterval(syncItems, 3000);
+
+        return () => { cancelled = true; clearInterval(syncInterval); };
     }, [id]));
 
     const checkedCount = items.filter(i => i.isChecked).length;
@@ -201,16 +328,26 @@ export default function ShoppingListScreen() {
             .map(i => i.id === item.id ? { ...i, isChecked: newChecked } : i)
             .sort((a, b) => Number(a.isChecked) - Number(b.isChecked));
         setItems(updatedItems);
+        markInFlight(item.id);
 
         fetch(`${API_BASE_URL}/api/list-items/${item.id}/toggle`, {
             method: 'PATCH',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ isChecked: newChecked }),
-        }).catch(() => {
-            setItems(items);
-        });
+        })
+            .catch(() => { setItems(items); })
+            .finally(() => { inFlightItemsRef.current.delete(item.id); });
 
         if (newChecked && updatedItems.every(i => i.isChecked)) {
+            // Fire the completion prompt exactly once per list. After "Ne"
+            // the user can finish manually from the tab's swipe-complete
+            // — no point re-nagging every time they uncheck/recheck a
+            // stray item. Persistent flag in AsyncStorage so the one-shot
+            // survives navigations.
+            const key = `sl_prompted_${id}`;
+            const already = await AsyncStorage.getItem(key);
+            if (already === '1') return;
+            await AsyncStorage.setItem(key, '1');
             Alert.alert(
                 'Pirkiniai surinkti!',
                 'Ar norite pažymėti sąrašą kaip užbaigtą?',
@@ -236,20 +373,57 @@ export default function ShoppingListScreen() {
         setQuantityInput(isWeighable ? '0.5' : '1');
         setQuantityModal({ productId, name, isWeighable, storeProductId, imageUrl });
     };
-    const removeItem = async (itemId: number) => {
-        try {
-            await fetch(`${API_BASE_URL}/api/list-items/${itemId}`, { method: 'DELETE' });
-            setItems(prev => prev.filter(i => i.id !== itemId));
-        } catch (error) {
-            Alert.alert('Klaida', 'Nepavyko pašalinti produkto');
+    // Optimistic delete with 3-second undo. Hides the row locally, queues
+    // the DELETE request, and shows the undo toast. Tapping Atšaukti
+    // before the timer cancels the request and restores the row.
+    const removeItem = (itemId: number) => {
+        const target = items.find(i => i.id === itemId);
+        if (!target) return;
+        setItems(prev => prev.filter(i => i.id !== itemId));
+        // If another delete is already pending, finalize it first —
+        // second-delete shouldn't cancel the first undo window.
+        if (pendingDeleteRef.current) {
+            clearTimeout(pendingDeleteRef.current.timer);
+            const prev = pendingDeleteRef.current.item;
+            fetch(`${API_BASE_URL}/api/list-items/${prev.id}`, { method: 'DELETE' }).catch(() => {});
         }
+        const timer = setTimeout(() => {
+            fetch(`${API_BASE_URL}/api/list-items/${itemId}`, { method: 'DELETE' })
+                .catch(() => setItems(current => [...current, target]));
+            pendingDeleteRef.current = null;
+            setPendingDeleteTick(t => t + 1);
+        }, 3000);
+        pendingDeleteRef.current = { item: target, timer };
+        setPendingDeleteTick(t => t + 1);
+    };
+
+    const undoItemDelete = () => {
+        if (!pendingDeleteRef.current) return;
+        clearTimeout(pendingDeleteRef.current.timer);
+        const { item } = pendingDeleteRef.current;
+        setItems(prev => {
+            // Insert while preserving sort: unchecked first, then name.
+            const next = [...prev, item];
+            next.sort((a, b) => {
+                if (a.isChecked !== b.isChecked) return Number(a.isChecked) - Number(b.isChecked);
+                return a.productName.localeCompare(b.productName);
+            });
+            return next;
+        });
+        pendingDeleteRef.current = null;
+        setPendingDeleteTick(t => t + 1);
     };
 
     const handleSearch = async (query: string) => {
         setSearchQuery(query);
         if (query.length < 2) { setSearchResults([]); return; }
+        // Without a chainId we'd search across all chains — the results
+        // would include products the user's selected store doesn't
+        // actually stock. Bail out until the list (and therefore chainId)
+        // has loaded.
+        if (!list?.chainId) { setSearchResults([]); return; }
         try {
-            const res = await fetch(`${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(query)}&chainId=${list?.chainId}`);
+            const res = await fetch(`${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(query)}&chainId=${list.chainId}`);
             const data = await res.json();
             setSearchResults(Array.isArray(data) ? data.slice(0, 5) : []);
         } catch {}
@@ -272,7 +446,18 @@ export default function ShoppingListScreen() {
                     quantity,
                 }),
             });
+            if (!res.ok) {
+                // Previously we'd happily parse a 400 response, end up with
+                // data.id = undefined, and push a keyless item into the
+                // list — triggering React's "unique key" warning AND
+                // showing a ghost row that never existed in the DB. Now
+                // we reject explicitly before touching state.
+                throw new Error(`HTTP ${res.status}`);
+            }
             const data = await res.json();
+            if (typeof data?.id !== 'number') {
+                throw new Error('Response missing id');
+            }
             const newItem: ShoppingListItem = {
                 id: data.id,
                 listId: Number(id),
@@ -287,10 +472,11 @@ export default function ShoppingListScreen() {
                 unit: isWeighable ? 'kg' : 'vnt.',
             };
             setItems(prev => [...prev, newItem]);
+            markInFlight(data.id);
             setVisibleCount(prev => prev + 1);
+            setQuickAddText('');
             setSearchQuery('');
             setSearchResults([]);
-            setSearchVisible(false);
         } catch (error) {
             Alert.alert('Klaida', 'Nepavyko pridėti produkto');
         }
@@ -323,17 +509,40 @@ export default function ShoppingListScreen() {
             <>
                 <Stack.Screen options={{
                     title: list?.storeAddress || 'Pirkinių sąrašas',
+                    headerStyle: { backgroundColor: colors.cardBackground },
+                    headerShadowVisible: false,
                     headerLeft: () => list?.chainLogoUrl ? (
                         <Image source={{ uri: list.chainLogoUrl }} style={styles.headerLogo} resizeMode="contain" />
                     ) : null,
-                    headerRight: () => list?.status === 'completed' ? (
-                        <TouchableOpacity style={{ marginRight: 12 }} onPress={() => setMenuVisible(true)}>
-                            <Ionicons name="ellipsis-vertical" size={22} color={colors.textMuted} />
-                        </TouchableOpacity>
-                    ) : undefined,
+                    headerRight: () => (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 8 }}>
+                            {list?.status === 'active' && (
+                                <TouchableOpacity style={{ paddingHorizontal: 8 }} onPress={openShare}>
+                                    <Ionicons name="share-social-outline" size={22} color={colors.textPrimary} />
+                                </TouchableOpacity>
+                            )}
+                            {list?.status === 'completed' && (
+                                <TouchableOpacity style={{ paddingHorizontal: 8 }} onPress={() => setMenuVisible(true)}>
+                                    <Ionicons name="ellipsis-vertical" size={22} color={colors.textMuted} />
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    ),
                 }} />
 
                 <View style={styles.container}>
+                    {pendingDeleteRef.current && (
+                        <TouchableOpacity
+                            style={styles.undoToast}
+                            onPress={undoItemDelete}
+                            activeOpacity={0.85}
+                        >
+                            <Ionicons name="arrow-undo" size={14} color={colors.onPrimary} />
+                            <Text style={styles.undoToastText}>
+                                Ištrinta. Atšaukti?
+                            </Text>
+                        </TouchableOpacity>
+                    )}
                     <View style={styles.progressContainer}>
                         <View style={styles.progressBar}>
                             <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
@@ -341,69 +550,78 @@ export default function ShoppingListScreen() {
                         <Text style={styles.progressText}>{checkedCount} iš {totalCount}</Text>
                     </View>
 
-                    {searchVisible && (
-                        <View style={styles.searchOverlay}>
-                            <View style={styles.searchContainer}>
-                                <Ionicons name="search" size={18} color={colors.textMuted} />
-                                <TextInput
-                                    style={styles.searchInput}
-                                    placeholder="Ieškoti produkto..."
-                                    placeholderTextColor={colors.textMuted}
-                                    value={searchQuery}
-                                    onChangeText={handleSearch}
-                                    autoFocus
-                                />
-                                <TouchableOpacity onPress={() => { setSearchVisible(false); setSearchQuery(''); setSearchResults([]); }}>
-                                    <Ionicons name="close" size={22} color={colors.textSecondary} />
-                                </TouchableOpacity>
-                            </View>
-                            {searchResults.length > 0 && (
-                                <ScrollView
-                                    style={styles.searchResults}
-                                    keyboardShouldPersistTaps="handled"
-                                >
-                                    {searchResults.map((product, index) => {
-                                        const alreadyInList = items.some(i => i.productId === product.productId);
-                                        return (
-                                            <TouchableOpacity
-                                                key={`${product.id}-${index}`}
-                                                style={styles.searchResultItem}
-                                                onPress={() => {
-                                                    if (alreadyInList) {
-                                                        Alert.alert('Jau sąraše', `"${product.storeProductName}" jau yra pirkinių sąraše`);
-                                                        return;
-                                                    }
-                                                    promptQuantity(product.productId, product.storeProductName, product.isWeighable === 1 || product.isWeighable === true, product.id, product.imageUrl);
-                                                }}
-                                            >
-                                                {alreadyInList && (
-                                                    <Ionicons name="checkmark-circle" size={18} color={colors.primary} style={{ marginRight: 8 }} />
-                                                )}
-                                                <Text style={styles.searchResultText}>{product.storeProductName}</Text>
-                                            </TouchableOpacity>
-                                        );
-                                    })}
-                                    <TouchableOpacity
-                                        style={styles.customItemButton}
-                                        onPress={() => promptQuantity(null, searchQuery, false)}
-                                    >
-                                        <Ionicons name="add-circle-outline" size={18} color={colors.primary} />
-                                        <Text style={styles.customItemText}>Pridėti "{searchQuery}" kaip naują prekę</Text>
-                                    </TouchableOpacity>
-                                </ScrollView>
-                            )}
-                            {searchQuery.length > 0 && searchResults.length === 0 && (
-                                <TouchableOpacity
-                                    style={styles.customItemButton}
-                                    onPress={() => promptQuantity(null, searchQuery, false)}
-                                >
-                                    <Ionicons name="add-circle-outline" size={18} color={colors.primary} />
-                                    <Text style={styles.customItemText}>Pridėti "{searchQuery}" kaip naują prekę</Text>
-                                </TouchableOpacity>
-                            )}
-                        </View>
-                    )}
                     <ScrollView contentContainerStyle={styles.list}>
+                        {list?.status === 'active' && (
+                            <View style={styles.quickAddWrapper}>
+                                <View style={styles.quickAddRow}>
+                                    <Ionicons name="search-outline" size={18} color={colors.textMuted} />
+                                    <TextInput
+                                        style={styles.quickAddInput}
+                                        value={quickAddText}
+                                        onChangeText={(t) => { setQuickAddText(t); handleSearch(t); }}
+                                        placeholder="Ieškoti arba pridėti prekę…"
+                                        placeholderTextColor={colors.textMuted}
+                                        onSubmitEditing={() => {
+                                            const name = quickAddText.trim();
+                                            if (name.length === 0) return;
+                                            setQuickAddText('');
+                                            setSearchQuery('');
+                                            setSearchResults([]);
+                                            // Custom item: productId + storeProductId null, qty 1.
+                                            addProduct(null, name, 1, false, null, null);
+                                        }}
+                                        returnKeyType="done"
+                                    />
+                                    {quickAddText.length > 0 && (
+                                        <TouchableOpacity
+                                            onPress={() => { setQuickAddText(''); setSearchQuery(''); setSearchResults([]); }}
+                                            hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                                        >
+                                            <Ionicons name="close" size={18} color={colors.textSecondary} />
+                                        </TouchableOpacity>
+                                    )}
+                                </View>
+                                {quickAddText.length >= 2 && searchResults.length > 0 && (
+                                    <View style={styles.inlineSearchResults}>
+                                        {searchResults.map((product, index) => {
+                                            const alreadyInList = items.some(i => i.productId === product.productId);
+                                            return (
+                                                <TouchableOpacity
+                                                    key={`${product.id}-${index}`}
+                                                    style={styles.searchResultItem}
+                                                    onPress={() => {
+                                                        if (alreadyInList) {
+                                                            Alert.alert('Jau sąraše', `"${product.storeProductName}" jau yra pirkinių sąraše`);
+                                                            return;
+                                                        }
+                                                        promptQuantity(product.productId, product.storeProductName, product.isWeighable === 1 || product.isWeighable === true, product.id, product.imageUrl);
+                                                        setQuickAddText('');
+                                                        setSearchQuery('');
+                                                        setSearchResults([]);
+                                                    }}
+                                                >
+                                                    {alreadyInList && (
+                                                        <Ionicons name="checkmark-circle" size={18} color={colors.primary} style={{ marginRight: 8 }} />
+                                                    )}
+                                                    <Text style={styles.searchResultText}>{product.storeProductName}</Text>
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                        <TouchableOpacity
+                                            style={styles.customItemButton}
+                                            onPress={() => {
+                                                const name = quickAddText.trim();
+                                                if (!name) return;
+                                                promptQuantity(null, name, false);
+                                            }}
+                                        >
+                                            <Ionicons name="add-circle-outline" size={18} color={colors.primary} />
+                                            <Text style={styles.customItemText}>Pridėti "{quickAddText}" kaip naują prekę</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                )}
+                            </View>
+                        )}
                         {items.slice(0, visibleCount).length > 0 && (
                             <View style={styles.listContainer}>
                                 {items.slice(0, visibleCount).map((item, index) => (
@@ -424,17 +642,6 @@ export default function ShoppingListScreen() {
                             <View style={styles.centered}>
                                 <Text style={styles.emptyText}>Sąrašas tuščias</Text>
                             </View>
-                        )}
-                        {list?.status === 'active' && (
-                            <TouchableOpacity
-                                style={styles.addCard}
-                                onPress={() => setSearchVisible(true)}
-                            >
-                                <View style={styles.addCardInner}>
-                                    <Ionicons name="add-circle-outline" size={22} color={colors.primary} />
-                                    <Text style={styles.addCardText}>Pridėti prekę</Text>
-                                </View>
-                            </TouchableOpacity>
                         )}
                     </ScrollView>
 
@@ -528,6 +735,65 @@ export default function ShoppingListScreen() {
                         </View>
                     </View>
                 )}
+                <Modal
+                    visible={shareOpen}
+                    transparent
+                    animationType="fade"
+                    onRequestClose={closeShare}
+                >
+                    <View style={styles.shareOverlay}>
+                        <TouchableOpacity
+                            style={StyleSheet.absoluteFillObject}
+                            activeOpacity={1}
+                            onPress={closeShare}
+                        />
+                        <View style={styles.shareContainer}>
+                            {shareStatus === 'claimed' ? (
+                                <>
+                                    <View style={styles.shareCheckCircle}>
+                                        <Ionicons name="checkmark" size={40} color={colors.onPrimary} />
+                                    </View>
+                                    <Text style={styles.shareTitle}>Sąrašas prijungtas</Text>
+                                    <Text style={styles.shareSubtitle}>Kitas vartotojas prisijungė prie sąrašo.</Text>
+                                    <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
+                                        <Text style={styles.shareCloseBtnText}>Uždaryti</Text>
+                                    </TouchableOpacity>
+                                </>
+                            ) : shareStatus === 'expired' ? (
+                                <>
+                                    <Text style={styles.shareTitle}>QR kodas nebegalioja</Text>
+                                    <Text style={styles.shareSubtitle}>Sukurkite naują, jei norite pasidalinti.</Text>
+                                    <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
+                                        <Text style={styles.shareCloseBtnText}>Uždaryti</Text>
+                                    </TouchableOpacity>
+                                </>
+                            ) : shareStatus === 'error' ? (
+                                <>
+                                    <Text style={styles.shareTitle}>Klaida</Text>
+                                    <Text style={styles.shareSubtitle}>Nepavyko sukurti QR kodo.</Text>
+                                    <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
+                                        <Text style={styles.shareCloseBtnText}>Uždaryti</Text>
+                                    </TouchableOpacity>
+                                </>
+                            ) : (
+                                <>
+                                    <Text style={styles.shareTitle}>Dalintis sąrašu</Text>
+                                    <Text style={styles.shareSubtitle}>Tegul kitas vartotojas nuskaito QR kodą.</Text>
+                                    <View style={styles.shareQrWrap}>
+                                        {shareLoading || !shareToken ? (
+                                            <ActivityIndicator size="large" color={colors.primary} />
+                                        ) : (
+                                            <QRCode value={shareToken} size={220} />
+                                        )}
+                                    </View>
+                                    <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
+                                        <Text style={styles.shareCloseBtnText}>Uždaryti</Text>
+                                    </TouchableOpacity>
+                                </>
+                            )}
+                        </View>
+                    </View>
+                </Modal>
             </>
         </GestureHandlerRootView>
     );
@@ -542,6 +808,41 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.cardBackground, borderBottomWidth: 1, borderBottomColor: c.border, gap: 10,
     },
     progressBar: { flex: 1, height: 8, backgroundColor: c.border, borderRadius: 4, overflow: 'hidden' },
+    quickAddWrapper: {
+        marginHorizontal: 10,
+        marginBottom: 10,
+    },
+    quickAddRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        paddingHorizontal: 16,
+        paddingVertical: 10,
+        backgroundColor: c.cardBackground,
+        borderRadius: 10,
+        elevation: 1,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.05,
+        shadowRadius: 2,
+    },
+    inlineSearchResults: {
+        backgroundColor: c.cardBackground,
+        borderRadius: 10,
+        marginTop: 6,
+        elevation: 2,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.08,
+        shadowRadius: 3,
+        overflow: 'hidden',
+    },
+    quickAddInput: {
+        flex: 1,
+        fontSize: 14,
+        color: c.textPrimary,
+        paddingVertical: 2,
+    },
     progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: 4 },
     progressText: { fontSize: 13, color: c.textSecondary, minWidth: 50, textAlign: 'right' },
 list: {
@@ -596,21 +897,6 @@ card: {
     itemQuantity: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
     itemPrice: { fontSize: 14, fontWeight: '500', color: c.primary },
     itemPriceChecked: { color: c.textMuted },
-    searchInput: { flex: 1, fontSize: 14, color: c.textPrimary },
-    searchOverlay: {
-        backgroundColor: c.cardBackground,
-        borderBottomWidth: 1,
-        borderBottomColor: c.border,
-        zIndex: 10,
-        maxHeight: 400,
-    },
-    searchResults: {
-        maxHeight: 250,
-    },
-    searchContainer: {
-        flexDirection: 'row', alignItems: 'center', gap: 8,
-        padding: 12, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
-    },
     searchResultItem: {
         padding: 12, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
         flexDirection: 'row', alignItems: 'center',
@@ -618,12 +904,6 @@ card: {
     searchResultText: { fontSize: 14, color: c.textPrimary },
     customItemButton: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 },
     customItemText: { fontSize: 14, color: c.primary },
-    addCard: {
-        backgroundColor: c.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10,
-        borderWidth: 1, borderColor: c.border, borderStyle: 'dashed', elevation: 1,
-    },
-    addCardInner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 },
-    addCardText: { fontSize: 14, color: c.primary, fontWeight: '600' },
     emptyText: { fontSize: 16, color: c.textSecondary },
     menuOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100 },
     menuContainer: {
@@ -702,4 +982,64 @@ card: {
         flex: 1,
     },
     actionText: { color: c.onPrimary, fontSize: 11, fontWeight: '600' },
+    undoToast: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: c.textPrimary,
+        marginHorizontal: 16,
+        marginTop: 12,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+        borderRadius: 10,
+        alignSelf: 'center',
+        zIndex: 50,
+    },
+    undoToastText: {
+        color: c.onPrimary,
+        fontSize: 13,
+        fontWeight: '600',
+    },
+    shareOverlay: {
+        flex: 1,
+        backgroundColor: c.overlayBackdrop,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    shareContainer: {
+        backgroundColor: c.cardBackground,
+        borderRadius: 16,
+        paddingVertical: 24,
+        paddingHorizontal: 28,
+        width: '85%',
+        alignItems: 'center',
+        elevation: 8,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2, shadowRadius: 8,
+    },
+    shareTitle: { fontSize: 18, fontWeight: '700', color: c.textPrimary, marginBottom: 6, textAlign: 'center' },
+    shareSubtitle: { fontSize: 13, color: c.textSecondary, marginBottom: 16, textAlign: 'center' },
+    shareQrWrap: {
+        padding: 12,
+        backgroundColor: '#fff',
+        borderRadius: 12,
+        marginBottom: 18,
+        minWidth: 244,
+        minHeight: 244,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    shareCloseBtn: {
+        paddingHorizontal: 24,
+        paddingVertical: 12,
+        backgroundColor: c.primary,
+        borderRadius: 8,
+    },
+    shareCloseBtnText: { color: c.onPrimary, fontSize: 14, fontWeight: '600' },
+    shareCheckCircle: {
+        width: 72, height: 72, borderRadius: 36,
+        backgroundColor: c.success,
+        alignItems: 'center', justifyContent: 'center',
+        marginBottom: 16,
+    },
 });

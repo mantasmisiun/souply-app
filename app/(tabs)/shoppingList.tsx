@@ -1,4 +1,4 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, Modal } from 'react-native';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +7,18 @@ import { getUserId } from '../../config/user';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useTheme, type AppTheme } from '../../constants/theme';
+
+interface StoreChain {
+    id: number;
+    name: string;
+    logoUrl: string | null;
+}
+
+interface Store {
+    id: number;
+    chainId: number;
+    address: string;
+}
 
 type Styles = ReturnType<typeof makeStyles>;
 
@@ -34,29 +46,20 @@ function ShoppingListCard({ item, onDelete, onComplete, onPress, styles, colors 
     const swipeableRef = useRef<SwipeableMethods>(null);
     const progress = item.itemCount > 0 ? item.checkedCount / item.itemCount : 0;
 
+    /**
+     * Swipe semantics:
+     *   - swipe left (delete revealed on the right) → immediately delete.
+     *     A 3s undo toast in the parent lets the user recover. No modal
+     *     alert — the swipe itself is the confirmation.
+     *   - swipe right (complete revealed on the left) → immediately
+     *     complete. Reversible via "reopen" in the future (detail screen).
+     */
     const handleSwipeOpen = (direction: 'left' | 'right') => {
+        swipeableRef.current?.close();
         if (direction === 'right') {
-            // swiped right → complete action revealed
-            swipeableRef.current?.close();
-            Alert.alert(
-                'Užbaigti',
-                'Ar tikrai norite užbaigti šį sąrašą?',
-                [
-                    { text: 'Atšaukti', style: 'cancel' as const },
-                    { text: 'Užbaigti', style: 'default' as const, onPress: () => onComplete(item.id) },
-                ]
-            );
+            onComplete(item.id);
         } else if (direction === 'left') {
-            // swiped left → delete action revealed
-            swipeableRef.current?.close();
-            Alert.alert(
-                'Ištrinti',
-                'Ar tikrai norite ištrinti šį sąrašą?',
-                [
-                    { text: 'Atšaukti', style: 'cancel' as const },
-                    { text: 'Ištrinti', style: 'destructive' as const, onPress: () => onDelete(item.id) },
-                ]
-            );
+            onDelete(item.id);
         }
     };
 
@@ -155,13 +158,113 @@ export default function ShoppingListScreen() {
         fetchLists();
     }, []));
 
-    const deleteList = async (id: number) => {
-        try {
-            await fetch(`${API_BASE_URL}/api/shopping-lists/${id}`, { method: 'DELETE' });
-            setLists(prev => prev.filter(l => l.id !== id));
-        } catch {
-            Alert.alert('Klaida', 'Nepavyko ištrinti sąrašo');
+    /**
+     * Optimistic-delete with a 3-second undo toast. We immediately hide
+     * the row locally AND schedule the DELETE request. If the user taps
+     * Atšaukti before the timer fires, we cancel the pending request and
+     * restore the row. Removes the alert-storm the old flow had on every
+     * swipe.
+     */
+    const [pendingDelete, setPendingDelete] = useState<{ list: ShoppingList; timer: any } | null>(null);
+
+    const deleteList = (id: number) => {
+        const target = lists.find(l => l.id === id);
+        if (!target) return;
+        setLists(prev => prev.filter(l => l.id !== id));
+        // If there's already a pending delete, finalize it immediately —
+        // user queued a second delete, shouldn't chain-restore.
+        if (pendingDelete) {
+            clearTimeout(pendingDelete.timer);
+            fetch(`${API_BASE_URL}/api/shopping-lists/${pendingDelete.list.id}`, { method: 'DELETE' })
+                .catch(() => {});
         }
+        const timer = setTimeout(() => {
+            fetch(`${API_BASE_URL}/api/shopping-lists/${id}`, { method: 'DELETE' })
+                .catch(() => {
+                    // Resurrect the row on server failure so the user
+                    // isn't left with a phantom-gone list.
+                    setLists(prev => [target, ...prev]);
+                });
+            setPendingDelete(null);
+        }, 3000);
+        setPendingDelete({ list: target, timer });
+    };
+
+    const undoDelete = () => {
+        if (!pendingDelete) return;
+        clearTimeout(pendingDelete.timer);
+        setLists(prev => [pendingDelete.list, ...prev].sort((a, b) =>
+            new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        ));
+        setPendingDelete(null);
+    };
+
+    /**
+     * Swipe-complete = user is done. Backend auto-checks every item in
+     * the list inside the same status-update transaction (new behaviour
+     * after the review), so the progress bar flips to 100% and the
+     * basket transitions to `completed`.
+     */
+    // FAB popup state: closed / showing choice / showing chain picker.
+    // Chains are fetched lazily the first time the picker opens — keeps
+    // the tab startup path as-is for users who never open it.
+    const [fabMenuOpen, setFabMenuOpen] = useState(false);
+    const [chainPickerOpen, setChainPickerOpen] = useState(false);
+    const [chains, setChains] = useState<StoreChain[] | null>(null);
+    const [chainsLoading, setChainsLoading] = useState(false);
+    const [creatingChainId, setCreatingChainId] = useState<number | null>(null);
+
+    const openChainPicker = async () => {
+        setFabMenuOpen(false);
+        setChainPickerOpen(true);
+        if (chains) return;
+        setChainsLoading(true);
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/chains`);
+            const data = await res.json();
+            setChains(Array.isArray(data) ? data : []);
+        } catch {
+            setChains([]);
+        } finally {
+            setChainsLoading(false);
+        }
+    };
+
+    const createStandaloneList = async (chainId: number) => {
+        if (creatingChainId) return;
+        setCreatingChainId(chainId);
+        try {
+            // We don't collect a store from the user here — any store in
+            // the chain is enough for price/category filtering. Pick the
+            // first one returned.
+            const storesRes = await fetch(`${API_BASE_URL}/api/stores/chain/${chainId}`);
+            const stores: Store[] = await storesRes.json();
+            if (!Array.isArray(stores) || stores.length === 0) {
+                Alert.alert('Klaida', 'Šiai parduotuvei nėra pasirinkimų');
+                return;
+            }
+            const storeId = stores[0].id;
+            const userId = await getUserId();
+            const res = await fetch(`${API_BASE_URL}/api/shopping-lists`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId, storeId }),
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const data = await res.json();
+            if (typeof data?.id !== 'number') throw new Error('Response missing id');
+            setChainPickerOpen(false);
+            router.push(`/shopping-list/${data.id}` as any);
+        } catch {
+            Alert.alert('Klaida', 'Nepavyko sukurti sąrašo');
+        } finally {
+            setCreatingChainId(null);
+        }
+    };
+
+    const openScanner = () => {
+        setFabMenuOpen(false);
+        router.push('/shopping-list/scan' as any);
     };
 
     const completeList = async (id: number) => {
@@ -171,7 +274,11 @@ export default function ShoppingListScreen() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ status: 'completed' }),
             });
-            setLists(prev => prev.map(l => l.id === id ? { ...l, status: 'completed' } : l));
+            setLists(prev => prev.map(l =>
+                l.id === id
+                    ? { ...l, status: 'completed', checkedCount: l.itemCount }
+                    : l
+            ));
         } catch {
             Alert.alert('Klaida', 'Nepavyko užbaigti sąrašo');
         }
@@ -189,6 +296,18 @@ export default function ShoppingListScreen() {
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
             <View style={styles.container}>
+                {pendingDelete && (
+                    <TouchableOpacity
+                        style={styles.undoToast}
+                        onPress={undoDelete}
+                        activeOpacity={0.85}
+                    >
+                        <Ionicons name="arrow-undo" size={14} color={colors.onPrimary} />
+                        <Text style={styles.undoToastText}>
+                            Ištrinta. Atšaukti?
+                        </Text>
+                    </TouchableOpacity>
+                )}
                 <FlatList
                     data={[]}
                     keyExtractor={() => ''}
@@ -237,6 +356,82 @@ export default function ShoppingListScreen() {
                     }
                     contentContainerStyle={styles.list}
                 />
+
+                <TouchableOpacity
+                    style={styles.fab}
+                    onPress={() => setFabMenuOpen(true)}
+                    activeOpacity={0.85}
+                >
+                    <Ionicons name="add" size={28} color={colors.onPrimary} />
+                </TouchableOpacity>
+
+                <Modal
+                    visible={fabMenuOpen}
+                    transparent
+                    animationType="fade"
+                    onRequestClose={() => setFabMenuOpen(false)}
+                >
+                    <TouchableOpacity
+                        style={styles.modalBackdrop}
+                        activeOpacity={1}
+                        onPress={() => setFabMenuOpen(false)}
+                    >
+                        <View style={styles.fabMenu}>
+                            <TouchableOpacity style={styles.fabMenuItem} onPress={openScanner}>
+                                <Ionicons name="qr-code-outline" size={22} color={colors.textPrimary} />
+                                <Text style={styles.fabMenuItemText}>Skenuoti QR</Text>
+                            </TouchableOpacity>
+                            <View style={styles.fabMenuDivider} />
+                            <TouchableOpacity style={styles.fabMenuItem} onPress={openChainPicker}>
+                                <Ionicons name="add-circle-outline" size={22} color={colors.textPrimary} />
+                                <Text style={styles.fabMenuItemText}>Kurti</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </TouchableOpacity>
+                </Modal>
+
+                <Modal
+                    visible={chainPickerOpen}
+                    transparent
+                    animationType="slide"
+                    onRequestClose={() => setChainPickerOpen(false)}
+                >
+                    <TouchableOpacity
+                        style={styles.modalBackdrop}
+                        activeOpacity={1}
+                        onPress={() => !creatingChainId && setChainPickerOpen(false)}
+                    >
+                        <View style={styles.chainPickerSheet}>
+                            <Text style={styles.sheetTitle}>Pasirinkite parduotuvę</Text>
+                            {chainsLoading ? (
+                                <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+                            ) : (chains ?? []).length === 0 ? (
+                                <Text style={styles.sheetEmpty}>Nerasta parduotuvių</Text>
+                            ) : (
+                                (chains ?? []).map(chain => (
+                                    <TouchableOpacity
+                                        key={chain.id}
+                                        style={styles.chainRow}
+                                        onPress={() => createStandaloneList(chain.id)}
+                                        disabled={creatingChainId !== null}
+                                    >
+                                        {chain.logoUrl ? (
+                                            <Image source={{ uri: chain.logoUrl }} style={styles.chainLogo} resizeMode="contain" />
+                                        ) : (
+                                            <View style={styles.chainLogoPlaceholder}>
+                                                <Text style={styles.chainLogoPlaceholderText}>{chain.name[0]}</Text>
+                                            </View>
+                                        )}
+                                        <Text style={styles.chainName}>{chain.name}</Text>
+                                        {creatingChainId === chain.id && (
+                                            <ActivityIndicator size="small" color={colors.primary} />
+                                        )}
+                                    </TouchableOpacity>
+                                ))
+                            )}
+                        </View>
+                    </TouchableOpacity>
+                </Modal>
             </View>
         </GestureHandlerRootView>
     );
@@ -281,6 +476,23 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     badgeTextCompleted: { color: c.textMuted },
     emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', textAlign: 'center' },
     emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 4, textAlign: 'center' },
+    undoToast: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        backgroundColor: c.textPrimary,
+        marginHorizontal: 16,
+        marginTop: 12,
+        paddingVertical: 10,
+        paddingHorizontal: 14,
+        borderRadius: 10,
+        alignSelf: 'center',
+    },
+    undoToastText: {
+        color: c.onPrimary,
+        fontSize: 13,
+        fontWeight: '600',
+    },
     deleteAction: {
         backgroundColor: c.error, justifyContent: 'center', alignItems: 'center',
         width: 80, borderRadius: 12, marginBottom: 10,
@@ -298,4 +510,71 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     cardCompleted: {
         borderLeftColor: c.textMuted,
     },
+    fab: {
+        position: 'absolute',
+        right: 20,
+        bottom: 24,
+        width: 56,
+        height: 56,
+        borderRadius: 28,
+        backgroundColor: c.primary,
+        alignItems: 'center',
+        justifyContent: 'center',
+        elevation: 6,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.25,
+        shadowRadius: 5,
+    },
+    modalBackdrop: {
+        flex: 1,
+        backgroundColor: c.overlayBackdrop,
+        justifyContent: 'flex-end',
+    },
+    fabMenu: {
+        backgroundColor: c.cardBackground,
+        marginHorizontal: 16,
+        marginBottom: 92,
+        borderRadius: 12,
+        paddingVertical: 4,
+        elevation: 8,
+        shadowColor: '#000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2,
+        shadowRadius: 6,
+    },
+    fabMenuItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        paddingVertical: 14,
+        paddingHorizontal: 18,
+    },
+    fabMenuItemText: { fontSize: 15, color: c.textPrimary, fontWeight: '500' },
+    fabMenuDivider: { height: 1, backgroundColor: c.borderSubtle, marginHorizontal: 12 },
+    chainPickerSheet: {
+        backgroundColor: c.cardBackground,
+        borderTopLeftRadius: 16,
+        borderTopRightRadius: 16,
+        paddingHorizontal: 20,
+        paddingTop: 20,
+        paddingBottom: 32,
+    },
+    sheetTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginBottom: 12 },
+    sheetEmpty: { fontSize: 14, color: c.textMuted, textAlign: 'center', marginVertical: 16 },
+    chainRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        paddingVertical: 14,
+        borderBottomWidth: 1,
+        borderBottomColor: c.borderSubtle,
+    },
+    chainLogo: { width: 36, height: 36, borderRadius: 6 },
+    chainLogoPlaceholder: {
+        width: 36, height: 36, borderRadius: 6,
+        backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center',
+    },
+    chainLogoPlaceholderText: { fontSize: 16, fontWeight: '700', color: c.textSecondary },
+    chainName: { flex: 1, fontSize: 15, color: c.textPrimary, fontWeight: '500' },
 });

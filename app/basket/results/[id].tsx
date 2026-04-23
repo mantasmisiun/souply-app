@@ -155,60 +155,64 @@ export default function BasketResultsScreen() {
         Linking.openURL(url);
     };
 
+    const [creatingList, setCreatingList] = useState(false);
+
     const handleCreateShoppingList = async () => {
-        if (!selectedStore) return;
+        if (!selectedStore || creatingList) return;
+        setCreatingList(true);
         try {
             const { getUserId } = await import('../../../config/user');
             const userId = await getUserId();
 
-            const listRes = await fetch(`${API_BASE_URL}/api/shopping-lists`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId, storeId: selectedStore.storeId, basketId: Number(id) }),
-            });
-            const listData = await listRes.json();
-            const listId = listData.id;
-
-            await Promise.all(selectedStore.items.map(item => {
-                // If the calc substituted or cross-chain-averaged to get a
-                // price, the priced SP belongs to a DIFFERENT Product.
-                // Linking the shopping-list row to that SP would make the
-                // backend's COALESCE(sp.name, p.name) display the
-                // substitute's name, violating user intent. Drop the
-                // storeProductId for those rows so the list shows the
-                // user's original Product.name.
-                const wasSubstituted = (item as any).isSubstituted
-                    || (item as any).isCrossChainAverage;
-                return fetch(`${API_BASE_URL}/api/list-items`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        listId,
+            const body = {
+                userId,
+                storeId: selectedStore.storeId,
+                basketId: Number(id),
+                items: selectedStore.items.map(item => {
+                    const wasSubstituted =
+                        (item as any).isSubstituted || (item as any).isCrossChainAverage;
+                    return {
                         productId: item.productId,
-                        // Preserve the SP link ONLY for clean direct matches.
                         storeProductId: wasSubstituted ? null : (item.storeProductId || null),
-                        // Substituted rows: keep the user's ORIGINAL quantity
-                        // (in their units); pack math of a substitute's SP
-                        // would just confuse the list. Direct matches keep
-                        // packsNeeded as before.
                         quantity: wasSubstituted
                             ? item.quantity
                             : (item.storeProductId
                                 ? (item.isWeighable ? item.quantity : item.packsNeeded || item.quantity)
                                 : item.quantity),
                         price: item.totalPrice,
-                    }),
-                });
-            }));
+                    };
+                }),
+            };
 
-            // Navigate only after all items are saved
+            const res = await fetch(`${API_BASE_URL}/api/shopping-lists`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+
+            if (res.status === 409) {
+                const data = await res.json();
+                router.replace('/(tabs)/shoppingList' as any);
+                setTimeout(() => {
+                    router.push(`/shopping-list/${data.listId}` as any);
+                }, 100);
+                return;
+            }
+            if (!res.ok) {
+                const errorText = await res.text().catch(() => '');
+                throw new Error(`HTTP ${res.status}: ${errorText.slice(0, 200)}`);
+            }
+            const listData = await res.json();
+            if (!listData?.id) throw new Error('Response missing id');
+
             router.replace('/(tabs)/shoppingList' as any);
             setTimeout(() => {
-                router.push(`/shopping-list/${listId}?expectedCount=${selectedStore.items.length}` as any);
+                router.push(`/shopping-list/${listData.id}` as any);
             }, 100);
-
-        } catch (error) {
+        } catch (error: any) {
             Alert.alert('Klaida', 'Nepavyko sukurti pirkinių sąrašo');
+        } finally {
+            setCreatingList(false);
         }
     };
 
@@ -332,9 +336,19 @@ export default function BasketResultsScreen() {
                             <Ionicons name="navigate-outline" size={20} color={colors.primary} />
                             <Text style={styles.navigateText}>Vykti</Text>
                         </TouchableOpacity>
-                        <TouchableOpacity style={styles.shoppingListButton} onPress={handleCreateShoppingList}>
-                            <Ionicons name="list-outline" size={20} color={colors.onPrimary} />
-                            <Text style={styles.shoppingListText}>Pirkinių sąrašas</Text>
+                        <TouchableOpacity
+                            style={styles.shoppingListButton}
+                            onPress={handleCreateShoppingList}
+                            disabled={creatingList}
+                        >
+                            {creatingList ? (
+                                <ActivityIndicator size="small" color={colors.onPrimary} />
+                            ) : (
+                                <Ionicons name="list-outline" size={20} color={colors.onPrimary} />
+                            )}
+                            <Text style={styles.shoppingListText}>
+                                {creatingList ? 'Kuriama…' : 'Pirkinių sąrašas'}
+                            </Text>
                         </TouchableOpacity>
                     </Animated.View>
                 )}
