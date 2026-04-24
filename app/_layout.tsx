@@ -2,10 +2,13 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
+import { View } from 'react-native';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '../constants/theme';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
+import { OfflineBanner } from '../components/OfflineBanner';
+import { useBindNetInfo } from '../state/networkStatus';
 
 export const unstable_settings = {
   anchor: '(tabs)',
@@ -14,6 +17,9 @@ export const unstable_settings = {
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const colors = useTheme();
+  // Subscribe to NetInfo once, at the top of the tree. Downstream
+  // consumers read via `useNetworkStatus(s => s.isOnline)`.
+  useBindNetInfo();
 
   // Derive React Navigation's theme from our app theme so every default
   // surface (headers, cards, borders) picks up the palette automatically.
@@ -33,6 +39,8 @@ export default function RootLayout() {
   return (
     <DisplayPreferenceProvider>
     <ThemeProvider value={navTheme}>
+      <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
+      <OfflineBanner />
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: colors.pageBackground },
@@ -56,6 +64,7 @@ export default function RootLayout() {
         <Stack.Screen name="receipt-process" options={{ title: 'Kvito peržiūra' }} />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
+      </View>
     </ThemeProvider>
     </DisplayPreferenceProvider>
   );

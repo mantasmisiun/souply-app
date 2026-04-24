@@ -19,6 +19,12 @@ import {
 import { API_BASE_URL } from "../../config/api";
 import { getUserId } from "../../config/user";
 import { useTheme, type AppTheme } from "../../constants/theme";
+import {
+    clearReceiptDraft,
+    loadReceiptDraft,
+} from "../../state/receiptDraft";
+import { fetchWithTimeout, TIMEOUT_HEAVY_MS, TIMEOUT_STANDARD_MS } from "../../utils/fetchWithTimeout";
+import { useNetworkStatus } from "../../state/networkStatus";
 
 interface Receipt {
   id: number;
@@ -39,6 +45,14 @@ export default function ReceiptsScreen() {
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
+  // Block scan actions when offline — OCR still works but every
+  // downstream HTTP call (store match, product match, POST, upload,
+  // comparison) will fail. Better to stop the user up front than
+  // surface a cascade of errors after a 5-second OCR. FAB visually
+  // dims and the "+" becomes inert while offline; existing-receipt
+  // taps still navigate fine (loadExistingReceipt has its own
+  // error handling for broken parsedData).
+  const isOnline = useNetworkStatus((s) => s.isOnline);
   const [lastUploadedId, setLastUploadedId] = useState<number | null>(null);
   const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
   const [previewOnly, setPreviewOnly] = useState(false);
@@ -86,11 +100,15 @@ export default function ReceiptsScreen() {
         encoding: FileSystem.EncodingType.Base64,
       });
 
-      const res = await fetch(`${API_BASE_URL}/api/receipts/pdf-to-image`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pdfBase64 }),
-      });
+      const res = await fetchWithTimeout(
+        `${API_BASE_URL}/api/receipts/pdf-to-image`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ pdfBase64 }),
+          timeoutMs: TIMEOUT_HEAVY_MS,
+        },
+      );
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err?.error || `HTTP ${res.status}`);
@@ -126,8 +144,9 @@ export default function ReceiptsScreen() {
   const fetchReceipts = async (removePlaceholder = false) => {
     try {
       const userId = await getUserId();
-      const response = await fetch(
+      const response = await fetchWithTimeout(
         `${API_BASE_URL}/api/users/${userId}/receipts`,
+        { timeoutMs: TIMEOUT_STANDARD_MS },
       );
       const data = await response.json();
       const rows = Array.isArray(data) ? data : [];
@@ -173,6 +192,48 @@ export default function ReceiptsScreen() {
       fetchReceipts();
     }, []),
   );
+
+  // Resume prompt: if a draft was saved by a previous /receipt-process
+  // session that didn't survive to POST, offer the user the option to
+  // pick up where they left off. Fires once per mount of this screen;
+  // using ref-less `checked` local because the effect should only run
+  // on first focus, not on every re-render.
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      const draft = await loadReceiptDraft();
+      if (!active) return;
+      if (!draft) return;
+      Alert.alert(
+        "Tęsti kvito analizę?",
+        "Anksčiau pradėtas kvito apdorojimas nebuvo užbaigtas. Ar tęsti?",
+        [
+          {
+            text: "Atšaukti",
+            style: "cancel",
+            onPress: () => {
+              clearReceiptDraft().catch(() => {});
+            },
+          },
+          {
+            text: "Tęsti",
+            onPress: () => {
+              const params = new URLSearchParams();
+              if (draft.imageUris.length > 1) {
+                params.set("uris", draft.imageUris.join(","));
+              } else {
+                params.set("uri", draft.imageUris[0]);
+              }
+              router.push(`/receipt-process?${params.toString()}` as any);
+            },
+          },
+        ],
+      );
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -332,8 +393,17 @@ export default function ReceiptsScreen() {
         }}
       />
       <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setUploadMenuOpen(true)}
+        style={[styles.fab, !isOnline && { opacity: 0.4 }]}
+        onPress={() => {
+          if (!isOnline) {
+            Alert.alert(
+              "Nėra interneto ryšio",
+              "Kvitų įkėlimas neįmanomas be interneto. Prisijunk prie tinklo ir bandyk vėl.",
+            );
+            return;
+          }
+          setUploadMenuOpen(true);
+        }}
       >
         <Ionicons name="add" size={28} color={colors.onPrimary} />
       </TouchableOpacity>
@@ -346,10 +416,7 @@ export default function ReceiptsScreen() {
         <View style={styles.menuBackdrop}>
           <View style={[styles.menuCard, { alignItems: "center", gap: 12 }]}>
             <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={styles.menuTitle}>Konvertuojama į paveikslėlį…</Text>
-            <Text style={styles.previewToggleHint}>
-              PDF paverčiamas nuotrauka serveryje, kad ML Kit galėtų nuskaityti tekstą.
-            </Text>
+            <Text style={styles.menuTitle}>PDF konvertuojamas į vaizdą</Text>
           </View>
         </View>
       </Modal>

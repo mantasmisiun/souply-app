@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 import { API_BASE_URL } from '../config/api';
 import { ReceiptComparison } from '../types/receipt-view';
+import { fetchWithTimeout, TIMEOUT_STANDARD_MS } from '../utils/fetchWithTimeout';
 
 export function useReceiptComparison() {
   const [comparison, setComparison] = useState<ReceiptComparison | null>(null);
@@ -12,7 +13,10 @@ export function useReceiptComparison() {
       setComparisonLoading(true);
       setComparisonError(null);
 
-      const res = await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/comparison`);
+      const res = await fetchWithTimeout(
+        `${API_BASE_URL}/api/receipts/${receiptId}/comparison`,
+        { timeoutMs: TIMEOUT_STANDARD_MS },
+      );
       const data = await res.json();
 
       if (!res.ok) {

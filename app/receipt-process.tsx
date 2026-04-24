@@ -30,6 +30,17 @@ import {
     useReceiptPickerState,
 } from "../state/basketState";
 import {
+    clearReceiptDraft,
+    saveReceiptDraft,
+} from "../state/receiptDraft";
+import { useNetworkStatus } from "../state/networkStatus";
+import {
+    fetchWithTimeout,
+    TIMEOUT_FAST_MS,
+    TIMEOUT_HEAVY_MS,
+    TIMEOUT_STANDARD_MS,
+} from "../utils/fetchWithTimeout";
+import {
     isIkiReceipt,
     parseIkiHeaderOnly,
     parseIkiReceipt,
@@ -351,7 +362,26 @@ export default function ProcessReceiptScreen() {
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState("Nuskaitomas kvitas...");
+  // Per-product match progress. When non-null, loading overlay shows
+  // an "N / M" counter alongside the message so the user sees the
+  // phone is actively working through the product list. Reset to null
+  // once matching completes (or on bail).
+  const [matchProgress, setMatchProgress] = useState<
+    { done: number; total: number } | null
+  >(null);
   const isHydratingRef = useRef(false);
+  // Component-scoped AbortController. Aborted on unmount so the 30+
+  // in-flight product-match fetches don't keep the server churning
+  // if the user backs out mid-analysis. Initialised lazily so the
+  // very first call sees a valid signal.
+  const mountAbortRef = useRef<AbortController | null>(null);
+  if (!mountAbortRef.current) mountAbortRef.current = new AbortController();
+  useEffect(() => {
+    return () => {
+      mountAbortRef.current?.abort();
+      mountAbortRef.current = null;
+    };
+  }, []);
   const [header, setHeader] = useState<HeaderData | null>(null);
   const [products, setProducts] = useState<ProductLine[]>([]);
   const [footer, setFooter] = useState<FooterData | null>(null);
@@ -474,8 +504,9 @@ export default function ProcessReceiptScreen() {
         chainId: String(chainId),
         name: newName.trim(),
       });
-      const res = await fetch(
+      const res = await fetchWithTimeout(
         `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
+        { timeoutMs: TIMEOUT_FAST_MS },
       );
       const data = await res.json();
       const matches: ProductMatchOption[] = Array.isArray(data?.matches)
@@ -553,7 +584,9 @@ export default function ProcessReceiptScreen() {
       setLoading(true);
       isHydratingRef.current = true;
       setLoadingMessage("Įkeliami duomenys...");
-      const res = await fetch(`${API_BASE_URL}/api/receipts/${id}`);
+      const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${id}`, {
+        timeoutMs: TIMEOUT_STANDARD_MS,
+      });
       const receipt = await res.json();
 
       const parsed =
@@ -561,12 +594,36 @@ export default function ProcessReceiptScreen() {
           ? JSON.parse(receipt.parsedData)
           : receipt.parsedData;
 
+      // Graceful bail: old receipts may have null/partial parsedData
+      // (rows created before parsedData was consistently populated,
+      // or orphans from mid-save crashes). Don't throw — return the
+      // user to the Analize tab so the app stays usable, and leave a
+      // console breadcrumb pointing at the bad row for manual cleanup.
       if (
         !parsed?.header ||
         !parsed?.footer ||
         !Array.isArray(parsed?.products)
       ) {
-        throw new Error("Receipt parsedData is missing required fields");
+        console.warn(
+          `[loadExistingReceipt] receipt id=${id} has malformed parsedData — bailing`,
+          {
+            hasHeader: !!parsed?.header,
+            hasFooter: !!parsed?.footer,
+            productsType: Array.isArray(parsed?.products)
+              ? "array"
+              : typeof parsed?.products,
+          },
+        );
+        setLoading(false);
+        isHydratingRef.current = false;
+        router.replace("/(tabs)/receipts");
+        setTimeout(() => {
+          Alert.alert(
+            "Kvito duomenys sugadinti",
+            "Šio kvito duomenys nebeprieinami. Pabandyk įkelti kvitą iš naujo.",
+          );
+        }, 100);
+        return;
       }
 
       setHeader({
@@ -632,6 +689,17 @@ export default function ProcessReceiptScreen() {
 
       if (parsed?.image?.filePath) {
         setImageFilePath(parsed.image.filePath);
+      } else if (parsed?.image && parsed.image.filePath === "") {
+        // Orphan case: Receipt row was POSTed but the MinIO PUT or
+        // follow-up PATCH failed. filePath saved as empty string
+        // (vs null for "intentionally no image"). The original local
+        // file is gone (different app session), so there's nothing
+        // to silently retry — surface an error badge and let the
+        // user know the image is missing.
+        setUploadStatus("error");
+        setUploadErr(
+          "Paveikslėlis nebuvo įkeltas. Pakartotinai apdoroti kvitą reikėtų iš Analizės skirtuko.",
+        );
       }
       // Resolve image URL for region previews in existing-receipt mode
       try {
@@ -746,9 +814,17 @@ export default function ProcessReceiptScreen() {
 
     if (imageUriList.length > 0) {
       setImageUri(imageUriList[0]); // first page used for region previews
+      // Persist a draft to AsyncStorage so that if the OS kills the
+      // app before the Receipt POST completes, the user can resume
+      // from the Analize tab without re-picking the image. Preview
+      // mode is out-of-scope for this — those scans never save
+      // anything server-side anyway.
+      if (!isPreviewMode) {
+        saveReceiptDraft(imageUriList).catch(() => {});
+      }
       processReceipt(imageUriList);
     }
-  }, [imageUriList, isExistingMode, existingReceiptId]);
+  }, [imageUriList, isExistingMode, existingReceiptId, isPreviewMode]);
 
   // Refresh the swipe-queue count every time the receipt screen regains
   // focus (initial mount + returning from /receipt/swipe/[id]). Backend's
@@ -835,30 +911,28 @@ export default function ProcessReceiptScreen() {
         imageFilePath,
       );
 
-      const res = await fetch(`${API_BASE_URL}/api/receipts`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId, filePath: "", parsedData }),
+        timeoutMs: TIMEOUT_HEAVY_MS,
       });
       const data = await res.json();
-      // Duplicate detection (e.g. re-photographing the same IKI receipt).
-      // Navigate to the existing receipt instead of creating a parallel one.
-      if (res.status === 409 && data?.existingReceiptId) {
-        Alert.alert(
-          "Kvitas jau įkeltas",
-          "Šis kvitas jau yra jūsų sąraše. Atidarome ankstesnį įrašą.",
-          [
-            {
-              text: "Gerai",
-              onPress: () =>
-                router.replace({
-                  pathname: "/receipt-process",
-                  params: { receiptId: String(data.existingReceiptId) },
-                }),
-            },
-          ],
-        );
+      // Duplicate detection. Backend returns 409 for BOTH same-user
+      // (caught upfront) and cross-user (caught by the UNIQUE
+      // constraint safety net) duplicates. Either way, bail out to
+      // the Analize tab with a clear message — no half-state on this
+      // screen, no sneaky nav to another receipt's view.
+      if (res.status === 409) {
         setPostStatus("done");
+        // Receipt already exists server-side (either as this user's row
+        // or a different user's). Drop the local draft — there's
+        // nothing to resume; the data lives in someone's receipt list.
+        clearReceiptDraft().catch(() => {});
+        router.replace("/(tabs)/receipts");
+        setTimeout(() => {
+          Alert.alert("Kvitas jau įkeltas", "Šis kvitas jau buvo įkeltas.");
+        }, 100);
         return;
       }
       if (!res.ok || !data?.id) {
@@ -868,6 +942,10 @@ export default function ProcessReceiptScreen() {
       setSaveStatus("saved");
       setPostStatus("done");
       setComparisonStatus("pending");
+      // Receipt is now persisted server-side; the draft has served
+      // its purpose. Any subsequent app-kill recovery would use the
+      // server's Receipt row via the Analize tab list, not the draft.
+      clearReceiptDraft().catch(() => {});
       fetchComparison(data.id);
     } catch (e: any) {
       console.warn("Receipt POST failed:", e);
@@ -899,31 +977,39 @@ export default function ProcessReceiptScreen() {
     setUploadStatus("pending");
     setUploadErr(null);
     try {
-      const urlRes = await fetch(`${API_BASE_URL}/api/receipts/upload-url`, {
+      const urlRes = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/upload-url`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           filename: `receipt-${receiptId}.jpg`,
           mimeType: "image/jpeg",
         }),
+        timeoutMs: TIMEOUT_STANDARD_MS,
       });
       if (!urlRes.ok) throw new Error(`upload-url HTTP ${urlRes.status}`);
       const { uploadUrl, filePath } = await urlRes.json();
       if (!uploadUrl || !filePath) throw new Error("upload-url atsakyme trūksta laukų");
 
+      // Local-file blob load is NOT a network call; fetch(imageUri)
+      // on a file:// URI is synchronous-ish. No timeout needed.
       const imageBlob = await (await fetch(imageUri)).blob();
-      const putRes = await fetch(uploadUrl, {
+      const putRes = await fetchWithTimeout(uploadUrl, {
         method: "PUT",
         headers: { "Content-Type": "image/jpeg" },
         body: imageBlob,
+        timeoutMs: TIMEOUT_HEAVY_MS,
       });
       if (!putRes.ok) throw new Error(`MinIO PUT HTTP ${putRes.status}`);
 
-      const patchRes = await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/file-path`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filePath }),
-      });
+      const patchRes = await fetchWithTimeout(
+        `${API_BASE_URL}/api/receipts/${receiptId}/file-path`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ filePath }),
+          timeoutMs: TIMEOUT_STANDARD_MS,
+        },
+      );
       if (!patchRes.ok) throw new Error(`PATCH HTTP ${patchRes.status}`);
 
       setImageFilePath(filePath);
@@ -945,6 +1031,32 @@ export default function ProcessReceiptScreen() {
   const retryUpload = () => {
     runUpload();
   };
+
+  // Auto-retry on reconnect. When NetInfo flips offline → online,
+  // fire whichever of POST / upload / comparison was previously in
+  // the 'error' state. This covers the "user was on mobile data,
+  // switched to Wi-Fi, the in-flight request died" field case
+  // without requiring a manual tap. Only one auto-retry per online
+  // transition; if that retry also fails, the user's manual retry
+  // button remains the recovery path.
+  const lastOnlineAt = useNetworkStatus((s) => s.lastOnlineAt);
+  useEffect(() => {
+    if (lastOnlineAt === null) return; // never been offline yet
+    if (isPreviewMode) return;
+    if (postStatus === "error") {
+      retryPost();
+    }
+    if (uploadStatus === "error" && imageUri) {
+      runUpload();
+    }
+    if (comparisonStatus === "error" && receiptId) {
+      fetchComparison(receiptId);
+    }
+    // Intentionally NOT including the status flags in the dep array —
+    // we only want to retry on the ONLINE TRANSITION, not every time
+    // the status flag toggles.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastOnlineAt]);
 
   /**
    * Issue-report: write a row into ReceiptLineIssue with the flagged fields,
@@ -1091,11 +1203,15 @@ export default function ProcessReceiptScreen() {
       const userId = userIdRef.current;
       const snapshot = pendingSaveRef.current;
       if (id && userId && snapshot) {
-        // Fire and forget — component is tearing down, can't await
-        fetch(`${API_BASE_URL}/api/receipts/${id}`, {
+        // Fire and forget — component is tearing down, can't await.
+        // Use fetchWithTimeout with the standard timeout so a hung
+        // request on unmount doesn't linger holding sockets open on
+        // the device long after the screen is gone.
+        fetchWithTimeout(`${API_BASE_URL}/api/receipts/${id}`, {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ userId, parsedData: snapshot }),
+          timeoutMs: TIMEOUT_STANDARD_MS,
         }).catch((err) => console.warn("Unmount flush failed:", err));
         pendingSaveRef.current = null;
       }
@@ -1107,10 +1223,11 @@ export default function ProcessReceiptScreen() {
       setSaveStatus("saving");
       const userId = userIdRef.current ?? (await getUserId());
       userIdRef.current = userId;
-      await fetch(`${API_BASE_URL}/api/receipts/${id}`, {
+      await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${id}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId, parsedData: data }),
+        timeoutMs: TIMEOUT_STANDARD_MS,
       });
       setSaveStatus("saved");
 
@@ -1140,10 +1257,78 @@ export default function ProcessReceiptScreen() {
     }, 1500);
   };
 
+  /**
+   * Analize-flow bail path. Called when the receipt can't proceed past
+   * an early phase (OCR produced nothing, chain not detected, store
+   * lookup failed). Logs a FailedReceiptLog server-side for analytics
+   * — lets us distinguish "user uploaded junk" from "OCR missed" —
+   * then pops an alert and navigates back to the Analize tab. No
+   * Receipt row is ever created on this path.
+   */
+  type BailReason =
+    | "ocr_no_text"
+    | "ocr_error"
+    | "chain_unrecognized"
+    | "store_unrecognized";
+
+  const USER_FACING_BAIL_MSG: Record<BailReason, string> = {
+    ocr_no_text:
+      "Nepavyko nuskaityti kvito teksto. Pabandyk įkelti geresnę nuotrauką arba kitą kvitą.",
+    ocr_error:
+      "Įvyko klaida skaitant kvitą. Pabandyk dar kartą arba įkelk kitą kvitą.",
+    chain_unrecognized:
+      "Parduotuvės tinklas nebuvo atpažintas. Pabandyk įkelti geresnę nuotrauką arba kitą kvitą.",
+    store_unrecognized:
+      "Parduotuvė nebuvo atpažinta. Pabandyk įkelti geresnę nuotrauką arba kitą kvitą.",
+  };
+
+  interface BailContext {
+    ocrLineCount?: number | null;
+    ocrPreview?: string | null;
+    detectedChainName?: string | null;
+    extractedStoreAddress?: string | null;
+  }
+
+  const bailWithLog = async (reason: BailReason, ctx: BailContext = {}) => {
+    // Fire-and-forget log. Network/DB failure here must not block the
+    // user's return to the Analize tab — the priority is getting them
+    // out of the dead-end flow.
+    try {
+      const userId = await getUserId();
+      fetchWithTimeout(`${API_BASE_URL}/api/receipts/log-fail`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          userId,
+          failReason: reason,
+          ocrLineCount: ctx.ocrLineCount ?? null,
+          ocrPreview: ctx.ocrPreview ?? null,
+          detectedChainName: ctx.detectedChainName ?? null,
+          extractedStoreAddress: ctx.extractedStoreAddress ?? null,
+          imageFilePath: imageFilePath ?? null,
+        }),
+        timeoutMs: TIMEOUT_FAST_MS,
+      }).catch((e) => console.warn("[bailWithLog] log POST failed:", e));
+    } catch (e) {
+      console.warn("[bailWithLog] log prep failed:", e);
+    }
+
+    setLoading(false);
+    // Bail = receipt can't be processed, nothing to resume. Drop the
+    // draft so the Analize tab doesn't keep prompting "continue" on
+    // a scan that will just bail again.
+    clearReceiptDraft().catch(() => {});
+    // Navigate first, then alert — alert shows on the Analize tab.
+    router.replace("/(tabs)/receipts");
+    setTimeout(() => {
+      Alert.alert("Nepavyko apdoroti kvito", USER_FACING_BAIL_MSG[reason]);
+    }, 100);
+  };
+
   const processReceipt = async (imageUris: string[]) => {
     try {
       setLoading(true);
-      setLoadingMessage("Atpažįstamas tekstas...");
+      setLoadingMessage("Nuskaitomi ir atpažįstami duomenys");
 
       interface LineWithFrame {
         text: string;
@@ -1290,8 +1475,26 @@ export default function ProcessReceiptScreen() {
 
       const lineTexts = mergedLines.map((l) => l.text);
 
-      setLoadingMessage("Analizuojama struktūra...");
+      // OCR produced nothing usable — bail before trying chain detection.
+      // Empty-text check uses >= 3 lines as the threshold: a well-lit
+      // receipt always emits at least the header + a couple of product
+      // rows, so fewer than 3 lines means OCR effectively failed.
+      if (lineTexts.filter((t) => t.trim().length > 0).length < 3) {
+        await bailWithLog("ocr_no_text", {
+          ocrLineCount: lineTexts.length,
+          ocrPreview: lineTexts.join("\n").slice(0, 500),
+        });
+        return;
+      }
 
+      setLoadingMessage("Nuskaitomi ir atpažįstami duomenys");
+
+      // Note on setLoading placement: we intentionally hold the main
+      // loading overlay up through the ENTIRE applyXxxResult call.
+      // Dropping it right after the early header was set used to flash
+      // "Prekės (0) — prekės nerastos" to the user while per-product
+      // match requests were still in flight. Keep the overlay until
+      // products have been parsed + matched.
       if (isRimiReceipt(lineTexts)) {
         const earlyHeader = parseRimiHeaderOnly(mergedLines);
         setHeader({
@@ -1307,10 +1510,10 @@ export default function ProcessReceiptScreen() {
           rawText: earlyHeader.rawText,
           region: earlyHeader.region,
         });
-        setLoading(false);
 
         const parsed = parseRimiReceipt(mergedLines);
         await applyRimiResult(parsed.header, parsed.products, parsed.footer);
+        setLoading(false);
       } else if (isMaximaReceipt(lineTexts)) {
         const earlyHeader = parseMaximaHeaderOnly(mergedLines);
         setHeader({
@@ -1326,10 +1529,10 @@ export default function ProcessReceiptScreen() {
           rawText: earlyHeader.rawText,
           region: earlyHeader.region,
         });
-        setLoading(false);
 
         const parsed = parseMaximaReceipt(mergedLines);
         await applyMaximaResult(parsed.header, parsed.products, parsed.footer);
+        setLoading(false);
       } else if (isIkiReceipt(lineTexts)) {
         const earlyHeader = parseIkiHeaderOnly(mergedLines);
         setHeader({
@@ -1345,18 +1548,21 @@ export default function ProcessReceiptScreen() {
           rawText: earlyHeader.rawText,
           region: earlyHeader.region,
         });
-        setLoading(false);
 
         const parsed = parseIkiReceipt(mergedLines);
         await applyIkiResult(parsed.header, parsed.products, parsed.footer);
-      } else {
-        applyGenericResult(lineTexts);
         setLoading(false);
+      } else {
+        await bailWithLog("chain_unrecognized", {
+          ocrLineCount: lineTexts.length,
+          ocrPreview: lineTexts.slice(0, 20).join("\n").slice(0, 500),
+        });
       }
     } catch (error) {
       console.error("OCR error:", error);
-      setLoadingMessage("Klaida apdorojant kvitą");
-      setLoading(false);
+      await bailWithLog("ocr_error", {
+        ocrPreview: error instanceof Error ? error.message : String(error),
+      });
     }
   };
 
@@ -1375,7 +1581,7 @@ export default function ProcessReceiptScreen() {
     if (rHeader.storeAddress) {
       try {
         const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(rHeader.storeAddress)}`;
-        const res = await fetch(url);
+        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
         const data = await res.json();
         if (data?.match) {
           storeId = data.match.storeId;
@@ -1386,6 +1592,19 @@ export default function ProcessReceiptScreen() {
       } catch (e) {
         console.warn("Store match failed:", e);
       }
+    }
+
+    // Bail if store couldn't be identified — no Receipt row is created
+    // for this path. Same treatment as chain-unrecognized since an
+    // un-mapped store downstream breaks price comparison and metric
+    // aggregation; easier to make the user re-scan than to thread
+    // a null-store receipt through the rest of the system.
+    if (storeId === null) {
+      await bailWithLog("store_unrecognized", {
+        detectedChainName: "RIMI",
+        extractedStoreAddress: rHeader.storeAddress || null,
+      });
+      return;
     }
 
     setHeader({
@@ -1404,6 +1623,12 @@ export default function ProcessReceiptScreen() {
 
     const AUTO_APPLY_THRESHOLD = 0.85;
 
+    // Initialise the loading-overlay progress counter. Each per-product
+    // match promise below bumps `done` on completion so the user sees
+    // "N / M prekių atpažinta" tick up instead of staring at a static
+    // spinner during what can be 5-15s of sequential HTTP calls.
+    setMatchProgress({ done: 0, total: rProducts.length });
+
     const matchPromises = rProducts.map(async (rp) => {
       let altMatches: ProductMatchOption[] = [];
 
@@ -1412,8 +1637,12 @@ export default function ProcessReceiptScreen() {
           chainId: String(chainId),
           name: rp.name,
         });
-        const res = await fetch(
+        const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
+          {
+            timeoutMs: TIMEOUT_FAST_MS,
+            externalSignal: mountAbortRef.current?.signal,
+          },
         );
         const data = await res.json();
         if (Array.isArray(data?.matches)) altMatches = data.matches;
@@ -1423,6 +1652,10 @@ export default function ProcessReceiptScreen() {
 
       const top = altMatches[0] || null;
       const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
+
+      setMatchProgress((prev) =>
+        prev ? { ...prev, done: prev.done + 1 } : prev,
+      );
 
       return {
         name: rp.name,
@@ -1446,6 +1679,7 @@ export default function ProcessReceiptScreen() {
     });
 
     const productLines = await Promise.all(matchPromises);
+    setMatchProgress(null);
     setProducts(productLines);
 
     setFooter({
@@ -1474,7 +1708,7 @@ export default function ProcessReceiptScreen() {
     if (mHeader.storeAddress) {
       try {
         const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(mHeader.storeAddress)}`;
-        const res = await fetch(url);
+        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
         const data = await res.json();
         if (data?.match) {
           storeId = data.match.storeId;
@@ -1485,6 +1719,14 @@ export default function ProcessReceiptScreen() {
       } catch (e) {
         console.warn("Store match failed:", e);
       }
+    }
+
+    if (storeId === null) {
+      await bailWithLog("store_unrecognized", {
+        detectedChainName: "MAXIMA",
+        extractedStoreAddress: mHeader.storeAddress || null,
+      });
+      return;
     }
 
     setHeader({
@@ -1503,6 +1745,8 @@ export default function ProcessReceiptScreen() {
 
     const AUTO_APPLY_THRESHOLD = 0.85;
 
+    setMatchProgress({ done: 0, total: mProducts.length });
+
     const matchPromises = mProducts.map(async (mp) => {
       let altMatches: ProductMatchOption[] = [];
 
@@ -1511,8 +1755,12 @@ export default function ProcessReceiptScreen() {
           chainId: String(chainId),
           name: mp.name,
         });
-        const res = await fetch(
+        const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
+          {
+            timeoutMs: TIMEOUT_FAST_MS,
+            externalSignal: mountAbortRef.current?.signal,
+          },
         );
         const data = await res.json();
         if (Array.isArray(data?.matches)) altMatches = data.matches;
@@ -1522,6 +1770,10 @@ export default function ProcessReceiptScreen() {
 
       const top = altMatches[0] || null;
       const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
+
+      setMatchProgress((prev) =>
+        prev ? { ...prev, done: prev.done + 1 } : prev,
+      );
 
       return {
         name: mp.name,
@@ -1543,6 +1795,7 @@ export default function ProcessReceiptScreen() {
     });
 
     const productLines = await Promise.all(matchPromises);
+    setMatchProgress(null);
     setProducts(productLines);
 
     setFooter({
@@ -1571,7 +1824,7 @@ export default function ProcessReceiptScreen() {
     if (iHeader.storeAddress) {
       try {
         const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(iHeader.storeAddress)}`;
-        const res = await fetch(url);
+        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
         const data = await res.json();
         if (data?.match) {
           storeId = data.match.storeId;
@@ -1582,6 +1835,14 @@ export default function ProcessReceiptScreen() {
       } catch (e) {
         console.warn("Store match failed:", e);
       }
+    }
+
+    if (storeId === null) {
+      await bailWithLog("store_unrecognized", {
+        detectedChainName: "IKI",
+        extractedStoreAddress: iHeader.storeAddress || null,
+      });
+      return;
     }
 
     setHeader({
@@ -1602,6 +1863,8 @@ export default function ProcessReceiptScreen() {
 
     const AUTO_APPLY_THRESHOLD = 0.85;
 
+    setMatchProgress({ done: 0, total: iProducts.length });
+
     const matchPromises = iProducts.map(async (ip) => {
       let altMatches: ProductMatchOption[] = [];
 
@@ -1610,8 +1873,12 @@ export default function ProcessReceiptScreen() {
           chainId: String(chainId),
           name: ip.name,
         });
-        const res = await fetch(
+        const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
+          {
+            timeoutMs: TIMEOUT_FAST_MS,
+            externalSignal: mountAbortRef.current?.signal,
+          },
         );
         const data = await res.json();
         if (Array.isArray(data?.matches)) altMatches = data.matches;
@@ -1621,6 +1888,10 @@ export default function ProcessReceiptScreen() {
 
       const top = altMatches[0] || null;
       const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
+
+      setMatchProgress((prev) =>
+        prev ? { ...prev, done: prev.done + 1 } : prev,
+      );
 
       return {
         name: ip.name,
@@ -1642,6 +1913,7 @@ export default function ProcessReceiptScreen() {
     });
 
     const productLines = await Promise.all(matchPromises);
+    setMatchProgress(null);
     setProducts(productLines);
 
     setFooter({
@@ -1707,10 +1979,38 @@ export default function ProcessReceiptScreen() {
   });
 
   if (loading) {
+    const pct =
+      matchProgress && matchProgress.total > 0
+        ? Math.min(100, Math.round((matchProgress.done / matchProgress.total) * 100))
+        : 0;
     return (
       <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={colors.primary} />
         <Text style={styles.loadingText}>{loadingMessage}</Text>
+        {matchProgress && matchProgress.total > 0 && (
+          <View style={{ marginTop: 12, alignItems: "center", gap: 8 }}>
+            <Text style={{ color: colors.textMuted, fontSize: 13 }}>
+              {matchProgress.done} / {matchProgress.total} prekių atpažinta
+            </Text>
+            <View
+              style={{
+                width: 220,
+                height: 4,
+                borderRadius: 2,
+                backgroundColor: colors.surfaceMuted ?? "#eee",
+                overflow: "hidden",
+              }}
+            >
+              <View
+                style={{
+                  width: `${pct}%`,
+                  height: "100%",
+                  backgroundColor: colors.primary,
+                }}
+              />
+            </View>
+          </View>
+        )}
       </View>
     );
   }
