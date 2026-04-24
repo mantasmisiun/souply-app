@@ -1,1 +1,2 @@
-export const API_BASE_URL = 'http://192.168.1.167:3000';
+export const API_BASE_URL = 'https://api.manofoto.dpdns.org';
+console.log('[API] BASE_URL=', API_BASE_URL);

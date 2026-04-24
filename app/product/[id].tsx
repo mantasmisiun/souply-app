@@ -474,11 +474,17 @@ export default function ProductDetailScreen() {
                 chainMap.set(sp.chainId, { id: sp.chainId, name: sp.chainName, logoUrl: sp.logoUrl });
             }
         });
-        // Add all 3 chains even if no products
+        // Fallback logo URLs for chains with no products on this
+        // screen. Hardcoding the LAN IP + http here used to break on
+        // release APKs (Android cleartext block) and any install
+        // outside the home network. Route through the public MinIO
+        // hostname so external installs work and Android doesn't
+        // cleartext-filter the image.
+        const MINIO_PUBLIC = 'https://minio.manofoto.dpdns.org';
         return [
-            chainMap.get(1) || { id: 1, name: 'MAXIMA LT, UAB', logoUrl: 'http://192.168.1.212:9000/chain-logos/maxima.png' },
-            chainMap.get(2) || { id: 2, name: 'UAB RIMI LIETUVA', logoUrl: 'http://192.168.1.212:9000/chain-logos/rimi.png' },
-            chainMap.get(3) || { id: 3, name: 'UAB IKI LIETUVA', logoUrl: 'http://192.168.1.212:9000/chain-logos/iki.png' },
+            chainMap.get(1) || { id: 1, name: 'MAXIMA LT, UAB', logoUrl: `${MINIO_PUBLIC}/chain-logos/maxima.png` },
+            chainMap.get(2) || { id: 2, name: 'UAB RIMI LIETUVA', logoUrl: `${MINIO_PUBLIC}/chain-logos/rimi.png` },
+            chainMap.get(3) || { id: 3, name: 'UAB IKI LIETUVA', logoUrl: `${MINIO_PUBLIC}/chain-logos/iki.png` },
         ];
     }, [storeProducts]);
 

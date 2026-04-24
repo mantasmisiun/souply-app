@@ -124,12 +124,14 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
   const anyPriceSpread = maxTotal - cheapestTotal > 0.005;
   const bestSaving =
     visitedTotal !== null ? visitedTotal - cheapestTotal : 0;
+  // Show the prose summary ONLY when the visited shop is NOT the cheapest.
+  // "You could have saved X" is useful; telling someone who already picked
+  // the best option that they saved vs the worst is noise — the bars +
+  // totals already show that visually.
   const summaryMessage =
-    !anyPriceSpread || visitedTotal === null
+    !anyPriceSpread || visitedTotal === null || visitedIsCheapest
       ? null
-      : visitedIsCheapest
-        ? `Pigiausia vieta — sutaupėte ${(maxTotal - cheapestTotal).toFixed(2)} €`
-        : `Galėjote sutaupyti ${bestSaving.toFixed(2)} € pirkdami pigiausioje parduotuvėje`;
+      : `Galėjote sutaupyti ${bestSaving.toFixed(2)} € pirkdami pigiausioje parduotuvėje`;
 
   return (
     <View style={styles.sectionCard}>
