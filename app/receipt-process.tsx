@@ -54,6 +54,7 @@ import {
     RimiHeader,
     RimiProduct
 } from "../../shared/parsers/rimiParser";
+import { ocrImageTiled } from "../utils/mlkitOcr";
 
 interface ProductMatchOption {
   storeProductId: number;
@@ -1164,74 +1165,38 @@ export default function ProcessReceiptScreen() {
         // PDFs / screenshots that already arrive in portrait.
         const pageUri = await ensurePortraitOrientation(imageUris[pageIdx]);
 
-        const pageDims = await new Promise<{ width: number; height: number }>(
-          (resolve, reject) => {
-            Image.getSize(
-              pageUri,
-              (width, height) => resolve({ width, height }),
-              reject,
-            );
-          },
-        );
+        // Shared helper. Auto-tiles when the image is tall enough to hit
+        // MLKit's ~4096 px soft cap (Lidl thermal receipts typically),
+        // which otherwise silently halves character detail. Returns
+        // lines already in page-pixel space with any per-tile offsets
+        // applied, plus the pixelWidth/Height matching that space.
+        const ocr = await ocrImageTiled(pageUri);
+        const pageDims = { width: ocr.pixelWidth, height: ocr.pixelHeight };
         if (pageIdx === 0) firstPageDims = pageDims;
-
-        const pageResult = await TextRecognition.recognize(pageUri);
-
-        let mlkitMaxX = 0;
-        let mlkitMaxY = 0;
-        for (const block of pageResult.blocks) {
-          for (const line of block.lines) {
-            if (line.frame) {
-              mlkitMaxX = Math.max(mlkitMaxX, line.frame.left + line.frame.width);
-              mlkitMaxY = Math.max(mlkitMaxY, line.frame.top + line.frame.height);
-            }
-          }
-        }
-
-        const scaleX = mlkitMaxX > 0 ? pageDims.width / mlkitMaxX : 1;
-        const scaleY = mlkitMaxY > 0 ? pageDims.height / mlkitMaxY : 1;
-        // Android's BitmapFactory auto-downsamples large bitmaps by a power
-        // of 2 before handing them to Image.getSize, while MLKit reads the
-        // full-resolution file. So the true MLKit→pixel scale is always a
-        // simple fraction (1, 1/2, 1/4, 1/8). We estimate from the tightest
-        // axis (whichever text fills more fully) then round to the nearest
-        // fraction — otherwise the few-percent drift from text not quite
-        // reaching the page edge shifts every region ~1 text line down.
-        const estimatedScale = Math.min(1, scaleX, scaleY);
-        const roundedInv = Math.max(
-          1,
-          Math.min(8, Math.round(1 / estimatedScale)),
-        );
-        const frameScale = 1 / roundedInv;
+        const frameScale = ocr.frameScale;
         if (pageIdx === 0) combinedFrameScale = frameScale;
 
         console.log(`=== PAGE ${pageIdx + 1}/${imageUris.length} ===`);
-        console.log(`Image dims: ${pageDims.width} x ${pageDims.height}`);
-        console.log(`MLKit max: ${mlkitMaxX} x ${mlkitMaxY}`);
         console.log(
-          `Scale X: ${scaleX.toFixed(3)}, Y: ${scaleY.toFixed(3)}, using: ${frameScale.toFixed(3)}, yOffset: ${yOffset.toFixed(0)}`,
+          `Image dims: ${pageDims.width} x ${pageDims.height}${ocr.tiled ? ` (tiled into ${ocr.tileCount})` : ''}`,
+        );
+        console.log(`MLKit max: ${ocr.mlkitMaxX} x ${ocr.mlkitMaxY}`);
+        console.log(
+          `frameScale: ${frameScale.toFixed(3)}, yOffset: ${yOffset.toFixed(0)}`,
         );
 
         let pageMaxYScaled = 0;
         const pageLineBounds: { l: number; r: number }[] = [];
-        for (const block of pageResult.blocks) {
-          for (const line of block.lines) {
-            if (line.frame && line.text.trim()) {
-              const yTopScaled = line.frame.top * frameScale;
-              const yBottomScaled = (line.frame.top + line.frame.height) * frameScale;
-              const xLeftScaled = line.frame.left * frameScale;
-              const xRightScaled = (line.frame.left + line.frame.width) * frameScale;
-              if (yBottomScaled > pageMaxYScaled) pageMaxYScaled = yBottomScaled;
-              pageLineBounds.push({ l: xLeftScaled, r: xRightScaled });
-              allLines.push({
-                text: line.text.trim(),
-                yTop: yTopScaled + yOffset,
-                yBottom: yBottomScaled + yOffset,
-                xLeft: xLeftScaled,
-                xRight: xRightScaled,
-              });
-            }
-          }
+        for (const line of ocr.lines) {
+          if (line.yBottom > pageMaxYScaled) pageMaxYScaled = line.yBottom;
+          pageLineBounds.push({ l: line.xLeft, r: line.xRight });
+          allLines.push({
+            text: line.text,
+            yTop: line.yTop + yOffset,
+            yBottom: line.yBottom + yOffset,
+            xLeft: line.xLeft,
+            xRight: line.xRight,
+          });
         }
 
         // Receipt horizontal bounds via text-density histogram.

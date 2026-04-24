@@ -39,6 +39,7 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+import { ocrImageTiled } from '../../utils/mlkitOcr';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import {
@@ -134,53 +135,16 @@ const downloadPageToCache = async (chain: ChainName, pageName: string): Promise<
 };
 
 /**
- * OCR one PNG → `PageLine[]` in image-pixel space. Scale heuristic
- * mirrors receipt-process.tsx: Android's BitmapFactory may downsample
- * by a power of 2, so we estimate MLKit→pixel scale from text extent
- * and snap to the nearest 1/{1,2,4,8}. Without this, frame coords
- * carry through as off-by-multiple and parser heuristics that depend
- * on y-thresholds (header/footer detection) start misfiring.
+ * OCR one PNG → `PageLine[]` in image-pixel space. Delegates to the
+ * shared tiled-OCR helper: tall images (phone-photographed Lidl
+ * thermal receipts that blow past MLKit's ~4096 px soft cap) are
+ * automatically split into vertical strips, OCR'd per-strip, and
+ * merged with offsets applied. Shorter images pass through as a
+ * single-shot call preserving the legacy scale-inference behaviour.
  */
 const ocrImage = async (uri: string): Promise<PageLine[]> => {
     const rotated = await ensurePortrait(uri);
-    const { width, height } = await new Promise<{ width: number; height: number }>(
-        (resolve, reject) => {
-            Image.getSize(rotated, (w, h) => resolve({ width: w, height: h }), reject);
-        }
-    );
-    const pageResult = await TextRecognition.recognize(rotated);
-
-    let mlkitMaxX = 0;
-    let mlkitMaxY = 0;
-    for (const block of pageResult.blocks) {
-        for (const line of block.lines) {
-            if (line.frame) {
-                mlkitMaxX = Math.max(mlkitMaxX, line.frame.left + line.frame.width);
-                mlkitMaxY = Math.max(mlkitMaxY, line.frame.top + line.frame.height);
-            }
-        }
-    }
-    const scaleX = mlkitMaxX > 0 ? width / mlkitMaxX : 1;
-    const scaleY = mlkitMaxY > 0 ? height / mlkitMaxY : 1;
-    const estimatedScale = Math.min(1, scaleX, scaleY);
-    const roundedInv = Math.max(1, Math.min(8, Math.round(1 / estimatedScale)));
-    const frameScale = 1 / roundedInv;
-
-    const lines: PageLine[] = [];
-    for (const block of pageResult.blocks) {
-        for (const line of block.lines) {
-            if (line.frame && line.text.trim()) {
-                lines.push({
-                    text: line.text.trim(),
-                    yTop: line.frame.top * frameScale,
-                    yBottom: (line.frame.top + line.frame.height) * frameScale,
-                    xLeft: line.frame.left * frameScale,
-                    xRight: (line.frame.left + line.frame.width) * frameScale,
-                });
-            }
-        }
-    }
-    lines.sort((a, b) => a.yTop - b.yTop);
+    const { lines } = await ocrImageTiled(rotated);
     return lines;
 };
 
