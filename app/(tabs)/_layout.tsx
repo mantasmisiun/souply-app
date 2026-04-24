@@ -107,6 +107,21 @@ export default function TabLayout() {
                     ),
                 }}
             />
+            <Tabs.Screen
+                name="menu"
+                options={{
+                    title: 'Menu',
+                    // __DEV__ is React Native's built-in dev-build flag. In
+                    // a release build this evaluates to false, which tells
+                    // expo-router to skip rendering the tab entry entirely
+                    // — zero risk of the Dev menu appearing in the shipped
+                    // app even though the file is in the bundle.
+                    href: __DEV__ ? undefined : null,
+                    tabBarIcon: ({ focused, color, size }) => (
+                        <Ionicons name={focused ? 'menu' : 'menu-outline'} size={size} color={color} />
+                    ),
+                }}
+            />
         </Tabs>
     );
 }

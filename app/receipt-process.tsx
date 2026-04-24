@@ -36,7 +36,7 @@ import {
     type IkiFooter,
     type IkiHeader,
     type IkiProduct,
-} from "../utils/ikiParser";
+} from "../../shared/parsers/ikiParser";
 import {
     isMaximaReceipt,
     parseMaximaHeaderOnly,
@@ -44,7 +44,7 @@ import {
     type MaximaFooter,
     type MaximaHeader,
     type MaximaProduct,
-} from "../utils/maximaParser";
+} from "../../shared/parsers/maximaParser";
 import {
     isRimiReceipt,
     parseRimiHeaderOnly,
@@ -53,7 +53,7 @@ import {
     RimiFooter,
     RimiHeader,
     RimiProduct
-} from "../utils/rimiParser";
+} from "../../shared/parsers/rimiParser";
 
 interface ProductMatchOption {
   storeProductId: number;

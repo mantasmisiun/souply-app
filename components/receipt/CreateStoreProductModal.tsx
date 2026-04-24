@@ -17,7 +17,7 @@ import {
 } from "react-native";
 import { API_BASE_URL } from "../../config/api";
 import { useReceiptCreateContext } from "../../state/basketState";
-import { parseProductName } from "../../utils/productNameParser";
+import { parseProductName } from "../../../shared/parsers/productNameParser";
 import { useTheme, type AppTheme } from "../../constants/theme";
 
 interface L3CategoryOption {
