@@ -19,6 +19,7 @@ import {
 import { API_BASE_URL } from "../../config/api";
 import { getUserId } from "../../config/user";
 import { useTheme, type AppTheme } from "../../constants/theme";
+import { DEV_MODE } from "../../constants/flags";
 import {
     clearReceiptDraft,
     loadReceiptDraft,
@@ -446,22 +447,28 @@ export default function ReceiptsScreen() {
               <Text style={styles.menuRowText}>Iš PDF</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.previewToggle}
-              onPress={() => setPreviewOnly((v) => !v)}
-            >
-              <Ionicons
-                name={previewOnly ? "checkbox" : "square-outline"}
-                size={20}
-                color={previewOnly ? colors.primary : colors.textMuted}
-              />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.previewToggleText}>Peržiūra — neišsaugoti</Text>
-                <Text style={styles.previewToggleHint}>
-                  OCR ir parserio išvestis rodoma, bet kvitas nesukuriamas duomenų bazėje.
-                </Text>
-              </View>
-            </TouchableOpacity>
+            {/* Preview-only mode is a parser-iteration tool, not a user
+                feature — hide it from release builds. DEV_MODE is a
+                compile-time boolean in constants/flags.ts; when false,
+                the minifier drops this whole block. */}
+            {DEV_MODE && (
+              <TouchableOpacity
+                style={styles.previewToggle}
+                onPress={() => setPreviewOnly((v) => !v)}
+              >
+                <Ionicons
+                  name={previewOnly ? "checkbox" : "square-outline"}
+                  size={20}
+                  color={previewOnly ? colors.primary : colors.textMuted}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.previewToggleText}>Peržiūra — neišsaugoti</Text>
+                  <Text style={styles.previewToggleHint}>
+                    OCR ir parserio išvestis rodoma, bet kvitas nesukuriamas duomenų bazėje.
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
 
             <TouchableOpacity
               style={styles.menuCancel}

@@ -7,6 +7,25 @@ export default function BrowseLayout() {
     const router = useRouter();
     const colors = useTheme();
 
+    // Both L1 (index) and L2 ([categoryId]) get the same magnifying-
+    // glass icon in the right side of the nav bar — tap pushes the
+    // dedicated /search screen with the products mode preselected.
+    // Single shared definition so the two screens stay in sync if
+    // the destination route or params ever change.
+    const searchHeaderRight = () => (
+        <TouchableOpacity
+            onPress={() =>
+                router.push({
+                    pathname: '/search',
+                    params: { mode: 'products', source: 'browse' },
+                })
+            }
+            style={{ marginRight: 12 }}
+        >
+            <Ionicons name="search" size={24} color={colors.primary} />
+        </TouchableOpacity>
+    );
+
     return (
         <Stack
             screenOptions={{
@@ -20,22 +39,15 @@ export default function BrowseLayout() {
                 name="index"
                 options={{
                     title: 'Naršyti',
-                    headerRight: () => (
-                        <TouchableOpacity
-                            onPress={() =>
-                            router.push({
-                                pathname: '/search',
-                                params: { mode: 'products', source: 'browse' },
-                            })
-                            }
-                            style={{ marginRight: 12 }}
-                        >
-                            <Ionicons name="search" size={24} color={colors.primary} />
-                        </TouchableOpacity>
-                    ),
+                    headerRight: searchHeaderRight,
                 }}
             />
-            <Stack.Screen name="[categoryId]" />
+            <Stack.Screen
+                name="[categoryId]"
+                options={{
+                    headerRight: searchHeaderRight,
+                }}
+            />
         </Stack>
     );
 }

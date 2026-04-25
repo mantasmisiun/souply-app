@@ -230,6 +230,30 @@ export default function SwipeScreen() {
     cardShownAtRef.current = Date.now();
   };
 
+  /**
+   * Skip the current card without recording a vote. Same advancement
+   * rule as "different" (try the next candidate, fall through to the
+   * next line) but nothing is sent to the backend — the pair stays
+   * un-voted and may resurface in a future queue fetch. Useful when
+   * the user can't decide and wants to move on.
+   *
+   * No undo surfaced (nothing to undo server-side), and no snapshot
+   * stored so the undo toast doesn't misfire on a subsequent real vote.
+   */
+  const skip = () => {
+    const item = currentItem;
+    if (!item) return;
+    if (rankIdx + 1 < item.candidates.length) {
+      setRankIdx(rankIdx + 1);
+    } else {
+      setItemIdx(itemIdx + 1);
+      setRankIdx(0);
+    }
+    translateX.value = 0;
+    translateY.value = 0;
+    cardShownAtRef.current = Date.now();
+  };
+
   const handleUndo = async () => {
     const snap = lastSnapshotRef.current;
     if (!snap) return;
@@ -263,17 +287,23 @@ export default function SwipeScreen() {
   const pan = Gesture.Pan()
     .onUpdate((e) => {
       translateX.value = e.translationX;
-      translateY.value = Math.min(0, e.translationY); // only allow upward drag
+      translateY.value = e.translationY; // allow both up (similar) and down (skip)
     })
     .onEnd((e) => {
-      const absX = Math.abs(e.translationX);
       const up = e.translationY < -SWIPE_THRESHOLD_Y;
+      const down = e.translationY > SWIPE_THRESHOLD_Y;
       const right = e.translationX > SWIPE_THRESHOLD_X;
       const left = e.translationX < -SWIPE_THRESHOLD_X;
 
       if (up) {
         translateY.value = withTiming(-SCREEN_H, { duration: 220 }, () =>
           runOnJS(advance)("similar")
+        );
+      } else if (down) {
+        // Swipe-down = skip. No vote sent; card slides off-screen and
+        // the next candidate surfaces.
+        translateY.value = withTiming(SCREEN_H, { duration: 220 }, () =>
+          runOnJS(skip)()
         );
       } else if (right) {
         translateX.value = withTiming(SCREEN_W, { duration: 220 }, () =>
@@ -287,8 +317,6 @@ export default function SwipeScreen() {
         translateX.value = withSpring(0);
         translateY.value = withSpring(0);
       }
-      // suppress lint for unused var
-      void absX;
     });
 
   const cardStyle = useAnimatedStyle(() => {
@@ -304,17 +332,25 @@ export default function SwipeScreen() {
 
   const tintStyle = useAnimatedStyle(() => {
     const dxAbs = Math.min(1, Math.abs(translateX.value) / SWIPE_THRESHOLD_X);
-    const dyAbs = translateY.value < 0 ? Math.min(1, -translateY.value / SWIPE_THRESHOLD_Y) : 0;
+    const dyUp = translateY.value < 0 ? Math.min(1, -translateY.value / SWIPE_THRESHOLD_Y) : 0;
+    const dyDown = translateY.value > 0 ? Math.min(1, translateY.value / SWIPE_THRESHOLD_Y) : 0;
     let bg = "transparent";
     let opacity = 0;
-    if (dyAbs > dxAbs) {
-      bg = colors.info;
-      opacity = dyAbs * 0.35;
+    // Whichever axis has the stronger drag wins the tint.
+    const maxY = Math.max(dyUp, dyDown);
+    if (maxY > dxAbs) {
+      if (dyUp > dyDown) {
+        bg = colors.info;        // similar
+        opacity = dyUp * 0.35;
+      } else {
+        bg = colors.textMuted;   // skip — muted, not a positive vote
+        opacity = dyDown * 0.35;
+      }
     } else if (translateX.value > 0) {
-      bg = colors.primary;
+      bg = colors.primary;       // identical
       opacity = dxAbs * 0.35;
     } else if (translateX.value < 0) {
-      bg = colors.error;
+      bg = colors.error;         // different
       opacity = dxAbs * 0.35;
     }
     return { backgroundColor: bg, opacity };
@@ -358,7 +394,7 @@ export default function SwipeScreen() {
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.closeBtn, styles.secondaryBtn]}
-              onPress={() => router.push("/swipe/extra")}
+              onPress={() => router.replace("/swipe/extra")}
             >
               <Text style={styles.secondaryBtnText}>Gal dar?</Text>
             </TouchableOpacity>
@@ -438,6 +474,10 @@ export default function SwipeScreen() {
             <View style={styles.legendItem}>
               <Ionicons name="arrow-forward" size={18} color={colors.primary} />
               <Text style={styles.legendText}>Identiški</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <Ionicons name="arrow-down" size={18} color={colors.textMuted} />
+              <Text style={styles.legendText}>Praleisti</Text>
             </View>
           </View>
 
