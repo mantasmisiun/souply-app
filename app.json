@@ -22,6 +22,8 @@
       "package": "com.anonymous.basketapp",
       "permissions": [
         "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION"
       ]
     },
@@ -47,6 +49,22 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d3053a04-a3bb-4dd2-81e5-d10ceddd06db"
+      }
+    },
+    "owner": "souply-solutions",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/d3053a04-a3bb-4dd2-81e5-d10ceddd06db",
+      "requestHeaders": {
+        "expo-channel-name": "production"
+      }
     }
   }
 }
