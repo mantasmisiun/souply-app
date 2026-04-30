@@ -9,6 +9,17 @@ type Props = {
   status: string;
 };
 
+// `date` may be either a date-only "YYYY-MM-DD" or a combined SQL
+// datetime "YYYY-MM-DD HH:MM:SS" — receipts saved before the server
+// stopped clobbering parsedData.footer.date with the combined form
+// have the latter. Strip any trailing time so it doesn't render
+// alongside the separate `time` field.
+const formatDateTime = (date: string | null | undefined, time: string | null | undefined): string => {
+    const dateOnly = (date || '').split(' ')[0] || '—';
+    const timeStr = (time || '').trim();
+    return timeStr ? `${dateOnly} ${timeStr}` : dateOnly;
+};
+
 const getStatusColor = (status: string, c: AppTheme) => {
   switch (status) {
     case 'completed': return c.primary;
@@ -121,7 +132,7 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
           </View>
           <View style={styles.footerRow}>
             <Text style={styles.footerLabel}>Data:</Text>
-            <Text style={styles.footerValue}>{vm.footer.date || '—'} {vm.footer.time || ''}</Text>
+            <Text style={styles.footerValue}>{formatDateTime(vm.footer.date, vm.footer.time)}</Text>
           </View>
           <View style={styles.footerRow}>
             <Text style={styles.footerLabel}>Kvito Nr.:</Text>

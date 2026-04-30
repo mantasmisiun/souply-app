@@ -9,6 +9,14 @@
  */
 
 import type { MaximaProduct, ProductBand } from '../../shared/parsers/maximaParser';
+import type { RimiProduct, RimiReceiptBand } from '../../shared/parsers/rimiParser';
+
+/**
+ * Either chain's product shape — they're structurally identical
+ * (same field names + types) so the receipt-detail UI can render
+ * either without branching.
+ */
+export type ParsedProduct = MaximaProduct | RimiProduct;
 
 export interface PageMeta {
     /** Filename of the PNG inside /receipts-batch/<chain>/. */
@@ -32,7 +40,7 @@ export interface PageMeta {
  */
 export interface BandResult {
     band: ProductBand;
-    product: MaximaProduct | null;
+    product: ParsedProduct | null;
     warnings: string[];
 }
 
@@ -41,12 +49,22 @@ export interface ReceiptSnapshot {
     sourcePdf: string;
     pages: PageMeta[];
     /**
-     * V2 step 1 + step 2 output. Each entry has the band's y-range
-     * (for the visual overlay and per-band image crop) plus the
-     * structured product extracted from it (null for SKIP bands —
-     * deposits, plastic bags, TAISYMAS refunds, anchor parse fails).
+     * Maxima V2 step 1 + step 2 output. Each entry has the band's
+     * y-range (for the visual overlay and per-band image crop)
+     * plus the structured product extracted from it (null for
+     * SKIP bands — deposits, plastic bags, TAISYMAS refunds,
+     * anchor parse fails).
      */
     bands: BandResult[];
+    /**
+     * Rimi V2 step 1 output: typed bands across the whole receipt
+     * (`store-name`, `store-address`, `product`, `receipt-no`,
+     * `datetime`). Step 2 (per-band content extraction) hasn't
+     * been built yet, so for now this is purely for visual
+     * verification that band geometry is right. Empty for chains
+     * that don't have a typed-band parser.
+     */
+    taggedBands?: RimiReceiptBand[];
 }
 
 const snapshots = new Map<string, ReceiptSnapshot>();

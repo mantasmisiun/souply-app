@@ -52,6 +52,7 @@ import {
     type ReceiptSnapshot,
 } from '../../utils/parserTestSnapshot';
 import type { ProductBand } from '../../../shared/parsers/maximaParser';
+import type { RimiBandKind, RimiReceiptBand } from '../../../shared/parsers/rimiParser';
 
 interface BandOnPage {
     bandIdx: number;
@@ -61,16 +62,32 @@ interface BandOnPage {
     yBottomOnPage: number;
     /** Index of the page this band falls on (into snap.pages). */
     pageIdx: number;
+    /**
+     * Optional band kind (Rimi V2 only — Maxima bands are all
+     * `product`). Drives the overlay rectangle's colour so the
+     * user can verify each region kind landed on the right slice
+     * of the receipt.
+     */
+    kind?: RimiBandKind;
+    /** Short label rendered inside the rectangle (band #, `addr`, …). */
+    label?: string;
 }
 
 /**
- * Bucket each V2 band onto the page whose y-offset range contains
+ * Bucket each band onto the page whose y-offset range contains
  * its yTop. Returns parallel arrays: per-page band lists (for the
  * full-receipt overlay) and a flat list keyed by bandIdx (for the
  * per-product crops, where order must match `snap.bands`).
+ *
+ * Accepts either Maxima-style ProductBand[] (no kind / label) or
+ * Rimi-style RimiReceiptBand[] (kind + label). The kind / label,
+ * when present, flows through to the overlay so each rectangle
+ * gets a colour and inline tag.
  */
+type BandLike = ProductBand | RimiReceiptBand;
+
 const bucketBandsByPage = (
-    bands: ProductBand[],
+    bands: BandLike[],
     pages: PageMeta[],
 ): { perPage: BandOnPage[][]; perBand: BandOnPage[] } => {
     const perPage: BandOnPage[][] = pages.map(() => []);
@@ -85,16 +102,46 @@ const bucketBandsByPage = (
             }
         }
         const offset = pages[pageIdx].yOffsetInParserSpace;
+        const tagged = band as Partial<RimiReceiptBand>;
         const onPage: BandOnPage = {
             bandIdx: bi,
             yTopOnPage: band.yTop - offset,
             yBottomOnPage: band.yBottom - offset,
             pageIdx,
+            kind: tagged.kind,
+            label: tagged.label ?? `${bi + 1}`,
         };
         perPage[pageIdx].push(onPage);
         perBand.push(onPage);
     }
     return { perPage, perBand };
+};
+
+/**
+ * Per-kind overlay colour. Picked to be visually distinct on the
+ * thermal-receipt-grey background while keeping enough
+ * transparency that the underlying text stays legible.
+ */
+const bandKindColor = (kind: RimiBandKind | undefined, fallback: string): {
+    border: string;
+    fill: string;
+} => {
+    switch (kind) {
+        case 'store-name':
+            return { border: '#1976D2', fill: 'rgba(25, 118, 210, 0.10)' };
+        case 'store-address':
+            return { border: '#0288D1', fill: 'rgba(2, 136, 209, 0.10)' };
+        case 'product':
+            return { border: fallback, fill: 'rgba(235, 103, 132, 0.08)' };
+        case 'receipt-no':
+            return { border: '#7B1FA2', fill: 'rgba(123, 31, 162, 0.10)' };
+        case 'datetime':
+            return { border: '#388E3C', fill: 'rgba(56, 142, 60, 0.10)' };
+        case 'total':
+            return { border: '#E65100', fill: 'rgba(230, 81, 0, 0.12)' };
+        default:
+            return { border: fallback, fill: 'rgba(235, 103, 132, 0.08)' };
+    }
 };
 
 type StatusKind = 'OK' | 'NOTE' | 'WARN' | 'SKIP';
@@ -109,6 +156,10 @@ const deriveStatus = (band: BandResult): StatusKind => {
 export default function ReceiptDetailScreen() {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    // Default-collapsed: product list is the primary debugging
+    // surface once step 2 is in place. The overview (full receipt
+    // PNG with band overlay) stays one tap away for verifying
+    // band geometry when something looks off.
     const [overviewExpanded, setOverviewExpanded] = useState(false);
 
     const { chain, sourcePdf } = useLocalSearchParams<{
@@ -120,16 +171,35 @@ export default function ReceiptDetailScreen() {
         return getReceiptSnapshot(makeSnapshotKey(chain, sourcePdf));
     }, [chain, sourcePdf]);
 
-    const allBands = useMemo<ProductBand[]>(
+    // Two separate band lists serve different surfaces:
+    //   - `overlayBands`: every typed band (store-name, address,
+    //     products, receipt-no, datetime, total) for the colour-
+    //     coded full-receipt overlay. On Maxima this just shows
+    //     product bands since Maxima's parser only emits products.
+    //   - `productCropBands`: ONLY product bands, in the same
+    //     order as `snap.bands`. The per-product list iterates
+    //     `snap.bands` by index and looks up the matching bucketed
+    //     coords here. Without this split, Rimi product 1's crop
+    //     would land on store-name's y-range (taggedBands index 0).
+    const overlayBands = useMemo<BandLike[]>(() => {
+        if (!snap) return [];
+        if (snap.taggedBands && snap.taggedBands.length > 0) return snap.taggedBands;
+        return snap.bands.map((b) => b.band);
+    }, [snap]);
+    const productCropBands = useMemo<BandLike[]>(
         () => (snap ? snap.bands.map((b) => b.band) : []),
         [snap],
     );
-    const buckets = useMemo(
-        () => (snap ? bucketBandsByPage(allBands, snap.pages) : null),
-        [snap, allBands],
+    const overlayBuckets = useMemo(
+        () => (snap ? bucketBandsByPage(overlayBands, snap.pages) : null),
+        [snap, overlayBands],
+    );
+    const productBuckets = useMemo(
+        () => (snap ? bucketBandsByPage(productCropBands, snap.pages) : null),
+        [snap, productCropBands],
     );
 
-    if (!snap || !buckets) {
+    if (!snap || !overlayBuckets || !productBuckets) {
         return (
             <View style={styles.centered}>
                 <Stack.Screen options={{ title: 'Detalė' }} />
@@ -143,6 +213,11 @@ export default function ReceiptDetailScreen() {
 
     const productCount = snap.bands.filter((b) => b.product !== null).length;
     const skipCount = snap.bands.length - productCount;
+    // Show the per-product list whenever there are bands with
+    // extracted products. Both Maxima and Rimi run step 2 now, so
+    // both populate `bands` with structured product info.
+    const showProductsList = snap.bands.length > 0;
+    const isTaggedReceipt = !!(snap.taggedBands && snap.taggedBands.length > 0);
 
     return (
         <ScrollView style={styles.container}>
@@ -152,10 +227,9 @@ export default function ReceiptDetailScreen() {
             <View style={styles.header}>
                 <Text style={styles.headerTitle}>{snap.sourcePdf}</Text>
                 <Text style={styles.headerMeta}>
-                    {snap.bands.length} band
-                    {snap.bands.length === 1 ? 'a' : 'os'} ·{' '}
-                    {productCount} prek{productCount === 1 ? 'ė' : 'ės'}
-                    {skipCount > 0 ? ` · ${skipCount} praleist${skipCount === 1 ? 'a' : 'os'}` : ''}
+                    {isTaggedReceipt
+                        ? `${snap.taggedBands!.length} band${snap.taggedBands!.length === 1 ? 'a' : 'os'}`
+                        : `${snap.bands.length} band${snap.bands.length === 1 ? 'a' : 'os'} · ${productCount} prek${productCount === 1 ? 'ė' : 'ės'}${skipCount > 0 ? ` · ${skipCount} praleist${skipCount === 1 ? 'a' : 'os'}` : ''}`}
                     {snap.pages.length > 1 ? ` · ${snap.pages.length} puslapiai` : ''}
                 </Text>
             </View>
@@ -188,7 +262,7 @@ export default function ReceiptDetailScreen() {
                                     uri={url}
                                     pageWidth={page.pixelWidth}
                                     pageHeight={page.pixelHeight}
-                                    bands={buckets.perPage[pageIdx]}
+                                    bands={overlayBuckets.perPage[pageIdx]}
                                     colors={colors}
                                 />
                             </View>
@@ -196,50 +270,73 @@ export default function ReceiptDetailScreen() {
                     })}
                     <View style={styles.bandsSection}>
                         <Text style={styles.sectionTitle}>V2 bandų y koordinatės</Text>
-                        {snap.bands.map((b, idx) => (
-                            <View key={idx} style={styles.bandRow}>
-                                <View style={styles.bandIdxBadge}>
-                                    <Text style={styles.bandIdxText}>{idx + 1}</Text>
-                                </View>
-                                <Text style={styles.bandText}>
-                                    y {Math.round(b.band.yTop)}–{Math.round(b.band.yBottom)}
-                                    <Text style={styles.bandTextDim}>
-                                        {' '}
-                                        (Δ {Math.round(b.band.yBottom - b.band.yTop)} px)
-                                    </Text>
-                                </Text>
-                            </View>
-                        ))}
+                        {isTaggedReceipt
+                            ? snap.taggedBands!.map((b, idx) => (
+                                  <View key={idx} style={styles.bandRow}>
+                                      <View
+                                          style={[
+                                              styles.bandIdxBadge,
+                                              { backgroundColor: bandKindColor(b.kind, colors.primary).border },
+                                          ]}
+                                      >
+                                          <Text style={styles.bandIdxText}>{b.label}</Text>
+                                      </View>
+                                      <Text style={styles.bandText}>
+                                          {b.kind}
+                                          <Text style={styles.bandTextDim}>
+                                              {'  '}y {Math.round(b.yTop)}–{Math.round(b.yBottom)} (Δ {Math.round(b.yBottom - b.yTop)} px)
+                                          </Text>
+                                      </Text>
+                                  </View>
+                              ))
+                            : snap.bands.map((b, idx) => (
+                                  <View key={idx} style={styles.bandRow}>
+                                      <View style={styles.bandIdxBadge}>
+                                          <Text style={styles.bandIdxText}>{idx + 1}</Text>
+                                      </View>
+                                      <Text style={styles.bandText}>
+                                          y {Math.round(b.band.yTop)}–{Math.round(b.band.yBottom)}
+                                          <Text style={styles.bandTextDim}>
+                                              {' '}
+                                              (Δ {Math.round(b.band.yBottom - b.band.yTop)} px)
+                                          </Text>
+                                      </Text>
+                                  </View>
+                              ))}
                     </View>
                 </View>
             )}
 
-            {/* Product list */}
-            <View style={styles.productsSection}>
-                <Text style={styles.sectionTitle}>Produktai</Text>
-                {snap.bands.length === 0 && (
-                    <Text style={styles.emptyText}>V2 nerado bandų.</Text>
-                )}
-                {snap.bands.map((bandResult, idx) => {
-                    const onPage = buckets.perBand[idx];
-                    const page = snap.pages[onPage.pageIdx];
-                    const url = `${API_BASE_URL}/receipts-batch/${snap.chain}/${encodeURIComponent(page.name)}`;
-                    return (
-                        <ProductRow
-                            key={idx}
-                            bandIdx={idx}
-                            bandResult={bandResult}
-                            uri={url}
-                            pageWidth={page.pixelWidth}
-                            pageHeight={page.pixelHeight}
-                            yTopOnPage={onPage.yTopOnPage}
-                            yBottomOnPage={onPage.yBottomOnPage}
-                            colors={colors}
-                            styles={styles}
-                        />
-                    );
-                })}
-            </View>
+            {/* Product list — disabled while we're tuning band
+                geometry for a non-Maxima chain. Maxima still shows
+                its products section since step 2 ships products. */}
+            {showProductsList && (
+                <View style={styles.productsSection}>
+                    <Text style={styles.sectionTitle}>Produktai</Text>
+                    {snap.bands.length === 0 && (
+                        <Text style={styles.emptyText}>V2 nerado bandų.</Text>
+                    )}
+                    {snap.bands.map((bandResult, idx) => {
+                        const onPage = productBuckets.perBand[idx];
+                        const page = snap.pages[onPage.pageIdx];
+                        const url = `${API_BASE_URL}/receipts-batch/${snap.chain}/${encodeURIComponent(page.name)}`;
+                        return (
+                            <ProductRow
+                                key={idx}
+                                bandIdx={idx}
+                                bandResult={bandResult}
+                                uri={url}
+                                pageWidth={page.pixelWidth}
+                                pageHeight={page.pixelHeight}
+                                yTopOnPage={onPage.yTopOnPage}
+                                yBottomOnPage={onPage.yBottomOnPage}
+                                colors={colors}
+                                styles={styles}
+                            />
+                        );
+                    })}
+                </View>
+            )}
         </ScrollView>
     );
 }
@@ -433,6 +530,8 @@ const ImageWithBands = ({
                 const topPct = (b.yTopOnPage / pageHeight) * 100;
                 const heightPct =
                     ((b.yBottomOnPage - b.yTopOnPage) / pageHeight) * 100;
+                const { border, fill } = bandKindColor(b.kind, colors.primary);
+                const labelText = b.label ?? `${b.bandIdx + 1}`;
                 return (
                     <View
                         key={b.bandIdx}
@@ -444,8 +543,8 @@ const ImageWithBands = ({
                             top: `${topPct}%`,
                             height: `${heightPct}%`,
                             borderWidth: 1.5,
-                            borderColor: colors.primary,
-                            backgroundColor: 'rgba(235, 103, 132, 0.08)',
+                            borderColor: border,
+                            backgroundColor: fill,
                         }}
                     >
                         <View
@@ -455,7 +554,7 @@ const ImageWithBands = ({
                                 top: 2,
                                 paddingHorizontal: 4,
                                 paddingVertical: 1,
-                                backgroundColor: colors.primary,
+                                backgroundColor: border,
                                 borderRadius: 3,
                             }}
                         >
@@ -466,7 +565,7 @@ const ImageWithBands = ({
                                     fontWeight: '700',
                                 }}
                             >
-                                {b.bandIdx + 1}
+                                {labelText}
                             </Text>
                         </View>
                     </View>

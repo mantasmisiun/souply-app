@@ -141,7 +141,10 @@ export default function ReceiptsScreen() {
       const timestamp = Date.now();
       const outPaths: string[] = [];
       for (let i = 0; i < images.length; i++) {
-        const path = `${FileSystem.cacheDirectory}receipt-pdf-${timestamp}-p${i}.jpg`;
+        // .png because the API now returns pdftoppm-rendered PNGs.
+        // MLKit accepts both, the extension just keeps the cache
+        // accurate for any debugging/inspection.
+        const path = `${FileSystem.cacheDirectory}receipt-pdf-${timestamp}-p${i}.png`;
         await FileSystem.writeAsStringAsync(path, images[i], {
           encoding: FileSystem.EncodingType.Base64,
         });

@@ -1496,7 +1496,12 @@ export default function ProcessReceiptScreen() {
       // match requests were still in flight. Keep the overlay until
       // products have been parsed + matched.
       if (isRimiReceipt(lineTexts)) {
-        const earlyHeader = parseRimiHeaderOnly(mergedLines);
+        // V2 Rimi parser does its own same-row absorption inside
+        // findProductBandsInternal, so it expects RAW OCR lines.
+        // The outer `mergedLines` blob fused header/product rows
+        // on tight gaps and broke header detection — same class
+        // of bug as Maxima below.
+        const earlyHeader = parseRimiHeaderOnly(allLines);
         setHeader({
           chainName: "RIMI",
           chainId: 2,
@@ -1511,7 +1516,7 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        const parsed = parseRimiReceipt(mergedLines);
+        const parsed = parseRimiReceipt(allLines);
         await applyRimiResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
       } else if (isMaximaReceipt(lineTexts)) {
@@ -1521,8 +1526,8 @@ export default function ProcessReceiptScreen() {
         // the first product's name to get glued onto the last
         // header line ("Kvitas bazėje:" + "Gira RUGILĖ" within
         // 30 px) and eaten by findHeaderEnd, leaving band 1 with
-        // an empty name. Rimi/Iki still consume the merged blob
-        // because their parsers were tuned against that input.
+        // an empty name. Iki still consumes the merged blob
+        // because its parser was tuned against that input.
         const earlyHeader = parseMaximaHeaderOnly(allLines);
         setHeader({
           chainName: "MAXIMA",

@@ -63,6 +63,10 @@ import {
 import {
     isRimiReceipt,
     parseRimiReceipt,
+    findReceiptBandsRimi,
+    traceReceiptBandsRimi,
+    extractRimiProduct,
+    traceRimiExtract,
 } from '../../../shared/parsers/rimiParser';
 import {
     isNorfaReceipt,
@@ -461,6 +465,64 @@ export default function ReceiptBatchScreen() {
                 console.warn('[batch] V2 step 1+2 failed:', e);
             }
         }
+
+        // Rimi V2 step 1 + step 2: typed bands across the whole
+        // receipt (`store-name`, `store-address`, `product`,
+        // `receipt-no`, `datetime`, `total`) for the visual overlay,
+        // plus per-product extraction (name, price, promoPrice,
+        // qty, unit, ppu) with reconcile self-check
+        // (anchor − Nuol.savings ≈ Galut.kaina).
+        if (detected === 'rimi') {
+            try {
+                const planV2 = findReceiptBandsRimi(allLines as any);
+                status.bandsV2Count = planV2.bands.length;
+                const summary = planV2.bands
+                    .map((b) => `${b.label}=${Math.round(b.yTop)}-${Math.round(b.yBottom)}`)
+                    .join(', ');
+                console.log(
+                    `[Rimi V2] ${row.sourcePdf}: ${planV2.bands.length} bands [${summary}]`,
+                );
+                try {
+                    const trace = traceReceiptBandsRimi(allLines as any);
+                    console.log(
+                        `[Rimi V2-TRACE BEGIN ${row.sourcePdf}]\n\`\`\`text\n${trace}\n\`\`\`\n[Rimi V2-TRACE END ${row.sourcePdf}]`,
+                    );
+                } catch (e) {
+                    console.warn(`[Rimi V2-TRACE] ${row.sourcePdf} trace failed:`, e);
+                }
+                try {
+                    const extract = traceRimiExtract(allLines as any);
+                    console.log(
+                        `[Rimi V2-EXTRACT BEGIN ${row.sourcePdf}]\n\`\`\`text\n${extract}\n\`\`\`\n[Rimi V2-EXTRACT END ${row.sourcePdf}]`,
+                    );
+                } catch (e) {
+                    console.warn(`[Rimi V2-EXTRACT] ${row.sourcePdf} trace failed:`, e);
+                }
+                // Build BandResult[] for the per-product list — 1:1
+                // with the product-kind subset of taggedBands and
+                // 1:1 with productInternals (same iteration order
+                // through computeBandsContext).
+                const productBands = planV2.bands.filter((b) => b.kind === 'product');
+                const bands: BandResult[] = productBands.map((band, i) => {
+                    const internal = planV2.productInternals[i];
+                    const { product, warnings } = extractRimiProduct(internal);
+                    return {
+                        band: { yTop: band.yTop, yBottom: band.yBottom },
+                        product,
+                        warnings,
+                    };
+                });
+                setReceiptSnapshot(makeSnapshotKey(row.chain, row.sourcePdf), {
+                    chain: row.chain,
+                    sourcePdf: row.sourcePdf,
+                    pages: pageMetas,
+                    bands,
+                    taggedBands: planV2.bands,
+                });
+            } catch (e) {
+                console.warn('[batch] Rimi V2 step 1+2 failed:', e);
+            }
+        }
         return status;
     };
 
@@ -559,10 +621,13 @@ export default function ReceiptBatchScreen() {
                     <TouchableOpacity
                         key={`${s.chain}-${s.sourcePdf}-${idx}`}
                         style={styles.row}
-                        // Only maxima rows have a snapshot today (V2 runs
-                        // for maxima only). Other chains show no detail
-                        // view, so disable tap to avoid a blank screen.
-                        disabled={s.chain !== 'maxima' || s.state !== 'done'}
+                        // Maxima and Rimi rows have V2 snapshots; other
+                        // chains don't yet so their detail view would be
+                        // blank — disable tap on those.
+                        disabled={
+                            (s.chain !== 'maxima' && s.chain !== 'rimi') ||
+                            s.state !== 'done'
+                        }
                         onPress={() => {
                             router.push({
                                 pathname: '/dev/receipt-detail',
@@ -581,9 +646,10 @@ export default function ReceiptBatchScreen() {
                                 {s.message && ` · ${s.message}`}
                             </Text>
                         </View>
-                        {s.chain === 'maxima' && s.state === 'done' && (
-                            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
-                        )}
+                        {(s.chain === 'maxima' || s.chain === 'rimi') &&
+                            s.state === 'done' && (
+                                <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+                            )}
                     </TouchableOpacity>
                 ))}
             </ScrollView>
