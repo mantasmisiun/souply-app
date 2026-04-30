@@ -8,6 +8,7 @@
  * lives on disk anyway.
  */
 
+import type { MaximaProduct } from '../../shared/parsers/maximaParser';
 import type { ProductBand } from '../../shared/parsers/maximaParserV2';
 
 export interface PageMeta {
@@ -25,15 +26,28 @@ export interface PageMeta {
     yOffsetInParserSpace: number;
 }
 
+/**
+ * One band's full V2 result: y-coords (for cropping + overlay),
+ * extracted product (or null when skipped), and any warnings the
+ * extractor attached. 1:1 with the V2 bands list.
+ */
+export interface BandResult {
+    band: ProductBand;
+    product: MaximaProduct | null;
+    warnings: string[];
+}
+
 export interface ReceiptSnapshot {
     chain: string;
     sourcePdf: string;
     pages: PageMeta[];
-    /** V2 step-1 output: contiguous product bands with y-ranges in
-     *  parser-space. Step 2 (per-band content extraction) hasn't
-     *  been built yet, so V2 emits no products — only band
-     *  boundaries for visual inspection. */
-    bandsV2: ProductBand[];
+    /**
+     * V2 step 1 + step 2 output. Each entry has the band's y-range
+     * (for the visual overlay and per-band image crop) plus the
+     * structured product extracted from it (null for SKIP bands —
+     * deposits, plastic bags, TAISYMAS refunds, anchor parse fails).
+     */
+    bands: BandResult[];
 }
 
 const snapshots = new Map<string, ReceiptSnapshot>();

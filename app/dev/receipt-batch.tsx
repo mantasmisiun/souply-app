@@ -53,11 +53,14 @@ import {
 import {
     findProductBandsV2,
     traceProductBandsV2,
+    traceMaximaExtractV2,
+    extractMaximaProduct,
 } from '../../../shared/parsers/maximaParserV2';
 import {
     setReceiptSnapshot,
     makeSnapshotKey,
     type PageMeta,
+    type BandResult,
 } from '../../utils/parserTestSnapshot';
 import {
     isRimiReceipt,
@@ -406,11 +409,11 @@ export default function ReceiptBatchScreen() {
         await res.json().catch(() => {});
         const status: RowStatus = { ...row, state: 'done' };
 
-        // V2 step 1 (Maxima only today): identify product band
-        // boundaries. No content extraction yet — bands are for
-        // visual inspection on the receipt-detail screen so we can
-        // verify the dividers between products are placed correctly
-        // before building step 2 (per-band content parser).
+        // V2 step 1 + step 2 (Maxima only today): identify product
+        // band boundaries (step 1) and convert each band into a
+        // structured product (step 2) with reconcile self-check.
+        // Snapshot stores band y-coords for the receipt-detail
+        // overlay; full traces dumped to console for diagnosis.
         if (detected === 'maxima') {
             try {
                 const planV2 = findProductBandsV2(allLines as any);
@@ -419,12 +422,12 @@ export default function ReceiptBatchScreen() {
                     .map((b, i) => `#${i + 1} ${Math.round(b.yTop)}-${Math.round(b.yBottom)}`)
                     .join(', ');
                 console.log(`[V2] ${row.sourcePdf}: ${planV2.bands.length} bands [${ranges}]`);
-                // Full per-line trace dump. Wrapped in a fenced
-                // ```text``` block so the user can paste it back into
-                // the chat verbatim and it renders unmodified. Uses
-                // distinct begin/end markers prefixed with the receipt
-                // filename so multiple receipts in one Metro log are
-                // unambiguous to slice apart.
+                // Full per-line trace + extract dump. Both wrapped
+                // in fenced ```text``` blocks so the user can paste
+                // back into chat verbatim. Distinct begin/end markers
+                // prefixed with the receipt filename so multiple
+                // receipts in one Metro log are unambiguous to slice
+                // apart.
                 try {
                     const trace = traceProductBandsV2(allLines as any);
                     console.log(
@@ -433,14 +436,31 @@ export default function ReceiptBatchScreen() {
                 } catch (e) {
                     console.warn(`[V2-TRACE] ${row.sourcePdf} trace failed:`, e);
                 }
+                try {
+                    const extract = traceMaximaExtractV2(allLines as any);
+                    console.log(
+                        `[V2-EXTRACT BEGIN ${row.sourcePdf}]\n\`\`\`text\n${extract}\n\`\`\`\n[V2-EXTRACT END ${row.sourcePdf}]`,
+                    );
+                } catch (e) {
+                    console.warn(`[V2-EXTRACT] ${row.sourcePdf} extract failed:`, e);
+                }
+                // Per-band extraction. 1:1 with planV2.bands and
+                // planV2.internals — same ordering, same indices —
+                // so the detail screen can render product info
+                // alongside the band's cropped image without an
+                // extra correlation step.
+                const bands: BandResult[] = planV2.bands.map((band, i) => {
+                    const { product, warnings } = extractMaximaProduct(planV2.internals[i]);
+                    return { band, product, warnings };
+                });
                 setReceiptSnapshot(makeSnapshotKey(row.chain, row.sourcePdf), {
                     chain: row.chain,
                     sourcePdf: row.sourcePdf,
                     pages: pageMetas,
-                    bandsV2: planV2.bands,
+                    bands,
                 });
             } catch (e) {
-                console.warn('[batch] V2 step 1 failed:', e);
+                console.warn('[batch] V2 step 1+2 failed:', e);
             }
         }
         return status;
