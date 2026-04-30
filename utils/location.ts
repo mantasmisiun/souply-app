@@ -5,9 +5,10 @@ import { API_BASE_URL } from '../config/api';
 /**
  * User location resolution for basket calculation.
  *
- *   1. AsyncStorage cache — per-install, keyed loosely so a manually-
- *      entered address sticks across app restarts. Cheap; if user moves
- *      or enters a different address, they trigger another geocode.
+ *   1. AsyncStorage cache — short-lived (30 min TTL). Avoids re-prompting
+ *      GPS on rapid back-to-back calcs. After expiry the cache is cleared
+ *      and the next calc re-queries GPS, so coords stay current as the
+ *      user moves between cities.
  *   2. expo-location — device GPS with the standard permission flow.
  *      Covers the happy path: user grants permission once on calc.
  *   3. Address modal (handled in UI) — when permission is denied or GPS
@@ -28,6 +29,7 @@ export interface UserCoords {
 }
 
 const CACHE_KEY = 'userCoords';
+const CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes
 const VILNIUS: UserCoords = {
     lat: 54.6872,
     lng: 25.2797,
@@ -43,7 +45,14 @@ export async function loadCachedCoords(): Promise<UserCoords | null> {
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         if (!Number.isFinite(parsed?.lat) || !Number.isFinite(parsed?.lng)) return null;
-        return { ...parsed, source: 'cache' };
+        // TTL check: if the cached coords are older than CACHE_TTL_MS,
+        // discard them so the caller falls through to a fresh GPS query.
+        const cachedAt = Number(parsed?.cachedAt);
+        if (!Number.isFinite(cachedAt) || Date.now() - cachedAt > CACHE_TTL_MS) {
+            await clearCachedCoords();
+            return null;
+        }
+        return { lat: parsed.lat, lng: parsed.lng, label: parsed.label, source: 'cache' };
     } catch {
         return null;
     }
@@ -51,7 +60,8 @@ export async function loadCachedCoords(): Promise<UserCoords | null> {
 
 export async function persistCoords(coords: UserCoords): Promise<void> {
     try {
-        await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(coords));
+        const payload = { ...coords, cachedAt: Date.now() };
+        await AsyncStorage.setItem(CACHE_KEY, JSON.stringify(payload));
     } catch {
         // non-fatal
     }

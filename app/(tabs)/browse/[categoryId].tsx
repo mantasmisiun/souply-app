@@ -171,34 +171,45 @@ export default function CategoryScreen() {
         | { kind: 'cancel' };
 
     const resolveBasketForAdd = async (): Promise<ResolveResult> => {
-        if (draftBasketId) return { kind: 'draft', id: draftBasketId };
-        // Re-fetch the user's baskets inline instead of trusting the
-        // `latestCompared` state — the on-mount useEffect may not have
-        // finished yet (user can tap faster than the network), and the
-        // state might also be stale if another screen changed basket
-        // status since the last focus. This adds one round-trip to the
-        // null-draft path but fully closes the race where a compared
-        // basket exists yet the modal never shows.
-        let compared = latestCompared;
+        // Always validate against the server. The cached `draftBasketId` in
+        // Zustand can drift out of sync — e.g. its basket flipped to
+        // `compared` on another screen, or a previous session left a stale
+        // id behind. Trusting it without verification was the bug that
+        // caused silent adds to a "draft" that no longer existed, with the
+        // backend then minting a brand-new draft (idempotent POST).
+        //
+        // Decision tree (based on server truth, not cached state):
+        //   - server has draft   → silent add to it, no modal
+        //   - no draft, has compared → modal
+        //   - nothing            → silent create new
+        let validatedDraftId: number | null = null;
+        let compared: ComparedBasketChoice | null = latestCompared;
         try {
             const userId = await getUserId();
             const res = await fetch(`${API_BASE_URL}/api/baskets/user/${userId}`);
             const baskets = await res.json();
             if (Array.isArray(baskets)) {
-                const hit = baskets.find((b: any) => b.status === 'compared');
-                compared = hit
+                const draftHit = baskets.find((b: any) => b.status === 'draft');
+                const comparedHit = baskets.find((b: any) => b.status === 'compared');
+                validatedDraftId = draftHit ? Number(draftHit.id) : null;
+                compared = comparedHit
                     ? {
-                          id: hit.id,
-                          name: hit.name,
-                          itemCount: hit.itemCount ?? 0,
-                          updatedAt: hit.updatedAt,
+                          id: comparedHit.id,
+                          name: comparedHit.name,
+                          itemCount: comparedHit.itemCount ?? 0,
+                          updatedAt: comparedHit.updatedAt,
                       }
                     : null;
+                // Sync local state with reality so subsequent renders are correct.
+                if (validatedDraftId !== draftBasketId) setDraftBasketId(validatedDraftId);
                 setLatestCompared(compared);
             }
         } catch {
-            // fall through with whatever state we had
+            // Network down — fall back to last-known state.
+            validatedDraftId = draftBasketId;
         }
+
+        if (validatedDraftId) return { kind: 'draft', id: validatedDraftId };
         if (!compared) return { kind: 'new' };
 
         const choice = await new Promise<ComparedChoice>((resolve) => {
