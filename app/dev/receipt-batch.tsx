@@ -49,13 +49,11 @@ import {
 import {
     isMaximaReceipt,
     parseMaximaReceipt,
-} from '../../../shared/parsers/maximaParser';
-import {
-    findProductBandsV2,
-    traceProductBandsV2,
-    traceMaximaExtractV2,
+    findProductBands,
+    traceProductBands,
+    traceMaximaExtract,
     extractMaximaProduct,
-} from '../../../shared/parsers/maximaParserV2';
+} from '../../../shared/parsers/maximaParser';
 import {
     setReceiptSnapshot,
     makeSnapshotKey,
@@ -416,7 +414,7 @@ export default function ReceiptBatchScreen() {
         // overlay; full traces dumped to console for diagnosis.
         if (detected === 'maxima') {
             try {
-                const planV2 = findProductBandsV2(allLines as any);
+                const planV2 = findProductBands(allLines as any);
                 status.bandsV2Count = planV2.bands.length;
                 const ranges = planV2.bands
                     .map((b, i) => `#${i + 1} ${Math.round(b.yTop)}-${Math.round(b.yBottom)}`)
@@ -429,7 +427,7 @@ export default function ReceiptBatchScreen() {
                 // receipts in one Metro log are unambiguous to slice
                 // apart.
                 try {
-                    const trace = traceProductBandsV2(allLines as any);
+                    const trace = traceProductBands(allLines as any);
                     console.log(
                         `[V2-TRACE BEGIN ${row.sourcePdf}]\n\`\`\`text\n${trace}\n\`\`\`\n[V2-TRACE END ${row.sourcePdf}]`,
                     );
@@ -437,7 +435,7 @@ export default function ReceiptBatchScreen() {
                     console.warn(`[V2-TRACE] ${row.sourcePdf} trace failed:`, e);
                 }
                 try {
-                    const extract = traceMaximaExtractV2(allLines as any);
+                    const extract = traceMaximaExtract(allLines as any);
                     console.log(
                         `[V2-EXTRACT BEGIN ${row.sourcePdf}]\n\`\`\`text\n${extract}\n\`\`\`\n[V2-EXTRACT END ${row.sourcePdf}]`,
                     );

@@ -8,8 +8,7 @@
  * lives on disk anyway.
  */
 
-import type { MaximaProduct } from '../../shared/parsers/maximaParser';
-import type { ProductBand } from '../../shared/parsers/maximaParserV2';
+import type { MaximaProduct, ProductBand } from '../../shared/parsers/maximaParser';
 
 export interface PageMeta {
     /** Filename of the PNG inside /receipts-batch/<chain>/. */

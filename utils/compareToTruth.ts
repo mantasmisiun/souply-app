@@ -95,11 +95,22 @@ const nameSimilarity = (a: string, b: string): number => {
     return intersection / Math.min(ta.size, tb.size);
 };
 
+/**
+ * Recover the line total from a parsed MaximaProduct. The parser
+ * normalizes rows with a unit-qty line to per-unit pricing
+ * (`price` == `pricePerUnit` and `promoPrice` divided by
+ * `quantity`), so the line total comes back as `price × quantity`.
+ * Truth files always carry the line total directly in `price`.
+ */
+const lineTotalGross = (p: MaximaProduct): number => p.price * p.quantity;
+const lineTotalPromo = (p: MaximaProduct): number | null =>
+    p.promoPrice === null ? null : p.promoPrice * p.quantity;
+
 /** Composite candidate-pair score: name overlap (70%) + price match (30%). */
 const pairScore = (parsed: MaximaProduct, truth: TruthProduct): number => {
     const nameSim = nameSimilarity(parsed.name, truth.name);
     if (nameSim < MIN_NAME_SIM) return 0;
-    const priceMatch = Math.abs(parsed.price - truth.price) < PRICE_EPS ? 1 : 0;
+    const priceMatch = Math.abs(lineTotalGross(parsed) - truth.price) < PRICE_EPS ? 1 : 0;
     return nameSim * 0.7 + priceMatch * 0.3;
 };
 
@@ -167,13 +178,19 @@ export function compareToTruth(
         const tNameShort = t.name.slice(0, 40);
         const localIssues: string[] = [];
 
-        const priceOk = Math.abs(p.price - t.price) < PRICE_EPS;
+        // Compare line totals, not raw `price`. Parser normalizes
+        // unit-qty rows to per-unit pricing, so the line total is
+        // `price × quantity`. Truth always stores the printed line
+        // total directly.
+        const pGross = lineTotalGross(p);
+        const priceOk = Math.abs(pGross - t.price) < PRICE_EPS;
         if (priceOk) pricesCorrect++;
-        else localIssues.push(`price=${p.price} (truth=${t.price})`);
+        else localIssues.push(`price=${pGross.toFixed(2)} (truth=${t.price})`);
 
-        const promoOk = promoEqual(p.promoPrice, t.promoPrice);
+        const pPromo = lineTotalPromo(p);
+        const promoOk = promoEqual(pPromo, t.promoPrice);
         if (promoOk) promoPricesCorrect++;
-        else localIssues.push(`promoPrice=${p.promoPrice} (truth=${t.promoPrice})`);
+        else localIssues.push(`promoPrice=${pPromo === null ? 'null' : pPromo.toFixed(2)} (truth=${t.promoPrice})`);
 
         // V1/V2 collapse pack-size into a single `quantity`. Compare
         // against truth's quantity*amount product so weighable

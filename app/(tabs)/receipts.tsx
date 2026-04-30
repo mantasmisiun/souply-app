@@ -38,7 +38,26 @@ interface Receipt {
   chainLogoUrl: string | null;
   storeName: string | null;
   storeAddress: string | null;
+  /**
+   * Persisted parsed receipt blob. mysql2 returns this as either a
+   * pre-parsed object (JSON column) or a raw string (TEXT column),
+   * depending on the underlying schema version.
+   */
+  parsedData?: unknown;
 }
+
+/**
+ * `JSON.parse` that swallows errors. Used for receipt rows whose
+ * `parsedData` column is a TEXT blob — a malformed row shouldn't
+ * crash the receipt list.
+ */
+const safeJsonParse = (raw: string): any => {
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+};
 
 export default function ReceiptsScreen() {
   const colors = useTheme();
@@ -345,8 +364,25 @@ export default function ReceiptsScreen() {
           const shopHeadline =
             item.storeName || item.chainName || "Neatpažinta parduotuvė";
           const shopAddress = item.storeAddress || null;
-          const dateLabel = item.receiptDate
-            ? new Date(item.receiptDate).toLocaleDateString("lt-LT")
+          // Prefer the OCR'd shop date over the DB `receiptDate`
+          // column. The column is set by `updateReceiptDetails` only
+          // when the price-persist path completes; rows that only
+          // reach `createReceipt` end up with the row's default
+          // (insert time = upload time), which is what showed up
+          // here as "the date of upload". `parsedData.footer.date`
+          // is populated by the parser whenever the OCR has a usable
+          // timestamp, so it's the source of truth for "when was the
+          // shopping done".
+          const parsedFooterDate = (() => {
+              const pd = item.parsedData;
+              if (!pd) return null;
+              const obj = typeof pd === "string" ? safeJsonParse(pd) : pd;
+              const raw = obj?.footer?.date ?? obj?.date ?? null;
+              return typeof raw === "string" && raw.trim() ? raw : null;
+          })();
+          const dateSource = parsedFooterDate ?? item.receiptDate;
+          const dateLabel = dateSource
+            ? new Date(dateSource).toLocaleDateString("lt-LT")
             : "—";
           return (
             <TouchableOpacity

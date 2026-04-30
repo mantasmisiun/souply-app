@@ -1515,7 +1515,15 @@ export default function ProcessReceiptScreen() {
         await applyRimiResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
       } else if (isMaximaReceipt(lineTexts)) {
-        const earlyHeader = parseMaximaHeaderOnly(mergedLines);
+        // Maxima parser does its own splitMergedLines + same-row
+        // handling internally, so it expects RAW OCR lines, not the
+        // outer `mergedLines` blob. Passing the merged blob caused
+        // the first product's name to get glued onto the last
+        // header line ("Kvitas bazėje:" + "Gira RUGILĖ" within
+        // 30 px) and eaten by findHeaderEnd, leaving band 1 with
+        // an empty name. Rimi/Iki still consume the merged blob
+        // because their parsers were tuned against that input.
+        const earlyHeader = parseMaximaHeaderOnly(allLines);
         setHeader({
           chainName: "MAXIMA",
           chainId: 1,
@@ -1530,7 +1538,23 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        const parsed = parseMaximaReceipt(mergedLines);
+        const parsed = parseMaximaReceipt(allLines);
+        if (__DEV__) {
+          // Diagnostic: surface what the parser actually captured
+          // from the footer so we can compare against the printed
+          // receipt without poking the DB. Most useful when the
+          // receipts list shows the wrong/missing date.
+          console.log(
+            "[parseMaximaReceipt] footer:",
+            JSON.stringify({
+              date: parsed.footer.date,
+              time: parsed.footer.time,
+              total: parsed.footer.total,
+              receiptNo: parsed.footer.receiptNo,
+              totalSavings: parsed.footer.totalSavings,
+            }),
+          );
+        }
         await applyMaximaResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
       } else if (isIkiReceipt(lineTexts)) {
@@ -2242,6 +2266,22 @@ export default function ProcessReceiptScreen() {
                     : undefined
                 }
               >
+                {/* Dev-only band crop: shows the OCR region this row's
+                    data was extracted from, sliced from the receipt
+                    image. Gated by __DEV__ so release bundles strip
+                    the entire branch at Metro bundle time. */}
+                {__DEV__ &&
+                  pageMetas.length > 0 &&
+                  product.region &&
+                  product.region.yBottom > product.region.yTop && (
+                    <View style={styles.productBandCropWrap}>
+                      <RegionPreview
+                        pages={pageMetas}
+                        region={product.region}
+                        cardWidth={CARD_WIDTH}
+                      />
+                    </View>
+                  )}
                 <View style={styles.productRow}>
                   {product.matchConfirmed && product.storeProductImageUrl ? (
                     <Image
@@ -2767,6 +2807,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     fontSize: 13,
     color: c.primary,
     fontWeight: "600",
+  },
+  productBandCropWrap: {
+    marginBottom: 8,
+    borderRadius: 6,
+    overflow: 'hidden',
+    backgroundColor: c.pageBackground,
   },
   productRowCard: {
     backgroundColor: c.cardBackground,

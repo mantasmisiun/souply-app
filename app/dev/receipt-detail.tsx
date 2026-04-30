@@ -51,7 +51,7 @@ import {
     type PageMeta,
     type ReceiptSnapshot,
 } from '../../utils/parserTestSnapshot';
-import type { ProductBand } from '../../../shared/parsers/maximaParserV2';
+import type { ProductBand } from '../../../shared/parsers/maximaParser';
 
 interface BandOnPage {
     bandIdx: number;
