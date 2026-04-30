@@ -51,6 +51,15 @@ import {
     parseMaximaReceipt,
 } from '../../../shared/parsers/maximaParser';
 import {
+    findProductBandsV2,
+    traceProductBandsV2,
+} from '../../../shared/parsers/maximaParserV2';
+import {
+    setReceiptSnapshot,
+    makeSnapshotKey,
+    type PageMeta,
+} from '../../utils/parserTestSnapshot';
+import {
     isRimiReceipt,
     parseRimiReceipt,
 } from '../../../shared/parsers/rimiParser';
@@ -99,9 +108,9 @@ interface RowStatus {
     chain: ChainName;
     state: 'pending' | 'running' | 'done' | 'error' | 'no-chain';
     message?: string;
-    productCount?: number;
-    matched?: number;
-    unmatched?: number;
+    /** V2 step 1 output: number of product bands detected. Tap a row
+     *  to inspect the bands visually on the receipt-detail screen. */
+    bandsV2Count?: number;
 }
 
 const readManifest = async (chain: ChainName): Promise<ManifestEntry[]> => {
@@ -135,17 +144,21 @@ const downloadPageToCache = async (chain: ChainName, pageName: string): Promise<
 };
 
 /**
- * OCR one PNG → `PageLine[]` in image-pixel space. Delegates to the
- * shared tiled-OCR helper: tall images (phone-photographed Lidl
- * thermal receipts that blow past MLKit's ~4096 px soft cap) are
- * automatically split into vertical strips, OCR'd per-strip, and
- * merged with offsets applied. Shorter images pass through as a
- * single-shot call preserving the legacy scale-inference behaviour.
+ * OCR one PNG → `PageLine[]` + native pixel dims (after the rotate
+ * step). Dims are needed by the dev receipt-detail screen to scale
+ * V2's band y-coords (in image-pixel space) to display-pixel space
+ * when overlaying band rectangles on the rendered image.
  */
-const ocrImage = async (uri: string): Promise<PageLine[]> => {
+const ocrImage = async (
+    uri: string,
+): Promise<{ lines: PageLine[]; pixelWidth: number; pixelHeight: number }> => {
     const rotated = await ensurePortrait(uri);
-    const { lines } = await ocrImageTiled(rotated);
-    return lines;
+    const result = await ocrImageTiled(rotated);
+    return {
+        lines: result.lines,
+        pixelWidth: result.pixelWidth,
+        pixelHeight: result.pixelHeight,
+    };
 };
 
 /**
@@ -299,18 +312,25 @@ export default function ReceiptBatchScreen() {
             return { ...row, state: 'error', message: 'missing from manifest' };
         }
 
-        // Download each page into the app's cache, OCR it, then
-        // clean the cache entry. MLKit needs a local file path
-        // (won't fetch over https itself), so the HTTP-delivered PNG
-        // is saved to cacheDirectory for the duration of OCR only.
+        // Download each page into the app's cache, OCR it, then clean
+        // the cache entry. MLKit needs a local file path (won't fetch
+        // over https itself), so the HTTP-delivered PNG is saved to
+        // cacheDirectory for the duration of OCR only.
         const allLines: PageLine[] = [];
         const cachedUris: string[] = [];
+        const pageMetas: PageMeta[] = []; // for snapshot → detail screen
         let yOffset = 0;
         try {
             for (const pageName of entry.pages) {
                 const localUri = await downloadPageToCache(row.chain, pageName);
                 cachedUris.push(localUri);
-                const pageLines = await ocrImage(localUri);
+                const { lines: pageLines, pixelWidth, pixelHeight } = await ocrImage(localUri);
+                pageMetas.push({
+                    name: pageName,
+                    pixelWidth,
+                    pixelHeight,
+                    yOffsetInParserSpace: yOffset,
+                });
                 const maxY = pageLines.reduce((m, l) => Math.max(m, l.yBottom), 0);
                 for (const l of pageLines) {
                     allLines.push({
@@ -322,8 +342,6 @@ export default function ReceiptBatchScreen() {
                 yOffset += maxY + 50;
             }
         } finally {
-            // Cleanup regardless of OCR success/failure — leaving 50+
-            // MB of PNGs in cache per run adds up fast.
             for (const u of cachedUris) {
                 FileSystem.deleteAsync(u, { idempotent: true }).catch(() => {});
             }
@@ -381,14 +399,51 @@ export default function ReceiptBatchScreen() {
             const err = await res.text();
             return { ...row, state: 'error', message: `HTTP ${res.status}: ${err.slice(0, 120)}` };
         }
-        const json = await res.json();
-        return {
-            ...row,
-            state: 'done',
-            productCount: json.productCount,
-            matched: json.matchedCount,
-            unmatched: json.unmatchedCount,
-        };
+        // Discard the batch-log response body — we don't surface V1
+        // stats anymore. The POST itself still runs because the
+        // Persist toggle relies on it for the receipt-logging side
+        // effect.
+        await res.json().catch(() => {});
+        const status: RowStatus = { ...row, state: 'done' };
+
+        // V2 step 1 (Maxima only today): identify product band
+        // boundaries. No content extraction yet — bands are for
+        // visual inspection on the receipt-detail screen so we can
+        // verify the dividers between products are placed correctly
+        // before building step 2 (per-band content parser).
+        if (detected === 'maxima') {
+            try {
+                const planV2 = findProductBandsV2(allLines as any);
+                status.bandsV2Count = planV2.bands.length;
+                const ranges = planV2.bands
+                    .map((b, i) => `#${i + 1} ${Math.round(b.yTop)}-${Math.round(b.yBottom)}`)
+                    .join(', ');
+                console.log(`[V2] ${row.sourcePdf}: ${planV2.bands.length} bands [${ranges}]`);
+                // Full per-line trace dump. Wrapped in a fenced
+                // ```text``` block so the user can paste it back into
+                // the chat verbatim and it renders unmodified. Uses
+                // distinct begin/end markers prefixed with the receipt
+                // filename so multiple receipts in one Metro log are
+                // unambiguous to slice apart.
+                try {
+                    const trace = traceProductBandsV2(allLines as any);
+                    console.log(
+                        `[V2-TRACE BEGIN ${row.sourcePdf}]\n\`\`\`text\n${trace}\n\`\`\`\n[V2-TRACE END ${row.sourcePdf}]`,
+                    );
+                } catch (e) {
+                    console.warn(`[V2-TRACE] ${row.sourcePdf} trace failed:`, e);
+                }
+                setReceiptSnapshot(makeSnapshotKey(row.chain, row.sourcePdf), {
+                    chain: row.chain,
+                    sourcePdf: row.sourcePdf,
+                    pages: pageMetas,
+                    bandsV2: planV2.bands,
+                });
+            } catch (e) {
+                console.warn('[batch] V2 step 1 failed:', e);
+            }
+        }
+        return status;
     };
 
     const runBatch = async () => {
@@ -483,18 +538,35 @@ export default function ReceiptBatchScreen() {
                     </Text>
                 )}
                 {statuses.map((s, idx) => (
-                    <View key={`${s.chain}-${s.sourcePdf}-${idx}`} style={styles.row}>
+                    <TouchableOpacity
+                        key={`${s.chain}-${s.sourcePdf}-${idx}`}
+                        style={styles.row}
+                        // Only maxima rows have a snapshot today (V2 runs
+                        // for maxima only). Other chains show no detail
+                        // view, so disable tap to avoid a blank screen.
+                        disabled={s.chain !== 'maxima' || s.state !== 'done'}
+                        onPress={() => {
+                            router.push({
+                                pathname: '/dev/receipt-detail',
+                                params: { chain: s.chain, sourcePdf: s.sourcePdf },
+                            });
+                        }}
+                        activeOpacity={0.7}
+                    >
                         <StatusIcon state={s.state} colors={colors} />
                         <View style={{ flex: 1 }}>
                             <Text style={styles.rowName}>{s.sourcePdf}</Text>
                             <Text style={styles.rowMeta}>
                                 {s.chain}
-                                {s.state === 'done' &&
-                                    ` · ${s.productCount} preki${s.productCount === 1 ? 'ė' : 'ės'} · ${s.matched} match · ${s.unmatched} unmatched`}
+                                {s.state === 'done' && s.bandsV2Count !== undefined &&
+                                    ` · ${s.bandsV2Count} band${s.bandsV2Count === 1 ? 'a' : 'os'}`}
                                 {s.message && ` · ${s.message}`}
                             </Text>
                         </View>
-                    </View>
+                        {s.chain === 'maxima' && s.state === 'done' && (
+                            <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
+                        )}
+                    </TouchableOpacity>
                 ))}
             </ScrollView>
         </View>
