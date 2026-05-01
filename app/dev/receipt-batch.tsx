@@ -71,6 +71,10 @@ import {
 import {
     isNorfaReceipt,
     parseNorfaReceipt,
+    findReceiptBandsNorfa,
+    traceReceiptBandsNorfa,
+    extractNorfaProduct,
+    traceNorfaExtract,
 } from '../../../shared/parsers/norfaParser';
 import {
     isLidlReceipt,
@@ -523,6 +527,63 @@ export default function ReceiptBatchScreen() {
                 console.warn('[batch] Rimi V2 step 1+2 failed:', e);
             }
         }
+
+        // Norfa V2 step 1 + step 2: typed bands across the whole
+        // receipt (store-name, store-address, product, receipt-no,
+        // datetime, total) for the visual overlay, plus per-product
+        // extraction (name, price, promoPrice from Nuolaida discount,
+        // qty/unit/ppu from WEIGHABLE).
+        if (detected === 'norfa') {
+            try {
+                const planV2 = findReceiptBandsNorfa(allLines as any);
+                status.bandsV2Count = planV2.bands.length;
+                const summary = planV2.bands
+                    .map((b) => `${b.label}=${Math.round(b.yTop)}-${Math.round(b.yBottom)}`)
+                    .join(', ');
+                console.log(
+                    `[Norfa V2] ${row.sourcePdf}: ${planV2.bands.length} bands [${summary}]`,
+                );
+                try {
+                    const trace = traceReceiptBandsNorfa(allLines as any);
+                    console.log(
+                        `[Norfa V2-TRACE BEGIN ${row.sourcePdf}]\n\`\`\`text\n${trace}\n\`\`\`\n[Norfa V2-TRACE END ${row.sourcePdf}]`,
+                    );
+                } catch (e) {
+                    console.warn(`[Norfa V2-TRACE] ${row.sourcePdf} trace failed:`, e);
+                }
+                try {
+                    const extract = traceNorfaExtract(allLines as any);
+                    console.log(
+                        `[Norfa V2-EXTRACT BEGIN ${row.sourcePdf}]\n\`\`\`text\n${extract}\n\`\`\`\n[Norfa V2-EXTRACT END ${row.sourcePdf}]`,
+                    );
+                } catch (e) {
+                    console.warn(`[Norfa V2-EXTRACT] ${row.sourcePdf} trace failed:`, e);
+                }
+                // Build BandResult[] for the per-product list — 1:1
+                // with the product-kind subset of taggedBands and
+                // 1:1 with productInternals (same iteration order
+                // through computeBandsContextV2).
+                const productBands = planV2.bands.filter((b) => b.kind === 'product');
+                const bands: BandResult[] = productBands.map((band, i) => {
+                    const internal = planV2.productInternals[i];
+                    const { product, warnings } = extractNorfaProduct(internal);
+                    return {
+                        band: { yTop: band.yTop, yBottom: band.yBottom },
+                        product,
+                        warnings,
+                    };
+                });
+                setReceiptSnapshot(makeSnapshotKey(row.chain, row.sourcePdf), {
+                    chain: row.chain,
+                    sourcePdf: row.sourcePdf,
+                    pages: pageMetas,
+                    bands,
+                    taggedBands: planV2.bands,
+                });
+            } catch (e) {
+                console.warn('[batch] Norfa V2 step 1+2 failed:', e);
+            }
+        }
         return status;
     };
 
@@ -621,11 +682,13 @@ export default function ReceiptBatchScreen() {
                     <TouchableOpacity
                         key={`${s.chain}-${s.sourcePdf}-${idx}`}
                         style={styles.row}
-                        // Maxima and Rimi rows have V2 snapshots; other
-                        // chains don't yet so their detail view would be
-                        // blank — disable tap on those.
+                        // Maxima, Rimi, and Norfa rows write V2 snapshots;
+                        // chains without one would land on a blank detail
+                        // view, so tap stays disabled until they get one.
                         disabled={
-                            (s.chain !== 'maxima' && s.chain !== 'rimi') ||
+                            (s.chain !== 'maxima' &&
+                                s.chain !== 'rimi' &&
+                                s.chain !== 'norfa') ||
                             s.state !== 'done'
                         }
                         onPress={() => {
@@ -646,7 +709,7 @@ export default function ReceiptBatchScreen() {
                                 {s.message && ` · ${s.message}`}
                             </Text>
                         </View>
-                        {(s.chain === 'maxima' || s.chain === 'rimi') &&
+                        {(s.chain === 'maxima' || s.chain === 'rimi' || s.chain === 'norfa') &&
                             s.state === 'done' && (
                                 <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
                             )}

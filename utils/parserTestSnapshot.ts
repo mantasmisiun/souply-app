@@ -10,13 +10,23 @@
 
 import type { MaximaProduct, ProductBand } from '../../shared/parsers/maximaParser';
 import type { RimiProduct, RimiReceiptBand } from '../../shared/parsers/rimiParser';
+import type { NorfaProduct, NorfaReceiptBand } from '../../shared/parsers/norfaParser';
 
 /**
- * Either chain's product shape — they're structurally identical
- * (same field names + types) so the receipt-detail UI can render
- * either without branching.
+ * Any chain's product shape — they're structurally identical (same
+ * field names + types) so the receipt-detail UI can render any of
+ * them without branching.
  */
-export type ParsedProduct = MaximaProduct | RimiProduct;
+export type ParsedProduct = MaximaProduct | RimiProduct | NorfaProduct;
+
+/**
+ * Chain-neutral typed-band shape used by the dev overlay. Rimi
+ * and Norfa each export a structurally-identical band type; the
+ * snapshot stores them as a union so future chains plug in by
+ * adding their own band type to this union without changing the
+ * detail screen.
+ */
+export type TaggedReceiptBand = RimiReceiptBand | NorfaReceiptBand;
 
 export interface PageMeta {
     /** Filename of the PNG inside /receipts-batch/<chain>/. */
@@ -57,14 +67,13 @@ export interface ReceiptSnapshot {
      */
     bands: BandResult[];
     /**
-     * Rimi V2 step 1 output: typed bands across the whole receipt
-     * (`store-name`, `store-address`, `product`, `receipt-no`,
-     * `datetime`). Step 2 (per-band content extraction) hasn't
-     * been built yet, so for now this is purely for visual
-     * verification that band geometry is right. Empty for chains
-     * that don't have a typed-band parser.
+     * Typed bands across the whole receipt (`store-name`,
+     * `store-address`, `product`, `receipt-no`, `datetime`,
+     * `total`). Used by the visual overlay on the dev detail
+     * screen. Populated by Rimi and Norfa V2 step 1; empty for
+     * chains that don't have a typed-band parser.
      */
-    taggedBands?: RimiReceiptBand[];
+    taggedBands?: TaggedReceiptBand[];
 }
 
 const snapshots = new Map<string, ReceiptSnapshot>();

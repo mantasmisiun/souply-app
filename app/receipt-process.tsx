@@ -57,6 +57,14 @@ import {
     type MaximaProduct,
 } from "../../shared/parsers/maximaParser";
 import {
+    isNorfaReceipt,
+    parseNorfaHeaderOnly,
+    parseNorfaReceipt,
+    type NorfaFooter,
+    type NorfaHeader,
+    type NorfaProduct,
+} from "../../shared/parsers/norfaParser";
+import {
     isRimiReceipt,
     parseRimiHeaderOnly,
     parseRimiReceipt,
@@ -1562,6 +1570,28 @@ export default function ProcessReceiptScreen() {
         }
         await applyMaximaResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
+      } else if (isNorfaReceipt(lineTexts)) {
+        // Norfa V2 (hard-walled bands + per-band extract) consumes
+        // RAW OCR lines — its mergeRowFragments pass needs the
+        // original y-coords intact. Same reasoning as Rimi/Maxima.
+        const earlyHeader = parseNorfaHeaderOnly(allLines);
+        setHeader({
+          chainName: "NORFA",
+          chainId: 4,
+          storeCode: earlyHeader.storeCode,
+          storeAddress: earlyHeader.storeAddress,
+          storeId: null,
+          storeName: null,
+          storeAddressMatched: null,
+          matchConfidence: null,
+          matchLoading: true,
+          rawText: earlyHeader.rawText,
+          region: earlyHeader.region,
+        });
+
+        const parsed = parseNorfaReceipt(allLines);
+        await applyNorfaResult(parsed.header, parsed.products, parsed.footer);
+        setLoading(false);
       } else if (isIkiReceipt(lineTexts)) {
         const earlyHeader = parseIkiHeaderOnly(mergedLines);
         setHeader({
@@ -1835,6 +1865,136 @@ export default function ProcessReceiptScreen() {
       totalSavings: mFooter.totalSavings,
       rawText: mFooter.rawText,
       region: mFooter.region,
+    });
+  };
+
+  const applyNorfaResult = async (
+    nHeader: NorfaHeader,
+    nProducts: NorfaProduct[],
+    nFooter: NorfaFooter,
+  ) => {
+    const chainId = 4;
+
+    let storeId: number | null = null;
+    let storeName: string | null = null;
+    let storeAddressMatched: string | null = null;
+    let matchConfidence: number | null = null;
+
+    if (__DEV__) {
+      console.log(
+        "[Norfa] storeAddress OCR =",
+        JSON.stringify(nHeader.storeAddress),
+      );
+    }
+
+    if (nHeader.storeAddress) {
+      try {
+        const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(nHeader.storeAddress)}`;
+        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
+        const data = await res.json();
+        if (__DEV__) console.log("[Norfa] match response:", JSON.stringify(data));
+        if (data?.match) {
+          storeId = data.match.storeId;
+          storeName = data.match.storeName;
+          storeAddressMatched = data.match.address;
+          matchConfidence = data.match.confidence;
+        }
+      } catch (e) {
+        console.warn("Store match failed:", e);
+      }
+    }
+
+    if (storeId === null) {
+      if (__DEV__) {
+        console.log(
+          "[Norfa] Header rawText (first 500 chars):\n",
+          (nHeader.rawText || "").slice(0, 500),
+        );
+      }
+      await bailWithLog("store_unrecognized", {
+        detectedChainName: "NORFA",
+        extractedStoreAddress: nHeader.storeAddress || null,
+      });
+      return;
+    }
+
+    setHeader({
+      chainName: "NORFA",
+      chainId,
+      storeCode: nHeader.storeCode,
+      storeAddress: nHeader.storeAddress,
+      storeId,
+      storeName,
+      storeAddressMatched,
+      matchConfidence,
+      matchLoading: false,
+      rawText: nHeader.rawText,
+      region: nHeader.region,
+    });
+
+    const AUTO_APPLY_THRESHOLD = 0.85;
+
+    setMatchProgress({ done: 0, total: nProducts.length });
+
+    const matchPromises = nProducts.map(async (np) => {
+      let altMatches: ProductMatchOption[] = [];
+
+      try {
+        const params = new URLSearchParams({
+          chainId: String(chainId),
+          name: np.name,
+        });
+        const res = await fetchWithTimeout(
+          `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
+          {
+            timeoutMs: TIMEOUT_FAST_MS,
+            externalSignal: mountAbortRef.current?.signal,
+          },
+        );
+        const data = await res.json();
+        if (Array.isArray(data?.matches)) altMatches = data.matches;
+      } catch (e) {
+        console.warn(`Product match failed for "${np.name}":`, e);
+      }
+
+      const top = altMatches[0] || null;
+      const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
+
+      setMatchProgress((prev) =>
+        prev ? { ...prev, done: prev.done + 1 } : prev,
+      );
+
+      return {
+        name: np.name,
+        matchedName: top?.name ?? null,
+        storeProductId: autoApply ? top!.storeProductId : null,
+        storeProductImageUrl: top?.imageUrl ?? null,
+        matchConfidence: top?.confidence ?? null,
+        matchConfirmed: autoApply,
+        priceVerified: autoApply,
+        altMatches,
+        price: np.price,
+        promoPrice: np.promoPrice,
+        quantity: np.quantity,
+        unit: np.unit,
+        pricePerUnit: np.pricePerUnit,
+        rawLines: np.rawLines,
+        region: np.region,
+      } as ProductLine;
+    });
+
+    const productLines = await Promise.all(matchPromises);
+    setMatchProgress(null);
+    setProducts(productLines);
+
+    setFooter({
+      total: nFooter.total,
+      date: nFooter.date,
+      time: nFooter.time,
+      receiptNo: nFooter.receiptNo,
+      totalSavings: nFooter.totalSavings,
+      rawText: nFooter.rawText,
+      region: nFooter.region,
     });
   };
 

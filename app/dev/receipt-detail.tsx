@@ -53,6 +53,13 @@ import {
 } from '../../utils/parserTestSnapshot';
 import type { ProductBand } from '../../../shared/parsers/maximaParser';
 import type { RimiBandKind, RimiReceiptBand } from '../../../shared/parsers/rimiParser';
+import type { NorfaReceiptBand } from '../../../shared/parsers/norfaParser';
+
+// Kinds emitted by any chain's V2 parser. Rimi has the full set
+// including `store-name`; Norfa drops `store-name` since the
+// header line text isn't load-bearing for store id. Both share
+// the same overlay colour map.
+type TaggedBandKind = RimiBandKind | NorfaReceiptBand['kind'];
 
 interface BandOnPage {
     bandIdx: number;
@@ -63,12 +70,12 @@ interface BandOnPage {
     /** Index of the page this band falls on (into snap.pages). */
     pageIdx: number;
     /**
-     * Optional band kind (Rimi V2 only — Maxima bands are all
+     * Optional band kind (Rimi/Norfa V2 — Maxima bands are all
      * `product`). Drives the overlay rectangle's colour so the
      * user can verify each region kind landed on the right slice
      * of the receipt.
      */
-    kind?: RimiBandKind;
+    kind?: TaggedBandKind;
     /** Short label rendered inside the rectangle (band #, `addr`, …). */
     label?: string;
 }
@@ -80,11 +87,11 @@ interface BandOnPage {
  * per-product crops, where order must match `snap.bands`).
  *
  * Accepts either Maxima-style ProductBand[] (no kind / label) or
- * Rimi-style RimiReceiptBand[] (kind + label). The kind / label,
+ * Rimi/Norfa-style typed bands (kind + label). The kind / label,
  * when present, flows through to the overlay so each rectangle
  * gets a colour and inline tag.
  */
-type BandLike = ProductBand | RimiReceiptBand;
+type BandLike = ProductBand | RimiReceiptBand | NorfaReceiptBand;
 
 const bucketBandsByPage = (
     bands: BandLike[],
@@ -102,7 +109,7 @@ const bucketBandsByPage = (
             }
         }
         const offset = pages[pageIdx].yOffsetInParserSpace;
-        const tagged = band as Partial<RimiReceiptBand>;
+        const tagged = band as Partial<RimiReceiptBand & NorfaReceiptBand>;
         const onPage: BandOnPage = {
             bandIdx: bi,
             yTopOnPage: band.yTop - offset,
@@ -122,7 +129,7 @@ const bucketBandsByPage = (
  * thermal-receipt-grey background while keeping enough
  * transparency that the underlying text stays legible.
  */
-const bandKindColor = (kind: RimiBandKind | undefined, fallback: string): {
+const bandKindColor = (kind: TaggedBandKind | undefined, fallback: string): {
     border: string;
     fill: string;
 } => {
@@ -156,11 +163,11 @@ const deriveStatus = (band: BandResult): StatusKind => {
 export default function ReceiptDetailScreen() {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    // Default-collapsed: product list is the primary debugging
-    // surface once step 2 is in place. The overview (full receipt
-    // PNG with band overlay) stays one tap away for verifying
-    // band geometry when something looks off.
-    const [overviewExpanded, setOverviewExpanded] = useState(false);
+    // Default-expanded: the full-receipt overlay is the primary
+    // debugging surface while iterating on band geometry. Step 2
+    // (per-product extraction) collapses to the product list once
+    // bands are stable.
+    const [overviewExpanded, setOverviewExpanded] = useState(true);
 
     const { chain, sourcePdf } = useLocalSearchParams<{
         chain: string;
