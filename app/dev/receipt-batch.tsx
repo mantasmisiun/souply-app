@@ -79,6 +79,10 @@ import {
 import {
     isLidlReceipt,
     parseLidlReceipt,
+    findReceiptBandsLidl,
+    traceReceiptBandsLidl,
+    extractLidlProduct,
+    traceLidlExtract,
 } from '../../../shared/parsers/lidlParser';
 import { useTheme, type AppTheme } from '../../constants/theme';
 
@@ -584,6 +588,64 @@ export default function ReceiptBatchScreen() {
                 console.warn('[batch] Norfa V2 step 1+2 failed:', e);
             }
         }
+
+        // Lidl V2 step 1 + step 2: typed bands across the whole
+        // receipt (store-name, store-address, product, receipt-no,
+        // datetime, total) for the visual overlay, plus per-product
+        // extraction (name, price, promoPrice from Lidl Plus
+        // voucher discount, qty/unit/ppu from UNIT_LINE_RE).
+        // Deposit-return clusters (`Išimta` / `Užstato grąžinimas`)
+        // are dropped entirely per project policy.
+        if (detected === 'lidl') {
+            try {
+                const planV2 = findReceiptBandsLidl(allLines as any);
+                status.bandsV2Count = planV2.bands.length;
+                const summary = planV2.bands
+                    .map((b) => `${b.label}=${Math.round(b.yTop)}-${Math.round(b.yBottom)}`)
+                    .join(', ');
+                console.log(
+                    `[Lidl V2] ${row.sourcePdf}: ${planV2.bands.length} bands [${summary}]`,
+                );
+                try {
+                    const trace = traceReceiptBandsLidl(allLines as any);
+                    console.log(
+                        `[Lidl V2-TRACE BEGIN ${row.sourcePdf}]\n\`\`\`text\n${trace}\n\`\`\`\n[Lidl V2-TRACE END ${row.sourcePdf}]`,
+                    );
+                } catch (e) {
+                    console.warn(`[Lidl V2-TRACE] ${row.sourcePdf} trace failed:`, e);
+                }
+                try {
+                    const extract = traceLidlExtract(allLines as any);
+                    console.log(
+                        `[Lidl V2-EXTRACT BEGIN ${row.sourcePdf}]\n\`\`\`text\n${extract}\n\`\`\`\n[Lidl V2-EXTRACT END ${row.sourcePdf}]`,
+                    );
+                } catch (e) {
+                    console.warn(`[Lidl V2-EXTRACT] ${row.sourcePdf} trace failed:`, e);
+                }
+                // Build BandResult[] for the per-product list — 1:1
+                // with the product-kind subset of taggedBands and
+                // 1:1 with productInternals (same iteration order).
+                const productBands = planV2.bands.filter((b) => b.kind === 'product');
+                const bands: BandResult[] = productBands.map((band, i) => {
+                    const internal = planV2.productInternals[i];
+                    const { product, warnings } = extractLidlProduct(internal);
+                    return {
+                        band: { yTop: band.yTop, yBottom: band.yBottom },
+                        product,
+                        warnings,
+                    };
+                });
+                setReceiptSnapshot(makeSnapshotKey(row.chain, row.sourcePdf), {
+                    chain: row.chain,
+                    sourcePdf: row.sourcePdf,
+                    pages: pageMetas,
+                    bands,
+                    taggedBands: planV2.bands,
+                });
+            } catch (e) {
+                console.warn('[batch] Lidl V2 step 1+2 failed:', e);
+            }
+        }
         return status;
     };
 
@@ -682,13 +744,15 @@ export default function ReceiptBatchScreen() {
                     <TouchableOpacity
                         key={`${s.chain}-${s.sourcePdf}-${idx}`}
                         style={styles.row}
-                        // Maxima, Rimi, and Norfa rows write V2 snapshots;
-                        // chains without one would land on a blank detail
-                        // view, so tap stays disabled until they get one.
+                        // Maxima, Rimi, Norfa, and Lidl rows write V2
+                        // snapshots; chains without one would land on a
+                        // blank detail view, so tap stays disabled until
+                        // they get one.
                         disabled={
                             (s.chain !== 'maxima' &&
                                 s.chain !== 'rimi' &&
-                                s.chain !== 'norfa') ||
+                                s.chain !== 'norfa' &&
+                                s.chain !== 'lidl') ||
                             s.state !== 'done'
                         }
                         onPress={() => {
@@ -709,7 +773,10 @@ export default function ReceiptBatchScreen() {
                                 {s.message && ` · ${s.message}`}
                             </Text>
                         </View>
-                        {(s.chain === 'maxima' || s.chain === 'rimi' || s.chain === 'norfa') &&
+                        {(s.chain === 'maxima' ||
+                            s.chain === 'rimi' ||
+                            s.chain === 'norfa' ||
+                            s.chain === 'lidl') &&
                             s.state === 'done' && (
                                 <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
                             )}

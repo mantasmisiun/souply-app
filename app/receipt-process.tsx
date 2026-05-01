@@ -57,6 +57,14 @@ import {
     type MaximaProduct,
 } from "../../shared/parsers/maximaParser";
 import {
+    isLidlReceipt,
+    parseLidlHeaderOnly,
+    parseLidlReceipt,
+    type LidlFooter,
+    type LidlHeader,
+    type LidlProduct,
+} from "../../shared/parsers/lidlParser";
+import {
     isNorfaReceipt,
     parseNorfaHeaderOnly,
     parseNorfaReceipt,
@@ -1592,6 +1600,31 @@ export default function ProcessReceiptScreen() {
         const parsed = parseNorfaReceipt(allLines);
         await applyNorfaResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
+      } else if (isLidlReceipt(lineTexts)) {
+        // Lidl V2 (hard-walled bands + per-band extract) consumes
+        // RAW OCR lines — same reasoning as Rimi/Maxima/Norfa.
+        // Phone-photographed thermal print so OCR is rougher than
+        // the e-receipt chains, but the V2 splitter handles the
+        // head-fused / tail-fused / middle-fused-with-barcode
+        // patterns MLKit emits.
+        const earlyHeader = parseLidlHeaderOnly(allLines);
+        setHeader({
+          chainName: "LIDL",
+          chainId: 5,
+          storeCode: earlyHeader.storeCode,
+          storeAddress: earlyHeader.storeAddress,
+          storeId: null,
+          storeName: null,
+          storeAddressMatched: null,
+          matchConfidence: null,
+          matchLoading: true,
+          rawText: earlyHeader.rawText,
+          region: earlyHeader.region,
+        });
+
+        const parsed = parseLidlReceipt(allLines);
+        await applyLidlResult(parsed.header, parsed.products, parsed.footer);
+        setLoading(false);
       } else if (isIkiReceipt(lineTexts)) {
         const earlyHeader = parseIkiHeaderOnly(mergedLines);
         setHeader({
@@ -1995,6 +2028,122 @@ export default function ProcessReceiptScreen() {
       totalSavings: nFooter.totalSavings,
       rawText: nFooter.rawText,
       region: nFooter.region,
+    });
+  };
+
+  const applyLidlResult = async (
+    lHeader: LidlHeader,
+    lProducts: LidlProduct[],
+    lFooter: LidlFooter,
+  ) => {
+    const chainId = 5;
+
+    let storeId: number | null = null;
+    let storeName: string | null = null;
+    let storeAddressMatched: string | null = null;
+    let matchConfidence: number | null = null;
+
+    if (lHeader.storeAddress) {
+      try {
+        const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(lHeader.storeAddress)}`;
+        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
+        const data = await res.json();
+        if (data?.match) {
+          storeId = data.match.storeId;
+          storeName = data.match.storeName;
+          storeAddressMatched = data.match.address;
+          matchConfidence = data.match.confidence;
+        }
+      } catch (e) {
+        console.warn("Store match failed:", e);
+      }
+    }
+
+    if (storeId === null) {
+      await bailWithLog("store_unrecognized", {
+        detectedChainName: "LIDL",
+        extractedStoreAddress: lHeader.storeAddress || null,
+      });
+      return;
+    }
+
+    setHeader({
+      chainName: "LIDL",
+      chainId,
+      storeCode: lHeader.storeCode,
+      storeAddress: lHeader.storeAddress,
+      storeId,
+      storeName,
+      storeAddressMatched,
+      matchConfidence,
+      matchLoading: false,
+      rawText: lHeader.rawText,
+      region: lHeader.region,
+    });
+
+    const AUTO_APPLY_THRESHOLD = 0.85;
+
+    setMatchProgress({ done: 0, total: lProducts.length });
+
+    const matchPromises = lProducts.map(async (lp) => {
+      let altMatches: ProductMatchOption[] = [];
+
+      try {
+        const params = new URLSearchParams({
+          chainId: String(chainId),
+          name: lp.name,
+        });
+        const res = await fetchWithTimeout(
+          `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
+          {
+            timeoutMs: TIMEOUT_FAST_MS,
+            externalSignal: mountAbortRef.current?.signal,
+          },
+        );
+        const data = await res.json();
+        if (Array.isArray(data?.matches)) altMatches = data.matches;
+      } catch (e) {
+        console.warn(`Product match failed for "${lp.name}":`, e);
+      }
+
+      const top = altMatches[0] || null;
+      const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
+
+      setMatchProgress((prev) =>
+        prev ? { ...prev, done: prev.done + 1 } : prev,
+      );
+
+      return {
+        name: lp.name,
+        matchedName: top?.name ?? null,
+        storeProductId: autoApply ? top!.storeProductId : null,
+        storeProductImageUrl: top?.imageUrl ?? null,
+        matchConfidence: top?.confidence ?? null,
+        matchConfirmed: autoApply,
+        priceVerified: autoApply,
+        altMatches,
+        price: lp.price,
+        promoPrice: lp.promoPrice,
+        quantity: lp.quantity,
+        unit: lp.unit,
+        pricePerUnit: lp.pricePerUnit,
+        rawLines: lp.rawLines,
+        region: lp.region,
+      } as ProductLine;
+    });
+
+    const productLines = await Promise.all(matchPromises);
+    setMatchProgress(null);
+    setProducts(productLines);
+
+    setFooter({
+      total: lFooter.total,
+      date: lFooter.date,
+      time: lFooter.time,
+      receiptNo: lFooter.receiptNo,
+      totalSavings: lFooter.totalSavings,
+      rawText: lFooter.rawText,
+      region: lFooter.region,
     });
   };
 

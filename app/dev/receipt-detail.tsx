@@ -14,16 +14,17 @@
  *      pricePerUnit, promoPrice, reconcile state) and any
  *      warnings the extractor surfaced.
  *
- * Cropping: each band's image is the same page PNG masked by an
- * overflow:hidden container. Container sets aspectRatio so its
- * height matches the band's natural display ratio; once onLayout
- * resolves the actual rendered container width, the inner Image
- * is sized in pixels (`pageHeight × scale` tall) and positioned
- * with a negative pixel `top` so the band's yTop lands at
- * container y=0. Pixel-driven positioning sidesteps the RN quirk
- * where percentage `top` + aspectRatio on absolutely-positioned
- * children drifts by ~one OCR line height. No image
- * manipulation, no extra files.
+ * Cropping: each band region is pre-cropped via expo-image-
+ * manipulator into its own small PNG (1080 × bandHeight px).
+ * Earlier the crop was done at render time by overflow:hidden +
+ * a negative-`top` Image inside an aspectRatio-constrained
+ * container — but RN on Android downsamples large images during
+ * decode based on the visible rectangle, so feeding the whole
+ * page PNG to a band-shaped container threw away most of the
+ * source pixels and produced barely-readable crops on phone-
+ * photographed receipts (Lidl). The pre-crop file is small
+ * enough to dodge the downsample heuristic, so the band's
+ * source pixels render at native resolution.
  *
  * Multi-page receipts: each band knows which page it's on via
  * the page's yOffsetInParserSpace; the crop pulls from that
@@ -31,11 +32,11 @@
  */
 
 import { Ionicons } from '@expo/vector-icons';
+import * as ImageManipulator from 'expo-image-manipulator';
 import { Stack, useLocalSearchParams } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
     Image,
-    type LayoutChangeEvent,
     ScrollView,
     StyleSheet,
     Text,
@@ -54,12 +55,15 @@ import {
 import type { ProductBand } from '../../../shared/parsers/maximaParser';
 import type { RimiBandKind, RimiReceiptBand } from '../../../shared/parsers/rimiParser';
 import type { NorfaReceiptBand } from '../../../shared/parsers/norfaParser';
+import type { LidlReceiptBand } from '../../../shared/parsers/lidlParser';
 
-// Kinds emitted by any chain's V2 parser. Rimi has the full set
-// including `store-name`; Norfa drops `store-name` since the
-// header line text isn't load-bearing for store id. Both share
-// the same overlay colour map.
-type TaggedBandKind = RimiBandKind | NorfaReceiptBand['kind'];
+// Kinds emitted by any chain's V2 parser. Rimi/Norfa/Lidl share
+// structurally-identical band-kind unions; the overlay colour map
+// is shared too.
+type TaggedBandKind =
+    | RimiBandKind
+    | NorfaReceiptBand['kind']
+    | LidlReceiptBand['kind'];
 
 interface BandOnPage {
     bandIdx: number;
@@ -91,7 +95,7 @@ interface BandOnPage {
  * when present, flows through to the overlay so each rectangle
  * gets a colour and inline tag.
  */
-type BandLike = ProductBand | RimiReceiptBand | NorfaReceiptBand;
+type BandLike = ProductBand | RimiReceiptBand | NorfaReceiptBand | LidlReceiptBand;
 
 const bucketBandsByPage = (
     bands: BandLike[],
@@ -109,7 +113,7 @@ const bucketBandsByPage = (
             }
         }
         const offset = pages[pageIdx].yOffsetInParserSpace;
-        const tagged = band as Partial<RimiReceiptBand & NorfaReceiptBand>;
+        const tagged = band as Partial<RimiReceiptBand & NorfaReceiptBand & LidlReceiptBand>;
         const onPage: BandOnPage = {
             bandIdx: bi,
             yTopOnPage: band.yTop - offset,
@@ -382,33 +386,75 @@ const ProductRow = ({
     const product = bandResult.product;
     const bandHeight = Math.max(yBottomOnPage - yTopOnPage, 1);
     const cropAspect = pageWidth / bandHeight;
-    const [containerWidth, setContainerWidth] = useState<number | null>(null);
-    const onLayout = (e: LayoutChangeEvent) => {
-        const w = e.nativeEvent.layout.width;
-        if (w > 0 && w !== containerWidth) setContainerWidth(w);
-    };
-    const scale = containerWidth !== null ? containerWidth / pageWidth : 0;
+
+    // Pre-crop the band region to a separate image file via
+    // expo-image-manipulator. Two reasons this is sharper than
+    // the previous overflow:hidden + offset trick:
+    //   1. RN on Android downsamples large images during decode
+    //      based on the display rectangle. The previous path fed
+    //      the WHOLE page (1080 × ~5000 px) to a band-shaped
+    //      container (400 × ~10 px on phone), so the decoder
+    //      threw away most of the source pixels before render.
+    //      A small pre-cropped file (1080 × bandHeight) doesn't
+    //      trip the downsample heuristic — RN decodes it fully.
+    //   2. The negative-`top` positioning interacted oddly with
+    //      RN's pixel rounding on certain DPRs, producing a
+    //      ~1 line drift on long receipts. Pre-cropping makes
+    //      the offset structurally zero.
+    const [croppedUri, setCroppedUri] = useState<string | null>(null);
+    const [cropError, setCropError] = useState<string | null>(null);
+    useEffect(() => {
+        let cancelled = false;
+        const yTop = Math.max(0, Math.floor(yTopOnPage));
+        const heightPx = Math.min(
+            Math.ceil(yBottomOnPage - yTopOnPage),
+            pageHeight - yTop,
+        );
+        if (heightPx <= 0) return;
+        ImageManipulator.manipulateAsync(
+            uri,
+            [
+                {
+                    crop: {
+                        originX: 0,
+                        originY: yTop,
+                        width: pageWidth,
+                        height: heightPx,
+                    },
+                },
+            ],
+            { compress: 1, format: ImageManipulator.SaveFormat.PNG },
+        )
+            .then((res) => {
+                if (!cancelled) setCroppedUri(res.uri);
+            })
+            .catch((e) => {
+                if (!cancelled) setCropError(String(e?.message ?? e));
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [uri, yTopOnPage, yBottomOnPage, pageWidth, pageHeight]);
 
     return (
         <View style={styles.productRow}>
             <View
-                onLayout={onLayout}
                 style={[
                     styles.cropContainer,
                     { aspectRatio: cropAspect, borderColor: statusColor(status, colors) },
                 ]}
             >
-                {containerWidth !== null && (
+                {croppedUri && (
                     <Image
-                        source={{ uri }}
-                        style={{
-                            position: 'absolute',
-                            left: 0,
-                            width: containerWidth,
-                            height: pageHeight * scale,
-                            top: -yTopOnPage * scale,
-                        }}
+                        source={{ uri: croppedUri }}
+                        style={{ width: '100%', height: '100%' }}
+                        resizeMode="stretch"
                     />
+                )}
+                {cropError && (
+                    <Text style={styles.cropErrorText} numberOfLines={1}>
+                        crop failed: {cropError}
+                    </Text>
                 )}
             </View>
             <View style={styles.productMeta}>
@@ -659,6 +705,15 @@ const makeStyles = (c: AppTheme) =>
             overflow: 'hidden',
             backgroundColor: c.pageBackground,
             borderTopWidth: 2,
+        },
+        cropErrorText: {
+            position: 'absolute',
+            top: 4,
+            left: 4,
+            fontSize: 10,
+            color: c.error,
+            backgroundColor: 'rgba(255, 255, 255, 0.7)',
+            paddingHorizontal: 4,
         },
         productMeta: { padding: 10 },
         productMetaHeader: {

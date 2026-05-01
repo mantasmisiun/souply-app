@@ -11,22 +11,26 @@
 import type { MaximaProduct, ProductBand } from '../../shared/parsers/maximaParser';
 import type { RimiProduct, RimiReceiptBand } from '../../shared/parsers/rimiParser';
 import type { NorfaProduct, NorfaReceiptBand } from '../../shared/parsers/norfaParser';
+import type { LidlProduct, LidlReceiptBand } from '../../shared/parsers/lidlParser';
 
 /**
  * Any chain's product shape — they're structurally identical (same
  * field names + types) so the receipt-detail UI can render any of
  * them without branching.
  */
-export type ParsedProduct = MaximaProduct | RimiProduct | NorfaProduct;
+export type ParsedProduct = MaximaProduct | RimiProduct | NorfaProduct | LidlProduct;
 
 /**
- * Chain-neutral typed-band shape used by the dev overlay. Rimi
- * and Norfa each export a structurally-identical band type; the
- * snapshot stores them as a union so future chains plug in by
+ * Chain-neutral typed-band shape used by the dev overlay. Rimi,
+ * Norfa, and Lidl each export a structurally-identical band type;
+ * the snapshot stores them as a union so future chains plug in by
  * adding their own band type to this union without changing the
  * detail screen.
  */
-export type TaggedReceiptBand = RimiReceiptBand | NorfaReceiptBand;
+export type TaggedReceiptBand =
+    | RimiReceiptBand
+    | NorfaReceiptBand
+    | LidlReceiptBand;
 
 export interface PageMeta {
     /** Filename of the PNG inside /receipts-batch/<chain>/. */
