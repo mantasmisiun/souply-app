@@ -12,7 +12,7 @@ interface Category {
 }
 
 const CATEGORY_ICONS: Record<string, string> = {
-    'Daržovės ir vaisiai': '🥦',
+    'Daržovės ir vaisiai': '🫜',
     'Pieno gaminiai, kiaušiniai ir majonezas': '🥛',
     'Duonos gaminiai ir konditerija': '🍞',
     'Mėsa, žuvis ir kulinarija': '🥩',

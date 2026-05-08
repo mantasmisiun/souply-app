@@ -279,7 +279,7 @@ export default function ReceiptCategoryScreen() {
         >
             <View style={styles.productImageContainer}>
                 <View style={styles.createProductPlaceholder}>
-                    <Text style={styles.createBroccoli}>🥦</Text>
+                    <Text style={styles.createBroccoli}>🫜</Text>
                     <View style={styles.createPlusBadge}>
                         <Ionicons name="add" size={14} color={colors.onPrimary} />
                     </View>

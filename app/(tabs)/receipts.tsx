@@ -1,7 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
-import * as ImagePicker from "expo-image-picker";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -38,6 +37,8 @@ interface Receipt {
   chainLogoUrl: string | null;
   storeName: string | null;
   storeAddress: string | null;
+  mandatorySwipesRequired: number;
+  mandatorySwipesCompleted: number;
   /**
    * Persisted parsed receipt blob. mysql2 returns this as either a
    * pre-parsed object (JSON column) or a raw string (TEXT column),
@@ -94,32 +95,12 @@ export default function ReceiptsScreen() {
     }
   };
 
-  const onPickGallery = async () => {
-    setUploadMenuOpen(false);
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      quality: 0.8,
-    });
-    if (!result.canceled && result.assets[0]) {
-      goToProcess(result.assets[0].uri);
-    }
-  };
-
-  const onPickPdf = async () => {
-    const picked = await DocumentPicker.getDocumentAsync({
-      type: "application/pdf",
-      copyToCacheDirectory: true,
-    });
-    if (picked.canceled || !picked.assets?.[0]) return;
-
-    const asset = picked.assets[0];
-    setUploadMenuOpen(false);
+  const handlePdf = async (uri: string) => {
     setPdfConverting(true);
     try {
-      const pdfBase64 = await FileSystem.readAsStringAsync(asset.uri, {
+      const pdfBase64 = await FileSystem.readAsStringAsync(uri, {
         encoding: FileSystem.EncodingType.Base64,
       });
-
       const res = await fetchWithTimeout(
         `${API_BASE_URL}/api/receipts/pdf-to-image`,
         {
@@ -137,20 +118,15 @@ export default function ReceiptsScreen() {
       if (!Array.isArray(images) || images.length === 0) {
         throw new Error("Serverio atsakyme trūksta nuotraukų");
       }
-
       const timestamp = Date.now();
       const outPaths: string[] = [];
       for (let i = 0; i < images.length; i++) {
-        // .png because the API now returns pdftoppm-rendered PNGs.
-        // MLKit accepts both, the extension just keeps the cache
-        // accurate for any debugging/inspection.
         const path = `${FileSystem.cacheDirectory}receipt-pdf-${timestamp}-p${i}.png`;
         await FileSystem.writeAsStringAsync(path, images[i], {
           encoding: FileSystem.EncodingType.Base64,
         });
         outPaths.push(path);
       }
-
       const params = new URLSearchParams({ uris: outPaths.join(",") });
       if (previewOnly) params.set("preview", "true");
       router.push(`/receipt-process?${params.toString()}` as any);
@@ -161,6 +137,25 @@ export default function ReceiptsScreen() {
       );
     } finally {
       setPdfConverting(false);
+    }
+  };
+
+  // Unified file picker: accepts both images and PDFs, detects type, routes accordingly.
+  // Users don't need to know whether their receipt is a photo or a PDF file.
+  const onPickFile = async () => {
+    setUploadMenuOpen(false);
+    const picked = await DocumentPicker.getDocumentAsync({
+      type: ["image/*", "application/pdf"],
+      copyToCacheDirectory: true,
+    });
+    if (picked.canceled || !picked.assets?.[0]) return;
+    const asset = picked.assets[0];
+    const mimeType = asset.mimeType ?? '';
+    const isPdf = mimeType === 'application/pdf' || (asset.name?.toLowerCase().endsWith('.pdf') ?? false);
+    if (isPdf) {
+      await handlePdf(asset.uri);
+    } else {
+      goToProcess(asset.uri);
     }
   };
 
@@ -258,8 +253,14 @@ export default function ReceiptsScreen() {
     };
   }, []);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
+  const hasPendingSwipes = (item: Receipt) =>
+    item.processingStatus === "completed" &&
+    (item.mandatorySwipesRequired ?? 0) > 0 &&
+    (item.mandatorySwipesCompleted ?? 0) < (item.mandatorySwipesRequired ?? 0);
+
+  const getStatusColor = (item: Receipt) => {
+    if (hasPendingSwipes(item)) return colors.warning;
+    switch (item.processingStatus) {
       case "completed":
         return colors.success;
       case "processing":
@@ -271,8 +272,9 @@ export default function ReceiptsScreen() {
     }
   };
 
-  const getStatusText = (status: string) => {
-    switch (status) {
+  const getStatusText = (item: Receipt) => {
+    if (hasPendingSwipes(item)) return "Padėk atpažinti";
+    switch (item.processingStatus) {
       case "completed":
         return "Apdorotas";
       case "processing":
@@ -291,53 +293,6 @@ export default function ReceiptsScreen() {
       </View>
     );
   }
-  const handleUpload = async () => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
-      base64: true,
-      quality: 1,
-    });
-
-    if (result.canceled || !result.assets[0]) return;
-
-    const asset = result.assets[0];
-    const filename = asset.fileName || "receipt.jpg";
-    const mimeType = asset.mimeType || "image/jpeg";
-    const imageBase64 = asset.base64;
-    const userId = await getUserId();
-
-    const placeholder: Receipt = {
-      id: -1,
-      filePath: "",
-      fileType: "",
-      processingStatus: "uploading",
-      receiptDate: null,
-      receiptNo: null,
-      chainName: null,
-      chainLogoUrl: null,
-      storeName: null,
-      storeAddress: null,
-    };
-    setReceipts((prev) => [placeholder, ...prev]);
-
-    try {
-      const response = await fetch(`${API_BASE_URL}/api/receipts/upload`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64, filename, mimeType, userId }),
-      });
-      const data = await response.json();
-      if (data.receiptId) {
-        setLastUploadedId(data.receiptId);
-        await fetchReceipts(true);
-      }
-    } catch (error) {
-      console.error("Upload failed:", error);
-      Alert.alert("Klaida", "Nepavyko įkelti kvito");
-      setReceipts((prev) => prev.filter((r) => r.id !== -1));
-    }
-  };
-
   return (
     <View style={styles.container}>
       <FlatList
@@ -389,9 +344,19 @@ export default function ReceiptsScreen() {
             : "—";
           return (
             <TouchableOpacity
-              style={styles.card}
+              style={[styles.card, hasPendingSwipes(item) && styles.cardPending]}
               onPress={() => {
-                router.push(`/receipt-process?receiptId=${item.id}`);
+                if (hasPendingSwipes(item)) {
+                  const remaining =
+                    (item.mandatorySwipesRequired ?? 0) -
+                    (item.mandatorySwipesCompleted ?? 0);
+                  router.push({
+                    pathname: `/receipt/swipe/${item.id}`,
+                    params: { mandatory: "1", mandatoryCount: String(remaining) },
+                  } as any);
+                } else {
+                  router.push(`/receipt-process?receiptId=${item.id}`);
+                }
               }}
             >
               <View style={styles.cardLeft}>
@@ -420,11 +385,11 @@ export default function ReceiptsScreen() {
                 <View
                   style={[
                     styles.statusBadge,
-                    { backgroundColor: getStatusColor(item.processingStatus) },
+                    { backgroundColor: getStatusColor(item) },
                   ]}
                 >
                   <Text style={styles.statusText}>
-                    {getStatusText(item.processingStatus)}
+                    {getStatusText(item)}
                   </Text>
                 </View>
               </View>
@@ -476,14 +441,9 @@ export default function ReceiptsScreen() {
               <Text style={styles.menuRowText}>Fotografuoti</Text>
             </TouchableOpacity>
 
-            <TouchableOpacity style={styles.menuRow} onPress={onPickGallery}>
-              <Ionicons name="images-outline" size={22} color={colors.primary} />
-              <Text style={styles.menuRowText}>Iš galerijos</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.menuRow} onPress={onPickPdf}>
-              <Ionicons name="document-text-outline" size={22} color={colors.primary} />
-              <Text style={styles.menuRowText}>Iš PDF</Text>
+            <TouchableOpacity style={styles.menuRow} onPress={onPickFile}>
+              <Ionicons name="cloud-upload-outline" size={22} color={colors.primary} />
+              <Text style={styles.menuRowText}>Įkelti</Text>
             </TouchableOpacity>
 
             {/* Preview-only mode is a parser-iteration tool, not a user
@@ -540,6 +500,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     shadowRadius: 2,
     borderLeftWidth: 3,
     borderLeftColor: c.softAccent,
+  },
+  cardPending: {
+    backgroundColor: c.primaryMuted,
+    borderLeftColor: c.primary,
+    shadowOpacity: 0.12,
   },
   cardLeft: { marginRight: 12, width: 36, alignItems: "center", justifyContent: "center" },
   cardLogo: { width: 32, height: 32 },

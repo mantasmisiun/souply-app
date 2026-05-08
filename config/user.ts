@@ -5,6 +5,10 @@ import { API_BASE_URL } from './api';
 const USER_ID_KEY = 'userId';
 const USER_SYNCED_KEY = 'userSyncedToBackend';
 
+// In debug builds (npx expo run:android) always use the fixed dev user so
+// test data is easy to identify and wipe. __DEV__ is false in production.
+const DEV_USER_ID = '00000000-0000-0000-0000-000000000000';
+
 /**
  * Every install gets a fresh UUID on first launch. The device is the source
  * of truth for its identity — we generate locally, persist to AsyncStorage,
@@ -27,6 +31,10 @@ const USER_SYNCED_KEY = 'userSyncedToBackend';
 let initPromise: Promise<string> | null = null;
 
 async function initUserId(): Promise<string> {
+    if (__DEV__) {
+        syncToBackendIfNeeded(DEV_USER_ID);
+        return DEV_USER_ID;
+    }
     let userId = await AsyncStorage.getItem(USER_ID_KEY);
     if (!userId) {
         userId = Crypto.randomUUID();

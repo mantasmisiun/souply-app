@@ -9,6 +9,7 @@ const asStringOrNull = (v: unknown): string | null =>
   typeof v === 'string' && v.trim().length > 0 ? v : null;
 
 const asNumberOrNull = (v: unknown): number | null => {
+  if (v === null || v === undefined) return null;
   const n = typeof v === 'number' ? v : Number(v);
   return Number.isFinite(n) ? n : null;
 };

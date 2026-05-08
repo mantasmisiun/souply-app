@@ -39,6 +39,10 @@ export default function CategoryScreen() {
     const { categoryId, name } = useLocalSearchParams<{ categoryId: string; name: string }>();
     const [l3Categories, setL3Categories] = useState<Category[]>([]);
     const [products, setProducts] = useState<Product[]>([]);
+    // hideId → keepId: products the user personally merged via 'same' swipe verdicts.
+    // Only populated in base mode. Merged products are filtered from the list, and
+    // their basket quantities are added to the canonical product's count.
+    const [userMergeMap, setUserMergeMap] = useState<Record<number, number>>({});
     const [selectedL3, setSelectedL3] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
     const [loadingProducts, setLoadingProducts] = useState(false);
@@ -81,15 +85,27 @@ export default function CategoryScreen() {
         const fetchData = async () => {
             setLoading(true);
             try {
-                const subRes = await fetch(`${API_BASE_URL}/api/categories/${categoryId}/subcategories`);
+                const userId = await getUserId();
+                const [subRes, prodRes] = await Promise.all([
+                    fetch(`${API_BASE_URL}/api/categories/${categoryId}/subcategories`),
+                    fetch(`${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts?mode=${mode}`),
+                ]);
                 const subData = await subRes.json();
                 setL3Categories(Array.isArray(subData) ? subData : []);
 
-                const prodRes = await fetch(
-                    `${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts?mode=${mode}`
-                );
                 const prodData = await prodRes.json();
-                setProducts(Array.isArray(prodData) ? prodData : []);
+                const prods: Product[] = Array.isArray(prodData) ? prodData : [];
+                setProducts(prods);
+
+                if (mode === 'base' && prods.length > 0) {
+                    const ids = prods.map(p => p.id).join(',');
+                    const mergeRes = await fetch(
+                        `${API_BASE_URL}/api/users/${userId}/product-merge-map?productIds=${ids}`
+                    );
+                    setUserMergeMap(mergeRes.ok ? await mergeRes.json() : {});
+                } else {
+                    setUserMergeMap({});
+                }
             } finally {
                 setLoading(false);
             }
@@ -359,7 +375,19 @@ export default function CategoryScreen() {
                 : `${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts?mode=${mode}`;
             const res = await fetch(url);
             const data = await res.json();
-            setProducts(Array.isArray(data) ? data : []);
+            const prods: Product[] = Array.isArray(data) ? data : [];
+            setProducts(prods);
+
+            if (mode === 'base' && prods.length > 0) {
+                const userId = await getUserId();
+                const ids = prods.map(p => p.id).join(',');
+                const mergeRes = await fetch(
+                    `${API_BASE_URL}/api/users/${userId}/product-merge-map?productIds=${ids}`
+                );
+                setUserMergeMap(mergeRes.ok ? await mergeRes.json() : {});
+            } else {
+                setUserMergeMap({});
+            }
         } finally {
             setLoadingProducts(false);
         }
@@ -376,6 +404,22 @@ export default function CategoryScreen() {
         // has drilled into an L3 and THEN changes mode.
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [mode]);
+
+    // Build reverse map: keepId → [hideIds] so we can sum quantities correctly.
+    const mergedIntoMe = useMemo(() => {
+        const m: Record<number, number[]> = {};
+        for (const [hideIdStr, keepId] of Object.entries(userMergeMap)) {
+            const hideId = Number(hideIdStr);
+            if (!m[keepId]) m[keepId] = [];
+            m[keepId].push(hideId);
+        }
+        return m;
+    }, [userMergeMap]);
+
+    const visibleProducts = useMemo(
+        () => products.filter(p => !(p.id in userMergeMap)),
+        [products, userMergeMap]
+    );
 
     if (loading) return <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />;
 
@@ -441,7 +485,7 @@ export default function CategoryScreen() {
                         <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />
                     ) : (
                         <FlatList
-                            data={products}
+                            data={visibleProducts}
                             keyExtractor={item => item.id.toString()}
                             contentContainerStyle={styles.list}
                             numColumns={2}
@@ -450,7 +494,11 @@ export default function CategoryScreen() {
                                 <Text style={styles.emptyText}>Ši kategorija neturi produktų</Text>
                             }
                             renderItem={({ item }) => {
-                                const quantity = basketQuantities[item.id] ?? 0;
+                                // Sum quantities of merged-in products so the counter
+                                // reflects all items the user has added under this cluster.
+                                const mergedQty = (mergedIntoMe[item.id] ?? [])
+                                    .reduce((sum, hid) => sum + (basketQuantities[hid] ?? 0), 0);
+                                const quantity = (basketQuantities[item.id] ?? 0) + mergedQty;
                                 return (
                                     <View style={styles.productCard}>
                                         <TouchableOpacity 

@@ -61,7 +61,7 @@ function normalizeUris(input: UriInput): string[] {
 
 /**
  * Product-level image with fallback chain: tries each URL in `uris` in order
- * and swaps in a 🥦 placeholder once all have failed or there are no URIs.
+ * and swaps in a 🫜 placeholder once all have failed or there are no URIs.
  * For single-URL views, pass `uris={[single]}`.
  */
 export function ProductImage({
@@ -70,7 +70,7 @@ export function ProductImage({
   placeholderStyle,
   emojiStyle,
   resizeMode = "contain",
-  emoji = "🥦",
+  emoji = "🫜",
 }: Props) {
   const list = useMemo(() => normalizeUris(uris), [uris]);
   const [idx, setIdx] = useState(0);

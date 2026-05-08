@@ -62,8 +62,10 @@ function formatAmount(amount: string | number | null, unit: string | null) {
 }
 
 export default function SwipeScreen() {
-  const { id } = useLocalSearchParams<{ id: string }>();
+  const { id, mandatory, mandatoryCount } = useLocalSearchParams<{ id: string; mandatory?: string; mandatoryCount?: string }>();
   const receiptId = Number(id);
+  const isMandatory = mandatory === "1";
+  const mandatorySwipesRequired = isMandatory ? (Number(mandatoryCount) || 3) : 0;
   const router = useRouter();
   const colors = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -81,6 +83,7 @@ export default function SwipeScreen() {
   const [exhausted, setExhausted] = useState(false);
   const [undoVisible, setUndoVisible] = useState(false);
   const undoTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const mandatorySwipesDoneRef = useRef(0);
   const lastSnapshotRef = useRef<{
     itemIdx: number;
     rankIdx: number;
@@ -99,12 +102,29 @@ export default function SwipeScreen() {
     })();
   }, []);
 
+  const FETCH_TIMEOUT_MS = 8_000;
+
+  const fetchWithTimeout = (url: string, options?: RequestInit): Promise<Response> => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    return fetch(url, { ...options, signal: controller.signal }).finally(() =>
+      clearTimeout(timer)
+    );
+  };
+
+  const friendlyError = (e: any): string => {
+    if (e?.name === 'AbortError' || e?.name === 'FetchTimeoutError') {
+      return 'Ryšys nutrauktas. Bandykite dar kartą.';
+    }
+    return e?.message || 'Nepavyko gauti eilės';
+  };
+
   // Fetch the receipt's swipe queue (filtered server-side by already-voted
   // pairs + self-pair verified prices). Returns the filtered item list.
   const loadQueue = async (): Promise<QueueItem[]> => {
     const userId = userIdRef.current ?? (await getUserId());
     userIdRef.current = userId;
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `${API_BASE_URL}/api/receipts/${receiptId}/swipe-queue?userId=${encodeURIComponent(userId)}`
     );
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -116,7 +136,7 @@ export default function SwipeScreen() {
 
   useEffect(() => {
     if (!Number.isFinite(receiptId)) {
-      setError("Neteisingas kvito ID");
+      router.back();
       setLoading(false);
       return;
     }
@@ -129,8 +149,17 @@ export default function SwipeScreen() {
         setRankIdx(0);
         setExhausted(validItems.length === 0);
         cardShownAtRef.current = Date.now();
-      } catch (e: any) {
-        setError(e?.message || "Nepavyko gauti eilės");
+      } catch {
+        // Drop straight to receipt analysis results on initial load failure —
+        // don't leave the user stranded on an error screen.
+        if (isMandatory) {
+          router.replace({
+            pathname: "/receipt-process",
+            params: { receiptId: String(receiptId), swipeDone: "1" },
+          } as any);
+        } else {
+          router.back();
+        }
       } finally {
         setLoading(false);
       }
@@ -176,7 +205,7 @@ export default function SwipeScreen() {
     const userId = userIdRef.current ?? (await getUserId());
     userIdRef.current = userId;
     try {
-      await fetch(`${API_BASE_URL}/api/swipe-votes`, {
+      await fetchWithTimeout(`${API_BASE_URL}/api/swipe-votes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -186,6 +215,7 @@ export default function SwipeScreen() {
           candidateStoreProductId: cand.storeProductId,
           vote,
           dwellMs,
+          isMandatory: isMandatory ? 1 : 0,
         }),
       });
     } catch (e) {
@@ -228,6 +258,15 @@ export default function SwipeScreen() {
     translateX.value = 0;
     translateY.value = 0;
     cardShownAtRef.current = Date.now();
+
+    // Mandatory cap: end session after mandatorySwipesRequired votes regardless
+    // of how many more candidates remain in the queue.
+    if (isMandatory && mandatorySwipesRequired > 0) {
+      mandatorySwipesDoneRef.current += 1;
+      if (mandatorySwipesDoneRef.current >= mandatorySwipesRequired) {
+        setExhausted(true);
+      }
+    }
   };
 
   /**
@@ -269,7 +308,7 @@ export default function SwipeScreen() {
     const userId = userIdRef.current ?? (await getUserId());
     userIdRef.current = userId;
     try {
-      await fetch(`${API_BASE_URL}/api/swipe-votes/undo`, {
+      await fetchWithTimeout(`${API_BASE_URL}/api/swipe-votes/undo`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -360,6 +399,17 @@ export default function SwipeScreen() {
     if (undoTimerRef.current) clearTimeout(undoTimerRef.current);
   }, []);
 
+  // Auto-navigate to receipt results when mandatory swipes are done.
+  // No "Žiūrėti rezultatus" button — just drop straight into the screen.
+  useEffect(() => {
+    if (done && isMandatory) {
+      router.replace({
+        pathname: "/receipt-process",
+        params: { receiptId: String(receiptId), swipeDone: "1" },
+      } as any);
+    }
+  }, [done, isMandatory]);
+
   return (
     <GestureHandlerRootView style={{ flex: 1, backgroundColor: colors.pageBackground }}>
       <Stack.Screen options={{ title: "Padėk atpažinti" }} />
@@ -372,14 +422,47 @@ export default function SwipeScreen() {
 
       {!loading && !refetching && error && (
         <View style={styles.centered}>
+          <Ionicons name="cloud-offline-outline" size={48} color={colors.textMuted} style={{ marginBottom: 12 }} />
           <Text style={styles.errorText}>{error}</Text>
-          <TouchableOpacity style={styles.closeBtn} onPress={() => router.back()}>
-            <Text style={styles.closeBtnText}>Grįžti</Text>
+          <TouchableOpacity
+            style={[styles.closeBtn, { marginTop: 16 }]}
+            onPress={async () => {
+              setError(null);
+              setLoading(true);
+              try {
+                const validItems = await loadQueue();
+                setItems(validItems);
+                setItemIdx(0);
+                setRankIdx(0);
+                setExhausted(validItems.length === 0);
+              } catch (e: any) {
+                setError(friendlyError(e));
+              } finally {
+                setLoading(false);
+              }
+            }}
+          >
+            <Text style={styles.closeBtnText}>Bandyti dar kartą</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.closeBtn, styles.secondaryBtn, { marginTop: 8 }]}
+            onPress={() =>
+              isMandatory
+                ? router.replace({
+                    pathname: "/receipt-process",
+                    params: { receiptId: String(receiptId), swipeDone: "1" },
+                  } as any)
+                : router.back()
+            }
+          >
+            <Text style={styles.secondaryBtnText}>
+              {isMandatory ? "Praleisti ir žiūrėti kvitą" : "Grįžti"}
+            </Text>
           </TouchableOpacity>
         </View>
       )}
 
-      {!loading && !refetching && !error && done && (
+      {!loading && !refetching && !error && done && !isMandatory && (
         <View style={styles.centered}>
           <Ionicons name="checkmark-circle" size={72} color={colors.primary} />
           <Text style={styles.doneTitle}>Ačiū!</Text>
@@ -482,7 +565,9 @@ export default function SwipeScreen() {
           </View>
 
           <Text style={styles.progress}>
-            {Math.min(itemIdx + 1, items.length)} / {items.length}
+            {isMandatory && mandatorySwipesRequired > 0
+              ? `${mandatorySwipesDoneRef.current + 1} / ${mandatorySwipesRequired}`
+              : `${Math.min(itemIdx + 1, items.length)} / ${items.length}`}
           </Text>
         </View>
       )}

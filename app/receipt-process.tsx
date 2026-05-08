@@ -347,14 +347,18 @@ function buildParsedData(
 }
 
 export default function ProcessReceiptScreen() {
-  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam } = useLocalSearchParams<{
+  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, swipeDone: swipeDoneParam } = useLocalSearchParams<{
     uri?: string;
     uris?: string;
     receiptId?: string;
     preview?: string;
+    swipeDone?: string;
   }>();
   const existingReceiptId = receiptIdParam ? Number(receiptIdParam) : null;
   const isExistingMode = Number.isFinite(existingReceiptId);
+  // Set to true when navigating here FROM the swipe screen — prevents the
+  // mandatory-swipe gate from immediately redirecting back to swipe.
+  const swipeDone = swipeDoneParam === '1';
 
   // `uris` (comma-separated) is used for multi-page PDF receipts where each
   // page is OCR'd separately; `uri` stays for the single-image cases.
@@ -605,6 +609,24 @@ export default function ProcessReceiptScreen() {
       });
       const receipt = await res.json();
 
+      // If the receipt still has pending mandatory swipes, redirect to the
+      // swipe screen unless we just came from it (swipeDone=1). The swipe
+      // screen sets swipeDone when it navigates here so we don't loop.
+      const pendingSwipes =
+        !swipeDone &&
+        (receipt.mandatorySwipesRequired ?? 0) > 0 &&
+        (receipt.mandatorySwipesCompleted ?? 0) < (receipt.mandatorySwipesRequired ?? 0);
+      if (pendingSwipes) {
+        const remaining =
+          (receipt.mandatorySwipesRequired ?? 0) -
+          (receipt.mandatorySwipesCompleted ?? 0);
+        router.replace({
+          pathname: `/receipt/swipe/${id}`,
+          params: { mandatory: "1", mandatoryCount: String(remaining) },
+        } as any);
+        return;
+      }
+
       const parsed =
         typeof receipt.parsedData === "string"
           ? JSON.parse(receipt.parsedData)
@@ -717,57 +739,68 @@ export default function ProcessReceiptScreen() {
           "Paveikslėlis nebuvo įkeltas. Pakartotinai apdoroti kvitą reikėtų iš Analizės skirtuko.",
         );
       }
-      // Resolve image URL for region previews in existing-receipt mode
-      try {
-        const imageRes = await fetch(
-          `${API_BASE_URL}/api/receipts/${id}/image`,
-        );
-        const imageData = await imageRes.json();
+      // Image URL and comparison are independent of the receipt data already
+      // loaded above — fire both in the background so the loading spinner
+      // drops as soon as the receipt content is ready (~300 ms instead of
+      // waiting for the full comparison round-trip).
+      void (async () => {
+        try {
+          const imageRes = await fetch(
+            `${API_BASE_URL}/api/receipts/${id}/image`,
+          );
+          const imageData = await imageRes.json();
 
-        if (imageData?.url) {
-          setImageUri(imageData.url);
+          if (imageData?.url) {
+            setImageUri(imageData.url);
 
-          const parsedWidth = Number(parsed?.image?.width);
-          const parsedHeight = Number(parsed?.image?.height);
+            const parsedWidth = Number(parsed?.image?.width);
+            const parsedHeight = Number(parsed?.image?.height);
 
-          const applyDims = (w: number, h: number) => {
-            setImageDims({ width: w, height: h });
-            // Existing receipts are saved as a single image; saved region
-            // coords are in that image's pixel space, so frameScale=1 and
-            // the full image width is used as the horizontal viewport.
-            setPageMetas([
-              {
-                uri: imageData.url,
-                pixelWidth: w,
-                pixelHeight: h,
-                frameScale: 1,
-                yOffsetScaled: 0,
-                pageMaxYScaled: h,
-                receiptXLeftScaled: 0,
-                receiptXRightScaled: w,
-              },
-            ]);
-          };
+            const applyDims = (w: number, h: number) => {
+              setImageDims({ width: w, height: h });
+              setPageMetas([
+                {
+                  uri: imageData.url,
+                  pixelWidth: w,
+                  pixelHeight: h,
+                  frameScale: 1,
+                  yOffsetScaled: 0,
+                  pageMaxYScaled: h,
+                  receiptXLeftScaled: 0,
+                  receiptXRightScaled: w,
+                },
+              ]);
+            };
 
-          if (
-            Number.isFinite(parsedWidth) &&
-            Number.isFinite(parsedHeight) &&
-            parsedWidth > 0 &&
-            parsedHeight > 0
-          ) {
-            applyDims(parsedWidth, parsedHeight);
-          } else {
-            Image.getSize(
-              imageData.url,
-              (width, height) => applyDims(width, height),
-              () => {},
-            );
+            if (
+              Number.isFinite(parsedWidth) &&
+              Number.isFinite(parsedHeight) &&
+              parsedWidth > 0 &&
+              parsedHeight > 0
+            ) {
+              applyDims(parsedWidth, parsedHeight);
+            } else {
+              Image.getSize(
+                imageData.url,
+                (width, height) => applyDims(width, height),
+                () => {},
+              );
+            }
           }
+        } catch (e) {
+          console.warn("Failed to load receipt image for region preview:", e);
         }
-      } catch (e) {
-        console.warn("Failed to load receipt image for region preview:", e);
-      }
-      await fetchComparison(id);
+      })();
+
+      // Mark the session complete before firing the background comparison so
+      // the "Kvitas apdorojamas" overlay (gated on !firstCompleteReached) never
+      // triggers in existing-receipt mode. The overlay is only meaningful for
+      // fresh OCR flows where post → upload → comparison are all in-flight.
+      setFirstCompleteReached(true);
+      void fetchComparison(id);
+    } catch (e) {
+      console.warn("[loadExistingReceipt] failed:", e);
+      router.replace("/(tabs)/receipts");
     } finally {
       setLoading(false);
       setTimeout(() => {
@@ -781,6 +814,7 @@ export default function ProcessReceiptScreen() {
   const receiptIdRef = useRef<number | null>(null);
   const userIdRef = useRef<string | null>(null);
   const hasPostedRef = useRef(false); // guard against double POST from re-renders
+  const hasProcessedRef = useRef(false); // guard against double OCR in StrictMode dev builds
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -817,6 +851,7 @@ export default function ProcessReceiptScreen() {
     setFirstCompleteReached(false);
     setComparison(null);
     hasPostedRef.current = false;
+    hasProcessedRef.current = false;
     comparisonKeyRef.current = "";
     shouldRefreshComparisonRef.current = false;
   }, [uri, isExistingMode, setComparison]);
@@ -829,6 +864,8 @@ export default function ProcessReceiptScreen() {
     }
 
     if (imageUriList.length > 0) {
+      if (hasProcessedRef.current) return; // StrictMode mounts effects twice in dev
+      hasProcessedRef.current = true;
       setImageUri(imageUriList[0]); // first page used for region previews
       // Persist a draft to AsyncStorage so that if the OS kills the
       // app before the Receipt POST completes, the user can resume
@@ -846,33 +883,44 @@ export default function ProcessReceiptScreen() {
   // focus (initial mount + returning from /receipt/swipe/[id]). Backend's
   // filter already excludes votes this user has cast, so the count we get
   // back IS exactly "cards remaining for this user".
+  // Delayed 2 s so the comparison fetch (which drives the main loading state)
+  // gets a head start and doesn't compete with this advisory query for DB
+  // pool connections.
   useFocusEffect(
     useMemo(
       () => () => {
         if (!receiptId) return;
         let cancelled = false;
-        (async () => {
-          try {
-            const userId = await getUserId();
-            const res = await fetch(
-              `${API_BASE_URL}/api/receipts/${receiptId}/swipe-queue?userId=${encodeURIComponent(userId)}`
-            );
-            if (!res.ok) return;
-            const data = await res.json();
-            const queueSize = Array.isArray(data?.items)
-              ? data.items.reduce(
-                  (sum: number, it: any) =>
-                    sum + (Array.isArray(it.candidates) ? it.candidates.length : 0),
-                  0
-                )
-              : 0;
-            if (!cancelled) setSwipeQueueCount(queueSize);
-          } catch {
-            /* swallow — it's advisory UI */
-          }
-        })();
+        let delayTimer: ReturnType<typeof setTimeout> | null = null;
+        delayTimer = setTimeout(() => {
+          const controller = new AbortController();
+          const abortTimer = setTimeout(() => controller.abort(), 5000);
+          (async () => {
+            try {
+              const userId = await getUserId();
+              const res = await fetch(
+                `${API_BASE_URL}/api/receipts/${receiptId}/swipe-queue?userId=${encodeURIComponent(userId)}`,
+                { signal: controller.signal }
+              );
+              clearTimeout(abortTimer);
+              if (!res.ok || cancelled) return;
+              const data = await res.json();
+              const queueSize = Array.isArray(data?.items)
+                ? data.items.reduce(
+                    (sum: number, it: any) =>
+                      sum + (Array.isArray(it.candidates) ? it.candidates.length : 0),
+                    0
+                  )
+                : 0;
+              if (!cancelled) setSwipeQueueCount(queueSize);
+            } catch {
+              /* swallow — it's advisory UI */
+            }
+          })();
+        }, 2000);
         return () => {
           cancelled = true;
+          if (delayTimer) clearTimeout(delayTimer);
         };
       },
       [receiptId]
@@ -957,12 +1005,19 @@ export default function ProcessReceiptScreen() {
       setReceiptId(data.id);
       setSaveStatus("saved");
       setPostStatus("done");
-      setComparisonStatus("pending");
-      // Receipt is now persisted server-side; the draft has served
-      // its purpose. Any subsequent app-kill recovery would use the
-      // server's Receipt row via the Analize tab list, not the draft.
       clearReceiptDraft().catch(() => {});
-      fetchComparison(data.id);
+      if (data.mandatorySwipesRequired > 0) {
+        // User must swipe before seeing the price comparison — navigate to the
+        // swipe screen now. Comparison will be fetched when they return to the
+        // receipt view in existing mode after completing the swipes.
+        router.replace({
+          pathname: "/receipt/swipe/[id]",
+          params: { id: String(data.id), mandatory: "1", mandatoryCount: String(data.mandatorySwipesRequired) },
+        } as any);
+      } else {
+        setComparisonStatus("pending");
+        fetchComparison(data.id);
+      }
     } catch (e: any) {
       console.warn("Receipt POST failed:", e);
       setSaveStatus("error");
@@ -1048,31 +1103,30 @@ export default function ProcessReceiptScreen() {
     runUpload();
   };
 
-  // Auto-retry on reconnect. When NetInfo flips offline → online,
-  // fire whichever of POST / upload / comparison was previously in
-  // the 'error' state. This covers the "user was on mobile data,
-  // switched to Wi-Fi, the in-flight request died" field case
-  // without requiring a manual tap. Only one auto-retry per online
-  // transition; if that retry also fails, the user's manual retry
-  // button remains the recovery path.
+  // Auto-retry: on reconnect AND on a 5-second interval while any step is
+  // in error state. Errors are never shown to the user — everything retries
+  // silently in the background.
   const lastOnlineAt = useNetworkStatus((s) => s.lastOnlineAt);
   useEffect(() => {
-    if (lastOnlineAt === null) return; // never been offline yet
+    if (lastOnlineAt === null) return;
     if (isPreviewMode) return;
-    if (postStatus === "error") {
-      retryPost();
-    }
-    if (uploadStatus === "error" && imageUri) {
-      runUpload();
-    }
-    if (comparisonStatus === "error" && receiptId) {
-      fetchComparison(receiptId);
-    }
-    // Intentionally NOT including the status flags in the dep array —
-    // we only want to retry on the ONLINE TRANSITION, not every time
-    // the status flag toggles.
+    if (postStatus === "error") retryPost();
+    if (uploadStatus === "error" && imageUri) runUpload();
+    if (comparisonStatus === "error" && receiptId) fetchComparison(receiptId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastOnlineAt]);
+
+  const hasAnyError = postStatus === "error" || uploadStatus === "error" || comparisonStatus === "error";
+  useEffect(() => {
+    if (!hasAnyError || isPreviewMode) return;
+    const interval = setInterval(() => {
+      if (postStatus === "error") retryPost();
+      if (uploadStatus === "error" && imageUri) runUpload();
+      if (comparisonStatus === "error" && receiptId) fetchComparison(receiptId);
+    }, 5000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasAnyError, isPreviewMode]);
 
   /**
    * Issue-report: write a row into ReceiptLineIssue with the flagged fields,
@@ -2420,51 +2474,10 @@ export default function ProcessReceiptScreen() {
         }}
       />
       <ScrollView style={styles.container}>
-        {hasAsyncError && (
-          <View style={styles.errorBanner}>
-            <View style={styles.errorHeaderRow}>
-              <Ionicons name="alert-circle" size={20} color={colors.error} />
-              <Text style={styles.errorTitle}>Apdorojimas nepavyko</Text>
-            </View>
-            {postStatus === "error" && (
-              <View style={styles.errorRow}>
-                <Text style={styles.errorMsg}>
-                  Kvito išsaugojimas: {postErr ?? "klaida"}
-                </Text>
-                <TouchableOpacity style={styles.retryBtn} onPress={retryPost}>
-                  <Text style={styles.retryBtnText}>Bandyti dar kartą</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-            {uploadStatus === "error" && (
-              <View style={styles.errorRow}>
-                <Text style={styles.errorMsg}>
-                  Nuotraukos įkėlimas: {uploadErr ?? "klaida"}
-                </Text>
-                <TouchableOpacity style={styles.retryBtn} onPress={retryUpload}>
-                  <Text style={styles.retryBtnText}>Bandyti dar kartą</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-            {comparisonStatus === "error" && (
-              <View style={styles.errorRow}>
-                <Text style={styles.errorMsg}>
-                  Palyginimas: {comparisonError ?? "klaida"}
-                </Text>
-                <TouchableOpacity
-                  style={styles.retryBtn}
-                  onPress={retryComparison}
-                >
-                  <Text style={styles.retryBtnText}>Bandyti dar kartą</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-          </View>
-        )}
         <ReceiptComparisonSection
           comparison={comparison}
-          loading={comparisonLoading && !comparison}
-          error={comparisonError}
+          loading={comparisonLoading && !comparison || comparisonStatus === "error"}
+          error={null}
           summary={{
             // Prefer "Chain · Store" when both are known; fall back to chain
             // alone (better than "Neatpažinta" when we at least identified
@@ -2605,7 +2618,7 @@ export default function ProcessReceiptScreen() {
                     />
                   ) : (
                     <View style={styles.productThumbPlaceholder}>
-                      <Text style={styles.productThumbEmoji}>🥦</Text>
+                      <Text style={styles.productThumbEmoji}>🫜</Text>
                     </View>
                   )}
                   <View style={styles.productInfo}>
@@ -2760,7 +2773,11 @@ export default function ProcessReceiptScreen() {
             <View style={styles.footerRow}>
               <Text style={styles.footerLabel}>Suma:</Text>
               <Text style={styles.footerValue}>
-                {footer?.total ? `€${footer.total.toFixed(2)}` : "—"}
+                {footer?.total
+                  ? `€${footer.total.toFixed(2)}`
+                  : comparison?.currentChain?.total
+                  ? `~€${comparison.currentChain.total.toFixed(2)}`
+                  : "—"}
               </Text>
             </View>
             <View style={styles.footerRow}>

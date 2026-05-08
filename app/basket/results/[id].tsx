@@ -7,6 +7,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
 import { API_BASE_URL } from '../../../config/api';
 import { useTheme, type AppTheme } from '../../../constants/theme';
+import { getUserId } from '../../../config/user';
 
 /** Lithuanian plural inflection for "prekė":
  *    1  → prekės     (gen. sg.) "1 prekės"
@@ -63,6 +64,7 @@ export default function BasketResultsScreen() {
     const [loading, setLoading] = useState(true);
     const [visibleCount, setVisibleCount] = useState(0);
     const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
+    const [swipesGated, setSwipesGated] = useState(false);
 
     const loadResults = async () => {
         // Detail screen now awaits the calc before pushing to this route,
@@ -89,9 +91,16 @@ export default function BasketResultsScreen() {
     };
 
     useFocusEffect(useCallback(() => {
-        // Re-fetch on every focus so a revert-to-draft from the detail
-        // screen (which wipes the AsyncStorage cache) is reflected here
-        // the moment the user navigates back in.
+        (async () => {
+            try {
+                const userId = await getUserId();
+                const res = await fetch(`${API_BASE_URL}/api/users/${userId}/profile`);
+                const profile = await res.json();
+                setSwipesGated(!!profile?.pendingSwipes);
+            } catch {
+                setSwipesGated(false);
+            }
+        })();
         loadResults();
     }, [id]));
 
@@ -235,7 +244,22 @@ export default function BasketResultsScreen() {
                 }}
             />
             <View style={styles.container}>
-                {loading ? (
+                {swipesGated && (
+                    <Animated.View entering={FadeIn} style={styles.gateOverlay}>
+                        <Ionicons name="lock-closed" size={48} color={colors.primary} />
+                        <Text style={styles.gateTitle}>Užbaik kortelių brauksymą</Text>
+                        <Text style={styles.gateBody}>
+                            Kad matytum pigiausia parduotuvę, reikia užbaigti privalomąjį kortelių brauksymą. Eik į Analizė ir atlik likusius brauksmus.
+                        </Text>
+                        <TouchableOpacity
+                            style={styles.gateButton}
+                            onPress={() => router.push('/(tabs)/receipts' as any)}
+                        >
+                            <Text style={styles.gateButtonText}>Eiti į Analizė</Text>
+                        </TouchableOpacity>
+                    </Animated.View>
+                )}
+                {!swipesGated && loading ? (
                     <Animated.View entering={FadeIn} style={styles.loadingContainer}>
                         <ActivityIndicator size="large" color={colors.primary} />
                         <Text style={styles.loadingText}>Skaičiuojamos kainos...</Text>
@@ -467,4 +491,16 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
     },
     navigateText: { color: c.primary, fontWeight: '600', fontSize: 15 },
+
+    gateOverlay: {
+        flex: 1, alignItems: 'center', justifyContent: 'center',
+        padding: 32, gap: 16,
+    },
+    gateTitle: { fontSize: 20, fontWeight: '700', color: c.textPrimary, textAlign: 'center' },
+    gateBody: { fontSize: 14, color: c.textSecondary, textAlign: 'center', lineHeight: 22 },
+    gateButton: {
+        backgroundColor: c.primary, borderRadius: 10,
+        paddingVertical: 12, paddingHorizontal: 24, marginTop: 8,
+    },
+    gateButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
 });

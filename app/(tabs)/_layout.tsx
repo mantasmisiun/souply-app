@@ -20,16 +20,19 @@ export default function TabLayout() {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [basketCount, setBasketCount] = useState(0);
     const [listCount, setListCount] = useState(0);
+    const [pendingSwipeCount, setPendingSwipeCount] = useState(0);
 
     const fetchCounts = async () => {
         try {
             const userId = await getUserId();
-            const [basketRes, listRes] = await Promise.all([
+            const [basketRes, listRes, profileRes] = await Promise.all([
                 fetch(`${API_BASE_URL}/api/baskets/user/${userId}`),
                 fetch(`${API_BASE_URL}/api/shopping-lists/user/${userId}`),
+                fetch(`${API_BASE_URL}/api/users/${userId}/profile`),
             ]);
             const baskets = await basketRes.json();
             const lists = await listRes.json();
+            const profile = await profileRes.json();
 
             setBasketCount(Array.isArray(baskets)
                 ? baskets.filter((b: any) => b.status !== 'completed').length
@@ -39,6 +42,7 @@ export default function TabLayout() {
                 ? lists.filter((l: any) => l.status === 'active').length
                 : 0
             );
+            setPendingSwipeCount(profile?.pendingSwipeCount ?? (profile?.pendingSwipes ? 1 : 0));
         } catch (error) {
             console.error('Failed to fetch counts:', error);
         }
@@ -103,22 +107,19 @@ export default function TabLayout() {
                 options={{
                     title: 'Analizė',
                     tabBarIcon: ({ focused, color, size }) => (
-                    <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />
+                        <View>
+                            <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />
+                            {pendingSwipeCount > 0 && <Badge count={pendingSwipeCount} styles={styles} />}
+                        </View>
                     ),
                 }}
             />
             <Tabs.Screen
                 name="menu"
                 options={{
-                    title: 'Menu',
-                    // __DEV__ is React Native's built-in dev-build flag. In
-                    // a release build this evaluates to false, which tells
-                    // expo-router to skip rendering the tab entry entirely
-                    // — zero risk of the Dev menu appearing in the shipped
-                    // app even though the file is in the bundle.
-                    href: __DEV__ ? undefined : null,
+                    title: 'Profilis',
                     tabBarIcon: ({ focused, color, size }) => (
-                        <Ionicons name={focused ? 'menu' : 'menu-outline'} size={size} color={color} />
+                        <Ionicons name={focused ? 'person' : 'person-outline'} size={size} color={color} />
                     ),
                 }}
             />
