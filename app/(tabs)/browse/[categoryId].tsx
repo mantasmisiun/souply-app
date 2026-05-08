@@ -1,6 +1,8 @@
 import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, ActivityIndicator, Switch, Modal } from 'react-native';
-import { useEffect, useMemo, useState } from 'react';
-import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
+import { useEffect, useMemo, useState, useCallback } from 'react';
+import { useLocalSearchParams, useRouter, Stack, useFocusEffect, useNavigation } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../config/api';
 import { useBasketState } from '../../../state/basketState';
@@ -32,6 +34,8 @@ interface Product {
 export default function CategoryScreen() {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    const { bottom: bottomInset } = useSafeAreaInsets();
+    const navigation = useNavigation();
     const { categoryId, name } = useLocalSearchParams<{ categoryId: string; name: string }>();
     const [l3Categories, setL3Categories] = useState<Category[]>([]);
     const [products, setProducts] = useState<Product[]>([]);
@@ -40,6 +44,7 @@ export default function CategoryScreen() {
     const [loadingProducts, setLoadingProducts] = useState(false);
     const { draftBasketId, setDraftBasketId } = useBasketState();
     const [basketQuantities, setBasketQuantities] = useState<{[productId: number]: number}>({});
+    const [basketItemCount, setBasketItemCount] = useState(0);
     // Products whose "Į krepšelį" POST is currently in flight. Prevents
     // rapid double-taps from firing a second add before the first lands
     // and paints the quantity control over the button.
@@ -109,6 +114,7 @@ export default function CategoryScreen() {
                         quantities[item.productId] = parseFloat(item.quantity);
                     });
                     setBasketQuantities(quantities);
+                    setBasketItemCount(items.filter((i: any) => parseFloat(i.quantity) > 0).length);
                 }
             } catch {}
         };
@@ -145,6 +151,35 @@ export default function CategoryScreen() {
             }
         })();
     }, [draftBasketId]);
+
+    // Hide the tab bar while browsing a category — gives products more room
+    // and makes space for the basket bar that appears when items are added.
+    // Also refreshes basket quantities on every focus so that deletions made
+    // on the basket screen are reflected here immediately on return.
+    useFocusEffect(useCallback(() => {
+        navigation.getParent()?.setOptions({ tabBarStyle: { display: 'none' } });
+        const currentDraftId = useBasketState.getState().draftBasketId;
+        if (currentDraftId) {
+            fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`)
+                .then(r => r.json())
+                .then(items => {
+                    if (!Array.isArray(items)) return;
+                    const quantities: { [productId: number]: number } = {};
+                    items.forEach((item: any) => {
+                        quantities[item.productId] = parseFloat(item.quantity);
+                    });
+                    setBasketQuantities(quantities);
+                    setBasketItemCount(items.filter((i: any) => parseFloat(i.quantity) > 0).length);
+                })
+                .catch(() => {});
+        } else {
+            setBasketQuantities({});
+            setBasketItemCount(0);
+        }
+        return () => {
+            navigation.getParent()?.setOptions({ tabBarStyle: undefined });
+        };
+    }, [navigation]));
 
     // True when the user has any item in their current draft basket.
     // basketQuantities can hold 0 values after a quantity decrement, so we
@@ -353,6 +388,7 @@ export default function CategoryScreen() {
                     headerShadowVisible: false,
                 }}
             />
+            <View style={{ flex: 1 }}>
             <View style={styles.container}>
                 <View style={styles.modeToggleRow}>
                     <Text style={styles.modeToggleLabel}>Apjungti alternatyvas</Text>
@@ -468,6 +504,7 @@ export default function CategoryScreen() {
                                                             const result = await commitAdd(item.id, 1);
                                                             if (result.success) {
                                                                 setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
+                                                                setBasketItemCount(prev => prev + 1);
                                                             }
                                                         } finally {
                                                             setAddingIds(prev => {
@@ -494,12 +531,19 @@ export default function CategoryScreen() {
 
                                                         if (newQty <= 0) {
                                                             setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
+                                                            setBasketItemCount(prev => Math.max(0, prev - 1));
                                                             try {
                                                                 const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
-                                                                const items = await res.json();
-                                                                const basketItem = items.find((i: any) => i.productId === item.id);
+                                                                const allItems = await res.json();
+                                                                const basketItem = Array.isArray(allItems) ? allItems.find((i: any) => i.productId === item.id) : null;
                                                                 if (basketItem) {
                                                                     await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
+                                                                }
+                                                                // If basket is now empty, delete it so no ghost draft remains
+                                                                const remaining = Array.isArray(allItems) ? allItems.filter((i: any) => i.id !== basketItem?.id) : [];
+                                                                if (remaining.length === 0 && draftBasketId) {
+                                                                    await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}`, { method: 'DELETE' });
+                                                                    setDraftBasketId(null);
                                                                 }
                                                             } catch {}
                                                         } else {
@@ -555,6 +599,28 @@ export default function CategoryScreen() {
                         />
                     )}
                 </View>
+            </View>
+            {basketItemCount > 0 && draftBasketId && (
+                <Animated.View
+                    entering={FadeInDown.duration(200)}
+                    exiting={FadeOutDown.duration(150)}
+                    style={[styles.basketBar, { paddingBottom: Math.max(12, bottomInset) }]}
+                >
+                    <View style={styles.basketBarLeft}>
+                        <Ionicons name="cart" size={20} color={colors.primary} />
+                        <Text style={styles.basketBarCount}>
+                            {basketItemCount} {pluralizeItems(basketItemCount)}
+                        </Text>
+                    </View>
+                    <TouchableOpacity
+                        style={styles.basketBarButton}
+                        onPress={() => router.push(`/basket/${draftBasketId}` as any)}
+                    >
+                        <Text style={styles.basketBarButtonText}>Krepšelis</Text>
+                        <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
+                    </TouchableOpacity>
+                </Animated.View>
+            )}
             </View>
             <Modal
                 visible={pendingMode !== null}
@@ -655,6 +721,7 @@ export default function CategoryScreen() {
                                 ...prev,
                                 [amountModal.product!.id]: amount,
                             }));
+                            setBasketItemCount(prev => prev + 1);
                         }
                     }
                     setAmountModal({ visible: false, product: null });
@@ -662,6 +729,12 @@ export default function CategoryScreen() {
             />
         </>
     );
+}
+
+function pluralizeItems(n: number): string {
+    if (n % 10 === 1 && n % 100 !== 11) return 'prekė';
+    if (n % 10 >= 2 && n % 10 <= 9 && (n % 100 < 10 || n % 100 >= 20)) return 'prekės';
+    return 'prekių';
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
@@ -877,5 +950,40 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         fontSize: 12,
         color: c.textMuted,
         marginTop: 2,
+    },
+    basketBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingTop: 12,
+        backgroundColor: c.cardBackground,
+        borderTopWidth: 1,
+        borderTopColor: c.border,
+        gap: 12,
+    },
+    basketBarLeft: {
+        flex: 1,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+    },
+    basketBarCount: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: c.primary,
+    },
+    basketBarButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: c.primary,
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: 10,
+    },
+    basketBarButtonText: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: c.onPrimary,
     },
 });

@@ -1,4 +1,5 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Modal } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -33,6 +34,7 @@ interface Basket {
 export default function BasketDetailScreen() {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    const { bottom: bottomInset } = useSafeAreaInsets();
     const { id } = useLocalSearchParams();
     const router = useRouter();
     const { mode: displayMode } = useDisplayMode();
@@ -444,7 +446,7 @@ export default function BasketDetailScreen() {
                 )}
 
                 {items.length > 0 && (
-                    <View style={styles.bottomBar}>
+                    <View style={[styles.bottomBar, bottomInset > 0 && { paddingBottom: 12 + bottomInset }]}>
                         {basket?.status === 'inProgress' || basket?.status === 'completed' ? (
                             // Read-only states: basket is locked because the
                             // user is actively shopping (inProgress) or the

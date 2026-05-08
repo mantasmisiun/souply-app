@@ -100,9 +100,9 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
                         <Text style={styles.itemQuantity}>
                             Kiekis: {item.storeProductId
                                 ? `${item.quantity} ${item.unit}`
-                                : (item.quantity < 10
-                                    ? `${item.quantity} kg`
-                                    : `${item.quantity} g`)}
+                                : item.isWeighable
+                                    ? (item.quantity < 10 ? `${item.quantity} kg` : `${item.quantity} g`)
+                                    : `${item.quantity} vnt.`}
                         </Text>
                     </View>
                     {item.price && (
@@ -444,6 +444,7 @@ export default function ShoppingListScreen() {
                     productId,
                     storeProductId,
                     quantity,
+                    name,
                 }),
             });
             if (!res.ok) {
@@ -581,7 +582,7 @@ export default function ShoppingListScreen() {
                                         </TouchableOpacity>
                                     )}
                                 </View>
-                                {quickAddText.length >= 2 && searchResults.length > 0 && (
+                                {quickAddText.length >= 2 && (
                                     <View style={styles.inlineSearchResults}>
                                         {searchResults.map((product, index) => {
                                             const alreadyInList = items.some(i => i.productId === product.productId);
@@ -625,7 +626,7 @@ export default function ShoppingListScreen() {
                         {items.slice(0, visibleCount).length > 0 && (
                             <View style={styles.listContainer}>
                                 {items.slice(0, visibleCount).map((item, index) => (
-                                    <Animated.View key={item.id} entering={FadeInDown.delay(index * 30)}>
+                                    <Animated.View key={item.id} entering={FadeInDown}>
                                         {index > 0 && <View style={styles.divider} />}
                                         <ShoppingListItemCard
                                             item={item}

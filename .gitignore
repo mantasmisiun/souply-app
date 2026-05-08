@@ -41,3 +41,8 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Synced copy of /Project/shared/ — populated by `npm run sync-shared`
+# before each EAS build so the upload includes the parser source. The
+# canonical edit point is /Project/shared/ at the monorepo root.
+/shared/

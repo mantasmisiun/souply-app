@@ -3,8 +3,8 @@
  * baskets at BaseProduct granularity ("mažiau" = cluster-head rows, cheapest
  * variant per store) or Product granularity ("daugiau" = individual SKUs).
  *
- * Persisted to AsyncStorage so it survives app restart. Default is 'base'
- * (mažiau) — most users want the simpler summary view first.
+ * Persisted to AsyncStorage so it survives app restart. Default is 'sku'
+ * (individual products) — the toggle is opt-in.
  *
  * Usage:
  *   const { mode, setMode, ready } = useDisplayMode();
@@ -19,7 +19,7 @@ import { createContext, useContext, useEffect, useState } from 'react';
 export type DisplayMode = 'base' | 'sku';
 
 const STORAGE_KEY = 'displayMode';
-const DEFAULT_MODE: DisplayMode = 'base';
+const DEFAULT_MODE: DisplayMode = 'sku';
 
 interface DisplayPreferenceValue {
   mode: DisplayMode;

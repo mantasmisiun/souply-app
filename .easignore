@@ -1,0 +1,52 @@
+# EAS upload ignore — overrides .gitignore for the EAS Build VCS step.
+# Mirrors .gitignore EXCEPT for `/shared/`: that folder is git-ignored
+# (it's a synced copy of /Project/shared/ populated by `npm run
+# sync-shared` and the canonical edit point lives at the monorepo
+# root) but it MUST be uploaded so the parser source is reachable
+# during Metro bundling on the EAS worker. Without this file, EAS
+# falls back to .gitignore and the sync-shared output gets stripped
+# from the upload, reproducing the original "Failed to construct
+# transformer / no such file or directory '/home/expo/workingdir/
+# shared'" bundle failure.
+
+# dependencies
+node_modules/
+
+# Expo
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+
+# Native
+.kotlin/
+*.orig.*
+*.jks
+*.p8
+*.p12
+*.key
+*.mobileprovision
+
+# Metro
+.metro-health-check*
+
+# debug
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# macOS
+.DS_Store
+*.pem
+
+# local env files
+.env*.local
+
+# typescript
+*.tsbuildinfo
+
+app-example
+
+# generated native folders
+/ios
+/android

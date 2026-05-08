@@ -1,4 +1,5 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect, useNavigation, Stack } from 'expo-router';
 import { useMemo, useState, useCallback, useLayoutEffect } from 'react';
 import { Ionicons } from '@expo/vector-icons';
@@ -54,6 +55,7 @@ interface StoreResult {
 export default function BasketResultsScreen() {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    const { bottom: bottomInset } = useSafeAreaInsets();
     const { id } = useLocalSearchParams();
     const router = useRouter();
     const navigation = useNavigation();
@@ -331,7 +333,7 @@ export default function BasketResultsScreen() {
                 )}
 
                 {selectedStore && (
-                    <Animated.View entering={FadeInDown} style={styles.bottomBar}>
+                    <Animated.View entering={FadeInDown} style={[styles.bottomBar, bottomInset > 0 && { paddingBottom: 12 + bottomInset }]}>
                         <TouchableOpacity style={styles.navigateButton} onPress={handleNavigate}>
                             <Ionicons name="navigate-outline" size={20} color={colors.primary} />
                             <Text style={styles.navigateText}>Vykti</Text>
