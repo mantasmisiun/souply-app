@@ -8,10 +8,10 @@
  * lives on disk anyway.
  */
 
-import type { MaximaProduct, ProductBand } from '../../shared/parsers/maximaParser';
-import type { RimiProduct, RimiReceiptBand } from '../../shared/parsers/rimiParser';
-import type { NorfaProduct, NorfaReceiptBand } from '../../shared/parsers/norfaParser';
-import type { LidlProduct, LidlReceiptBand } from '../../shared/parsers/lidlParser';
+import type { MaximaProduct, ProductBand } from '@shared/parsers/maximaParser';
+import type { RimiProduct, RimiReceiptBand } from '@shared/parsers/rimiParser';
+import type { NorfaProduct, NorfaReceiptBand } from '@shared/parsers/norfaParser';
+import type { LidlProduct, LidlReceiptBand } from '@shared/parsers/lidlParser';
 
 /**
  * Any chain's product shape — they're structurally identical (same

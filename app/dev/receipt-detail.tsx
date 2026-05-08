@@ -52,10 +52,10 @@ import {
     type PageMeta,
     type ReceiptSnapshot,
 } from '../../utils/parserTestSnapshot';
-import type { ProductBand } from '../../../shared/parsers/maximaParser';
-import type { RimiBandKind, RimiReceiptBand } from '../../../shared/parsers/rimiParser';
-import type { NorfaReceiptBand } from '../../../shared/parsers/norfaParser';
-import type { LidlReceiptBand } from '../../../shared/parsers/lidlParser';
+import type { ProductBand } from '@shared/parsers/maximaParser';
+import type { RimiBandKind, RimiReceiptBand } from '@shared/parsers/rimiParser';
+import type { NorfaReceiptBand } from '@shared/parsers/norfaParser';
+import type { LidlReceiptBand } from '@shared/parsers/lidlParser';
 
 // Kinds emitted by any chain's V2 parser. Rimi/Norfa/Lidl share
 // structurally-identical band-kind unions; the overlay colour map

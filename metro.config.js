@@ -1,8 +1,12 @@
-// Metro config. Needed because the parsers now live in
-// `Project/shared/parsers/` — outside the app's project root. Metro
-// ignores anything outside the root by default, so we whitelist the
-// shared folder via `watchFolders` and extend `nodeModulesPaths` so
-// its relative imports resolve.
+// Metro config. The parsers live in `Project/shared/parsers/` —
+// outside basket-app. We point at the IN-PROJECT `./shared/` copy
+// (populated by `npm run sync-shared` from `../shared`) rather than
+// `../shared` directly: EAS Build uploads only the basket-app tree,
+// so a watchFolder pointing OUTSIDE the project root resolves to a
+// nonexistent path on the EAS worker and Metro fails with
+// `verifyRootExists ENOENT '/home/expo/workingdir/shared'` before
+// bundling. Pointing at `./shared` keeps both local dev and EAS
+// happy because the synced copy lives inside the upload tree.
 //
 // Cross-stack `.js` extension shim: the basket-api uses TypeScript
 // with `module: Node16` which mandates explicit `.js` extensions on
@@ -16,7 +20,7 @@ const { getDefaultConfig } = require('expo/metro-config');
 const path = require('path');
 
 const projectRoot = __dirname;
-const sharedRoot = path.resolve(projectRoot, '../shared');
+const sharedRoot = path.resolve(projectRoot, 'shared');
 
 const config = getDefaultConfig(projectRoot);
 

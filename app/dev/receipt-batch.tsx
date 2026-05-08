@@ -45,7 +45,7 @@ import { getUserId } from '../../config/user';
 import {
     isIkiReceipt,
     parseIkiReceipt,
-} from '../../../shared/parsers/ikiParser';
+} from '@shared/parsers/ikiParser';
 import {
     isMaximaReceipt,
     parseMaximaReceipt,
@@ -53,7 +53,7 @@ import {
     traceProductBands,
     traceMaximaExtract,
     extractMaximaProduct,
-} from '../../../shared/parsers/maximaParser';
+} from '@shared/parsers/maximaParser';
 import {
     setReceiptSnapshot,
     makeSnapshotKey,
@@ -67,7 +67,7 @@ import {
     traceReceiptBandsRimi,
     extractRimiProduct,
     traceRimiExtract,
-} from '../../../shared/parsers/rimiParser';
+} from '@shared/parsers/rimiParser';
 import {
     isNorfaReceipt,
     parseNorfaReceipt,
@@ -75,7 +75,7 @@ import {
     traceReceiptBandsNorfa,
     extractNorfaProduct,
     traceNorfaExtract,
-} from '../../../shared/parsers/norfaParser';
+} from '@shared/parsers/norfaParser';
 import {
     isLidlReceipt,
     parseLidlReceipt,
@@ -83,8 +83,13 @@ import {
     traceReceiptBandsLidl,
     extractLidlProduct,
     traceLidlExtract,
-} from '../../../shared/parsers/lidlParser';
+} from '@shared/parsers/lidlParser';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import {
+    compareToTruth,
+    type TruthFile,
+    type ParserComparison,
+} from '../../utils/compareToTruth';
 
 // Why HTTP instead of reading staged files locally: every local-read
 // path (file:// URIs through expo-file-system, fetch(), MLKit) runs
@@ -94,6 +99,7 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 // fetches manifest.json and downloads each page into its own cache
 // before OCR, same trust boundary as the existing API calls.
 const HTTP_BATCH_ROOT = `${API_BASE_URL}/receipts-batch`;
+const HTTP_TRUTH_ROOT = `${API_BASE_URL}/receipts-truth`;
 const CHAINS = ['maxima', 'rimi', 'norfa', 'lidl'] as const;
 type ChainName = (typeof CHAINS)[number];
 
@@ -116,6 +122,15 @@ interface PageLine {
     xRight: number;
 }
 
+interface ParsedProductSnapshot {
+    name: string;
+    price: number;
+    promoPrice: number | null;
+    quantity: number;
+    unit: string;
+    pricePerUnit: number | null;
+}
+
 interface RowStatus {
     sourcePdf: string;
     chain: ChainName;
@@ -124,7 +139,32 @@ interface RowStatus {
     /** V2 step 1 output: number of product bands detected. Tap a row
      *  to inspect the bands visually on the receipt-detail screen. */
     bandsV2Count?: number;
+    /** Comparison vs hand-annotated truth file (if present alongside
+     *  the PDF/PNG). null if no truth file or comparison failed. */
+    comparison?: ParserComparison | null;
+    /** Snapshot of parser-emitted products (lean fields used by the
+     *  truth comparison). Persisted into the _results JSON so the
+     *  truth files can be reconstructed when the parser is treated
+     *  as authoritative. */
+    parsedProducts?: ParsedProductSnapshot[];
 }
+
+const loadTruth = async (
+    chain: ChainName,
+    sourcePdf: string,
+): Promise<TruthFile | null> => {
+    // Strip extension; truth file is `<basename>.truth.json` next to
+    // the PDF/PNG in shared/receipts/<chain>/.
+    const base = sourcePdf.replace(/\.(pdf|png|jpg|jpeg)$/i, '');
+    const url = `${HTTP_TRUTH_ROOT}/${chain}/${base}.truth.json`;
+    try {
+        const res = await fetch(url);
+        if (!res.ok) return null;
+        return (await res.json()) as TruthFile;
+    } catch {
+        return null;
+    }
+};
 
 const readManifest = async (chain: ChainName): Promise<ManifestEntry[]> => {
     const url = `${HTTP_BATCH_ROOT}/${chain}/manifest.json`;
@@ -412,12 +452,52 @@ export default function ReceiptBatchScreen() {
             const err = await res.text();
             return { ...row, state: 'error', message: `HTTP ${res.status}: ${err.slice(0, 120)}` };
         }
-        // Discard the batch-log response body — we don't surface V1
-        // stats anymore. The POST itself still runs because the
-        // Persist toggle relies on it for the receipt-logging side
-        // effect.
+        // Discard the batch-log response body — we only need the
+        // POST as a side effect (server-side logging when Persist is
+        // on). Scoring is done on-device against the truth file.
         await res.json().catch(() => {});
-        const status: RowStatus = { ...row, state: 'done' };
+        const status: RowStatus = {
+            ...row,
+            state: 'done',
+            parsedProducts: parsed.products.map((p: any) => ({
+                name: p.name,
+                price: p.price,
+                promoPrice: p.promoPrice ?? null,
+                quantity: p.quantity,
+                unit: p.unit,
+                pricePerUnit: p.pricePerUnit ?? null,
+            })),
+        };
+
+        // Score the parser output against the hand-annotated truth
+        // file (when present). Truth lives at
+        // shared/receipts/<chain>/<basename>.truth.json and is served
+        // by the dev API's /receipts-truth route. Score is reported
+        // per row in the UI and aggregated per chain at run end into
+        // a single JSON pushed to /api/parser-test/results.
+        try {
+            const truth = await loadTruth(row.chain, row.sourcePdf);
+            if (truth) {
+                const parsedTotal = parsed.footer?.total ?? null;
+                status.comparison = compareToTruth(
+                    parsed.products as any,
+                    parsedTotal,
+                    truth,
+                );
+                console.log(
+                    `[score] ${row.chain}/${row.sourcePdf}: ` +
+                        `score=${status.comparison.score}, ` +
+                        `correct=${status.comparison.productsCorrect}/` +
+                        `${truth.products.length}, ` +
+                        `parsed=${status.comparison.productCount}`,
+                );
+            } else {
+                status.comparison = null;
+            }
+        } catch (e: any) {
+            console.warn(`[score] ${row.sourcePdf} comparison failed:`, e);
+            status.comparison = null;
+        }
 
         // V2 step 1 + step 2 (Maxima only today): identify product
         // band boundaries (step 1) and convert each band into a
@@ -657,6 +737,11 @@ export default function ReceiptBatchScreen() {
         setRunning(true);
         abortRef.current = false;
         await activateKeepAwakeAsync('receipt-batch');
+        // Collected per-row results in run order. We can't read
+        // `statuses` after the loop because setStatuses is async and
+        // batched — local accumulator is the source of truth for
+        // post-run aggregation.
+        const finalRows: RowStatus[] = [];
         try {
             for (let i = 0; i < statuses.length; i++) {
                 if (abortRef.current) break;
@@ -665,24 +750,26 @@ export default function ReceiptBatchScreen() {
                     next[i] = { ...next[i], state: 'running' };
                     return next;
                 });
+                let rowResult: RowStatus;
                 try {
-                    const result = await processOne(i);
-                    setStatuses((prev) => {
-                        const next = [...prev];
-                        next[i] = result;
-                        return next;
-                    });
+                    rowResult = await processOne(i);
                 } catch (e: any) {
-                    setStatuses((prev) => {
-                        const next = [...prev];
-                        next[i] = { ...next[i], state: 'error', message: e?.message ?? String(e) };
-                        return next;
-                    });
+                    rowResult = {
+                        ...statuses[i],
+                        state: 'error',
+                        message: e?.message ?? String(e),
+                    };
                 }
+                finalRows.push(rowResult);
+                setStatuses((prev) => {
+                    const next = [...prev];
+                    next[i] = rowResult;
+                    return next;
+                });
             }
 
             // Finalize once per chain that had any activity.
-            const chainsDone = new Set(statuses.map((s) => s.chain));
+            const chainsDone = new Set(finalRows.map((s) => s.chain));
             for (const chain of chainsDone) {
                 try {
                     await fetch(`${API_BASE_URL}/api/receipts/batch-log/finalize`, {
@@ -691,6 +778,84 @@ export default function ReceiptBatchScreen() {
                         body: JSON.stringify({ chain }),
                     });
                 } catch {}
+            }
+
+            // Aggregate per chain and POST a single results JSON per
+            // chain (only chains that had at least one truth-scored
+            // receipt). Lands at shared/receipts/_results/<runId>.json
+            // for the doc generator to consume.
+            const isoStamp = new Date().toISOString().replace(/[:.]/g, '-');
+            for (const chain of chainsDone) {
+                const chainRows = finalRows.filter(
+                    (r) => r.chain === chain && r.comparison,
+                );
+                if (chainRows.length === 0) continue;
+
+                let productsCorrectTotal = 0;
+                let productsTruthTotal = 0;
+                const receipts = chainRows.map((r) => {
+                    const c = r.comparison!;
+                    productsCorrectTotal += c.productsCorrect;
+                    // truthCount = correct + missed (greedy pairing
+                    // covers everything). Avoids re-fetching truth.
+                    productsTruthTotal += c.productsCorrect + c.productsMissed;
+                    return {
+                        pdf: r.sourcePdf,
+                        truthProductCount: c.productsCorrect + c.productsMissed,
+                        v2: {
+                            productCount: c.productCount,
+                            productsCorrect: c.productsCorrect,
+                            productsMissed: c.productsMissed,
+                            productsExtra: c.productsExtra,
+                            pricesCorrect: c.pricesCorrect,
+                            promoPricesCorrect: c.promoPricesCorrect,
+                            quantitiesCorrect: c.quantitiesCorrect,
+                            unitsCorrect: c.unitsCorrect,
+                            weighableCorrect: c.weighableCorrect,
+                            totalAmountDelta: c.totalAmountDelta,
+                            totalAmountParsed: c.totalAmountParsed,
+                            totalAmountTruth: c.totalAmountTruth,
+                            score: c.score,
+                            issues: c.issues,
+                            // Full parser output for this receipt — lets a
+                            // human (or the doc generator) reconstruct the
+                            // truth file when the parser is treated as
+                            // authoritative.
+                            parsedProducts: r.parsedProducts ?? [],
+                        },
+                    };
+                });
+                const denom = Math.max(productsTruthTotal, 1);
+                const aggregateScore =
+                    Math.round((productsCorrectTotal / denom) * 1000) / 1000;
+                const runId = `${chain}-${isoStamp}`;
+                const payload = {
+                    $schema: 'parser-test-v1',
+                    runId,
+                    completedAt: new Date().toISOString(),
+                    summary: {
+                        v2: {
+                            score: aggregateScore,
+                            productsCorrectTotal,
+                            productsTruthTotal,
+                        },
+                        receiptsTested: chainRows.length,
+                    },
+                    receipts,
+                };
+                try {
+                    await fetch(`${API_BASE_URL}/api/parser-test/results`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload),
+                    });
+                    console.log(
+                        `[results] saved ${runId}: score=${aggregateScore} ` +
+                            `(${productsCorrectTotal}/${productsTruthTotal})`,
+                    );
+                } catch (e) {
+                    console.warn(`[results] POST failed for ${runId}:`, e);
+                }
             }
         } finally {
             deactivateKeepAwake('receipt-batch');
@@ -770,6 +935,13 @@ export default function ReceiptBatchScreen() {
                                 {s.chain}
                                 {s.state === 'done' && s.bandsV2Count !== undefined &&
                                     ` · ${s.bandsV2Count} band${s.bandsV2Count === 1 ? 'a' : 'os'}`}
+                                {s.state === 'done' && s.comparison && (
+                                    ` · score ${s.comparison.score.toFixed(2)} ` +
+                                    `(${s.comparison.productsCorrect}/` +
+                                    `${s.comparison.productsCorrect + s.comparison.productsMissed})`
+                                )}
+                                {s.state === 'done' && s.comparison === null &&
+                                    ' · be truth'}
                                 {s.message && ` · ${s.message}`}
                             </Text>
                         </View>

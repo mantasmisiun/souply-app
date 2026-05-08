@@ -20,7 +20,7 @@
  * penalizes both missed truths and extra hallucinations symmetrically.
  */
 
-import type { MaximaProduct } from '../../shared/parsers/maximaParser';
+import type { MaximaProduct } from '@shared/parsers/maximaParser';
 
 export interface TruthProduct {
     name: string;
@@ -72,27 +72,116 @@ export interface ParserComparison {
 
 // ───────── helpers ─────────
 
+// Threshold mirrors the productMatcher used to match OCR'd receipt
+// rows to catalog SP entries (basket-api/src/utils/productMatcher.ts).
+// Below this, a parser product and a truth product are NOT considered
+// the same item — they go into MISSED / EXTRA buckets instead of being
+// scored as a mismatched pair.
+const NAME_SIM_PASS = 0.8;
+const TOKEN_MATCH_THRESHOLD = 0.75;
 const MIN_TOKEN_LEN = 3;
-const MIN_NAME_SIM = 0.3; // below this two products are NOT a candidate pair
 const PRICE_EPS = 0.01;
 const AMOUNT_EPS = 0.001;
 
-const tokenize = (name: string): Set<string> => {
-    const tokens = name
-        .toLowerCase()
-        .replace(/[^\p{L}\p{N}\s]/gu, ' ')
-        .split(/\s+/)
-        .filter((t) => t.length >= MIN_TOKEN_LEN);
-    return new Set(tokens);
-};
+/** Levenshtein edit distance — same algorithm as
+ *  basket-api/src/utils/addressMatcher.ts. Inlined here because
+ *  basket-app can't import from basket-api. */
+function levenshtein(a: string, b: string): number {
+    if (a.length === 0) return b.length;
+    if (b.length === 0) return a.length;
+    const m = a.length;
+    const n = b.length;
+    let prev = new Array(n + 1);
+    let curr = new Array(n + 1);
+    for (let j = 0; j <= n; j++) prev[j] = j;
+    for (let i = 1; i <= m; i++) {
+        curr[0] = i;
+        for (let j = 1; j <= n; j++) {
+            const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+            curr[j] = Math.min(
+                prev[j] + 1,
+                curr[j - 1] + 1,
+                prev[j - 1] + cost,
+            );
+        }
+        [prev, curr] = [curr, prev];
+    }
+    return prev[n];
+}
 
+/** ASCII-fold + lowercase + drop non-alphanumeric. Mirrors
+ *  productMatcher.normalizeProductName for like-for-like scoring. */
+function normalize(name: string): string {
+    if (!name) return '';
+    return name
+        .toLowerCase()
+        .normalize('NFD').replace(/[̀-ͯ]/g, '')
+        .replace(/[^a-z0-9+\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function tokenize(normalized: string): string[] {
+    return normalized.split(' ').filter((t) => t.length >= MIN_TOKEN_LEN);
+}
+
+function bestTokenMatch(qt: string, candTokens: string[]): number {
+    let best = 0;
+    for (const c of candTokens) {
+        if (qt === c) return 1;
+        if (qt.length <= 3 || c.length <= 3) continue;
+        const d = levenshtein(qt, c);
+        const maxLen = Math.max(qt.length, c.length);
+        const score = 1 - d / maxLen;
+        if (score > best) best = score;
+    }
+    return best;
+}
+
+function tokenScore(queryTokens: string[], candTokens: string[]): number {
+    if (queryTokens.length === 0 || candTokens.length === 0) return 0;
+    let weightedSum = 0;
+    let weightSum = 0;
+    let matched = 0;
+    for (const qt of queryTokens) {
+        const w = qt.length;
+        const m = bestTokenMatch(qt, candTokens);
+        const eff = m >= TOKEN_MATCH_THRESHOLD ? m : 0;
+        weightedSum += eff * w;
+        weightSum += w;
+        if (eff > 0) matched++;
+    }
+    if (matched / queryTokens.length < 0.5) return 0;
+    return weightSum > 0 ? weightedSum / weightSum : 0;
+}
+
+function charSimilarity(a: string, b: string): number {
+    const aC = a.replace(/\s+/g, '');
+    const bC = b.replace(/\s+/g, '');
+    const maxLen = Math.max(aC.length, bC.length);
+    if (maxLen === 0) return 0;
+    const minLen = Math.min(aC.length, bC.length);
+    if (minLen / maxLen < 0.4) return 0;
+    return 1 - levenshtein(aC, bC) / maxLen;
+}
+
+/**
+ * Combined token + char similarity, mirroring
+ * basket-api/src/utils/productMatcher.ts:findBestProductMatches.
+ *
+ * Char score is discounted slightly so clean token matches edge out
+ * full-string matches of the wrong product. Use NAME_SIM_PASS (0.8)
+ * as the cutoff for "same product".
+ */
 const nameSimilarity = (a: string, b: string): number => {
-    const ta = tokenize(a);
-    const tb = tokenize(b);
-    if (ta.size === 0 || tb.size === 0) return 0;
-    let intersection = 0;
-    for (const t of ta) if (tb.has(t)) intersection++;
-    return intersection / Math.min(ta.size, tb.size);
+    const na = normalize(a);
+    const nb = normalize(b);
+    if (!na || !nb) return 0;
+    const ta = tokenize(na);
+    const tb = tokenize(nb);
+    const tScore = tokenScore(ta, tb);
+    const cScore = charSimilarity(na, nb);
+    return Math.max(tScore, cScore * 0.95);
 };
 
 /**
@@ -106,10 +195,13 @@ const lineTotalGross = (p: MaximaProduct): number => p.price * p.quantity;
 const lineTotalPromo = (p: MaximaProduct): number | null =>
     p.promoPrice === null ? null : p.promoPrice * p.quantity;
 
-/** Composite candidate-pair score: name overlap (70%) + price match (30%). */
+/** Candidate pair score for greedy matching. Names below
+ *  NAME_SIM_PASS aren't the same product — return 0 so the row goes
+ *  into MISSED/EXTRA. Price agreement is a tiebreaker among
+ *  similarly-named candidates. */
 const pairScore = (parsed: MaximaProduct, truth: TruthProduct): number => {
     const nameSim = nameSimilarity(parsed.name, truth.name);
-    if (nameSim < MIN_NAME_SIM) return 0;
+    if (nameSim < NAME_SIM_PASS) return 0;
     const priceMatch = Math.abs(lineTotalGross(parsed) - truth.price) < PRICE_EPS ? 1 : 0;
     return nameSim * 0.7 + priceMatch * 0.3;
 };

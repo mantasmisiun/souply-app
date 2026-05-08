@@ -47,7 +47,7 @@ import {
     type IkiFooter,
     type IkiHeader,
     type IkiProduct,
-} from "../../shared/parsers/ikiParser";
+} from "@shared/parsers/ikiParser";
 import {
     isMaximaReceipt,
     parseMaximaHeaderOnly,
@@ -55,7 +55,7 @@ import {
     type MaximaFooter,
     type MaximaHeader,
     type MaximaProduct,
-} from "../../shared/parsers/maximaParser";
+} from "@shared/parsers/maximaParser";
 import {
     isLidlReceipt,
     parseLidlHeaderOnly,
@@ -63,7 +63,7 @@ import {
     type LidlFooter,
     type LidlHeader,
     type LidlProduct,
-} from "../../shared/parsers/lidlParser";
+} from "@shared/parsers/lidlParser";
 import {
     isNorfaReceipt,
     parseNorfaHeaderOnly,
@@ -71,7 +71,7 @@ import {
     type NorfaFooter,
     type NorfaHeader,
     type NorfaProduct,
-} from "../../shared/parsers/norfaParser";
+} from "@shared/parsers/norfaParser";
 import {
     isRimiReceipt,
     parseRimiHeaderOnly,
@@ -80,7 +80,7 @@ import {
     RimiFooter,
     RimiHeader,
     RimiProduct
-} from "../../shared/parsers/rimiParser";
+} from "@shared/parsers/rimiParser";
 import { ocrImageTiled } from "../utils/mlkitOcr";
 
 interface ProductMatchOption {
