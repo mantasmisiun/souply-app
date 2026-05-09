@@ -8,6 +8,7 @@ import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '../constants/theme';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
+import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 
 export const unstable_settings = {
@@ -41,6 +42,7 @@ export default function RootLayout() {
     <ThemeProvider value={navTheme}>
       <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
       <OfflineBanner />
+      <LevelUpModal />
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: colors.pageBackground },
@@ -62,6 +64,7 @@ export default function RootLayout() {
         <Stack.Screen name="shopping-list/[id]" options={{ title: 'Pirkinių sąrašas' }} />
         <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
         <Stack.Screen name="receipt-process" options={{ title: 'Kvito peržiūra' }} />
+        <Stack.Screen name="profile/vote-history" options={{ title: 'Balsavimų istorija' }} />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
       </View>

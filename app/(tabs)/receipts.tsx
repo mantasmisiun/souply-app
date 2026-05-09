@@ -25,6 +25,7 @@ import {
 } from "../../state/receiptDraft";
 import { fetchWithTimeout, TIMEOUT_HEAVY_MS, TIMEOUT_STANDARD_MS } from "../../utils/fetchWithTimeout";
 import { useNetworkStatus } from "../../state/networkStatus";
+import { useLevelStore } from "../../state/levelStore";
 
 interface Receipt {
   id: number;
@@ -63,6 +64,8 @@ const safeJsonParse = (raw: string): any => {
 export default function ReceiptsScreen() {
   const colors = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  const checkCandidate = useLevelStore(s => s.checkCandidate);
+  useFocusEffect(useCallback(() => { checkCandidate(); }, [checkCandidate]));
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [loading, setLoading] = useState(true);
   const router = useRouter();

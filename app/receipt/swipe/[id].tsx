@@ -1,6 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Stack, useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Dimensions,
@@ -22,6 +22,7 @@ import Animated, {
 import { API_BASE_URL } from "../../../config/api";
 import { getUserId } from "../../../config/user";
 import { useTheme, type AppTheme } from "../../../constants/theme";
+import { useLevelStore } from "../../../state/levelStore";
 
 type Vote = "identical" | "similar" | "different";
 
@@ -69,6 +70,29 @@ export default function SwipeScreen() {
   const router = useRouter();
   const colors = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  const { stashLevel, triggerIfNewLevel } = useLevelStore();
+  const didSwipeRef = useRef(false);
+
+  // Fetch the profile when leaving the swipe screen so the modal fires on
+  // whichever screen the user lands on. Fire-and-forget: the cleanup itself
+  // must return synchronously, so the async work runs in the background.
+  // Using the profile endpoint (not levelSeenRef) avoids the race where the
+  // last vote response arrives after the cleanup fires.
+  useFocusEffect(useCallback(() => {
+    return () => {
+      if (!didSwipeRef.current) return;
+      (async () => {
+        try {
+          const userId = await getUserId();
+          const res = await fetch(`${API_BASE_URL}/api/users/${userId}/profile`);
+          if (res.ok) {
+            const { level } = await res.json();
+            if (level) triggerIfNewLevel(level);
+          }
+        } catch {}
+      })();
+    };
+  }, [triggerIfNewLevel]));
 
   const [loading, setLoading] = useState(true);
   const [refetching, setRefetching] = useState(false);
@@ -202,10 +226,11 @@ export default function SwipeScreen() {
   const done = !loading && !error && !refetching && exhausted;
 
   const sendVote = async (vote: Vote, item: QueueItem, cand: Candidate, dwellMs: number) => {
+    didSwipeRef.current = true;
     const userId = userIdRef.current ?? (await getUserId());
     userIdRef.current = userId;
     try {
-      await fetchWithTimeout(`${API_BASE_URL}/api/swipe-votes`, {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/api/swipe-votes`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -218,6 +243,8 @@ export default function SwipeScreen() {
           isMandatory: isMandatory ? 1 : 0,
         }),
       });
+      const data = await res.json();
+      if (data?.level) stashLevel(data.level); // persists for app-close recovery
     } catch (e) {
       console.warn("Swipe vote POST failed:", e);
     }

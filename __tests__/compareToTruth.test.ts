@@ -12,7 +12,7 @@ function makeProduct(overrides: Partial<MaximaProduct> & { name: string; price: 
         unit: 'vnt',
         pricePerUnit: null,
         rawLines: [],
-        region: { x: 0, y: 0, width: 0, height: 0 },
+        region: { yTop: 0, yBottom: 0, xLeft: 0, xRight: 0 },
         ...overrides,
     };
 }

@@ -9,6 +9,7 @@ import { getUserId } from '../../config/user';
 import { getLevelData } from '../../constants/levels';
 import { DonutChart, type DonutSlice } from '../../components/DonutChart';
 import { BarChart, type BarSlice } from '../../components/BarChart';
+import { useLevelStore } from '../../state/levelStore';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 // CAROUSEL_WIDTH must account for both the outer ScrollView padding (16 each side)
@@ -74,6 +75,7 @@ export default function ProfilisScreen() {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
+    const triggerIfNewLevel = useLevelStore(s => s.triggerIfNewLevel);
     const [profile, setProfile] = useState<ProfileData | null>(null);
     const [stats, setStats] = useState<StatsData | null>(null);
     const [loading, setLoading] = useState(true);
@@ -97,6 +99,7 @@ export default function ProfilisScreen() {
                 if (!cancelled) {
                     setProfile(profileData);
                     setStats(statsData);
+                    if (profileData?.level) triggerIfNewLevel(profileData.level);
                 }
             } catch {
                 // keep previous data on network error
@@ -274,6 +277,18 @@ export default function ProfilisScreen() {
                         </Text>
                     </>
                 )}
+            </View>
+
+            {/* Quick links */}
+            <View style={{ marginTop: 8 }}>
+                <TouchableOpacity
+                    style={styles.row}
+                    onPress={() => router.push('/profile/vote-history')}
+                >
+                    <Ionicons name="layers-outline" size={22} color={colors.textSecondary} />
+                    <Text style={styles.rowText}>Balsavimų istorija</Text>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
             </View>
 
             {/* Dev tools — only in dev builds */}

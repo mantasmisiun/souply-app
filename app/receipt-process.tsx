@@ -4,7 +4,7 @@ import TextRecognition from "@react-native-ml-kit/text-recognition";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -34,6 +34,7 @@ import {
     saveReceiptDraft,
 } from "../state/receiptDraft";
 import { useNetworkStatus } from "../state/networkStatus";
+import { useLevelStore } from "../state/levelStore";
 import {
     fetchWithTimeout,
     TIMEOUT_FAST_MS,
@@ -1107,6 +1108,8 @@ export default function ProcessReceiptScreen() {
   // in error state. Errors are never shown to the user — everything retries
   // silently in the background.
   const lastOnlineAt = useNetworkStatus((s) => s.lastOnlineAt);
+  const checkCandidate = useLevelStore(s => s.checkCandidate);
+  useFocusEffect(useCallback(() => { checkCandidate(); }, [checkCandidate]));
   useEffect(() => {
     if (lastOnlineAt === null) return;
     if (isPreviewMode) return;
