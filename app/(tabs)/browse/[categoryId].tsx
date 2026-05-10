@@ -513,12 +513,6 @@ export default function CategoryScreen() {
                                                 placeholderStyle={styles.productImagePlaceholder}
                                                 emojiStyle={styles.productImageEmoji}
                                             />
-                                            {!!item.bestDiscountPct && item.bestDiscountPct > 0 && (
-                                                <View style={styles.discountBadge}>
-                                                    <Text style={styles.discountBadgeEmoji}>🔥</Text>
-                                                    <Text style={styles.discountBadgePct}>%</Text>
-                                                </View>
-                                            )}
                                         </TouchableOpacity>
                                         <View style={styles.productInfo}>
                                             <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
