@@ -1,13 +1,15 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect, useNavigation, Stack } from 'expo-router';
-import { useMemo, useState, useCallback, useLayoutEffect } from 'react';
+import { useMemo, useState, useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
 import { API_BASE_URL } from '../../../config/api';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { getUserId } from '../../../config/user';
+import { loadCachedCoords, tryGpsCoords, persistCoords, type UserCoords } from '../../../utils/location';
+import LocationPromptModal from '../../../components/LocationPromptModal';
 
 /** Lithuanian plural inflection for "prekė":
  *    1  → prekės     (gen. sg.) "1 prekės"
@@ -65,6 +67,7 @@ export default function BasketResultsScreen() {
     const [visibleCount, setVisibleCount] = useState(0);
     const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
     const [swipesGated, setSwipesGated] = useState(false);
+    const [locationPromptVisible, setLocationPromptVisible] = useState(false);
 
     const loadResults = async () => {
         // Detail screen now awaits the calc before pushing to this route,
@@ -90,7 +93,51 @@ export default function BasketResultsScreen() {
         setLoading(false);
     };
 
+    const runRecalcWithCoords = useCallback(async (coords: UserCoords) => {
+        setLoading(true);
+        setVisibleCount(0);
+        setSelectedStoreId(null);
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ lat: coords.lat, lng: coords.lng }),
+            });
+            const newResults = await res.json();
+            await AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults));
+            await persistCoords(coords);
+            setResults(newResults);
+            setLoading(false);
+            for (let i = 0; i <= newResults.length; i++) {
+                setTimeout(() => setVisibleCount(i), i * 150);
+            }
+        } catch {
+            Alert.alert('Klaida', 'Nepavyko perskaičiuoti');
+            setLoading(false);
+        }
+    }, [id]);
+
+    const handleRecalculate = useCallback(async () => {
+        const cached = await loadCachedCoords();
+        if (cached) { await runRecalcWithCoords(cached); return; }
+        const gps = await tryGpsCoords();
+        if (gps) { await runRecalcWithCoords(gps); return; }
+        setLocationPromptVisible(true);
+    }, [runRecalcWithCoords]);
+
     useFocusEffect(useCallback(() => {
+        // Set header options here — after expo-router's own focus event —
+        // so the button isn't cleared when an unregistered screen gets its
+        // options reset to defaults on every focus.
+        navigation.setOptions({
+            title: 'Palyginimo rezultatai',
+            headerRight: () => (
+                <TouchableOpacity onPress={handleRecalculate} style={{ marginRight: 12 }}>
+                    <Ionicons name="refresh-outline" size={22} color={colors.primary} />
+                </TouchableOpacity>
+            ),
+        });
+
         (async () => {
             try {
                 const userId = await getUserId();
@@ -102,61 +149,16 @@ export default function BasketResultsScreen() {
             }
         })();
         loadResults();
-    }, [id]));
-
-    const handleRecalculate = async () => {
-        setLoading(true);
-        setVisibleCount(0);
-        setSelectedStoreId(null);
-        try {
-            // Recalc uses the previously-cached coordinates so the user
-            // doesn't get re-prompted for location on every refresh.
-            // Falls back silently to the backend's Vilnius default if the
-            // cache is empty (edge case: fresh install recalcing a pre-
-            // existing basket).
-            const { loadCachedCoords } = await import('../../../utils/location');
-            const coords = await loadCachedCoords();
-            const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(coords ? { lat: coords.lat, lng: coords.lng } : {}),
-            });
-            const newResults = await res.json();
-            await AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults));
-            setResults(newResults);
-            setLoading(false);
-            for (let i = 0; i <= newResults.length; i++) {
-                setTimeout(() => setVisibleCount(i), i * 150);
-            }
-        } catch (error) {
-            Alert.alert('Klaida', 'Nepavyko perskaičiuoti');
-            setLoading(false);
-        }
-    };
-
-    // Imperative header config. The declarative <Stack.Screen options> has
-    // flaky timing when this route is reached from a cached AsyncStorage
-    // load — the header commits before the screen's options apply, so the
-    // refresh button blinks in and out. `useLayoutEffect` + setOptions
-    // runs synchronously before paint so the button is always there.
-    useLayoutEffect(() => {
-        navigation.setOptions({
-            title: 'Palyginimo rezultatai',
-            headerRight: () => (
-                <TouchableOpacity onPress={handleRecalculate} style={{ marginRight: 12 }}>
-                    <Ionicons name="refresh-outline" size={22} color={colors.primary} />
-                </TouchableOpacity>
-            ),
-        });
-        // handleRecalculate reference changes every render; that's fine,
-        // setOptions is cheap.
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    });
+    }, [id, navigation, handleRecalculate, colors.primary]));
 
     const closestStoreId = results.length > 0
         ? [...results].sort((a, b) => a.distance - b.distance)[0].storeId
         : null;
-    const cheapestStoreId = results.length > 0 ? results[0].storeId : null;
+    const cheapestStoreId = results.length > 1 && results[0].total < results[1].total
+        ? results[0].storeId
+        : results.length === 1
+            ? results[0].storeId
+            : null;
     const selectedStore = results.find(r => r.storeId === selectedStoreId);
 
     const handleNavigate = () => {
@@ -379,6 +381,14 @@ export default function BasketResultsScreen() {
                     </Animated.View>
                 )}
             </View>
+            <LocationPromptModal
+                visible={locationPromptVisible}
+                onResolved={async (coords) => {
+                    setLocationPromptVisible(false);
+                    await runRecalcWithCoords(coords);
+                }}
+                onCancel={() => setLocationPromptVisible(false)}
+            />
         </>
     );
 }

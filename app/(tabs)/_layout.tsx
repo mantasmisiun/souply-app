@@ -1,10 +1,12 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet } from 'react-native';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { useBasketState } from '../../state/basketState';
+import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../components/ComparedBasketChoiceModal';
 
 function Badge({ count, styles }: { count: number; styles: ReturnType<typeof makeStyles> }) {
     if (count === 0) return null;
@@ -21,6 +23,9 @@ export default function TabLayout() {
     const [basketCount, setBasketCount] = useState(0);
     const [listCount, setListCount] = useState(0);
     const [pendingSwipeCount, setPendingSwipeCount] = useState(0);
+    const { setDraftBasketId, clearSessionBasket } = useBasketState();
+    const [startupBasket, setStartupBasket] = useState<ComparedBasketChoice | null>(null);
+    const startupChecked = useRef(false);
 
     const fetchCounts = async () => {
         try {
@@ -54,7 +59,44 @@ export default function TabLayout() {
         return () => clearInterval(interval);
     }, []);
 
+    useEffect(() => {
+        if (startupChecked.current) return;
+        startupChecked.current = true;
+        (async () => {
+            try {
+                const userId = await getUserId();
+                const res = await fetch(`${API_BASE_URL}/api/baskets/user/${userId}`);
+                const baskets = await res.json();
+                if (!Array.isArray(baskets)) return;
+                const draft = baskets.find((b: any) => b.status === 'draft');
+                if (draft) {
+                    setStartupBasket({
+                        id: draft.id,
+                        name: draft.name,
+                        itemCount: draft.itemCount ?? 0,
+                        updatedAt: draft.updatedAt,
+                    });
+                }
+            } catch {}
+        })();
+    }, []);
+
     return (
+        <>
+        <ComparedBasketChoiceModal
+            visible={startupBasket !== null}
+            compared={startupBasket}
+            subtitle="Turite neužbaigtą krepšelį. Ar norite jį tęsti ar pradėti naują?"
+            onUseExisting={() => {
+                if (startupBasket) setDraftBasketId(startupBasket.id);
+                setStartupBasket(null);
+            }}
+            onCreateNew={() => {
+                clearSessionBasket();
+                setStartupBasket(null);
+            }}
+            onCancel={() => setStartupBasket(null)}
+        />
         <Tabs
             screenOptions={{
                 tabBarActiveTintColor: colors.primary,
@@ -124,6 +166,7 @@ export default function TabLayout() {
                 }}
             />
         </Tabs>
+        </>
     );
 }
 

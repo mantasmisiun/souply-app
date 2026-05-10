@@ -29,6 +29,7 @@ interface Product {
     maxAmount: number | null;
     unit: string | null;
     hasWeighable: boolean;
+    bestDiscountPct?: number | null;
 }
 
 export default function CategoryScreen() {
@@ -501,7 +502,7 @@ export default function CategoryScreen() {
                                 const quantity = (basketQuantities[item.id] ?? 0) + mergedQty;
                                 return (
                                     <View style={styles.productCard}>
-                                        <TouchableOpacity 
+                                        <TouchableOpacity
                                             onPress={() => router.push(`/product/${item.id}` as any)}
                                             style={styles.productImageContainer}
                                             activeOpacity={0.7}
@@ -512,6 +513,12 @@ export default function CategoryScreen() {
                                                 placeholderStyle={styles.productImagePlaceholder}
                                                 emojiStyle={styles.productImageEmoji}
                                             />
+                                            {!!item.bestDiscountPct && item.bestDiscountPct > 0 && (
+                                                <View style={styles.discountBadge}>
+                                                    <Text style={styles.discountBadgeEmoji}>🔥</Text>
+                                                    <Text style={styles.discountBadgePct}>%</Text>
+                                                </View>
+                                            )}
                                         </TouchableOpacity>
                                         <View style={styles.productInfo}>
                                             <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
@@ -935,6 +942,29 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     productImageEmoji: {
         fontSize: 44,
         opacity: 0.4,
+    },
+    discountBadge: {
+        position: 'absolute',
+        top: 4,
+        right: 4,
+        width: 28,
+        height: 28,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    discountBadgeEmoji: {
+        fontSize: 26,
+        lineHeight: 28,
+    },
+    discountBadgePct: {
+        position: 'absolute',
+        fontSize: 12,
+        fontWeight: '900',
+        color: '#000',
+        top: 12,
+        left: 5,
+        right: 0,
+        textAlign: 'center',
     },
     productInfo: {
         flex: 1,

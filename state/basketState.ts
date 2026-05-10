@@ -19,14 +19,35 @@ interface ReceiptPickerState {
 }
 
 interface BasketState {
+  /** Non-null only when the current session basket is in 'draft' status. */
   draftBasketId: number | null;
+  /**
+   * Tracks the active basket for the whole app session regardless of its
+   * status (draft or compared). Set automatically whenever draftBasketId
+   * is set to a non-null value. Only cleared explicitly via clearSessionBasket
+   * (user action) or when the basket is deleted.
+   */
+  sessionBasketId: number | null;
   setDraftBasketId: (id: number | null) => void;
+  clearSessionBasket: () => void;
   initDraftBasket: () => Promise<void>;
 }
 
 export const useBasketState = create<BasketState>((set) => ({
   draftBasketId: null,
-  setDraftBasketId: (id) => set({ draftBasketId: id }),
+  sessionBasketId: null,
+
+  setDraftBasketId: (id) =>
+    set((state) => ({
+      draftBasketId: id,
+      // When a draft basket is set, it becomes the session basket.
+      // When cleared (basket compared/calc run), session basket stays —
+      // the bar remains visible until the user explicitly discards.
+      sessionBasketId: id !== null ? id : state.sessionBasketId,
+    })),
+
+  clearSessionBasket: () => set({ draftBasketId: null, sessionBasketId: null }),
+
   initDraftBasket: async () => {
     try {
       const userId = await getUserId();
@@ -35,7 +56,13 @@ export const useBasketState = create<BasketState>((set) => ({
       const draft = Array.isArray(baskets)
         ? baskets.find((b: any) => b.status === "draft")
         : null;
-      set({ draftBasketId: draft ? draft.id : null });
+      if (draft) {
+        set({ draftBasketId: draft.id, sessionBasketId: draft.id });
+      } else {
+        set({ draftBasketId: null });
+        // sessionBasketId intentionally not cleared — if a session basket
+        // exists but is now 'compared', the bar should still show.
+      }
     } catch {
       set({ draftBasketId: null });
     }

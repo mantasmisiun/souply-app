@@ -455,6 +455,7 @@ export default function ProductDetailScreen() {
     const { id } = useLocalSearchParams<{ id: string }>();
     const [product, setProduct] = useState<Product | null>(null);
     const [storeProducts, setStoreProducts] = useState<StoreProduct[]>([]);
+    const [allChains, setAllChains] = useState<Chain[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedChainId, setSelectedChainId] = useState<number | null>(null);
     const [stores, setStores] = useState<Store[]>([]);
@@ -466,27 +467,28 @@ export default function ProductDetailScreen() {
     const [chartModalSp, setChartModalSp] = useState<StoreProduct | null>(null);
     const { mode, ready: prefReady } = useDisplayMode();
 
-    // Get unique chains from store products
+    useEffect(() => {
+        fetch(`${API_BASE_URL}/api/chains`)
+            .then(r => r.json())
+            .then(data => setAllChains(Array.isArray(data) ? data : []))
+            .catch(() => {});
+    }, []);
+
+    // Get chains for tabs: use DB-sourced logos from /api/chains as the base,
+    // filled in by storeProducts for any chain the API hasn't returned yet.
     const chains = useMemo(() => {
         const chainMap = new Map<number, Chain>();
+        allChains.forEach(c => chainMap.set(c.id, c));
         storeProducts.forEach(sp => {
             if (!chainMap.has(sp.chainId)) {
                 chainMap.set(sp.chainId, { id: sp.chainId, name: sp.chainName, logoUrl: sp.logoUrl });
             }
         });
-        // Fallback logo URLs for chains with no products on this
-        // screen. Hardcoding the LAN IP + http here used to break on
-        // release APKs (Android cleartext block) and any install
-        // outside the home network. Route through the public MinIO
-        // hostname so external installs work and Android doesn't
-        // cleartext-filter the image.
-        const MINIO_PUBLIC = 'https://minio.manofoto.dpdns.org';
-        return [
-            chainMap.get(1) || { id: 1, name: 'MAXIMA LT, UAB', logoUrl: `${MINIO_PUBLIC}/chain-logos/maxima.png` },
-            chainMap.get(2) || { id: 2, name: 'UAB RIMI LIETUVA', logoUrl: `${MINIO_PUBLIC}/chain-logos/rimi.png` },
-            chainMap.get(3) || { id: 3, name: 'UAB IKI LIETUVA', logoUrl: `${MINIO_PUBLIC}/chain-logos/iki.png` },
-        ];
-    }, [storeProducts]);
+        return [1, 2, 3, 4, 5].flatMap(id => {
+            const c = chainMap.get(id);
+            return c ? [c] : [];
+        });
+    }, [allChains, storeProducts]);
 
     const filteredStoreProducts = useMemo(() => {
         if (!selectedChainId) return storeProducts;

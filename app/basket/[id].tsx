@@ -38,7 +38,7 @@ export default function BasketDetailScreen() {
     const { id } = useLocalSearchParams();
     const router = useRouter();
     const { mode: displayMode } = useDisplayMode();
-    const { setDraftBasketId } = useBasketState();
+    const { setDraftBasketId, clearSessionBasket } = useBasketState();
 
     const [basket, setBasket] = useState<Basket | null>(null);
     const [items, setItems] = useState<BasketItem[]>([]);
@@ -211,7 +211,7 @@ export default function BasketDetailScreen() {
                 // basket itself is deleted; trigger that here for UX
                 // consistency (empty basket == no basket).
                 await fetch(`${API_BASE_URL}/api/baskets/${id}`, { method: 'DELETE' });
-                setDraftBasketId(null);
+                clearSessionBasket();
                 router.back();
             }
         } catch {

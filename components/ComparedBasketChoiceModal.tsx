@@ -16,6 +16,8 @@ interface ComparedBasketChoiceModalProps {
     onUseExisting: () => void;
     onCreateNew: () => void;
     onCancel: () => void;
+    /** Override the explanatory subtitle. Defaults to the compared-basket copy. */
+    subtitle?: string;
 }
 
 /**
@@ -34,6 +36,7 @@ export default function ComparedBasketChoiceModal({
     onUseExisting,
     onCreateNew,
     onCancel,
+    subtitle,
 }: ComparedBasketChoiceModalProps) {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -49,8 +52,7 @@ export default function ComparedBasketChoiceModal({
                 <View style={styles.card}>
                     <Text style={styles.title}>Kur pridėti prekę?</Text>
                     <Text style={styles.sub}>
-                        Turite palygintą krepšelį. Jei pridėsite į jį, krepšelis
-                        vėl taps redaguojamu juodraščiu.
+                        {subtitle ?? 'Turite palygintą krepšelį. Jei pridėsite į jį, krepšelis vėl taps redaguojamu juodraščiu.'}
                     </Text>
 
                     <TouchableOpacity style={styles.optionRow} onPress={onUseExisting}>

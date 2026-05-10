@@ -33,6 +33,7 @@ export default function BrowseIndex() {
     const [expandedL1, setExpandedL1] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
     const router = useRouter();
+    const DISCOUNTS_ITEM = { id: -1, name: 'Nuolaidos', parentCategoryId: null } as const;
 
     useEffect(() => {
         fetch(`${API_BASE_URL}/api/categories`)
@@ -66,6 +67,20 @@ export default function BrowseIndex() {
                 data={l1Categories}
                 keyExtractor={item => item.id.toString()}
                 contentContainerStyle={styles.list}
+                ListHeaderComponent={
+                    <TouchableOpacity
+                        style={styles.discountsCard}
+                        onPress={() => router.push('/browse/discounts' as any)}
+                        activeOpacity={0.8}
+                    >
+                        <Text style={styles.discountsIcon}>🔥</Text>
+                        <View style={styles.discountsTextWrap}>
+                            <Text style={styles.discountsTitle}>Nuolaidos</Text>
+                            <Text style={styles.discountsSub}>Akcijinės prekės iš visų parduotuvių</Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={20} color={colors.onPrimary} />
+                    </TouchableOpacity>
+                }
                 renderItem={({ item }) => {
                     const isExpanded = expandedL1 === item.id;
                     const l2 = l2Map[item.id] || [];
@@ -114,11 +129,35 @@ export default function BrowseIndex() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: c.pageBackground },
-    list: { padding: 16 },
+    list: { padding: 16, gap: 10 },
+    discountsCard: {
+        backgroundColor: c.primary,
+        borderRadius: 14,
+        paddingHorizontal: 16,
+        paddingVertical: 18,
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        elevation: 2,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.12, shadowRadius: 4,
+    },
+    discountsIcon: { fontSize: 28 },
+    discountsTextWrap: { flex: 1 },
+    discountsTitle: {
+        fontSize: 17,
+        fontWeight: '700',
+        color: c.onPrimary,
+    },
+    discountsSub: {
+        fontSize: 12,
+        color: c.onPrimary,
+        opacity: 0.8,
+        marginTop: 2,
+    },
     l1Container: {
         backgroundColor: c.cardBackground,
         borderRadius: 12,
-        marginBottom: 10,
         overflow: 'hidden',
         elevation: 1,
         shadowColor: '#000', shadowOffset: { width: 0, height: 1 },

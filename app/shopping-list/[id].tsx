@@ -36,7 +36,22 @@ interface ShoppingListItem {
     isWeighable: boolean;
     unit?: string;
     storeProductId?: number | null;
+    requiresCoupon?: boolean;
+    couponLabel?: string | null;
+    l2CategoryId?: number | null;
+    l2CategoryName?: string | null;
 }
+
+const sortItems = (arr: ShoppingListItem[]): ShoppingListItem[] =>
+    arr.sort((a, b) => {
+        if (a.isChecked !== b.isChecked) return Number(a.isChecked) - Number(b.isChecked);
+        if (!a.isChecked) {
+            const ca = a.l2CategoryName ?? '￿';
+            const cb = b.l2CategoryName ?? '￿';
+            if (ca !== cb) return ca.localeCompare(cb, 'lt');
+        }
+        return a.productName.localeCompare(b.productName, 'lt');
+    });
 function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
     item: ShoppingListItem;
     onToggle: (item: ShoppingListItem) => void;
@@ -104,6 +119,11 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
                                     ? (item.quantity < 10 ? `${item.quantity} kg` : `${item.quantity} g`)
                                     : `${item.quantity} vnt.`}
                         </Text>
+                        {item.requiresCoupon && item.couponLabel && !item.isChecked && (
+                            <View style={styles.couponBadge}>
+                                <Text style={styles.couponBadgeText}>{item.couponLabel} kuponas</Text>
+                            </View>
+                        )}
                     </View>
                     {item.price && (
                         <Text style={[styles.itemPrice, item.isChecked && styles.itemPriceChecked]}>
@@ -164,6 +184,20 @@ export default function ShoppingListScreen() {
     const [shareToken, setShareToken] = useState<string | null>(null);
     const [shareStatus, setShareStatus] = useState<'pending' | 'claimed' | 'expired' | 'error'>('pending');
     const [shareLoading, setShareLoading] = useState(false);
+    // Coupon reminder: queue of coupon labels not yet shown this session.
+    // shownCouponsRef prevents re-showing a label already dismissed.
+    const shownCouponsRef = useRef<Set<string>>(new Set());
+    const [couponQueue, setCouponQueue] = useState<string[]>([]);
+    const [couponDontShow, setCouponDontShow] = useState(false);
+
+    const dismissCoupon = async () => {
+        const label = couponQueue[0];
+        if (couponDontShow && label) {
+            await AsyncStorage.setItem(`coupon_hide_${label}`, '1');
+        }
+        setCouponDontShow(false);
+        setCouponQueue(q => q.slice(1));
+    };
 
     const openShare = async () => {
         setShareOpen(true);
@@ -245,7 +279,7 @@ export default function ShoppingListScreen() {
                 const data = await res.json();
 
                 if (Array.isArray(data) && (data.length >= expected || attempts >= 20)) {
-                    setItems(data.sort((a: any, b: any) => Number(a.isChecked) - Number(b.isChecked)));
+                    setItems(sortItems(data));
                     setLoading(false);
                     setVisibleCount(0);
                     for (let i = 0; i <= data.length; i++) {
@@ -301,10 +335,7 @@ export default function ShoppingListScreen() {
                     const filtered = pendDel != null
                         ? merged.filter(m => m.id !== pendDel)
                         : merged;
-                    filtered.sort((a, b) => {
-                        if (a.isChecked !== b.isChecked) return Number(a.isChecked) - Number(b.isChecked);
-                        return a.productName.localeCompare(b.productName);
-                    });
+                    sortItems(filtered);
                     return filtered;
                 });
                 // Keep the staggered reveal in sync — any newly-added
@@ -321,12 +352,35 @@ export default function ShoppingListScreen() {
     const totalCount = items.length;
     const progress = totalCount > 0 ? checkedCount / totalCount : 0;
 
+    const { uncheckedGroups, checkedItems } = useMemo(() => {
+        const visible = items.slice(0, visibleCount);
+        const unchecked = visible.filter(i => !i.isChecked);
+        const checked = visible.filter(i => i.isChecked);
+
+        const byCategory = new Map<string, ShoppingListItem[]>();
+        for (const item of unchecked) {
+            const key = item.l2CategoryName ?? '';
+            if (!byCategory.has(key)) byCategory.set(key, []);
+            byCategory.get(key)!.push(item);
+        }
+        const groups = Array.from(byCategory.entries())
+            .map(([key, groupItems]) => ({ name: key || null, items: groupItems }))
+            .sort((a, b) => {
+                if (!a.name && !b.name) return 0;
+                if (!a.name) return 1;
+                if (!b.name) return -1;
+                return a.name.localeCompare(b.name, 'lt');
+            });
+
+        return { uncheckedGroups: groups, checkedItems: checked };
+    }, [items, visibleCount]);
+
     const toggleItem = async (item: ShoppingListItem) => {
         const newChecked = !item.isChecked;
 
-        const updatedItems = items
-            .map(i => i.id === item.id ? { ...i, isChecked: newChecked } : i)
-            .sort((a, b) => Number(a.isChecked) - Number(b.isChecked));
+        const updatedItems = sortItems(
+            items.map(i => i.id === item.id ? { ...i, isChecked: newChecked } : i)
+        );
         setItems(updatedItems);
         markInFlight(item.id);
 
@@ -337,6 +391,18 @@ export default function ShoppingListScreen() {
         })
             .catch(() => { setItems(items); })
             .finally(() => { inFlightItemsRef.current.delete(item.id); });
+
+        // Coupon reminder: first check of an item that needs a Lidl+ coupon
+        if (newChecked && item.requiresCoupon && item.couponLabel) {
+            const label = item.couponLabel;
+            if (!shownCouponsRef.current.has(label)) {
+                const hidden = await AsyncStorage.getItem(`coupon_hide_${label}`);
+                if (hidden !== '1') {
+                    shownCouponsRef.current.add(label);
+                    setCouponQueue(q => [...q, label]);
+                }
+            }
+        }
 
         if (newChecked && updatedItems.every(i => i.isChecked)) {
             // Fire the completion prompt exactly once per list. After "Ne"
@@ -401,15 +467,7 @@ export default function ShoppingListScreen() {
         if (!pendingDeleteRef.current) return;
         clearTimeout(pendingDeleteRef.current.timer);
         const { item } = pendingDeleteRef.current;
-        setItems(prev => {
-            // Insert while preserving sort: unchecked first, then name.
-            const next = [...prev, item];
-            next.sort((a, b) => {
-                if (a.isChecked !== b.isChecked) return Number(a.isChecked) - Number(b.isChecked);
-                return a.productName.localeCompare(b.productName);
-            });
-            return next;
-        });
+        setItems(prev => sortItems([...prev, item]));
         pendingDeleteRef.current = null;
         setPendingDeleteTick(t => t + 1);
     };
@@ -623,9 +681,30 @@ export default function ShoppingListScreen() {
                                 )}
                             </View>
                         )}
-                        {items.slice(0, visibleCount).length > 0 && (
+                        {uncheckedGroups.map(group => (
+                            <View key={group.name ?? '__no_category__'}>
+                                {group.name && (
+                                    <Text style={styles.sectionHeader}>{group.name}</Text>
+                                )}
+                                <View style={styles.listContainer}>
+                                    {group.items.map((item, index) => (
+                                        <Animated.View key={item.id} entering={FadeInDown}>
+                                            {index > 0 && <View style={styles.divider} />}
+                                            <ShoppingListItemCard
+                                                item={item}
+                                                onToggle={toggleItem}
+                                                onRemove={removeItem}
+                                                styles={styles}
+                                                colors={colors}
+                                            />
+                                        </Animated.View>
+                                    ))}
+                                </View>
+                            </View>
+                        ))}
+                        {checkedItems.length > 0 && (
                             <View style={styles.listContainer}>
-                                {items.slice(0, visibleCount).map((item, index) => (
+                                {checkedItems.map((item, index) => (
                                     <Animated.View key={item.id} entering={FadeInDown}>
                                         {index > 0 && <View style={styles.divider} />}
                                         <ShoppingListItemCard
@@ -736,6 +815,47 @@ export default function ShoppingListScreen() {
                         </View>
                     </View>
                 )}
+                <Modal
+                    visible={couponQueue.length > 0}
+                    transparent
+                    animationType="slide"
+                    onRequestClose={dismissCoupon}
+                >
+                    <View style={styles.shareOverlay}>
+                        <TouchableOpacity
+                            style={StyleSheet.absoluteFillObject}
+                            activeOpacity={1}
+                            onPress={dismissCoupon}
+                        />
+                        <View style={styles.couponModalContainer}>
+                            <View style={styles.couponBadgeLarge}>
+                                <Text style={styles.couponBadgeLargeText}>
+                                    {couponQueue[0]} kuponas
+                                </Text>
+                            </View>
+                            <Text style={styles.couponModalTitle}>Prisiminkite kuponą!</Text>
+                            <Text style={styles.couponModalBody}>
+                                Suaktyvinkite {couponQueue[0]} kuponą <Text style={{ fontWeight: '700' }}>Lidl Plus</Text> programėlėje prieš atsiskaitydami.
+                            </Text>
+                            <TouchableOpacity
+                                style={styles.couponDontShowRow}
+                                onPress={() => setCouponDontShow(v => !v)}
+                            >
+                                <View style={[styles.checkbox, couponDontShow && styles.checkboxChecked]}>
+                                    {couponDontShow && <Ionicons name="checkmark" size={14} color="#fff" />}
+                                </View>
+                                <Text style={styles.couponDontShowLabel}>Daugiau nerodyti</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.couponModalBtn}
+                                onPress={dismissCoupon}
+                            >
+                                <Text style={styles.couponModalBtnText}>Supratau</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </Modal>
+
                 <Modal
                     visible={shareOpen}
                     transparent
@@ -849,6 +969,16 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
 list: {
     paddingTop: 16,
     paddingBottom: 100,
+},
+sectionHeader: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: c.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 6,
 },
 listContainer: {
     backgroundColor: c.cardBackground,
@@ -1042,5 +1172,85 @@ card: {
         backgroundColor: c.success,
         alignItems: 'center', justifyContent: 'center',
         marginBottom: 16,
+    },
+
+    // Coupon badge on shopping list item card
+    couponBadge: {
+        flexDirection: 'row',
+        alignSelf: 'flex-start',
+        backgroundColor: '#FFF3B0',
+        borderWidth: 1,
+        borderColor: '#FFCC00',
+        borderRadius: 4,
+        paddingHorizontal: 6,
+        paddingVertical: 2,
+        marginTop: 4,
+    },
+    couponBadgeText: {
+        fontSize: 10,
+        fontWeight: '700',
+        color: '#003D8F',
+    },
+
+    // Coupon reminder modal
+    couponModalContainer: {
+        backgroundColor: c.cardBackground,
+        borderRadius: 16,
+        paddingVertical: 28,
+        paddingHorizontal: 24,
+        width: '85%',
+        alignItems: 'center',
+        elevation: 8,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.2, shadowRadius: 8,
+    },
+    couponBadgeLarge: {
+        backgroundColor: '#FFF3B0',
+        borderWidth: 2,
+        borderColor: '#FFCC00',
+        borderRadius: 8,
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        marginBottom: 18,
+    },
+    couponBadgeLargeText: {
+        fontSize: 20,
+        fontWeight: '800',
+        color: '#003D8F',
+    },
+    couponModalTitle: {
+        fontSize: 18,
+        fontWeight: '700',
+        color: c.textPrimary,
+        marginBottom: 8,
+        textAlign: 'center',
+    },
+    couponModalBody: {
+        fontSize: 14,
+        color: c.textSecondary,
+        textAlign: 'center',
+        lineHeight: 20,
+        marginBottom: 16,
+    },
+    couponDontShowRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 8,
+        marginBottom: 20,
+    },
+    couponDontShowLabel: {
+        fontSize: 13,
+        color: c.textSecondary,
+    },
+    couponModalBtn: {
+        paddingHorizontal: 32,
+        paddingVertical: 12,
+        backgroundColor: '#003D8F',
+        borderRadius: 8,
+    },
+    couponModalBtnText: {
+        color: '#fff',
+        fontSize: 14,
+        fontWeight: '700',
     },
 });
