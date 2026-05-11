@@ -1,4 +1,5 @@
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Image, Keyboard, Platform, Modal  } from 'react-native';
+import { SkeletonBox } from '../../components/SkeletonBox';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,6 +12,7 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { ProductImage } from '../../components/ProductImage';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import * as Haptics from 'expo-haptics';
 
 interface ShoppingList {
     id: number;
@@ -377,6 +379,7 @@ export default function ShoppingListScreen() {
 
     const toggleItem = async (item: ShoppingListItem) => {
         const newChecked = !item.isChecked;
+        Haptics.impactAsync(newChecked ? Haptics.ImpactFeedbackStyle.Medium : Haptics.ImpactFeedbackStyle.Light);
 
         const updatedItems = sortItems(
             items.map(i => i.id === item.id ? { ...i, isChecked: newChecked } : i)
@@ -561,7 +564,20 @@ export default function ShoppingListScreen() {
         }
     };
 
-    if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color={colors.primary} /></View>;
+    if (loading) return (
+        <View style={[styles.container, { padding: 16, gap: 10 }]}>
+            {Array.from({ length: 8 }).map((_, i) => (
+                <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <SkeletonBox width={22} height={22} borderRadius={6} />
+                    <View style={{ flex: 1, gap: 6 }}>
+                        <SkeletonBox width={180} height={13} borderRadius={6} />
+                        <SkeletonBox width={100} height={11} borderRadius={5} />
+                    </View>
+                    <SkeletonBox width={40} height={13} borderRadius={5} />
+                </View>
+            ))}
+        </View>
+    );
 
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>

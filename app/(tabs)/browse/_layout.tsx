@@ -20,7 +20,7 @@ export default function BrowseLayout() {
                     params: { mode: 'products', source: 'browse' },
                 })
             }
-            style={{ marginRight: 12 }}
+            style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
         >
             <Ionicons name="search" size={24} color={colors.primary} />
         </TouchableOpacity>
@@ -44,9 +44,10 @@ export default function BrowseLayout() {
             />
             <Stack.Screen
                 name="[categoryId]"
-                options={{
+                options={({ route }: any) => ({
+                    title: route.params?.name ? decodeURIComponent(route.params.name) : '',
                     headerRight: searchHeaderRight,
-                }}
+                })}
             />
         </Stack>
     );

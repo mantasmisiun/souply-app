@@ -1,4 +1,4 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, RefreshControl } from 'react-native';
 import { useMemo, useRef, useState, useCallback } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -6,6 +6,8 @@ import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { useBasketState } from '../../state/basketState';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { ScalePressable } from '../../components/ScalePressable';
+import { SkeletonBox } from '../../components/SkeletonBox';
 
 interface Basket {
     id: number;
@@ -29,6 +31,7 @@ export default function BasketScreen() {
     // so the list doesn't blank out every time the tab regains focus.
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [pullRefreshing, setPullRefreshing] = useState(false);
     const [visibleCount, setVisibleCount] = useState(INITIAL_PAGE_SIZE);
     const hasFetchedRef = useRef(false);
     const router = useRouter();
@@ -107,7 +110,19 @@ export default function BasketScreen() {
         }
     };
 
-    if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color={colors.primary} /></View>;
+    if (loading) return (
+        <View style={[styles.container, { padding: 16, gap: 12 }]}>
+            {Array.from({ length: 5 }).map((_, i) => (
+                <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, borderLeftWidth: 3, borderLeftColor: colors.borderSubtle }}>
+                    <View style={{ gap: 8, flex: 1 }}>
+                        <SkeletonBox width={160} height={14} borderRadius={7} />
+                        <SkeletonBox width={100} height={12} borderRadius={6} />
+                    </View>
+                    <SkeletonBox width={60} height={22} borderRadius={8} />
+                </View>
+            ))}
+        </View>
+    );
 
     const visibleBaskets = baskets.slice(0, visibleCount);
     const hasMore = baskets.length > visibleCount;
@@ -124,10 +139,22 @@ export default function BasketScreen() {
                 data={visibleBaskets}
                 keyExtractor={item => item.id.toString()}
                 contentContainerStyle={styles.list}
+                refreshControl={
+                    <RefreshControl
+                        refreshing={pullRefreshing}
+                        onRefresh={async () => { setPullRefreshing(true); await fetchBaskets(false); setPullRefreshing(false); }}
+                        colors={[colors.primary]}
+                        tintColor={colors.primary}
+                    />
+                }
                 ListEmptyComponent={
                     <View style={styles.centered}>
+                        <Ionicons name="cart-outline" size={56} color={colors.textMuted} />
                         <Text style={styles.emptyText}>Krepšelis tuščias</Text>
-                        <Text style={styles.emptySubText}>Eikite į Naršyti ir pridėkite produktų</Text>
+                        <Text style={styles.emptySubText}>Pridėkite produktų ir palyginkite kainas parduotuvėse</Text>
+                        <ScalePressable style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/browse' as any)}>
+                            <Text style={styles.emptyButtonText}>Naršyti produktus</Text>
+                        </ScalePressable>
                     </View>
                 }
                 ListFooterComponent={
@@ -198,8 +225,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     cardDate: { fontSize: 13, color: c.textSecondary, marginTop: 2 },
     statusBadge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 },
     statusText: { fontSize: 11, color: c.textInverse, fontWeight: '600' },
-    emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600' },
-    emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 4 },
+    emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', marginTop: 16, textAlign: 'center' },
+    emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 6, textAlign: 'center', lineHeight: 18 },
+    emptyButton: { marginTop: 20, backgroundColor: c.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
+    emptyButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 14 },
     fab: {
         position: 'absolute', bottom: 24, right: 24,
         backgroundColor: c.primary, width: 56, height: 56,

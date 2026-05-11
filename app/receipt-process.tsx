@@ -83,6 +83,7 @@ import {
     RimiProduct
 } from "@shared/parsers/rimiParser";
 import { ocrImageTiled } from "../utils/mlkitOcr";
+import { useProfileStore } from '../state/profileStore';
 
 interface ProductMatchOption {
   storeProductId: number;
@@ -655,6 +656,7 @@ export default function ProcessReceiptScreen() {
         );
         setLoading(false);
         isHydratingRef.current = false;
+        useProfileStore.getState().invalidate();
         router.replace("/(tabs)/receipts");
         setTimeout(() => {
           Alert.alert(
@@ -994,6 +996,7 @@ export default function ProcessReceiptScreen() {
         // or a different user's). Drop the local draft — there's
         // nothing to resume; the data lives in someone's receipt list.
         clearReceiptDraft().catch(() => {});
+        useProfileStore.getState().invalidate();
         router.replace("/(tabs)/receipts");
         setTimeout(() => {
           Alert.alert("Kvitas jau įkeltas", "Šis kvitas jau buvo įkeltas.");

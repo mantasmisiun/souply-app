@@ -1,4 +1,5 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Modal } from 'react-native';
+import { SkeletonBox } from '../../components/SkeletonBox';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
@@ -10,6 +11,8 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 import { useBasketState } from '../../state/basketState';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import LocationPromptModal from '../../components/LocationPromptModal';
+import * as Haptics from 'expo-haptics';
+import { ScalePressable } from '../../components/ScalePressable';
 import { loadCachedCoords, persistCoords, tryGpsCoords, type UserCoords, VILNIUS_FALLBACK } from '../../utils/location';
 
 interface BasketItem {
@@ -261,6 +264,7 @@ export default function BasketDetailScreen() {
      */
     const handleCalculate = async () => {
         if (calcing) return;
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         const cached = await loadCachedCoords();
         if (cached) {
             await runCalcWithCoords(cached);
@@ -306,7 +310,24 @@ export default function BasketDetailScreen() {
         );
     };
 
-    if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color={colors.primary} /></View>;
+    if (loading) return (
+        <View style={[styles.container, { padding: 16, gap: 10 }]}>
+            {Array.from({ length: 5 }).map((_, i) => (
+                <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 12, flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+                    <SkeletonBox width={56} height={56} borderRadius={8} />
+                    <View style={{ flex: 1, gap: 8 }}>
+                        <SkeletonBox width={150} height={13} borderRadius={6} />
+                        <SkeletonBox width={90} height={11} borderRadius={5} />
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
+                            <SkeletonBox width={28} height={28} borderRadius={14} />
+                            <SkeletonBox width={40} height={28} borderRadius={6} />
+                            <SkeletonBox width={28} height={28} borderRadius={14} />
+                        </View>
+                    </View>
+                </View>
+            ))}
+        </View>
+    );
 
     const fallbackTitle = new Date(basket?.createdAt || '').toLocaleDateString('lt-LT');
     const titleText = basketName || fallbackTitle;
@@ -452,7 +473,7 @@ export default function BasketDetailScreen() {
                             // user is actively shopping (inProgress) or the
                             // trip is done (completed). Only affordance is
                             // viewing the calculated store comparison.
-                            <TouchableOpacity
+                            <ScalePressable
                                 style={styles.showResultsButton}
                                 onPress={() => router.push(`/basket/results/${id}`)}
                             >
@@ -460,28 +481,29 @@ export default function BasketDetailScreen() {
                                 <Text style={styles.showResultsText}>
                                     {basket?.status === 'inProgress' ? 'Peržiūrėti' : 'Peržiūrėti (užbaigta)'}
                                 </Text>
-                            </TouchableOpacity>
+                            </ScalePressable>
                         ) : basket?.status === 'compared' ? (
                             <>
-                                <TouchableOpacity
+                                <ScalePressable
                                     style={[styles.showResultsButton, styles.secondaryButton]}
                                     onPress={handleRevertToDraft}
                                 >
                                     <Text style={styles.secondaryButtonText}>Juodraštis</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
+                                </ScalePressable>
+                                <ScalePressable
                                     style={styles.showResultsButton}
                                     onPress={() => router.push(`/basket/results/${id}`)}
                                 >
                                     <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
                                     <Text style={styles.showResultsText}>Rodyti parduotuves</Text>
-                                </TouchableOpacity>
+                                </ScalePressable>
                             </>
                         ) : (
-                            <TouchableOpacity
+                            <ScalePressable
                                 style={[styles.showResultsButton, calcing && styles.buttonCalcing]}
                                 onPress={handleCalculate}
                                 disabled={calcing}
+                                scaleTo={calcing ? 1 : 0.95}
                             >
                                 {calcing ? (
                                     <>
@@ -494,7 +516,7 @@ export default function BasketDetailScreen() {
                                         <Text style={styles.showResultsText}>Apskaičiuoti</Text>
                                     </>
                                 )}
-                            </TouchableOpacity>
+                            </ScalePressable>
                         )}
                     </View>
                 )}

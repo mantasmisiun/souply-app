@@ -1,15 +1,18 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Dimensions } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Dimensions, Image, Animated, Easing } from 'react-native';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { useTheme, type AppTheme } from '../../constants/theme';
-import { API_BASE_URL } from '../../config/api';
-import { getUserId } from '../../config/user';
 import { getLevelData } from '../../constants/levels';
 import { DonutChart, type DonutSlice } from '../../components/DonutChart';
 import { BarChart, type BarSlice } from '../../components/BarChart';
 import { useLevelStore } from '../../state/levelStore';
+import { useProfileStore, fetchProfileIfStale } from '../../state/profileStore';
+import { SkeletonBox } from '../../components/SkeletonBox';
+import * as Haptics from 'expo-haptics';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { BottomSheetModal, BottomSheetModalProvider, BottomSheetFlatList, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 // CAROUSEL_WIDTH must account for both the outer ScrollView padding (16 each side)
@@ -17,33 +20,13 @@ const SCREEN_WIDTH = Dimensions.get('window').width;
 const CAROUSEL_WIDTH = SCREEN_WIDTH - 32 - 40;
 const CHART_PAGE_HEIGHT = 340; // fixed height keeps all carousel pages the same size
 
-interface ProfileData {
-    points: number;
-    level: number;
-    pointsIntoLevel: number;
-    pointsNeededForNext: number;
-    progressFraction: number;
-    nextLevelAt: number;
-    pendingSwipes: boolean;
-    showBurstWarning: boolean;
-}
-
-interface StoreSlice { chainName: string; total: number; color: string; }
-interface CategorySlice { categoryName: string; total: number; color: string; }
-interface MonthSlice { month: string; label: string; total: number; }
-
-interface StatsData {
-    storeBreakdown: StoreSlice[];
-    categoryBreakdown: CategorySlice[];
-    monthlySpending: MonthSlice[];
-    totalSavings: number;
-}
+import type { ProfileData, StatsData } from '../../state/profileStore';
 
 function Legend({
     items,
     selectedIndex,
 }: {
-    items: Array<{ label: string; color: string; value: number }>;
+    items: Array<{ label: string; color: string; value: number; logoUri?: string | null }>;
     selectedIndex?: number | null;
 }) {
     const anySelected = selectedIndex !== null && selectedIndex !== undefined;
@@ -53,7 +36,15 @@ function Legend({
                 const dimmed = anySelected && i !== selectedIndex;
                 return (
                     <View key={i} style={[legendStyles.row, dimmed && legendStyles.rowDimmed]}>
-                        <View style={[legendStyles.dot, { backgroundColor: item.color }]} />
+                        {item.logoUri ? (
+                            <Image
+                                source={{ uri: item.logoUri }}
+                                style={legendStyles.logo}
+                                resizeMode="contain"
+                            />
+                        ) : (
+                            <View style={[legendStyles.dot, { backgroundColor: item.color }]} />
+                        )}
                         <Text style={legendStyles.label} numberOfLines={1}>{item.label}</Text>
                         <Text style={legendStyles.value}>{item.value.toFixed(2)}€</Text>
                     </View>
@@ -63,10 +54,11 @@ function Legend({
     );
 }
 const legendStyles = StyleSheet.create({
-    container: { alignSelf: 'stretch', marginTop: 16, gap: 6 },
+    container: { alignSelf: 'stretch', marginTop: 8, gap: 3 },
     row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     rowDimmed: { opacity: 0.3 },
     dot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
+    logo: { width: 20, height: 20, borderRadius: 4, flexShrink: 0 },
     label: { flex: 1, fontSize: 13, color: '#374151' },
     value: { fontSize: 13, fontWeight: '600', color: '#111827', flexShrink: 0 },
 });
@@ -76,41 +68,68 @@ export default function ProfilisScreen() {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
     const triggerIfNewLevel = useLevelStore(s => s.triggerIfNewLevel);
-    const [profile, setProfile] = useState<ProfileData | null>(null);
-    const [stats, setStats] = useState<StatsData | null>(null);
-    const [loading, setLoading] = useState(true);
-    const [statsLoading, setStatsLoading] = useState(true);
+    const profile = useProfileStore(s => s.profile);
+    const stats = useProfileStore(s => s.stats);
+    const loading = useProfileStore(s => s.profile === null && s.fetching);
+    const statsLoading = useProfileStore(s => s.stats === null && s.fetching);
     const [activePage, setActivePage] = useState(0);
     const [storeSelected, setStoreSelected] = useState<number | null>(null);
     const [categorySelected, setCategorySelected] = useState<number | null>(null);
+    const [showKita, setShowKita] = useState(false);
     const scrollRef = useRef<ScrollView>(null);
+    const donutAnim = useRef(new Animated.Value(1)).current;
+    const kitaSheetRef = useRef<BottomSheetModal>(null);
+    const renderBackdrop = useCallback(
+        (props: any) => <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />,
+        [],
+    );
+
+    function transitionToKita() {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        Animated.timing(donutAnim, {
+            toValue: 0, duration: 220,
+            easing: Easing.in(Easing.ease),
+            useNativeDriver: true,
+        }).start(() => {
+            setShowKita(true);
+            setCategorySelected(null);
+            // One frame delay lets React flush the new data before fading in,
+            // preventing the old chart from briefly reappearing at partial opacity.
+            setTimeout(() => {
+                Animated.timing(donutAnim, {
+                    toValue: 1, duration: 300,
+                    easing: Easing.out(Easing.ease),
+                    useNativeDriver: true,
+                }).start();
+            }, 16);
+        });
+    }
+
+    function transitionFromKita() {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        Animated.timing(donutAnim, {
+            toValue: 0, duration: 220,
+            easing: Easing.in(Easing.ease),
+            useNativeDriver: true,
+        }).start(() => {
+            setShowKita(false);
+            setCategorySelected(null);
+            setTimeout(() => {
+                Animated.timing(donutAnim, {
+                    toValue: 1, duration: 300,
+                    easing: Easing.out(Easing.ease),
+                    useNativeDriver: true,
+                }).start();
+            }, 16);
+        });
+    }
+
+    useEffect(() => {
+        if (profile?.level) triggerIfNewLevel(profile.level);
+    }, [profile?.level]);
 
     useFocusEffect(useCallback(() => {
-        let cancelled = false;
-        (async () => {
-            try {
-                const userId = await getUserId();
-                const [profileRes, statsRes] = await Promise.all([
-                    fetch(`${API_BASE_URL}/api/users/${userId}/profile`),
-                    fetch(`${API_BASE_URL}/api/users/${userId}/stats`),
-                ]);
-                const profileData = await profileRes.json();
-                const statsData = await statsRes.json();
-                if (!cancelled) {
-                    setProfile(profileData);
-                    setStats(statsData);
-                    if (profileData?.level) triggerIfNewLevel(profileData.level);
-                }
-            } catch {
-                // keep previous data on network error
-            } finally {
-                if (!cancelled) {
-                    setLoading(false);
-                    setStatsLoading(false);
-                }
-            }
-        })();
-        return () => { cancelled = true; };
+        fetchProfileIfStale();
     }, []));
 
     const devItems: Array<{ label: string; icon: keyof typeof Ionicons.glyphMap; route: string }> = [
@@ -122,13 +141,18 @@ export default function ProfilisScreen() {
     const level = profile?.level ?? 1;
 
     const storeSlices: DonutSlice[] = (stats?.storeBreakdown ?? []).map(s => ({
-        label: s.chainName, value: s.total, color: s.color,
+        label: s.chainName, value: s.total, color: s.color, logoUri: s.miniLogoUrl,
     }));
     const categorySlices: DonutSlice[] = (stats?.categoryBreakdown ?? []).map(c => ({
         label: c.categoryName, value: c.total, color: c.color,
     }));
+    const kitaSlices: DonutSlice[] = (stats?.kitaBreakdown ?? []).map(c => ({
+        label: c.categoryName, value: c.total, color: c.color,
+    }));
+    const KITA_DISPLAY_LIMIT = 6;
+    const kitaDisplaySlices = kitaSlices.slice(0, KITA_DISPLAY_LIMIT);
     const barData: BarSlice[] = (stats?.monthlySpending ?? []).map(m => ({
-        label: m.label, total: m.total,
+        label: m.label, total: m.total, month: m.month,
     }));
 
     const monthlyMax = Math.max(...barData.map(b => b.total), 0);
@@ -148,41 +172,59 @@ export default function ProfilisScreen() {
                         cardBackground={colors.cardBackground}
                     />
                     <Legend
-                        items={storeSlices.map(s => ({ label: s.label, color: s.color, value: s.value }))}
+                        items={storeSlices.map(s => ({ label: s.label, color: s.color, value: s.value, logoUri: s.logoUri }))}
                         selectedIndex={storeSelected}
                     />
                 </View>
             ),
         },
         {
-            title: 'Išlaidos pagal kategoriją',
+            title: showKita ? 'Kitos kategorijos' : 'Išlaidos pagal kategoriją',
             content: (
-                <View style={styles.chartPage}>
+                <Animated.View
+                    style={[styles.categoryChartPage, { opacity: donutAnim }]}
+                    renderToHardwareTextureAndroid
+                    shouldRasterizeIOS
+                >
                     <DonutChart
-                        data={categorySlices}
+                        data={showKita ? kitaDisplaySlices : categorySlices}
                         size={180}
                         thickness={32}
                         emptyColor={colors.borderSubtle}
                         selectedIndex={categorySelected}
-                        onSelect={setCategorySelected}
+                        onSelect={(idx) => {
+                            if (!showKita && idx !== null && kitaSlices.length > 0 && idx === categorySlices.length - 1) {
+                                transitionToKita();
+                            } else {
+                                setCategorySelected(idx);
+                            }
+                        }}
                         cardBackground={colors.cardBackground}
                     />
                     <Legend
-                        items={categorySlices.map(c => ({ label: c.label, color: c.color, value: c.value }))}
+                        items={(showKita ? kitaDisplaySlices : categorySlices).map(c => ({ label: c.label, color: c.color, value: c.value }))}
                         selectedIndex={categorySelected}
                     />
-                </View>
+                    {showKita && kitaSlices.length > KITA_DISPLAY_LIMIT && (
+                        <TouchableOpacity
+                            style={styles.showAllBtn}
+                            onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); kitaSheetRef.current?.present(); }}
+                        >
+                            <Text style={[styles.showAllBtnText, { color: colors.primary }]}>
+                                Rodyti visas ({kitaSlices.length} kategorijų)
+                            </Text>
+                            <Ionicons name="chevron-forward" size={13} color={colors.primary} />
+                        </TouchableOpacity>
+                    )}
+                </Animated.View>
             ),
         },
         {
             title: 'Mėnesinės išlaidos',
             content: (
-                <View style={styles.chartPage}>
+                <View style={styles.barChartPage}>
                     {monthlyMax > 0 ? (
-                        <>
-                            <BarChart data={barData} color={colors.primary} height={140} />
-                            <Text style={styles.barMaxLabel}>Maks. {monthlyMax.toFixed(2)}€</Text>
-                        </>
+                        <BarChart data={barData} color={colors.primary} height={140} />
                     ) : (
                         <Text style={styles.emptyChartText}>Duomenų dar nėra</Text>
                     )}
@@ -191,12 +233,22 @@ export default function ProfilisScreen() {
         },
     ];
 
+    const kitaTotal = kitaSlices.reduce((s, c) => s + c.value, 0);
+
     return (
+        <GestureHandlerRootView style={{ flex: 1 }}>
+        <BottomSheetModalProvider>
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
             {/* Level card */}
             <View style={styles.levelCard}>
                 {loading ? (
-                    <ActivityIndicator color={colors.primary} />
+                    <View style={{ width: '100%', alignItems: 'center', gap: 12, paddingVertical: 8 }}>
+                        <SkeletonBox width={56} height={56} borderRadius={28} />
+                        <SkeletonBox width='40%' height={14} borderRadius={7} />
+                        <SkeletonBox width='55%' height={12} borderRadius={6} />
+                        <SkeletonBox width='100%' height={8} borderRadius={4} style={{ marginTop: 4 }} />
+                        <SkeletonBox width='50%' height={11} borderRadius={6} />
+                    </View>
                 ) : (
                     <>
                         <View style={styles.iconCircle}>
@@ -240,10 +292,28 @@ export default function ProfilisScreen() {
             <View style={styles.statsCard}>
                 <Text style={styles.sectionTitle}>Statistika</Text>
                 {statsLoading ? (
-                    <ActivityIndicator color={colors.primary} style={{ marginVertical: 40 }} />
+                    <View style={{ gap: 16, paddingVertical: 24, alignItems: 'center' }}>
+                        <SkeletonBox width={160} height={160} borderRadius={80} style={{ alignSelf: 'center' }} />
+                        <View style={{ width: '100%', gap: 8 }}>
+                            <SkeletonBox width='60%' height={12} borderRadius={6} style={{ alignSelf: 'center' }} />
+                            <SkeletonBox width='45%' height={12} borderRadius={6} style={{ alignSelf: 'center' }} />
+                            <SkeletonBox width='50%' height={12} borderRadius={6} style={{ alignSelf: 'center' }} />
+                        </View>
+                    </View>
                 ) : (
                     <>
-                        <Text style={styles.carouselTitle}>{pages[activePage].title}</Text>
+                        <View style={styles.carouselTitleRow}>
+                            {activePage === 1 && showKita && (
+                                <TouchableOpacity
+                                    onPress={transitionFromKita}
+                                    style={styles.backBtn}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                >
+                                    <Ionicons name="chevron-back" size={16} color={colors.primary} />
+                                </TouchableOpacity>
+                            )}
+                            <Text style={styles.carouselTitle}>{pages[activePage].title}</Text>
+                        </View>
                         <ScrollView
                             ref={scrollRef}
                             horizontal
@@ -309,6 +379,39 @@ export default function ProfilisScreen() {
                 </View>
             )}
         </ScrollView>
+
+        <BottomSheetModal
+            ref={kitaSheetRef}
+            snapPoints={['55%', '85%']}
+            backdropComponent={renderBackdrop}
+            backgroundStyle={{ backgroundColor: colors.cardBackground }}
+            handleIndicatorStyle={{ backgroundColor: colors.textMuted }}
+        >
+            <BottomSheetFlatList
+                data={kitaSlices}
+                keyExtractor={(_, i) => i.toString()}
+                contentContainerStyle={styles.sheetList}
+                ListHeaderComponent={
+                    <View style={styles.sheetHeader}>
+                        <Text style={styles.sheetTitle}>Kitos kategorijos</Text>
+                        <Text style={styles.sheetSubtitle}>{kitaTotal.toFixed(2)}€ iš viso</Text>
+                    </View>
+                }
+                renderItem={({ item, index }) => (
+                    <View style={styles.sheetRow}>
+                        <View style={[styles.sheetDot, { backgroundColor: item.color }]} />
+                        <Text style={styles.sheetLabel} numberOfLines={1}>{item.label}</Text>
+                        <Text style={styles.sheetAmount}>{item.value.toFixed(2)}€</Text>
+                        <Text style={styles.sheetPct}>
+                            {kitaTotal > 0 ? `${Math.round((item.value / kitaTotal) * 100)}%` : ''}
+                        </Text>
+                    </View>
+                )}
+            />
+        </BottomSheetModal>
+
+        </BottomSheetModalProvider>
+        </GestureHandlerRootView>
     );
 }
 
@@ -374,9 +477,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         fontSize: 13, fontWeight: '700', color: c.textMuted,
         marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5,
     },
+    carouselTitleRow: {
+        flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 16,
+    },
     carouselTitle: {
-        fontSize: 15, fontWeight: '600', color: c.textPrimary,
-        marginBottom: 16,
+        fontSize: 15, fontWeight: '600', color: c.textPrimary, flex: 1,
     },
     chartPage: {
         alignItems: 'center',
@@ -384,7 +489,18 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         width: '100%',
         flex: 1,
     },
-    barMaxLabel: { fontSize: 11, color: c.textMuted, marginTop: 4 },
+    barChartPage: {
+        alignSelf: 'stretch',
+        flex: 1,
+    },
+    categoryChartPage: {
+        alignItems: 'center',
+        justifyContent: 'flex-start',
+        paddingTop: 4,
+        width: '100%',
+        flex: 1,
+    },
+    backBtn: { alignItems: 'center', justifyContent: 'center' },
     emptyChartText: { fontSize: 14, color: c.textMuted, fontStyle: 'italic', marginVertical: 32, textAlign: 'center' },
 
     dots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 16, marginBottom: 8 },
@@ -400,4 +516,24 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderRadius: 10, marginBottom: 8,
     },
     rowText: { flex: 1, fontSize: 15, color: c.textPrimary, fontWeight: '500' },
+
+    showAllBtn: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+        gap: 3, marginTop: 10,
+    },
+    showAllBtnText: { fontSize: 13, fontWeight: '500' },
+
+    sheetList: { paddingHorizontal: 20, paddingBottom: 40 },
+    sheetHeader: { paddingTop: 4, paddingBottom: 16, borderBottomWidth: 1, borderBottomColor: c.borderSubtle, marginBottom: 8 },
+    sheetTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginBottom: 2 },
+    sheetSubtitle: { fontSize: 13, color: c.textSecondary },
+    sheetRow: {
+        flexDirection: 'row', alignItems: 'center', gap: 10,
+        paddingVertical: 11,
+        borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: c.borderSubtle,
+    },
+    sheetDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
+    sheetLabel: { flex: 1, fontSize: 14, color: c.textPrimary },
+    sheetAmount: { fontSize: 14, fontWeight: '600', color: c.textPrimary, flexShrink: 0 },
+    sheetPct: { fontSize: 12, color: c.textMuted, width: 32, textAlign: 'right', flexShrink: 0 },
 });

@@ -398,6 +398,14 @@ export default function SearchScreen() {
       <Stack.Screen
         options={{
           title: "",
+          headerLeft: () => (
+            <TouchableOpacity
+              onPress={closeAndBack}
+              style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
+            >
+              <Ionicons name="chevron-back" size={28} color={colors.primary} />
+            </TouchableOpacity>
+          ),
           headerTitle: () => (
             <TextInput
               key={inputKey}
@@ -414,7 +422,7 @@ export default function SearchScreen() {
           headerRight: () => (
             <TouchableOpacity
               onPress={closeAndBack}
-              style={{ marginRight: 12 }}
+              style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
             >
               <Ionicons name="close" size={24} color={colors.primary} />
             </TouchableOpacity>

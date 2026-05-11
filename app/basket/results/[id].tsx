@@ -1,4 +1,4 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect, useNavigation, Stack } from 'expo-router';
 import { useMemo, useState, useCallback } from 'react';
@@ -8,6 +8,8 @@ import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
 import { API_BASE_URL } from '../../../config/api';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { getUserId } from '../../../config/user';
+import { useBasketState } from '../../../state/basketState';
+import { useProfileStore } from '../../../state/profileStore';
 import { loadCachedCoords, tryGpsCoords, persistCoords, type UserCoords } from '../../../utils/location';
 import LocationPromptModal from '../../../components/LocationPromptModal';
 
@@ -57,6 +59,7 @@ interface StoreResult {
 
 export default function BasketResultsScreen() {
     const colors = useTheme();
+    const { clearSessionBasket } = useBasketState();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
     const { id } = useLocalSearchParams();
@@ -64,6 +67,7 @@ export default function BasketResultsScreen() {
     const navigation = useNavigation();
     const [results, setResults] = useState<StoreResult[]>([]);
     const [loading, setLoading] = useState(true);
+    const [pullRefreshing, setPullRefreshing] = useState(false);
     const [visibleCount, setVisibleCount] = useState(0);
     const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
     const [swipesGated, setSwipesGated] = useState(false);
@@ -93,8 +97,8 @@ export default function BasketResultsScreen() {
         setLoading(false);
     };
 
-    const runRecalcWithCoords = useCallback(async (coords: UserCoords) => {
-        setLoading(true);
+    const runRecalcWithCoords = useCallback(async (coords: UserCoords, isPull = false) => {
+        if (!isPull) setLoading(true);
         setVisibleCount(0);
         setSelectedStoreId(null);
         try {
@@ -125,17 +129,37 @@ export default function BasketResultsScreen() {
         setLocationPromptVisible(true);
     }, [runRecalcWithCoords]);
 
+    const handlePullRefresh = useCallback(async () => {
+        setPullRefreshing(true);
+        try {
+            let blocked = false;
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/baskets/${id}`);
+                const basket = await res.json();
+                if (basket?.status === 'inProgress' || basket?.status === 'completed') {
+                    blocked = true;
+                }
+            } catch {}
+            if (blocked) { await loadResults(); return; }
+            const cached = await loadCachedCoords();
+            if (cached) { await runRecalcWithCoords(cached, true); }
+            else {
+                const gps = await tryGpsCoords();
+                if (gps) { await runRecalcWithCoords(gps, true); }
+                else { setLocationPromptVisible(true); }
+            }
+        } finally {
+            setPullRefreshing(false);
+        }
+    }, [runRecalcWithCoords, id]);
+
     useFocusEffect(useCallback(() => {
         // Set header options here — after expo-router's own focus event —
         // so the button isn't cleared when an unregistered screen gets its
         // options reset to defaults on every focus.
         navigation.setOptions({
             title: 'Palyginimo rezultatai',
-            headerRight: () => (
-                <TouchableOpacity onPress={handleRecalculate} style={{ marginRight: 12 }}>
-                    <Ionicons name="refresh-outline" size={22} color={colors.primary} />
-                </TouchableOpacity>
-            ),
+            headerRight: undefined,
         });
 
         (async () => {
@@ -205,6 +229,7 @@ export default function BasketResultsScreen() {
 
             if (res.status === 409) {
                 const data = await res.json();
+                clearSessionBasket();
                 router.replace('/(tabs)/shoppingList' as any);
                 setTimeout(() => {
                     router.push(`/shopping-list/${data.listId}` as any);
@@ -218,6 +243,8 @@ export default function BasketResultsScreen() {
             const listData = await res.json();
             if (!listData?.id) throw new Error('Response missing id');
 
+            clearSessionBasket();
+            useProfileStore.getState().invalidate();
             router.replace('/(tabs)/shoppingList' as any);
             setTimeout(() => {
                 router.push(`/shopping-list/${listData.id}` as any);
@@ -235,16 +262,7 @@ export default function BasketResultsScreen() {
                 useLayoutEffect above so re-renders keep the button
                 attached even if expo-router's initial push timing hides
                 it briefly. */}
-            <Stack.Screen
-                options={{
-                    title: 'Palyginimo rezultatai',
-                    headerRight: () => (
-                        <TouchableOpacity onPress={handleRecalculate} style={{ marginRight: 12 }}>
-                            <Ionicons name="refresh-outline" size={22} color={colors.primary} />
-                        </TouchableOpacity>
-                    ),
-                }}
-            />
+            <Stack.Screen options={{ title: 'Palyginimo rezultatai' }} />
             <View style={styles.container}>
                 {swipesGated && (
                     <Animated.View entering={FadeIn} style={styles.gateOverlay}>
@@ -261,7 +279,7 @@ export default function BasketResultsScreen() {
                         </TouchableOpacity>
                     </Animated.View>
                 )}
-                {!swipesGated && loading ? (
+                {!swipesGated && loading && !pullRefreshing ? (
                     <Animated.View entering={FadeIn} style={styles.loadingContainer}>
                         <ActivityIndicator size="large" color={colors.primary} />
                         <Text style={styles.loadingText}>Skaičiuojamos kainos...</Text>
@@ -271,6 +289,14 @@ export default function BasketResultsScreen() {
                         data={results.slice(0, visibleCount)}
                         keyExtractor={item => item.storeId.toString()}
                         contentContainerStyle={styles.list}
+                        refreshControl={
+                            <RefreshControl
+                                refreshing={pullRefreshing}
+                                onRefresh={handlePullRefresh}
+                                colors={[colors.primary]}
+                                tintColor={colors.primary}
+                            />
+                        }
                         ListEmptyComponent={
                             <View style={styles.centered}>
                                 <Text style={styles.emptyText}>Rezultatų nėra</Text>
@@ -318,31 +344,22 @@ export default function BasketResultsScreen() {
                                                 <Text style={styles.distance}>{item.distance} km</Text>
                                                 {item.missingItemNames && item.missingItemNames.length > 0 && (
                                                     <View style={styles.missingBadge}>
-                                                        <Ionicons name="alert-circle-outline" size={11} color={colors.warning} />
-                                                        <Text style={styles.missingBadgeText}>
-                                                            Trūksta {item.missingItemNames.length} {pluralizePrekes(item.missingItemNames.length)}
-                                                        </Text>
+                                                        <Text style={styles.missingBadgeText}>{item.missingItemNames.length}</Text>
+                                                        <Ionicons name="bag-remove-outline" size={12} color={colors.warning} />
                                                     </View>
                                                 )}
-                                                {item.items.some(i => i.isSubstituted) && (
-                                                    // Tier-3: a name-similar variant was found in THIS
-                                                    // chain — user would physically grab that product.
+                                                {(() => { const n = item.items.filter(i => i.isSubstituted).length; return n > 0 && (
                                                     <View style={styles.substitutedBadge}>
-                                                        <Text style={styles.substitutedBadgeText}>
-                                                            Panašus produktas
-                                                        </Text>
+                                                        <Text style={styles.substitutedBadgeText}>{n}</Text>
+                                                        <Ionicons name="swap-horizontal-outline" size={12} color={colors.info} />
                                                     </View>
-                                                )}
-                                                {item.items.some(i => i.isCrossChainAverage) && (
-                                                    // Tier-4: no in-chain candidate passed the similarity
-                                                    // gate, so the price was estimated from other chains'
-                                                    // stores. Lower confidence — muted styling.
+                                                ); })()}
+                                                {(() => { const n = item.items.filter(i => i.isCrossChainAverage).length; return n > 0 && (
                                                     <View style={styles.approxBadge}>
-                                                        <Text style={styles.approxBadgeText}>
-                                                            Apytikslė kaina
-                                                        </Text>
+                                                        <Text style={styles.approxBadgeText}>{n}</Text>
+                                                        <Ionicons name="help-circle-outline" size={12} color={colors.textMuted} />
                                                     </View>
-                                                )}
+                                                ); })()}
                                             </View>
                                             {isSelected && item.missingItemNames && item.missingItemNames.length > 0 && (
                                                 <Text style={styles.missingList} numberOfLines={3}>
@@ -468,8 +485,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         color: c.info,
         fontWeight: '600',
     },
-    // Tier-4 cross-chain average: the price is an estimate, the store
-    // doesn't actually carry anything close. Muted = "take with salt".
     approxBadge: {
         flexDirection: 'row',
         alignItems: 'center',

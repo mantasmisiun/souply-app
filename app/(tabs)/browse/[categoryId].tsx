@@ -1,5 +1,6 @@
 import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, ActivityIndicator, Switch, Modal } from 'react-native';
-import { useEffect, useMemo, useState, useCallback } from 'react';
+import { SkeletonBox } from '../../../components/SkeletonBox';
+import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect, useNavigation } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
@@ -14,6 +15,9 @@ import { useTheme, type AppTheme } from '../../../constants/theme';
 import { useDisplayMode } from '../../../contexts/DisplayPreferenceContext';
 import { getUserId } from '../../../config/user';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Haptics from 'expo-haptics';
+import { Toast, type ToastHandle } from '../../../components/Toast';
+import { ScalePressable } from '../../../components/ScalePressable';
 
 interface Category {
     id: number;
@@ -54,6 +58,7 @@ export default function CategoryScreen() {
     // rapid double-taps from firing a second add before the first lands
     // and paints the quantity control over the button.
     const [addingIds, setAddingIds] = useState<Set<number>>(() => new Set());
+    const toastRef = useRef<ToastHandle>(null);
     const router = useRouter();
     const { mode, setMode, ready: prefReady } = useDisplayMode();
     const [helpOpen, setHelpOpen] = useState(false);
@@ -115,7 +120,6 @@ export default function CategoryScreen() {
     }, [categoryId, mode, prefReady]);
     useEffect(() => {
         const loadBasketQuantities = async () => {
-            // Init draft basket if not set
             if (!draftBasketId) {
                 await useBasketState.getState().initDraftBasket();
             }
@@ -422,7 +426,41 @@ export default function CategoryScreen() {
         [products, userMergeMap]
     );
 
-    if (loading) return <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />;
+    if (loading) return (
+        <>
+        <Stack.Screen options={{
+            title: decodeURIComponent((name as string) || ''),
+            headerStyle: { backgroundColor: colors.cardBackground },
+            headerShadowVisible: false,
+        }} />
+        <View style={styles.container}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, gap: 6, backgroundColor: colors.cardBackground }}>
+                <SkeletonBox width={170} height={13} borderRadius={6} />
+                <View style={{ flex: 1 }} />
+                <SkeletonBox width={44} height={26} borderRadius={13} />
+            </View>
+            <View style={{ flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 10, gap: 8, backgroundColor: colors.cardBackground, borderBottomWidth: 0.5, borderBottomColor: colors.borderSubtle }}>
+                {[72, 58, 84, 66].map((w, i) => (
+                    <SkeletonBox key={i} width={w} height={30} borderRadius={20} />
+                ))}
+            </View>
+            <View style={{ padding: 12 }}>
+                {Array.from({ length: 3 }).map((_, row) => (
+                    <View key={row} style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
+                        {[0, 1].map(col => (
+                            <View key={col} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: 12, padding: 12, alignItems: 'center', gap: 8 }}>
+                                <SkeletonBox height={130} borderRadius={8} />
+                                <SkeletonBox width={100} height={13} borderRadius={6} />
+                                <SkeletonBox width={60} height={11} borderRadius={5} />
+                                <SkeletonBox height={34} borderRadius={10} />
+                            </View>
+                        ))}
+                    </View>
+                ))}
+            </View>
+        </View>
+        </>
+    );
 
     return (
         <>
@@ -483,7 +521,20 @@ export default function CategoryScreen() {
 
                 <View style={{ flex: 1 }}>
                     {loadingProducts ? (
-                        <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />
+                        <View style={{ padding: 12 }}>
+                            {Array.from({ length: 3 }).map((_, row) => (
+                                <View key={row} style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
+                                    {[0, 1].map(col => (
+                                        <View key={col} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: 12, padding: 12, alignItems: 'center', gap: 8 }}>
+                                            <SkeletonBox height={130} borderRadius={8} style={{ alignSelf: 'stretch' }} />
+                                            <SkeletonBox width={100} height={13} borderRadius={6} />
+                                            <SkeletonBox width={60} height={11} borderRadius={5} />
+                                            <SkeletonBox height={34} borderRadius={10} style={{ alignSelf: 'stretch' }} />
+                                        </View>
+                                    ))}
+                                </View>
+                            ))}
+                        </View>
                     ) : (
                         <FlatList
                             data={visibleProducts}
@@ -529,11 +580,12 @@ export default function CategoryScreen() {
                                                 </Text>
                                             </View>
                                         {quantity === 0 ? (
-                                            <TouchableOpacity
+                                            <ScalePressable
                                                 style={[styles.addButton, addingIds.has(item.id) && { opacity: 0.5 }]}
                                                 disabled={addingIds.has(item.id)}
                                                 onPress={async () => {
                                                     if (addingIds.has(item.id)) return;
+                                                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
                                                     const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
                                                     // Any of: varying pack sizes across SPs, or product is
                                                     // weighable (user buys by weight) → user should pick an
@@ -554,6 +606,7 @@ export default function CategoryScreen() {
                                                             if (result.success) {
                                                                 setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
                                                                 setBasketItemCount(prev => prev + 1);
+                                                                toastRef.current?.show('Pridėta į krepšelį');
                                                             }
                                                         } finally {
                                                             setAddingIds(prev => {
@@ -566,12 +619,13 @@ export default function CategoryScreen() {
                                                 }}
                                             >
                                                 <Text style={styles.addButtonText}>Į krepšelį</Text>
-                                            </TouchableOpacity>
+                                            </ScalePressable>
                                         ) : (
                                             <View style={styles.quantityControl}>
                                                 <TouchableOpacity
                                                     style={styles.qtyButton}
                                                     onPress={async () => {
+                                                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                                                         const hasRange = item.minAmount !== null && item.maxAmount !== null && Number(item.minAmount) !== Number(item.maxAmount);
                                                         // Same rule as the add button: weighable OR ranged SPs
                                                         // → step 0.1 kg; fixed single-size SKU → step 1 pack.
@@ -620,6 +674,7 @@ export default function CategoryScreen() {
                                                 <TouchableOpacity
                                                     style={styles.qtyButton}
                                                     onPress={async () => {
+                                                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
                                                         const hasRange = item.minAmount !== null && item.maxAmount !== null && Number(item.minAmount) !== Number(item.maxAmount);
                                                         const step = (hasRange || item.hasWeighable) ? 0.1 : 1;
                                                         const newQty = Math.round((quantity + step) * 10) / 10;
@@ -661,13 +716,13 @@ export default function CategoryScreen() {
                             {basketItemCount} {pluralizeItems(basketItemCount)}
                         </Text>
                     </View>
-                    <TouchableOpacity
+                    <ScalePressable
                         style={styles.basketBarButton}
                         onPress={() => router.push(`/basket/${draftBasketId}` as any)}
                     >
                         <Text style={styles.basketBarButtonText}>Krepšelis</Text>
                         <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
-                    </TouchableOpacity>
+                    </ScalePressable>
                 </Animated.View>
             )}
             </View>
@@ -763,19 +818,19 @@ export default function CategoryScreen() {
                 isWeighable={!!amountModal.product?.hasWeighable}
                 onCancel={() => setAmountModal({ visible: false, product: null })}
                 onConfirm={async (amount) => {
-                    if (amountModal.product) {
-                        const result = await commitAdd(amountModal.product.id, amount);
+                    const product = amountModal.product;
+                    setAmountModal({ visible: false, product: null });
+                    if (product) {
+                        const result = await commitAdd(product.id, amount);
                         if (result.success) {
-                            setBasketQuantities(prev => ({
-                                ...prev,
-                                [amountModal.product!.id]: amount,
-                            }));
+                            setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
                             setBasketItemCount(prev => prev + 1);
+                            toastRef.current?.show('Pridėta į krepšelį');
                         }
                     }
-                    setAmountModal({ visible: false, product: null });
                 }}
             />
+            <Toast ref={toastRef} />
         </>
     );
 }

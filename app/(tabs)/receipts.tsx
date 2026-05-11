@@ -10,6 +10,7 @@ import {
     Image,
     Modal,
     Pressable,
+    RefreshControl,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -18,6 +19,7 @@ import {
 import { API_BASE_URL } from "../../config/api";
 import { getUserId } from "../../config/user";
 import { useTheme, type AppTheme } from "../../constants/theme";
+import { SkeletonBox } from "../../components/SkeletonBox";
 import { DEV_MODE } from "../../constants/flags";
 import {
     clearReceiptDraft,
@@ -68,6 +70,7 @@ export default function ReceiptsScreen() {
   useFocusEffect(useCallback(() => { checkCandidate(); }, [checkCandidate]));
   const [receipts, setReceipts] = useState<Receipt[]>([]);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
   // Block scan actions when offline — OCR still works but every
   // downstream HTTP call (store match, product match, POST, upload,
@@ -147,6 +150,7 @@ export default function ReceiptsScreen() {
   // Users don't need to know whether their receipt is a photo or a PDF file.
   const onPickFile = async () => {
     setUploadMenuOpen(false);
+    await new Promise(resolve => setTimeout(resolve, 300));
     const picked = await DocumentPicker.getDocumentAsync({
       type: ["image/*", "application/pdf"],
       copyToCacheDirectory: true,
@@ -291,8 +295,20 @@ export default function ReceiptsScreen() {
 
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator size="large" color={colors.primary} />
+      <View style={[styles.list, { paddingTop: 16 }]}>
+        {Array.from({ length: 5 }).map((_, i) => (
+          <View key={i} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10, gap: 12 }}>
+            <SkeletonBox width={44} height={44} borderRadius={8} />
+            <View style={{ flex: 1, gap: 8 }}>
+              <SkeletonBox width='70%' height={13} borderRadius={6} />
+              <SkeletonBox width='45%' height={11} borderRadius={6} />
+            </View>
+            <View style={{ alignItems: 'flex-end', gap: 8 }}>
+              <SkeletonBox width={48} height={11} borderRadius={6} />
+              <SkeletonBox width={56} height={18} borderRadius={8} />
+            </View>
+          </View>
+        ))}
       </View>
     );
   }
@@ -302,9 +318,22 @@ export default function ReceiptsScreen() {
         data={receipts}
         keyExtractor={(item) => item.id.toString()}
         contentContainerStyle={styles.list}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={async () => { setRefreshing(true); await fetchReceipts(); setRefreshing(false); }}
+            colors={[colors.primary]}
+            tintColor={colors.primary}
+          />
+        }
         ListEmptyComponent={
           <View style={styles.centered}>
+            <Ionicons name="receipt-outline" size={56} color={colors.textMuted} />
             <Text style={styles.emptyText}>Kvitų nėra</Text>
+            <Text style={styles.emptySubText}>Įkelkite pirkinių kvitą ir stebėkite savo išlaidas</Text>
+            <TouchableOpacity style={styles.emptyButton} onPress={() => setUploadMenuOpen(true)}>
+              <Text style={styles.emptyButtonText}>Įkelti kvitą</Text>
+            </TouchableOpacity>
           </View>
         }
         renderItem={({ item }) => {
@@ -522,7 +551,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     borderRadius: 8,
   },
   statusText: { fontSize: 11, color: c.textInverse, fontWeight: "600" },
-  emptyText: { fontSize: 16, color: c.textSecondary },
+  emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', marginTop: 16, textAlign: 'center' },
+  emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 6, textAlign: 'center', lineHeight: 18 },
+  emptyButton: { marginTop: 20, backgroundColor: c.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
+  emptyButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 14 },
   fab: {
     position: "absolute",
     bottom: 24,

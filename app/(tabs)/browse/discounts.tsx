@@ -1,8 +1,8 @@
 import {
     View, FlatList, ScrollView, TouchableOpacity, Text, TextInput,
-    StyleSheet, ActivityIndicator
+    StyleSheet, ActivityIndicator, RefreshControl
 } from 'react-native';
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useRouter, Stack, useFocusEffect, useNavigation } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
@@ -13,9 +13,13 @@ import { addProductToBasket } from '../../../utils/basketUtils';
 import { ProductImage } from '../../../components/ProductImage';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { getUserId } from '../../../config/user';
+import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../../components/ComparedBasketChoiceModal';
 import AmountPickerModal from '../../../components/AmountPickerModal';
+import { Toast, type ToastHandle } from '../../../components/Toast';
+import { ScalePressable } from '../../../components/ScalePressable';
+import { SkeletonBox } from '../../../components/SkeletonBox';
 
 interface L2Category {
     id: number;
@@ -29,6 +33,7 @@ interface DiscountedProduct {
     id: number;
     name: string;
     categoryId: number;
+    l2CategoryId: number | null;
     imageUrls?: (string | null | undefined)[] | string | null;
     minAmount: number | null;
     maxAmount: number | null;
@@ -36,6 +41,58 @@ interface DiscountedProduct {
     hasWeighable: boolean;
     bestDiscountPct: number;
 }
+
+interface CardCallbacks {
+    onNavigate: (id: number) => void;
+    onAdd: (item: DiscountedProduct) => void;
+    onDecrement: (item: DiscountedProduct, qty: number) => void;
+    onIncrement: (item: DiscountedProduct, qty: number) => void;
+}
+
+const DiscountProductCard = memo(({
+    item, quantity, isAdding, styles, colors,
+    onNavigate, onAdd, onDecrement, onIncrement,
+}: CardCallbacks & {
+    item: DiscountedProduct;
+    quantity: number;
+    isAdding: boolean;
+    styles: ReturnType<typeof makeStyles>;
+    colors: AppTheme;
+}) => {
+    const fmt = (v: number) => v >= 1000 ? `${v / 1000} kg` : `${v} g`;
+    const amountText = item.minAmount != null && item.maxAmount != null
+        ? (() => { const min = Number(item.minAmount); const max = Number(item.maxAmount); return min === max ? fmt(min) : `${fmt(min)} - ${fmt(max)}`; })()
+        : '';
+    return (
+        <View style={styles.productCard}>
+            <TouchableOpacity onPress={() => onNavigate(item.id)} style={styles.productImageContainer} activeOpacity={0.7}>
+                <ProductImage uris={item.imageUrls} imageStyle={styles.productImage} placeholderStyle={styles.productImagePlaceholder} emojiStyle={styles.productImageEmoji} />
+                <View style={styles.discountBadge}>
+                    <Text style={styles.discountBadgeText}>🔥 -{item.bestDiscountPct}%</Text>
+                </View>
+            </TouchableOpacity>
+            <View style={styles.productInfo}>
+                <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
+                <Text style={styles.amountText}>{amountText}</Text>
+            </View>
+            {quantity === 0 ? (
+                <ScalePressable style={[styles.addButton, isAdding && { opacity: 0.5 }]} disabled={isAdding} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); onAdd(item); }}>
+                    <Text style={styles.addButtonText}>Į krepšelį</Text>
+                </ScalePressable>
+            ) : (
+                <View style={styles.quantityControl}>
+                    <TouchableOpacity style={styles.qtyButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onDecrement(item, quantity); }}>
+                        <Ionicons name="remove" size={16} color={colors.primary} />
+                    </TouchableOpacity>
+                    <Text style={styles.qtyText}>{Number.isInteger(quantity) ? quantity : quantity.toFixed(1)}</Text>
+                    <TouchableOpacity style={styles.qtyButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onIncrement(item, quantity); }}>
+                        <Ionicons name="add" size={16} color={colors.primary} />
+                    </TouchableOpacity>
+                </View>
+            )}
+        </View>
+    );
+});
 
 export default function DiscountsScreen() {
     const colors = useTheme();
@@ -47,16 +104,30 @@ export default function DiscountsScreen() {
     const [l2Categories, setL2Categories] = useState<L2Category[]>([]);
     const [selectedL2, setSelectedL2] = useState<number | null>(null);
     const [search, setSearch] = useState('');
-    const [products, setProducts] = useState<DiscountedProduct[]>([]);
-    // initialLoading: true until the very first fetch completes (full-screen spinner)
-    // refreshing: true on subsequent fetches — keeps existing products visible
+    const [allProducts, setAllProducts] = useState<DiscountedProduct[]>([]);
     const [initialLoading, setInitialLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [loadingMore, setLoadingMore] = useState(false);
-    const [hasMore, setHasMore] = useState(true);
     const [addingIds, setAddingIds] = useState<Set<number>>(() => new Set());
+    const toastRef = useRef<ToastHandle>(null);
 
-    const PAGE_SIZE = 30;
+    const activeL2Ids = useMemo(
+        () => new Set(allProducts.map(p => p.l2CategoryId).filter(id => id != null)),
+        [allProducts],
+    );
+
+    useEffect(() => {
+        if (selectedL2 != null && !activeL2Ids.has(selectedL2)) setSelectedL2(null);
+    }, [activeL2Ids, selectedL2]);
+
+    const products = useMemo(() => {
+        let list = allProducts;
+        if (selectedL2 != null) list = list.filter(p => p.l2CategoryId === selectedL2);
+        if (search.trim()) {
+            const q = search.trim().toLowerCase();
+            list = list.filter(p => p.name.toLowerCase().includes(q));
+        }
+        return list;
+    }, [allProducts, selectedL2, search]);
 
     const { draftBasketId, setDraftBasketId, sessionBasketId, clearSessionBasket } = useBasketState();
     const [basketQuantities, setBasketQuantities] = useState<Record<number, number>>({});
@@ -78,90 +149,39 @@ export default function DiscountsScreen() {
             .then(data => setL2Categories(Array.isArray(data) ? data : []));
     }, []);
 
-    const hasLoadedOnce = useRef(false);
-    const CACHE_KEY = 'discounts_cache_v1';
+    const CACHE_KEY = 'discounts_cache_v2';
 
-    const fetchProducts = useCallback(async (l2: number | null, q: string, background = false) => {
-        if (!background) {
-            if (!hasLoadedOnce.current) setInitialLoading(true);
-            else setRefreshing(true);
-        }
+    const fetchAll = useCallback(async (background = false) => {
+        if (!background) setRefreshing(true);
         try {
-            const params = new URLSearchParams();
-            if (l2 != null) params.set('l2CategoryId', String(l2));
-            if (q.trim()) params.set('search', q.trim());
-            params.set('limit', String(PAGE_SIZE));
-            params.set('offset', '0');
-            const res = await fetch(`${API_BASE_URL}/api/products/discounted?${params}`);
+            const res = await fetch(`${API_BASE_URL}/api/products/discounted`);
             const data = await res.json();
             const fresh = Array.isArray(data) ? data : [];
-            setProducts(fresh);
-            setHasMore(fresh.length === PAGE_SIZE);
-            // Persist unfiltered first page so next open is instant
-            if (l2 == null && !q.trim()) {
-                AsyncStorage.setItem(CACHE_KEY, JSON.stringify(fresh)).catch(() => {});
-            }
+            setAllProducts(fresh);
+            AsyncStorage.setItem(CACHE_KEY, JSON.stringify(fresh)).catch(() => {});
         } finally {
-            if (!background) {
-                if (!hasLoadedOnce.current) {
-                    hasLoadedOnce.current = true;
-                    setInitialLoading(false);
-                } else {
-                    setRefreshing(false);
-                }
-            }
+            if (!background) setRefreshing(false);
         }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [PAGE_SIZE]);
+    }, []);
 
-    const productsCountRef = useRef(0);
-    useEffect(() => { productsCountRef.current = products.length; }, [products.length]);
-
-    const loadMore = useCallback(async () => {
-        if (loadingMore || !hasMore) return;
-        setLoadingMore(true);
-        try {
-            const params = new URLSearchParams();
-            if (selectedL2 != null) params.set('l2CategoryId', String(selectedL2));
-            if (search.trim()) params.set('search', search.trim());
-            params.set('limit', String(PAGE_SIZE));
-            params.set('offset', String(productsCountRef.current));
-            const res = await fetch(`${API_BASE_URL}/api/products/discounted?${params}`);
-            const data = await res.json();
-            const fresh = Array.isArray(data) ? data : [];
-            setProducts(prev => [...prev, ...fresh]);
-            setHasMore(fresh.length === PAGE_SIZE);
-        } catch {}
-        finally { setLoadingMore(false); }
-    }, [loadingMore, hasMore, selectedL2, search, PAGE_SIZE]);
-
-    // On mount: load AsyncStorage cache instantly, then fetch fresh in background
+    // On mount: show cached data instantly, refresh in background
     useEffect(() => {
         AsyncStorage.getItem(CACHE_KEY).then(raw => {
             if (raw) {
                 try {
                     const cached = JSON.parse(raw);
                     if (Array.isArray(cached) && cached.length > 0) {
-                        setProducts(cached);
-                        hasLoadedOnce.current = true;
+                        setAllProducts(cached);
                         setInitialLoading(false);
-                        // Refresh silently in background
-                        fetchProducts(null, '', true);
+                        fetchAll(true);
                         return;
                     }
                 } catch {}
             }
-            // No usable cache — do a normal (spinner) fetch
-            fetchProducts(null, '');
-        }).catch(() => fetchProducts(null, ''));
+            fetchAll(false).finally(() => setInitialLoading(false));
+        }).catch(() => fetchAll(false).finally(() => setInitialLoading(false)));
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
-
-    useEffect(() => {
-        if (!hasLoadedOnce.current) return; // mount effect handles first load
-        const timer = setTimeout(() => fetchProducts(selectedL2, search), search ? 300 : 0);
-        return () => clearTimeout(timer);
-    }, [selectedL2, search, fetchProducts]);
 
     useFocusEffect(useCallback(() => {
         navigation.getParent()?.setOptions({ tabBarStyle: { display: 'none' } });
@@ -253,122 +273,79 @@ export default function DiscountsScreen() {
 
     const hasBasketItems = Object.values(basketQuantities).some(q => q > 0);
 
-    const renderItem = useCallback(({ item }: { item: DiscountedProduct }) => {
-        const quantity = basketQuantities[item.id] ?? 0;
-        return (
-            <View style={styles.productCard}>
-                <TouchableOpacity
-                    onPress={() => router.push(`/product/${item.id}` as any)}
-                    style={styles.productImageContainer}
-                    activeOpacity={0.7}
-                >
-                    <ProductImage
-                        uris={item.imageUrls}
-                        imageStyle={styles.productImage}
-                        placeholderStyle={styles.productImagePlaceholder}
-                        emojiStyle={styles.productImageEmoji}
-                    />
-                    <View style={styles.discountBadge}>
-                        <Text style={styles.discountBadgeText}>
-                            🔥 -{item.bestDiscountPct}%
-                        </Text>
-                    </View>
-                </TouchableOpacity>
-                <View style={styles.productInfo}>
-                    <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
-                    <Text style={styles.amountText}>
-                        {item.minAmount != null && item.maxAmount != null ? (() => {
-                            const min = Number(item.minAmount);
-                            const max = Number(item.maxAmount);
-                            const fmt = (v: number) => v >= 1000 ? `${v / 1000} kg` : `${v} g`;
-                            return min === max ? fmt(min) : `${fmt(min)} - ${fmt(max)}`;
-                        })() : ''}
-                    </Text>
-                </View>
-                {quantity === 0 ? (
-                    <TouchableOpacity
-                        style={[styles.addButton, addingIds.has(item.id) && { opacity: 0.5 }]}
-                        disabled={addingIds.has(item.id)}
-                        onPress={async () => {
-                            if (addingIds.has(item.id)) return;
-                            const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
-                            const needsPicker = hasRange || !!item.hasWeighable;
-                            if (needsPicker) {
-                                setAmountModal({ visible: true, product: item });
-                            } else {
-                                setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
-                                try {
-                                    const result = await commitAdd(item.id, 1);
-                                    if (result.success) {
-                                        setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
-                                        setBasketItemCount(prev => prev + 1);
-                                    }
-                                } finally {
-                                    setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
-                                }
-                            }
-                        }}
-                    >
-                        <Text style={styles.addButtonText}>Į krepšelį</Text>
-                    </TouchableOpacity>
-                ) : (
-                    <View style={styles.quantityControl}>
-                        <TouchableOpacity
-                            style={styles.qtyButton}
-                            onPress={async () => {
-                                const step = item.hasWeighable ? 0.1 : 1;
-                                const newQty = Math.round((quantity - step) * 10) / 10;
-                                if (newQty <= 0) {
-                                    setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
-                                    setBasketItemCount(prev => Math.max(0, prev - 1));
-                                    try {
-                                        const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
-                                        const allItems = await res.json();
-                                        const bi = Array.isArray(allItems) ? allItems.find((i: any) => i.productId === item.id) : null;
-                                        if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'DELETE' });
-                                        const remaining = Array.isArray(allItems) ? allItems.filter((i: any) => i.id !== bi?.id) : [];
-                                        if (remaining.length === 0 && draftBasketId) {
-                                            await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}`, { method: 'DELETE' });
-                                            clearSessionBasket();
-                                        }
-                                    } catch {}
-                                } else {
-                                    setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
-                                    try {
-                                        const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
-                                        const items2 = await res.json();
-                                        const bi = items2.find((i: any) => i.productId === item.id);
-                                        if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
-                                    } catch {}
-                                }
-                            }}
-                        >
-                            <Ionicons name="remove" size={16} color={colors.primary} />
-                        </TouchableOpacity>
-                        <Text style={styles.qtyText}>
-                            {Number.isInteger(quantity) ? quantity : quantity.toFixed(1)}
-                        </Text>
-                        <TouchableOpacity
-                            style={styles.qtyButton}
-                            onPress={async () => {
-                                const step = item.hasWeighable ? 0.1 : 1;
-                                const newQty = Math.round((quantity + step) * 10) / 10;
-                                setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
-                                try {
-                                    const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
-                                    const items2 = await res.json();
-                                    const bi = items2.find((i: any) => i.productId === item.id);
-                                    if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
-                                } catch {}
-                            }}
-                        >
-                            <Ionicons name="add" size={16} color={colors.primary} />
-                        </TouchableOpacity>
-                    </View>
-                )}
-            </View>
-        );
-    }, [basketQuantities, addingIds, styles, colors, router, draftBasketId, commitAdd, setDraftBasketId]);
+    const draftBasketIdRef = useRef(draftBasketId);
+    useEffect(() => { draftBasketIdRef.current = draftBasketId; }, [draftBasketId]);
+    const commitAddRef = useRef(commitAdd);
+    useEffect(() => { commitAddRef.current = commitAdd; }, [commitAdd]);
+
+    const onNavigate = useCallback((id: number) => {
+        router.push(`/product/${id}` as any);
+    }, [router]);
+
+    const onAdd = useCallback((item: DiscountedProduct) => {
+        const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
+        if (hasRange || item.hasWeighable) { setAmountModal({ visible: true, product: item }); return; }
+        setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
+        commitAddRef.current(item.id, 1).then(result => {
+            if (result.success) {
+                setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
+                setBasketItemCount(prev => prev + 1);
+                toastRef.current?.show('Pridėta į krepšelį');
+            }
+        }).finally(() => {
+            setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
+        });
+    }, [setAmountModal]);
+
+    const onDecrement = useCallback((item: DiscountedProduct, qty: number) => {
+        const step = item.hasWeighable ? 0.1 : 1;
+        const newQty = Math.round((qty - step) * 10) / 10;
+        const bid = draftBasketIdRef.current;
+        if (newQty <= 0) {
+            setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
+            setBasketItemCount(prev => Math.max(0, prev - 1));
+            if (!bid) return;
+            fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async allItems => {
+                const bi = Array.isArray(allItems) ? allItems.find((i: any) => i.productId === item.id) : null;
+                if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'DELETE' });
+                const remaining = Array.isArray(allItems) ? allItems.filter((i: any) => i.id !== bi?.id) : [];
+                if (remaining.length === 0) { await fetch(`${API_BASE_URL}/api/baskets/${bid}`, { method: 'DELETE' }); clearSessionBasket(); }
+            }).catch(() => {});
+        } else {
+            setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
+            if (!bid) return;
+            fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async items2 => {
+                const bi = items2.find((i: any) => i.productId === item.id);
+                if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
+            }).catch(() => {});
+        }
+    }, [clearSessionBasket]);
+
+    const onIncrement = useCallback((item: DiscountedProduct, qty: number) => {
+        const step = item.hasWeighable ? 0.1 : 1;
+        const newQty = Math.round((qty + step) * 10) / 10;
+        const bid = draftBasketIdRef.current;
+        setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
+        if (!bid) return;
+        fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async items2 => {
+            const bi = items2.find((i: any) => i.productId === item.id);
+            if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
+        }).catch(() => {});
+    }, []);
+
+    const renderItem = useCallback(({ item }: { item: DiscountedProduct }) => (
+        <DiscountProductCard
+            item={item}
+            quantity={basketQuantities[item.id] ?? 0}
+            isAdding={addingIds.has(item.id)}
+            styles={styles}
+            colors={colors}
+            onNavigate={onNavigate}
+            onAdd={onAdd}
+            onDecrement={onDecrement}
+            onIncrement={onIncrement}
+        />
+    ), [basketQuantities, addingIds, styles, colors, onNavigate, onAdd, onDecrement, onIncrement]);
 
     return (
         <>
@@ -379,7 +356,7 @@ export default function DiscountsScreen() {
             }} />
             <View style={{ flex: 1 }}>
                 <View style={styles.container}>
-                    {l2Categories.length > 0 && (
+                    {activeL2Ids.size > 0 && (
                         <ScrollView
                             horizontal
                             showsHorizontalScrollIndicator={false}
@@ -394,7 +371,7 @@ export default function DiscountsScreen() {
                                     Visos kategorijos
                                 </Text>
                             </TouchableOpacity>
-                            {l2Categories.map(cat => (
+                            {l2Categories.filter(cat => activeL2Ids.has(cat.id)).map(cat => (
                                 <TouchableOpacity
                                     key={cat.id}
                                     style={[styles.bubble, selectedL2 === cat.id && styles.bubbleActive]}
@@ -430,9 +407,19 @@ export default function DiscountsScreen() {
 
                     <View style={{ flex: 1 }}>
                         {initialLoading ? (
-                            <View style={styles.centered}>
-                                <ActivityIndicator size="large" color={colors.primary} />
-                                <Text style={styles.loadingText}>Įkeliamos prekės su nuolaidomis…</Text>
+                            <View style={{ flex: 1, padding: 12, gap: 12 }}>
+                                {Array.from({ length: 6 }).map((_, i) => (
+                                    <View key={i} style={{ flexDirection: 'row', gap: 12 }}>
+                                        {[0, 1].map(j => (
+                                            <View key={j} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: 12, padding: 12, gap: 8 }}>
+                                                <SkeletonBox height={100} borderRadius={8} />
+                                                <SkeletonBox height={12} borderRadius={6} />
+                                                <SkeletonBox width={80} height={12} borderRadius={6} />
+                                                <SkeletonBox height={32} borderRadius={8} />
+                                            </View>
+                                        ))}
+                                    </View>
+                                ))}
                             </View>
                         ) : (
                             <FlatList
@@ -441,11 +428,14 @@ export default function DiscountsScreen() {
                                 contentContainerStyle={styles.list}
                                 numColumns={2}
                                 columnWrapperStyle={styles.row}
-                                onEndReached={loadMore}
-                                onEndReachedThreshold={0.5}
-                                ListFooterComponent={loadingMore ? (
-                                    <ActivityIndicator size="small" color={colors.primary} style={{ marginVertical: 12 }} />
-                                ) : null}
+                                refreshControl={
+                                    <RefreshControl
+                                        refreshing={refreshing}
+                                        onRefresh={() => fetchAll(false)}
+                                        colors={[colors.primary]}
+                                        tintColor={colors.primary}
+                                    />
+                                }
                                 ListEmptyComponent={
                                     <Text style={styles.emptyText}>
                                         {search ? 'Nerasta akcijinių prekių pagal paiešką' : 'Šiuo metu nėra akcijinių prekių'}
@@ -469,13 +459,13 @@ export default function DiscountsScreen() {
                                 {basketItemCount} {pluralizeItems(basketItemCount)}
                             </Text>
                         </View>
-                        <TouchableOpacity
+                        <ScalePressable
                             style={styles.basketBarButton}
                             onPress={() => router.push(`/basket/${sessionBasketId}` as any)}
                         >
                             <Text style={styles.basketBarButtonText}>Krepšelis</Text>
                             <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
-                        </TouchableOpacity>
+                        </ScalePressable>
                     </Animated.View>
                 )}
             </View>
@@ -496,16 +486,19 @@ export default function DiscountsScreen() {
                 isWeighable={!!amountModal.product?.hasWeighable}
                 onCancel={() => setAmountModal({ visible: false, product: null })}
                 onConfirm={async (amount) => {
-                    if (amountModal.product) {
-                        const result = await commitAdd(amountModal.product.id, amount);
+                    const product = amountModal.product;
+                    setAmountModal({ visible: false, product: null });
+                    if (product) {
+                        const result = await commitAdd(product.id, amount);
                         if (result.success) {
-                            setBasketQuantities(prev => ({ ...prev, [amountModal.product!.id]: amount }));
+                            setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
                             setBasketItemCount(prev => prev + 1);
+                            toastRef.current?.show('Pridėta į krepšelį');
                         }
                     }
-                    setAmountModal({ visible: false, product: null });
                 }}
             />
+            <Toast ref={toastRef} />
         </>
     );
 }

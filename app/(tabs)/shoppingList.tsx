@@ -1,4 +1,4 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, Modal } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, Modal, RefreshControl } from 'react-native';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -7,6 +7,7 @@ import { getUserId } from '../../config/user';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { SkeletonBox } from '../../components/SkeletonBox';
 
 interface StoreChain {
     id: number;
@@ -139,6 +140,7 @@ export default function ShoppingListScreen() {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [lists, setLists] = useState<ShoppingList[]>([]);
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
     const router = useRouter();
 
     const fetchLists = async () => {
@@ -288,8 +290,20 @@ export default function ShoppingListScreen() {
     const completedLists = lists.filter(l => l.status === 'completed');
 
     if (loading) return (
-        <View style={styles.centered}>
-            <ActivityIndicator size="large" color={colors.primary} />
+        <View style={[styles.container, { padding: 16, gap: 12 }]}>
+            {Array.from({ length: 5 }).map((_, i) => (
+                <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, gap: 10, borderLeftWidth: 3, borderLeftColor: colors.borderSubtle }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <SkeletonBox width={32} height={32} borderRadius={16} />
+                        <View style={{ gap: 6, flex: 1 }}>
+                            <SkeletonBox width={140} height={13} borderRadius={6} />
+                            <SkeletonBox width={200} height={11} borderRadius={5} />
+                        </View>
+                        <SkeletonBox width={50} height={20} borderRadius={6} />
+                    </View>
+                    <SkeletonBox height={6} borderRadius={3} />
+                </View>
+            ))}
         </View>
     );
 
@@ -312,6 +326,14 @@ export default function ShoppingListScreen() {
                     data={[]}
                     keyExtractor={() => ''}
                     renderItem={null}
+                    refreshControl={
+                        <RefreshControl
+                            refreshing={refreshing}
+                            onRefresh={async () => { setRefreshing(true); await fetchLists(); setRefreshing(false); }}
+                            colors={[colors.primary]}
+                            tintColor={colors.primary}
+                        />
+                    }
                     ListHeaderComponent={
                         <>
                             {activeLists.length > 0 && (
@@ -348,8 +370,12 @@ export default function ShoppingListScreen() {
                             )}
                             {lists.length === 0 && (
                                 <View style={styles.centered}>
+                                    <Ionicons name="list-outline" size={56} color={colors.textMuted} />
                                     <Text style={styles.emptyText}>Pirkinių sąrašų nėra</Text>
-                                    <Text style={styles.emptySubText}>Sukurkite sąrašą iš krepšelio palyginimo rezultatų</Text>
+                                    <Text style={styles.emptySubText}>Sudėkite produktus į krepšelį, palyginkite kainas ir sukurkite sąrašą</Text>
+                                    <TouchableOpacity style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/basket' as any)}>
+                                        <Text style={styles.emptyButtonText}>Eiti į krepšelį</Text>
+                                    </TouchableOpacity>
                                 </View>
                             )}
                         </>
@@ -474,8 +500,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     badgeCompleted: { backgroundColor: c.border },
     badgeText: { fontSize: 12, fontWeight: '700', color: c.primary },
     badgeTextCompleted: { color: c.textMuted },
-    emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', textAlign: 'center' },
-    emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 4, textAlign: 'center' },
+    emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', marginTop: 16, textAlign: 'center' },
+    emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 6, textAlign: 'center', lineHeight: 18 },
+    emptyButton: { marginTop: 20, backgroundColor: c.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
+    emptyButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 14 },
     undoToast: {
         flexDirection: 'row',
         alignItems: 'center',

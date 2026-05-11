@@ -1,4 +1,5 @@
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Image, TextInput, Modal, Dimensions } from 'react-native';
+import { SkeletonBox } from '../../components/SkeletonBox';
 import { ProductImage } from '../../components/ProductImage';
 import { useEffect, useState, useMemo } from 'react';
 import { useLocalSearchParams, Stack } from 'expo-router';
@@ -594,7 +595,28 @@ export default function ProductDetailScreen() {
         return priceCache[cacheKey] || [];
     };
 
-    if (loading) return <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />;
+    if (loading) return (
+        <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, gap: 16 }}>
+            <View style={{ alignItems: 'center', gap: 12, paddingVertical: 8 }}>
+                <SkeletonBox width={160} height={160} borderRadius={12} />
+                <SkeletonBox width={220} height={18} borderRadius={8} />
+                <SkeletonBox width={140} height={13} borderRadius={6} />
+            </View>
+            <View style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, gap: 10 }}>
+                <SkeletonBox width={120} height={13} borderRadius={6} />
+                {Array.from({ length: 4 }).map((_, i) => (
+                    <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                        <SkeletonBox width={32} height={32} borderRadius={16} />
+                        <View style={{ flex: 1, gap: 6 }}>
+                            <SkeletonBox width={140} height={12} borderRadius={5} />
+                            <SkeletonBox width={80} height={11} borderRadius={5} />
+                        </View>
+                        <SkeletonBox width={60} height={16} borderRadius={5} />
+                    </View>
+                ))}
+            </View>
+        </ScrollView>
+    );
     if (!product) return <Text style={styles.centered}>Produktas nerastas</Text>;
 
     const breadcrumb = categories.map(c => c.name).join(' → ');
