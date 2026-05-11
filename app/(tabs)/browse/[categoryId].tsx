@@ -1,6 +1,7 @@
 import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, ActivityIndicator, Switch, Modal } from 'react-native';
 import { SkeletonBox } from '../../../components/SkeletonBox';
-import { useEffect, useMemo, useState, useCallback, useRef } from 'react';
+import { ChainLogoStrip } from '../../../components/ChainLogoStrip';
+import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect, useNavigation } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
@@ -29,12 +30,67 @@ interface Product {
     name: string;
     brandName: string | null;
     imageUrls?: (string | null | undefined)[] | string | null;
+    chainLogos?: { chainId: number; logoUrl: string | null }[] | string | null;
     minAmount: number | null;
     maxAmount: number | null;
     unit: string | null;
     hasWeighable: boolean;
     bestDiscountPct?: number | null;
 }
+
+interface CardCallbacks {
+    onNavigate: (id: number) => void;
+    onAdd: (item: Product) => void;
+    onDecrement: (item: Product, qty: number) => void;
+    onIncrement: (item: Product, qty: number) => void;
+}
+
+const BrowseProductCard = memo(({
+    item, quantity, isAdding, styles, colors,
+    onNavigate, onAdd, onDecrement, onIncrement,
+}: CardCallbacks & {
+    item: Product;
+    quantity: number;
+    isAdding: boolean;
+    styles: ReturnType<typeof makeStyles>;
+    colors: AppTheme;
+}) => {
+    const fmt = (v: number) => v >= 1000 ? `${v / 1000} kg` : `${v} g`;
+    const amountText = item.minAmount != null && item.maxAmount != null
+        ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
+        : '';
+    return (
+        <View style={styles.productCard}>
+            <TouchableOpacity onPress={() => onNavigate(item.id)} style={styles.productImageContainer} activeOpacity={0.7}>
+                <ProductImage uris={item.imageUrls} imageStyle={styles.productImage} placeholderStyle={styles.productImagePlaceholder} emojiStyle={styles.productImageEmoji} />
+                <ChainLogoStrip chainLogos={item.chainLogos} style={{ position: 'absolute', top: 6, left: 6 }} />
+            </TouchableOpacity>
+            <View style={styles.productInfo}>
+                <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
+                <Text style={styles.amountText}>{amountText}</Text>
+            </View>
+            {quantity === 0 ? (
+                <ScalePressable
+                    style={[styles.addButton, isAdding && { opacity: 0.5 }]}
+                    disabled={isAdding}
+                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); onAdd(item); }}
+                >
+                    <Text style={styles.addButtonText}>Į krepšelį</Text>
+                </ScalePressable>
+            ) : (
+                <View style={styles.quantityControl}>
+                    <TouchableOpacity style={styles.qtyButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onDecrement(item, quantity); }}>
+                        <Ionicons name="remove" size={16} color={colors.primary} />
+                    </TouchableOpacity>
+                    <Text style={styles.qtyText}>{Number.isInteger(quantity) ? quantity : quantity.toFixed(1)}</Text>
+                    <TouchableOpacity style={styles.qtyButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onIncrement(item, quantity); }}>
+                        <Ionicons name="add" size={16} color={colors.primary} />
+                    </TouchableOpacity>
+                </View>
+            )}
+        </View>
+    );
+});
 
 export default function CategoryScreen() {
     const colors = useTheme();
@@ -311,6 +367,11 @@ export default function CategoryScreen() {
         return addProductToBasket(productId, existing, setDraftBasketId, quantity, mode);
     };
 
+    const draftBasketIdRef = useRef(draftBasketId);
+    useEffect(() => { draftBasketIdRef.current = draftBasketId; }, [draftBasketId]);
+    const commitAddRef = useRef(commitAdd);
+    useEffect(() => { commitAddRef.current = commitAdd; }, [commitAdd]);
+
     const handleModeSwitchRequest = (nextOn: boolean) => {
         const target: 'base' | 'sku' = nextOn ? 'base' : 'sku';
         if (target === mode) return;
@@ -425,6 +486,82 @@ export default function CategoryScreen() {
         () => products.filter(p => !(p.id in userMergeMap)),
         [products, userMergeMap]
     );
+
+    const onNavigate = useCallback((id: number) => {
+        router.push(`/product/${id}` as any);
+    }, [router]);
+
+    const onAdd = useCallback((item: Product) => {
+        const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
+        if (hasRange || !!item.hasWeighable) { setAmountModal({ visible: true, product: item }); return; }
+        setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
+        commitAddRef.current(item.id, 1).then(result => {
+            if (result.success) {
+                setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
+                setBasketItemCount(prev => prev + 1);
+                toastRef.current?.show('Pridėta į krepšelį');
+            }
+        }).finally(() => {
+            setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
+        });
+    }, [setAmountModal]);
+
+    const onDecrement = useCallback((item: Product, qty: number) => {
+        const hasRange = item.minAmount !== null && item.maxAmount !== null && Number(item.minAmount) !== Number(item.maxAmount);
+        const step = (hasRange || item.hasWeighable) ? 0.1 : 1;
+        const newQty = Math.round((qty - step) * 10) / 10;
+        const bid = draftBasketIdRef.current;
+        if (newQty <= 0) {
+            setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
+            setBasketItemCount(prev => Math.max(0, prev - 1));
+            if (!bid) return;
+            fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (allItems: any) => {
+                const basketItem = Array.isArray(allItems) ? allItems.find((i: any) => i.productId === item.id) : null;
+                if (basketItem) await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
+                const remaining = Array.isArray(allItems) ? allItems.filter((i: any) => i.id !== basketItem?.id) : [];
+                if (remaining.length === 0) { await fetch(`${API_BASE_URL}/api/baskets/${bid}`, { method: 'DELETE' }); setDraftBasketId(null); }
+            }).catch(() => {});
+        } else {
+            setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
+            if (!bid) return;
+            fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (items2: any) => {
+                const basketItem = items2.find((i: any) => i.productId === item.id);
+                if (basketItem) await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
+            }).catch(() => {});
+        }
+    }, [setDraftBasketId]);
+
+    const onIncrement = useCallback((item: Product, qty: number) => {
+        const hasRange = item.minAmount !== null && item.maxAmount !== null && Number(item.minAmount) !== Number(item.maxAmount);
+        const step = (hasRange || item.hasWeighable) ? 0.1 : 1;
+        const newQty = Math.round((qty + step) * 10) / 10;
+        const bid = draftBasketIdRef.current;
+        setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
+        if (!bid) return;
+        fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (items2: any) => {
+            const basketItem = items2.find((i: any) => i.productId === item.id);
+            if (basketItem) await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
+        }).catch(() => {});
+    }, []);
+
+    const renderItem = useCallback(({ item }: { item: Product }) => {
+        const mergedQty = (mergedIntoMe[item.id] ?? [])
+            .reduce((sum, hid) => sum + (basketQuantities[hid] ?? 0), 0);
+        const quantity = (basketQuantities[item.id] ?? 0) + mergedQty;
+        return (
+            <BrowseProductCard
+                item={item}
+                quantity={quantity}
+                isAdding={addingIds.has(item.id)}
+                styles={styles}
+                colors={colors}
+                onNavigate={onNavigate}
+                onAdd={onAdd}
+                onDecrement={onDecrement}
+                onIncrement={onIncrement}
+            />
+        );
+    }, [basketQuantities, mergedIntoMe, addingIds, styles, colors, onNavigate, onAdd, onDecrement, onIncrement]);
 
     if (loading) return (
         <>
@@ -545,161 +682,7 @@ export default function CategoryScreen() {
                             ListEmptyComponent={
                                 <Text style={styles.emptyText}>Ši kategorija neturi produktų</Text>
                             }
-                            renderItem={({ item }) => {
-                                // Sum quantities of merged-in products so the counter
-                                // reflects all items the user has added under this cluster.
-                                const mergedQty = (mergedIntoMe[item.id] ?? [])
-                                    .reduce((sum, hid) => sum + (basketQuantities[hid] ?? 0), 0);
-                                const quantity = (basketQuantities[item.id] ?? 0) + mergedQty;
-                                return (
-                                    <View style={styles.productCard}>
-                                        <TouchableOpacity
-                                            onPress={() => router.push(`/product/${item.id}` as any)}
-                                            style={styles.productImageContainer}
-                                            activeOpacity={0.7}
-                                        >
-                                            <ProductImage
-                                                uris={item.imageUrls}
-                                                imageStyle={styles.productImage}
-                                                placeholderStyle={styles.productImagePlaceholder}
-                                                emojiStyle={styles.productImageEmoji}
-                                            />
-                                        </TouchableOpacity>
-                                        <View style={styles.productInfo}>
-                                            <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
-                                                <Text style={styles.amountText}>
-                                                    {item.minAmount != null && item.maxAmount != null ? (() => {
-                                                        const min = Number(item.minAmount);
-                                                        const max = Number(item.maxAmount);
-                                                        const formatAmount = (val: number) => 
-                                                            val >= 1000 ? `${val / 1000} kg` : `${val} g`;
-                                                        return min === max 
-                                                            ? formatAmount(min)
-                                                            : `${formatAmount(min)} - ${formatAmount(max)}`;
-                                                    })() : ''}
-                                                </Text>
-                                            </View>
-                                        {quantity === 0 ? (
-                                            <ScalePressable
-                                                style={[styles.addButton, addingIds.has(item.id) && { opacity: 0.5 }]}
-                                                disabled={addingIds.has(item.id)}
-                                                onPress={async () => {
-                                                    if (addingIds.has(item.id)) return;
-                                                    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                                                    const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
-                                                    // Any of: varying pack sizes across SPs, or product is
-                                                    // weighable (user buys by weight) → user should pick an
-                                                    // exact amount. Otherwise it's a single-size SKU and we
-                                                    // add a quantity of 1.
-                                                    const needsPicker = hasRange || !!item.hasWeighable;
-
-                                                    if (needsPicker) {
-                                                        setAmountModal({ visible: true, product: item });
-                                                    } else {
-                                                        setAddingIds(prev => {
-                                                            const n = new Set(prev);
-                                                            n.add(item.id);
-                                                            return n;
-                                                        });
-                                                        try {
-                                                            const result = await commitAdd(item.id, 1);
-                                                            if (result.success) {
-                                                                setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
-                                                                setBasketItemCount(prev => prev + 1);
-                                                                toastRef.current?.show('Pridėta į krepšelį');
-                                                            }
-                                                        } finally {
-                                                            setAddingIds(prev => {
-                                                                const n = new Set(prev);
-                                                                n.delete(item.id);
-                                                                return n;
-                                                            });
-                                                        }
-                                                    }
-                                                }}
-                                            >
-                                                <Text style={styles.addButtonText}>Į krepšelį</Text>
-                                            </ScalePressable>
-                                        ) : (
-                                            <View style={styles.quantityControl}>
-                                                <TouchableOpacity
-                                                    style={styles.qtyButton}
-                                                    onPress={async () => {
-                                                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                                        const hasRange = item.minAmount !== null && item.maxAmount !== null && Number(item.minAmount) !== Number(item.maxAmount);
-                                                        // Same rule as the add button: weighable OR ranged SPs
-                                                        // → step 0.1 kg; fixed single-size SKU → step 1 pack.
-                                                        const step = (hasRange || item.hasWeighable) ? 0.1 : 1;
-                                                        const newQty = Math.round((quantity - step) * 10) / 10;
-
-                                                        if (newQty <= 0) {
-                                                            setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
-                                                            setBasketItemCount(prev => Math.max(0, prev - 1));
-                                                            try {
-                                                                const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
-                                                                const allItems = await res.json();
-                                                                const basketItem = Array.isArray(allItems) ? allItems.find((i: any) => i.productId === item.id) : null;
-                                                                if (basketItem) {
-                                                                    await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
-                                                                }
-                                                                // If basket is now empty, delete it so no ghost draft remains
-                                                                const remaining = Array.isArray(allItems) ? allItems.filter((i: any) => i.id !== basketItem?.id) : [];
-                                                                if (remaining.length === 0 && draftBasketId) {
-                                                                    await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}`, { method: 'DELETE' });
-                                                                    setDraftBasketId(null);
-                                                                }
-                                                            } catch {}
-                                                        } else {
-                                                            setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
-                                                            try {
-                                                                const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
-                                                                const items = await res.json();
-                                                                const basketItem = items.find((i: any) => i.productId === item.id);
-                                                                if (basketItem) {
-                                                                    await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
-                                                                        method: 'PUT',
-                                                                        headers: { 'Content-Type': 'application/json' },
-                                                                        body: JSON.stringify({ quantity: newQty }),
-                                                                    });
-                                                                }
-                                                            } catch {}
-                                                        }
-                                                    }}
-                                                >
-                                                    <Ionicons name="remove" size={16} color={colors.primary} />
-                                                </TouchableOpacity>
-                                                <Text style={styles.qtyText}>
-                                                    {Number.isInteger(quantity) ? quantity : quantity.toFixed(1)}
-                                                </Text>
-                                                <TouchableOpacity
-                                                    style={styles.qtyButton}
-                                                    onPress={async () => {
-                                                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                                        const hasRange = item.minAmount !== null && item.maxAmount !== null && Number(item.minAmount) !== Number(item.maxAmount);
-                                                        const step = (hasRange || item.hasWeighable) ? 0.1 : 1;
-                                                        const newQty = Math.round((quantity + step) * 10) / 10;
-                                                        setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
-                                                        try {
-                                                            const res = await fetch(`${API_BASE_URL}/api/baskets/${draftBasketId}/items`);
-                                                            const items = await res.json();
-                                                            const basketItem = items.find((i: any) => i.productId === item.id);
-                                                            if (basketItem) {
-                                                                await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
-                                                                    method: 'PUT',
-                                                                    headers: { 'Content-Type': 'application/json' },
-                                                                    body: JSON.stringify({ quantity: newQty }),
-                                                                });
-                                                            }
-                                                        } catch {}
-                                                    }}
-                                                >
-                                                    <Ionicons name="add" size={16} color={colors.primary} />
-                                                </TouchableOpacity>
-                                            </View>
-                                        )}
-                                    </View>
-                                );
-                            }}
+                            renderItem={renderItem}
                         />
                     )}
                 </View>
