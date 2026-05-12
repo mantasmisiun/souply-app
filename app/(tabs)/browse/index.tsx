@@ -69,6 +69,23 @@ const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, router, co
         }
     };
 
+    const l2Rows = l2.length === 0 ? (
+        <ActivityIndicator size="small" color={colors.primary} style={{ padding: 12 }} />
+    ) : (
+        l2.map((cat, index) => (
+            <View key={cat.id}>
+                {index > 0 && <View style={styles.divider} />}
+                <TouchableOpacity
+                    style={styles.l2Row}
+                    onPress={() => router.push(`/browse/${cat.id}?name=${encodeURIComponent(cat.name)}`)}
+                >
+                    <Text style={styles.l2Text}>{cat.name}</Text>
+                    <Ionicons name="chevron-forward" size={18} color={colors.primary} />
+                </TouchableOpacity>
+            </View>
+        ))
+    );
+
     return (
         <View style={[styles.l1Container, isExpanded && styles.l1ContainerExpanded]}>
             <TouchableOpacity
@@ -81,25 +98,17 @@ const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, router, co
                     <Ionicons name="chevron-down" size={20} color={isExpanded ? colors.primary : colors.success} />
                 </Animated.View>
             </TouchableOpacity>
+            {/* Ghost view: absolutely positioned so its layout isn't constrained by
+                animatedHeight. onLayout here always returns the natural content height. */}
+            <View
+                style={{ position: 'absolute', opacity: 0, left: 0, right: 0 }}
+                pointerEvents="none"
+                onLayout={handleLayout}
+            >
+                <View style={styles.l2Container}>{l2Rows}</View>
+            </View>
             <Animated.View style={animatedContentStyle}>
-                <View onLayout={handleLayout} style={styles.l2Container}>
-                    {l2.length === 0 ? (
-                        <ActivityIndicator size="small" color={colors.primary} style={{ padding: 12 }} />
-                    ) : (
-                        l2.map((cat, index) => (
-                            <View key={cat.id}>
-                                {index > 0 && <View style={styles.divider} />}
-                                <TouchableOpacity
-                                    style={styles.l2Row}
-                                    onPress={() => router.push(`/browse/${cat.id}?name=${encodeURIComponent(cat.name)}`)}
-                                >
-                                    <Text style={styles.l2Text}>{cat.name}</Text>
-                                    <Ionicons name="chevron-forward" size={18} color={colors.primary} />
-                                </TouchableOpacity>
-                            </View>
-                        ))
-                    )}
-                </View>
+                <View style={styles.l2Container}>{l2Rows}</View>
             </Animated.View>
         </View>
     );
