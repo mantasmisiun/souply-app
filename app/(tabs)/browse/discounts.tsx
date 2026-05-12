@@ -20,6 +20,7 @@ import AmountPickerModal from '../../../components/AmountPickerModal';
 import { Toast, type ToastHandle } from '../../../components/Toast';
 import { ScalePressable } from '../../../components/ScalePressable';
 import { SkeletonBox } from '../../../components/SkeletonBox';
+import { ChainLogoStrip } from '../../../components/ChainLogoStrip';
 
 interface L2Category {
     id: number;
@@ -35,6 +36,7 @@ interface DiscountedProduct {
     categoryId: number;
     l2CategoryId: number | null;
     imageUrls?: (string | null | undefined)[] | string | null;
+    chainLogos?: { chainId: number; logoUrl: string | null }[] | string | null;
     minAmount: number | null;
     maxAmount: number | null;
     unit: string | null;
@@ -67,6 +69,7 @@ const DiscountProductCard = memo(({
         <View style={styles.productCard}>
             <TouchableOpacity onPress={() => onNavigate(item.id)} style={styles.productImageContainer} activeOpacity={0.7}>
                 <ProductImage uris={item.imageUrls} imageStyle={styles.productImage} placeholderStyle={styles.productImagePlaceholder} emojiStyle={styles.productImageEmoji} />
+                <ChainLogoStrip chainLogos={item.chainLogos} style={{ position: 'absolute', top: 6, left: 6 }} />
                 <View style={styles.discountBadge}>
                     <Text style={styles.discountBadgeText}>🔥 -{item.bestDiscountPct}%</Text>
                 </View>

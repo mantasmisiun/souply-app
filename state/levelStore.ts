@@ -7,11 +7,10 @@ const KEY_CANDIDATE  = 'levelup_candidate';
 
 interface LevelState {
     pendingLevel: number | null;
-    // Call on each vote response — writes to AsyncStorage so the level
-    // survives an app close and can be picked up on the next focus.
+    // In-memory lastSeen so acknowledge() blocks re-fire immediately without
+    // waiting for an AsyncStorage round-trip (prevents race-condition stacking).
+    lastSeen: number;
     stashLevel: (level: number) => Promise<void>;
-    // Call on focus of any screen the user lands on after swiping.
-    // Reads the stashed candidate and fires the modal if it's a new level.
     checkCandidate: () => Promise<void>;
     triggerIfNewLevel: (level: number) => Promise<void>;
     acknowledge: (neverShow: boolean, level: number) => Promise<void>;
@@ -19,6 +18,7 @@ interface LevelState {
 
 export const useLevelStore = create<LevelState>((set, get) => ({
     pendingLevel: null,
+    lastSeen: 1,
 
     stashLevel: async (level: number) => {
         const existing = await AsyncStorage.getItem(KEY_CANDIDATE);
@@ -33,17 +33,29 @@ export const useLevelStore = create<LevelState>((set, get) => ({
     },
 
     triggerIfNewLevel: async (level: number) => {
+        // Never stack a second modal while one is already visible.
+        if (get().pendingLevel !== null) return;
+
         const [lastSeenRaw, neverShowRaw] = await Promise.all([
             AsyncStorage.getItem(KEY_LAST_SEEN),
             AsyncStorage.getItem(KEY_NEVER_SHOW),
         ]);
         if (neverShowRaw === '1') return;
-        const lastSeen = lastSeenRaw ? Number(lastSeenRaw) : 1;
-        if (level > lastSeen) set({ pendingLevel: level });
+
+        // Take the higher of in-memory and persisted so we survive the
+        // acknowledge → AsyncStorage write race on simultaneous focus events.
+        const persisted = lastSeenRaw ? Number(lastSeenRaw) : 1;
+        const lastSeen = Math.max(get().lastSeen, persisted);
+
+        if (level > lastSeen) {
+            set({ pendingLevel: level, lastSeen: level });
+        }
     },
 
     acknowledge: async (neverShow: boolean, level: number) => {
-        set({ pendingLevel: null });
+        // Update in-memory immediately so concurrent triggerIfNewLevel calls
+        // that fire before the AsyncStorage write won't re-show the modal.
+        set({ pendingLevel: null, lastSeen: level });
         await Promise.all([
             AsyncStorage.setItem(KEY_LAST_SEEN, String(level)),
             AsyncStorage.removeItem(KEY_CANDIDATE),

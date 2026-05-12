@@ -379,13 +379,7 @@ export default function ReceiptsScreen() {
               style={[styles.card, hasPendingSwipes(item) && styles.cardPending]}
               onPress={() => {
                 if (hasPendingSwipes(item)) {
-                  const remaining =
-                    (item.mandatorySwipesRequired ?? 0) -
-                    (item.mandatorySwipesCompleted ?? 0);
-                  router.push({
-                    pathname: `/receipt/swipe/${item.id}`,
-                    params: { mandatory: "1", mandatoryCount: String(remaining) },
-                  } as any);
+                  router.push({ pathname: "/swipe/queue", params: { receiptId: String(item.id) } } as any);
                 } else {
                   router.push(`/receipt-process?receiptId=${item.id}`);
                 }
