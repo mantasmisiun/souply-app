@@ -82,6 +82,7 @@ import {
     RimiHeader,
     RimiProduct
 } from "@shared/parsers/rimiParser";
+import { parseProductName } from "@shared/parsers/productNameParser";
 import { ocrImageTiled } from "../utils/mlkitOcr";
 import { useProfileStore } from '../state/profileStore';
 
@@ -110,7 +111,12 @@ interface ProductLine {
   price: number;
   promoPrice: number | null;
   quantity: number;
-  unit: string;
+  /** Receipt quantity unit: "vnt" for pieces, "kg" for weighable. Used for calculation labels. */
+  unit: string | null;
+  /** Product package size amount (e.g. 165 for CHEETOS 165g). Stored on the SP. */
+  amount: number | null;
+  /** Product package size unit (e.g. "g", "ml", "rit"). Stored on the SP; separate from `unit`. */
+  sizeUnit: string | null;
   pricePerUnit: number | null;
   rawLines: string[];
   region: Region;
@@ -622,10 +628,7 @@ export default function ProcessReceiptScreen() {
         const remaining =
           (receipt.mandatorySwipesRequired ?? 0) -
           (receipt.mandatorySwipesCompleted ?? 0);
-        router.replace({
-          pathname: `/receipt/swipe/${id}`,
-          params: { mandatory: "1", mandatoryCount: String(remaining) },
-        } as any);
+        router.replace({ pathname: "/swipe/queue", params: { receiptId: String(id) } } as any);
         return;
       }
 
@@ -702,6 +705,8 @@ export default function ProcessReceiptScreen() {
           promoPrice: p.promoPrice == null ? null : Number(p.promoPrice),
           quantity: Number(p.quantity ?? 1),
           unit: p.unit ?? "",
+          amount: p.amount != null ? Number(p.amount) : null,
+          sizeUnit: p.sizeUnit ?? null,
           pricePerUnit: p.pricePerUnit == null ? null : Number(p.pricePerUnit),
           rawLines: Array.isArray(p.rawLines) ? p.rawLines : [],
           region: p.region ?? { yTop: 0, yBottom: 0, xLeft: 0, xRight: 0 },
@@ -1014,10 +1019,7 @@ export default function ProcessReceiptScreen() {
         // User must swipe before seeing the price comparison — navigate to the
         // swipe screen now. Comparison will be fetched when they return to the
         // receipt view in existing mode after completing the swipes.
-        router.replace({
-          pathname: "/receipt/swipe/[id]",
-          params: { id: String(data.id), mandatory: "1", mandatoryCount: String(data.mandatorySwipesRequired) },
-        } as any);
+        router.replace({ pathname: "/swipe/queue", params: { receiptId: String(data.id) } } as any);
       } else {
         setComparisonStatus("pending");
         fetchComparison(data.id);
@@ -1784,10 +1786,40 @@ export default function ProcessReceiptScreen() {
     const matchPromises = rProducts.map(async (rp) => {
       let altMatches: ProductMatchOption[] = [];
 
+      // Strip trailing size tokens from the product name so the fuzzy matcher
+      // isn't biased by the number. Also extract amount/unit when present.
+      // rp.parsedAmount/parsedUnit were extracted from the raw name before
+      // cleanProductName stripped the size suffix — prefer them over re-parsing
+      // the already-cleaned name (which would always return null for packaged goods).
+      const { strippedName, amount: parsedAmountFromName, unit: parsedUnitFromName } =
+        parseProductName(rp.name);
+
+      // Rimi receipts often embed volume without a unit (e.g. "NATURĀ, 1,51"
+      // means 1.51 L). When parseProductName strips a bare decimal ≤ 5 that
+      // isn't an integer, infer litres — that range covers all common liquid
+      // package sizes (0.25 L … 5 L) without catching gram/piece values.
+      let resolvedAmount = rp.parsedAmount ?? parsedAmountFromName;
+      let resolvedUnit = rp.parsedUnit ?? parsedUnitFromName;
+      if (resolvedAmount === null && strippedName !== rp.name) {
+        const stripped = rp.name.slice(strippedName.length).replace(/^[,\s]+/, "");
+        const bare = parseFloat(stripped.replace(",", "."));
+        if (
+          Number.isFinite(bare) &&
+          bare > 0.1 &&
+          bare <= 5 &&
+          !Number.isInteger(bare)
+        ) {
+          resolvedAmount = bare;
+          resolvedUnit = "l";
+        }
+      }
+
+      const matchName = strippedName || rp.name;
+
       try {
         const params = new URLSearchParams({
           chainId: String(chainId),
-          name: rp.name,
+          name: matchName,
         });
         const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
@@ -1810,7 +1842,7 @@ export default function ProcessReceiptScreen() {
       );
 
       return {
-        name: rp.name,
+        name: matchName,
         matchedName: top?.name ?? null,
         storeProductId: autoApply ? top!.storeProductId : null,
         storeProductImageUrl: top?.imageUrl ?? null,
@@ -1823,7 +1855,12 @@ export default function ProcessReceiptScreen() {
         price: rp.price,
         promoPrice: rp.promoPrice,
         quantity: rp.quantity,
-        unit: rp.unit,
+        // "vnt" is the receipt quantity unit — not a product size unit.
+        // Preserve "kg" for weighable products; use the extracted size unit
+        // ("l", "g", …) when available; null when unknown.
+        unit: rp.unit === "kg" ? "kg" : rp.unit,
+        amount: resolvedAmount,
+        sizeUnit: resolvedUnit,
         pricePerUnit: rp.pricePerUnit,
         rawLines: rp.rawLines,
         region: rp.region,
@@ -1902,10 +1939,17 @@ export default function ProcessReceiptScreen() {
     const matchPromises = mProducts.map(async (mp) => {
       let altMatches: ProductMatchOption[] = [];
 
+      // mp.name is already cleaned (size stripped). mp.parsedAmount/parsedUnit
+      // were extracted from the raw name before cleaning.
+      const { strippedName } = parseProductName(mp.name);
+      const matchName = strippedName || mp.name;
+      const resolvedAmount = mp.parsedAmount ?? null;
+      const resolvedUnit = mp.parsedUnit ?? null;
+
       try {
         const params = new URLSearchParams({
           chainId: String(chainId),
-          name: mp.name,
+          name: matchName,
         });
         const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
@@ -1928,7 +1972,7 @@ export default function ProcessReceiptScreen() {
       );
 
       return {
-        name: mp.name,
+        name: matchName,
         matchedName: top?.name ?? null,
         storeProductId: autoApply ? top!.storeProductId : null,
         storeProductImageUrl: top?.imageUrl ?? null,
@@ -1939,7 +1983,9 @@ export default function ProcessReceiptScreen() {
         price: mp.price,
         promoPrice: mp.promoPrice,
         quantity: mp.quantity,
-        unit: mp.unit,
+        unit: mp.unit === "kg" ? "kg" : mp.unit,
+        amount: resolvedAmount,
+        sizeUnit: resolvedUnit,
         pricePerUnit: mp.pricePerUnit,
         rawLines: mp.rawLines,
         region: mp.region,
@@ -2032,10 +2078,13 @@ export default function ProcessReceiptScreen() {
     const matchPromises = nProducts.map(async (np) => {
       let altMatches: ProductMatchOption[] = [];
 
+      const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(np.name);
+      const matchName = strippedName || np.name;
+
       try {
         const params = new URLSearchParams({
           chainId: String(chainId),
-          name: np.name,
+          name: matchName,
         });
         const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
@@ -2058,7 +2107,7 @@ export default function ProcessReceiptScreen() {
       );
 
       return {
-        name: np.name,
+        name: matchName,
         matchedName: top?.name ?? null,
         storeProductId: autoApply ? top!.storeProductId : null,
         storeProductImageUrl: top?.imageUrl ?? null,
@@ -2069,7 +2118,9 @@ export default function ProcessReceiptScreen() {
         price: np.price,
         promoPrice: np.promoPrice,
         quantity: np.quantity,
-        unit: np.unit,
+        unit: np.unit === "kg" ? "kg" : np.unit,
+        amount: np.parsedAmount ?? parsedAmount,
+        sizeUnit: np.parsedUnit ?? parsedUnit,
         pricePerUnit: np.pricePerUnit,
         rawLines: np.rawLines,
         region: np.region,
@@ -2148,10 +2199,13 @@ export default function ProcessReceiptScreen() {
     const matchPromises = lProducts.map(async (lp) => {
       let altMatches: ProductMatchOption[] = [];
 
+      const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(lp.name);
+      const matchName = strippedName || lp.name;
+
       try {
         const params = new URLSearchParams({
           chainId: String(chainId),
-          name: lp.name,
+          name: matchName,
         });
         const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
@@ -2174,7 +2228,7 @@ export default function ProcessReceiptScreen() {
       );
 
       return {
-        name: lp.name,
+        name: matchName,
         matchedName: top?.name ?? null,
         storeProductId: autoApply ? top!.storeProductId : null,
         storeProductImageUrl: top?.imageUrl ?? null,
@@ -2185,7 +2239,9 @@ export default function ProcessReceiptScreen() {
         price: lp.price,
         promoPrice: lp.promoPrice,
         quantity: lp.quantity,
-        unit: lp.unit,
+        unit: lp.unit === "kg" ? "kg" : lp.unit,
+        amount: parsedAmount,
+        sizeUnit: parsedUnit,
         pricePerUnit: lp.pricePerUnit,
         rawLines: lp.rawLines,
         region: lp.region,
@@ -2266,10 +2322,13 @@ export default function ProcessReceiptScreen() {
     const matchPromises = iProducts.map(async (ip) => {
       let altMatches: ProductMatchOption[] = [];
 
+      const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(ip.name);
+      const matchName = strippedName || ip.name;
+
       try {
         const params = new URLSearchParams({
           chainId: String(chainId),
-          name: ip.name,
+          name: matchName,
         });
         const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
@@ -2292,7 +2351,7 @@ export default function ProcessReceiptScreen() {
       );
 
       return {
-        name: ip.name,
+        name: matchName,
         matchedName: top?.name ?? null,
         storeProductId: autoApply ? top!.storeProductId : null,
         storeProductImageUrl: top?.imageUrl ?? null,
@@ -2303,7 +2362,9 @@ export default function ProcessReceiptScreen() {
         price: ip.price,
         promoPrice: ip.promoPrice,
         quantity: ip.quantity,
-        unit: ip.unit,
+        unit: ip.unit === "kg" ? "kg" : ip.unit,
+        amount: parsedAmount,
+        sizeUnit: parsedUnit,
         pricePerUnit: ip.pricePerUnit,
         rawLines: ip.rawLines,
         region: ip.region,
@@ -2512,39 +2573,24 @@ export default function ProcessReceiptScreen() {
             routes into the cross-chain orphan queue — users who enjoyed the
             receipt swipe can keep contributing to the matching dataset.
             Preview mode never persists, so neither appears there. */}
-        {receiptId && swipeQueueCount > 0 && (
+        {receiptId && (
           <TouchableOpacity
             style={styles.swipeEntryCard}
             activeOpacity={0.85}
             onPress={() =>
               router.push({
-                pathname: "/receipt/swipe/[id]",
-                params: { id: String(receiptId) },
-              })
+                pathname: "/swipe/queue",
+                params: { standalone: "1" },
+              } as any)
             }
           >
             <View style={{ flex: 1 }}>
-              <Text style={styles.swipeEntryCta}>Pagerink prekių atpažinimą</Text>
+              <Text style={styles.swipeEntryCta}>Pagerink kainų palyginimą</Text>
               <Text style={styles.swipeEntryCount}>
-                Kortelių eilėje: {swipeQueueCount}
+                10 kortelių · tikslesniam atpažinimui
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={22} color={colors.onPrimary} />
-          </TouchableOpacity>
-        )}
-        {receiptId && swipeQueueCount === 0 && (
-          <TouchableOpacity
-            style={styles.swipeHelpMoreCard}
-            activeOpacity={0.85}
-            onPress={() => router.push("/swipe/extra")}
-          >
-            <View style={{ flex: 1 }}>
-              <Text style={styles.swipeHelpMoreCta}>Man patinka padėti</Text>
-              <Text style={styles.swipeHelpMoreSubtitle}>
-                Padėk atpažinti daugiau prekių iš kitų parduotuvių
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.primary} />
           </TouchableOpacity>
         )}
 
