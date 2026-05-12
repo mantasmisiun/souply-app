@@ -90,7 +90,7 @@ const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, router, co
         <View style={[styles.l1Container, isExpanded && styles.l1ContainerExpanded]}>
             <TouchableOpacity
                 style={[styles.l1Row, isExpanded && styles.l1RowExpanded]}
-                onPressIn={() => onToggle(item.id)}
+                onPress={() => onToggle(item.id)}
             >
                 <Text style={styles.l1Icon}>{CATEGORY_ICONS[item.name] || '📦'}</Text>
                 <Text style={styles.l1Text}>{item.name}</Text>
