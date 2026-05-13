@@ -28,6 +28,7 @@ import { API_BASE_URL } from "../../config/api";
 import { getUserId } from "../../config/user";
 import { useTheme, type AppTheme } from "../../constants/theme";
 import { useLevelStore } from "../../state/levelStore";
+import { capMandatoryQueue, capVoluntaryQueue } from "../../utils/swipeQueueCap";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -56,6 +57,11 @@ interface SwipeQueueCard {
     sameChain: boolean;
     conflictDetected: boolean;
   };
+  /** Tagged by `capVoluntaryQueue` for cards sourced from the global pool
+   *  (after the receipt's own cards fill their per-slot share). The card
+   *  renderer shows a small subline acknowledging the user is helping
+   *  the community queue, not resolving this receipt. */
+  fromGlobalFill?: boolean;
 }
 
 interface SlotCounts {
@@ -160,24 +166,32 @@ function CardSide({
 export default function SwipeQueueScreen() {
   const router = useRouter();
   // Param surface:
-  //   receiptIds=a,b,c        new batch flow (banner / list tap)
-  //   receiptId=a             legacy single-receipt flow (receipt-process)
-  //   returnTo=/(tabs)/...    where to land after the last receipt
-  //   standalone=1            no receipt context (open from receipt-process button)
+  //   receiptIds=a,b,c        Banner batch flow — multi-receipt mandatory
+  //                           session, 3 cards per receipt.
+  //   receiptId=a             Single-receipt flow. Combined with
+  //                           voluntary=1 → "Pagerinti atpažinimą" mode
+  //                           (10 cards, 3-per-slot + ≥1 global).
+  //                           Without voluntary → legacy mandatory shape.
+  //   voluntary=1             Voluntary deep-rescue mode (pink button on
+  //                           Nepriskirta modal). No mandatory completion
+  //                           tracking, returns to /receipt-process when
+  //                           done. Requires receiptId.
+  //   returnTo=/(tabs)/...    Where to land after the session ends.
   const {
     receiptId: receiptIdParam,
     receiptIds: receiptIdsParam,
-    standalone,
+    voluntary,
     returnTo,
   } = useLocalSearchParams<{
     receiptId?: string;
     receiptIds?: string;
-    standalone?: string;
+    voluntary?: string;
     returnTo?: string;
   }>();
 
+  const isVoluntary = voluntary === "1";
+
   const receiptIdList = useMemo<string[]>(() => {
-    if (standalone === "1") return [];
     if (receiptIdsParam) {
       const split = receiptIdsParam
         .split(",")
@@ -197,7 +211,7 @@ export default function SwipeQueueScreen() {
     if (receiptIdParam) return [receiptIdParam];
     return [];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [receiptIdParam, receiptIdsParam, standalone]);
+  }, [receiptIdParam, receiptIdsParam]);
 
   const isMulti = receiptIdList.length > 1;
 
@@ -253,41 +267,79 @@ export default function SwipeQueueScreen() {
       setError(null);
       const userId = userIdRef.current ?? (await getUserId());
       userIdRef.current = userId;
-      const qs = currentReceiptId ? `?receiptId=${encodeURIComponent(currentReceiptId)}` : "";
-      const res = await fetch(
-        `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue${qs}`
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      let merged: SwipeQueueCard[] = Array.isArray(data?.items) ? data.items : [];
-      const counts: SlotCounts = data?.slotCounts ?? { slot1: 0, slot2: 0, slot3: 0 };
 
-      // EC7: when a receipt has fewer than 3 candidate cards, top up from
-      // the global standalone queue so the user always does meaningful
-      // work in their slot — better than a blank "no cards" state that
-      // makes them feel the receipt was wasted.
-      if (currentReceiptId && merged.length < 3) {
-        try {
-          const res2 = await fetch(
-            `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue`
-          );
-          if (res2.ok) {
-            const data2 = await res2.json();
-            const extras: SwipeQueueCard[] = Array.isArray(data2?.items) ? data2.items : [];
-            const seen = new Set(merged.map((c) => c.cardId));
-            for (const c of extras) {
-              if (merged.length >= 3) break;
-              if (seen.has(c.cardId)) continue;
-              seen.add(c.cardId);
-              merged.push(c);
-            }
-          }
-        } catch (e) {
-          console.warn("[SwipeQueue] standalone top-up failed:", e);
-        }
+      // Fetch the receipt-anchored queue. In voluntary mode also fetch
+      // the global queue in parallel so `capVoluntaryQueue` can enforce
+      // the 3+3+3+1 spec (3 cards per slot in priority 2→1→3, plus 1
+      // global card flagged with `fromGlobalFill`). We still pass
+      // `voluntary=1` to the server so it knows to trigger the
+      // background OSC refill for the user's missing orphans (the
+      // refill is fire-and-forget; it benefits the user's NEXT visit).
+      const receiptParts: string[] = [];
+      if (currentReceiptId) receiptParts.push(`receiptId=${encodeURIComponent(currentReceiptId)}`);
+      if (isVoluntary) receiptParts.push("voluntary=1");
+      const receiptQs = receiptParts.length > 0 ? `?${receiptParts.join("&")}` : "";
+      const [receiptRes, globalRes] = await Promise.all([
+        fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue${receiptQs}`),
+        isVoluntary
+          ? fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue`)
+          : Promise.resolve(null as Response | null),
+      ]);
+      if (!receiptRes.ok) throw new Error(`HTTP ${receiptRes.status}`);
+      const receiptData = await receiptRes.json();
+      const receiptItems: SwipeQueueCard[] = Array.isArray(receiptData?.items) ? receiptData.items : [];
+      const counts: SlotCounts = receiptData?.slotCounts ?? { slot1: 0, slot2: 0, slot3: 0 };
+
+      let globalItems: SwipeQueueCard[] = [];
+      if (globalRes && globalRes.ok) {
+        const globalData = await globalRes.json();
+        globalItems = Array.isArray(globalData?.items) ? globalData.items : [];
       }
 
-      setItems(merged);
+      let capped: SwipeQueueCard[];
+      if (isVoluntary) {
+        // Voluntary spec: 3 slot 2 (orphans) → 3 slot 1 (cross-chain
+        // identity) → 3 slot 3 (same-chain dedup) → 1 global card.
+        // capVoluntaryQueue redistributes within the 9-card receipt
+        // budget when a slot has < 3 cards, and stamps fromGlobalFill
+        // on the community-contribution card.
+        capped = capVoluntaryQueue({ receiptItems, globalItems }).items;
+      } else if (currentReceiptId) {
+        // Mandatory: 3 cards in slot 2 → 1 → 3 priority. EC7 top-up:
+        // if the receipt-anchored pool has < 3 cards, blend in global
+        // cards before capping so the user still does meaningful work.
+        let augmented = receiptItems;
+        if (augmented.length < 3) {
+          try {
+            const res2 = await fetch(
+              `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue`,
+            );
+            if (res2.ok) {
+              const data2 = await res2.json();
+              const extras: SwipeQueueCard[] = Array.isArray(data2?.items) ? data2.items : [];
+              const seen = new Set(augmented.map((c) => c.cardId));
+              const merged = [...augmented];
+              for (const c of extras) {
+                if (merged.length >= 3) break;
+                if (seen.has(c.cardId)) continue;
+                seen.add(c.cardId);
+                merged.push(c);
+              }
+              augmented = merged;
+            }
+          } catch (e) {
+            console.warn("[SwipeQueue] mandatory top-up failed:", e);
+          }
+        }
+        capped = capMandatoryQueue({ receiptItems: augmented }).items;
+      } else {
+        // Defensive: voluntary + standalone are the documented modes.
+        // Anything else (no receiptId, no voluntary) is treated as an
+        // empty session rather than crashing the renderer.
+        capped = [];
+      }
+
+      setItems(capped);
       setSlotCounts(counts);
       setIdx(0);
       setItemsReceiptId(currentReceiptId);
@@ -502,41 +554,10 @@ export default function SwipeQueueScreen() {
 
   // ── Derived ────────────────────────────────────────────────────────────
 
-  const cappedItems = useMemo(() => {
-    if (currentReceiptId) {
-      // Receipt context: fill up to 3 cards in priority order (slot2 → slot1 → slot3).
-      // Take more from a slot when earlier slots are empty so we always reach 3.
-      const MANDATORY = 3;
-      const bySlot = [
-        items.filter((i) => i.slot === 2),
-        items.filter((i) => i.slot === 1),
-        items.filter((i) => i.slot === 3),
-      ];
-      const result: SwipeQueueCard[] = [];
-      for (const pool of bySlot) {
-        for (const card of pool) {
-          if (result.length >= MANDATORY) break;
-          result.push(card);
-        }
-        if (result.length >= MANDATORY) break;
-      }
-      return result;
-    }
-    // Standalone: up to 3 per slot (S2→S1→S3), fill overflow to 10.
-    const CAP = 10;
-    const PER_SLOT = 3;
-    const s2 = items.filter((i) => i.slot === 2).slice(0, PER_SLOT);
-    const s1 = items.filter((i) => i.slot === 1).slice(0, PER_SLOT);
-    const s3 = items.filter((i) => i.slot === 3).slice(0, PER_SLOT);
-    const picked = new Set([...s2, ...s1, ...s3].map((i) => i.cardId));
-    const firstRound = [...s2, ...s1, ...s3];
-    if (firstRound.length >= CAP) return firstRound.slice(0, CAP);
-    const overflow = items
-      .filter((i) => !picked.has(i.cardId))
-      .slice(0, CAP - firstRound.length);
-    return [...firstRound, ...overflow];
-  }, [items, currentReceiptId]);
-
+  // `items` is now pre-capped by loadQueue (via capMandatoryQueue or
+  // capVoluntaryQueue) so the renderer just iterates. Keeping the alias
+  // local to avoid churn through the existing references below.
+  const cappedItems = items;
   const currentItem = cappedItems[idx];
   // `itemsReceiptId === currentReceiptId` is the staleness gate. Until
   // loadQueue refreshes after a receiptIdx bump, `items` still holds the
@@ -552,38 +573,47 @@ export default function SwipeQueueScreen() {
 
   // ── Flow control: per-receipt completion ─────────────────────────────
   //
-  // When the current receipt's 3 cards are done:
-  //   • POST /complete-swipes for that receipt (best-effort).
-  //   • If more receipts remain, advance receiptIdx → loadQueue refires.
-  //   • Else (last receipt), refresh level + navigate to returnTo (or
-  //     legacy /receipt-process when no returnTo).
-  //
-  // The standalone-done branch below handles the no-receipt case.
+  // When the current receipt's session ends, behaviour splits by mode:
+  //   • Mandatory: POST /complete-swipes (clears banner count); advance
+  //     receiptIdx if more receipts remain; else navigate to returnTo
+  //     or the legacy /receipt-process flow.
+  //   • Voluntary: never POST /complete-swipes (mandatory tracking is
+  //     orthogonal). Single-receipt session only — navigate straight
+  //     back to /receipt-process so the breakdown re-renders with any
+  //     newly-resolved Nepriskirta lines.
   useEffect(() => {
     if (!doneWithCurrentReceipt) return;
     if (!currentReceiptId) return;
     if (finishedRef.current) return;
+    // Voluntary mode with 0 cards returned: don't auto-navigate. Show
+    // the empty state below so the user understands there's nothing to
+    // rescue right now instead of being silently bounced back to the
+    // receipt screen. Mandatory mode still auto-navigates because it
+    // needs to mark the receipt complete server-side.
+    if (isVoluntary && cappedItems.length === 0) return;
 
     let cancelled = false;
     (async () => {
-      // Always mark the current receipt complete — even if cappedItems
-      // was 0 (no candidates available), the server-side counter must
-      // be cleared so the banner count drops on return.
-      try {
-        await fetch(`${API_BASE_URL}/api/receipts/${currentReceiptId}/complete-swipes`, {
-          method: "POST",
-        });
-      } catch {}
+      if (!isVoluntary) {
+        // Mandatory: always mark the current receipt complete — even
+        // if cappedItems was 0 (no candidates available), the server
+        // counter must be cleared so the banner count drops on return.
+        try {
+          await fetch(`${API_BASE_URL}/api/receipts/${currentReceiptId}/complete-swipes`, {
+            method: "POST",
+          });
+        } catch {}
+      }
       if (cancelled) return;
 
-      const hasNext = receiptIdx + 1 < receiptIdList.length;
+      const hasNext = !isVoluntary && receiptIdx + 1 < receiptIdList.length;
       if (hasNext) {
         // Move to next receipt; loadQueue fires via the receiptIdx effect.
         setReceiptIdx((i) => i + 1);
         return;
       }
 
-      // Last receipt — wrap the session.
+      // Wrap the session.
       finishedRef.current = true;
       // Give the latest pending vote a chance to commit before fetching
       // profile (used to decide level-up modal).
@@ -599,7 +629,16 @@ export default function SwipeQueueScreen() {
         } catch {}
       }
       if (cancelled) return;
-      if (returnTo) {
+      if (isVoluntary) {
+        // Pop just the queue screen so the existing /receipt-process
+        // underneath re-focuses. router.replace into a fresh
+        // /receipt-process stacked a duplicate on top of the original,
+        // forcing the user to back-tap TWICE to reach the Analize tab.
+        // The receipt screen's focus effect refreshes the swipe count
+        // on its own; the breakdown picks up any rescued lines on the
+        // next manual revisit (read-through category resolver).
+        router.back();
+      } else if (returnTo) {
         router.replace(returnTo as any);
       } else {
         // Legacy single-receipt-from-receipt-process flow.
@@ -662,18 +701,30 @@ export default function SwipeQueueScreen() {
         </View>
       )}
 
-      {/* ── Done / empty (standalone only — receipt mode auto-navigates) ── */}
-      {!loading && !error && doneWithCurrentReceipt && !currentReceiptId && (
+      {/* ── Done / empty ──
+          Standalone (no receiptId) always renders here. Voluntary mode
+          with 0 cards stays here too — the auto-navigate effect skips
+          it so the user sees an honest "nothing to rescue right now"
+          message instead of being silently bounced back to the receipt. */}
+      {!loading && !error && doneWithCurrentReceipt && (!currentReceiptId || (isVoluntary && cappedItems.length === 0)) && (
         <View style={styles.centered}>
-          <Ionicons name="checkmark-circle" size={72} color={colors.primary} />
-          <Text style={styles.doneTitle}>Ačiū!</Text>
+          <Ionicons
+            name={cappedItems.length === 0 && isVoluntary ? "leaf-outline" : "checkmark-circle"}
+            size={72}
+            color={cappedItems.length === 0 && isVoluntary ? colors.textMuted : colors.primary}
+          />
+          <Text style={styles.doneTitle}>
+            {cappedItems.length === 0 && isVoluntary ? "Nieko atpažinti" : "Ačiū!"}
+          </Text>
           <Text style={styles.doneSubtitle}>
-            {cappedItems.length === 0
+            {cappedItems.length === 0 && isVoluntary
+              ? "Šiuo metu šio kvito Nepriskirta prekės neturi panašių kandidatų. Įkėlus daugiau kvitų kortelės atsiras automatiškai."
+              : cappedItems.length === 0
               ? "Šiuo metu nėra kortelių peržiūrai. Užsukite vėliau."
               : "Peržiūrėjote visas korteles šioje sesijoje."}
           </Text>
           <View style={styles.btnRow}>
-            {cappedItems.length > 0 && (
+            {cappedItems.length > 0 && !isVoluntary && (
               <TouchableOpacity
                 style={styles.btnOutline}
                 onPress={() => setSessionNum((n) => n + 1)}
@@ -702,6 +753,14 @@ export default function SwipeQueueScreen() {
       {/* ── Active card ── */}
       {!loading && !error && !doneWithCurrentReceipt && currentItem && (
         <View style={styles.stage}>
+          {/* Voluntary-mode community-contribution subline. Shows above
+              the card stack when the current card is sourced from the
+              global pool (this receipt's own cards exhausted). */}
+          {currentItem.fromGlobalFill && (
+            <Text style={styles.fromGlobalSubline} numberOfLines={2}>
+              Šio kvito kortelės baigtos — padedi visiems vartotojams
+            </Text>
+          )}
           <GestureDetector gesture={pan}>
             <Animated.View style={[styles.card, cardStyle]}>
               <Animated.View
@@ -844,6 +903,17 @@ const makeStyles = (c: AppTheme) =>
       flexDirection: "row",
       paddingHorizontal: 10,
       paddingVertical: 14,
+    },
+    // Voluntary-mode subline above the card. Italic, muted colour,
+    // small font — communicates "you're now helping the community"
+    // without competing with the active card content.
+    fromGlobalSubline: {
+      fontSize: 12,
+      fontStyle: "italic",
+      color: c.textMuted,
+      textAlign: "center",
+      paddingHorizontal: 16,
+      marginBottom: 8,
     },
     verticalDivider: {
       width: 1,

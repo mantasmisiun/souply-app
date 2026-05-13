@@ -41,6 +41,12 @@ export interface BreakdownProduct {
 
 interface Props {
     products: BreakdownProduct[];
+    /** Current receipt id — used by the Nepriskirta explainer's
+     *  "Pagerinti atpažinimą" pink button to open the voluntary
+     *  swipe queue scoped to this receipt's own orphans. When the
+     *  receipt isn't persisted yet (mid-upload), the prop is null
+     *  and the button falls back to the global queue. */
+    receiptId?: number | null;
 }
 
 interface Bucket {
@@ -170,7 +176,7 @@ function buildBuckets(products: BreakdownProduct[]): {
     return { buckets, grandTotal };
 }
 
-export default function ReceiptCategoryBreakdown({ products }: Props) {
+export default function ReceiptCategoryBreakdown({ products, receiptId }: Props) {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
@@ -288,13 +294,41 @@ export default function ReceiptCategoryBreakdown({ products }: Props) {
                             <Ionicons name="help-circle" size={32} color={colors.warning} />
                         </View>
                         <Text style={styles.modalTitle}>Neatpažintos prekės</Text>
-                        <Text style={styles.modalBody}>
-                            Šios prekės dar nepriskirtos kategorijoms — Souply
-                            nepavyko jų patikimai atpažinti. Padėk pagerinti
-                            atpažinimą rūšiuodamas korteles: rūšiavimas tiksliau
-                            sujungia jūsų pirkinius su produktų katalogu, o
-                            ateityje kainų palyginimas tampa patikimesnis.
-                        </Text>
+                        <View style={styles.modalRows}>
+                            <View style={styles.modalRow}>
+                                <Ionicons
+                                    name="pricetag-outline"
+                                    size={18}
+                                    color={colors.warning}
+                                    style={styles.modalRowIcon}
+                                />
+                                <Text style={styles.modalRowText}>
+                                    Šios prekės dar be kategorijos.
+                                </Text>
+                            </View>
+                            <View style={styles.modalRow}>
+                                <Ionicons
+                                    name="swap-horizontal-outline"
+                                    size={18}
+                                    color={colors.primary}
+                                    style={styles.modalRowIcon}
+                                />
+                                <Text style={styles.modalRowText}>
+                                    Rūšiuok korteles – padėk joms rasti vietą.
+                                </Text>
+                            </View>
+                            <View style={styles.modalRow}>
+                                <Ionicons
+                                    name="time-outline"
+                                    size={18}
+                                    color={colors.textMuted}
+                                    style={styles.modalRowIcon}
+                                />
+                                <Text style={styles.modalRowText}>
+                                    Kai kurios susitvarkys pačios, kai bus daugiau panašių prekių.
+                                </Text>
+                            </View>
+                        </View>
                         <View style={styles.modalBtnRow}>
                             <TouchableOpacity
                                 style={[styles.modalBtn, styles.modalBtnSecondary]}
@@ -306,9 +340,18 @@ export default function ReceiptCategoryBreakdown({ products }: Props) {
                                 style={[styles.modalBtn, styles.modalBtnPrimary]}
                                 onPress={() => {
                                     setExplainerOpen(false);
+                                    // Voluntary mode anchored to THIS receipt
+                                    // so the queue serves cards targeting the
+                                    // user's actual Nepriskirta lines. The
+                                    // pink button used to drop into the
+                                    // global queue (standalone=1), which
+                                    // surfaced unrelated cards — defeating
+                                    // the modal's "padėk atpažinti" promise.
                                     router.push({
                                         pathname: '/swipe/queue',
-                                        params: { standalone: '1' },
+                                        params: receiptId
+                                            ? { receiptId: String(receiptId), voluntary: '1' }
+                                            : { voluntary: '1' },
                                     } as any);
                                 }}
                             >
@@ -415,6 +458,28 @@ const makeStyles = (c: AppTheme) =>
             lineHeight: 19,
             color: c.textSecondary,
             textAlign: 'center',
+        },
+        // Iconified bullet rows replace the centered prose so the three
+        // points (state → action → patience) feel like a scannable
+        // checklist rather than a wall of text.
+        modalRows: {
+            gap: 10,
+            paddingHorizontal: 4,
+            marginTop: 4,
+        },
+        modalRow: {
+            flexDirection: 'row',
+            alignItems: 'flex-start',
+            gap: 10,
+        },
+        modalRowIcon: {
+            marginTop: 1,
+        },
+        modalRowText: {
+            flex: 1,
+            fontSize: 13,
+            lineHeight: 19,
+            color: c.textSecondary,
         },
         modalBtnRow: {
             flexDirection: 'row',

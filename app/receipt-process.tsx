@@ -25,6 +25,7 @@ import ReceiptCategoryBreakdown from "../components/receipt/ReceiptCategoryBreak
 import ReceiptPhotoView from "../components/receipt/ReceiptPhotoView";
 import { SkeletonBox } from "../components/SkeletonBox";
 import { formatEuro } from "../utils/formatCurrency";
+import { capVoluntaryQueue } from "../utils/swipeQueueCap";
 import { API_BASE_URL } from "../config/api";
 import { getUserId } from "../config/user";
 import { useReceiptComparison } from "../hooks/useReceiptComparison";
@@ -105,6 +106,9 @@ interface ProductMatchOption {
    *  Optional because pre-redesign receipts may not have it until the
    *  lazy-hydration GET handler backfills them. */
   categoryName?: string | null;
+  /** L2 ancestor of categoryName — what the breakdown buckets on. Server
+   *  CASE returns null for L1 categories. */
+  categoryL2Name?: string | null;
   name: string;
   imageUrl: string | null;
   amount: number | null;
@@ -1165,6 +1169,82 @@ export default function ProcessReceiptScreen() {
     }
   }, [imageUriList, isExistingMode, existingReceiptId, isPreviewMode]);
 
+  // Re-pull receipt categories on focus so the Suvestinė breakdown
+  // reflects any personal rescues from a voluntary swipe session. The
+  // live resolver overlays the user's "same" votes on top of the global
+  // Product.categoryId, but the products state was loaded once on
+  // mount — without this refresh the Neatpažinta number stays frozen
+  // until the user leaves the screen and returns.
+  //
+  // Matches altMatches by storeProductId (not array index) so concurrent
+  // edits to the receipt don't get clobbered. Only the three category
+  // fields are touched; everything else on each line is preserved.
+  useFocusEffect(
+    useCallback(() => {
+      if (!receiptId) return;
+      let cancelled = false;
+      // Skip initial mount — loadExistingReceipt already populates the
+      // categories from the same endpoint. This effect is for refreshes
+      // AFTER the user returns from /swipe/queue. The hydrate ref is
+      // true while loadExistingReceipt is running.
+      if (isHydratingRef.current) return;
+      (async () => {
+        try {
+          const res = await fetchWithTimeout(
+            `${API_BASE_URL}/api/receipts/${receiptId}`,
+            { timeoutMs: 5000 },
+          );
+          if (cancelled || !res.ok) return;
+          const data = await res.json();
+          const parsed = typeof data.parsedData === 'string'
+            ? JSON.parse(data.parsedData)
+            : data.parsedData;
+          const liveProducts: any[] = Array.isArray(parsed?.products) ? parsed.products : [];
+          if (cancelled || liveProducts.length === 0) return;
+          // Build a {storeProductId → {category fields}} map from the
+          // fresh response. Multiple lines may reference the same SP;
+          // last write wins which is fine because the resolver returns
+          // identical category data for the same SP.
+          const liveBySpId = new Map<number, { categoryId: number | null; categoryName: string | null; categoryL2Name: string | null }>();
+          for (const lp of liveProducts) {
+            if (!Array.isArray(lp?.altMatches)) continue;
+            for (const lam of lp.altMatches) {
+              const sp = Number(lam?.storeProductId);
+              if (!Number.isFinite(sp) || sp <= 0) continue;
+              liveBySpId.set(sp, {
+                categoryId: lam.categoryId ?? null,
+                categoryName: lam.categoryName ?? null,
+                categoryL2Name: lam.categoryL2Name ?? null,
+              });
+            }
+          }
+          if (cancelled) return;
+          setProducts(prev => prev.map(p => {
+            if (!Array.isArray(p.altMatches) || p.altMatches.length === 0) return p;
+            let touched = false;
+            const nextAm: ProductMatchOption[] = p.altMatches.map(am => {
+              const sp = Number(am?.storeProductId);
+              if (!Number.isFinite(sp) || sp <= 0) return am;
+              const live = liveBySpId.get(sp);
+              if (!live || live.categoryId === null) return am;
+              if (
+                am.categoryId === live.categoryId
+                && am.categoryName === live.categoryName
+                && am.categoryL2Name === live.categoryL2Name
+              ) return am;
+              touched = true;
+              return { ...am, categoryId: live.categoryId, categoryName: live.categoryName, categoryL2Name: live.categoryL2Name };
+            });
+            return touched ? { ...p, altMatches: nextAm } : p;
+          }));
+        } catch {
+          /* swallow — best-effort refresh */
+        }
+      })();
+      return () => { cancelled = true; };
+    }, [receiptId])
+  );
+
   // Refresh the swipe-queue count every time the receipt screen regains
   // focus (initial mount + returning from /receipt/swipe/[id]). Backend's
   // filter already excludes votes this user has cast, so the count we get
@@ -1184,22 +1264,34 @@ export default function ProcessReceiptScreen() {
           (async () => {
             try {
               const userId = await getUserId();
-              const res = await fetch(
-                `${API_BASE_URL}/api/receipts/${receiptId}/swipe-queue?userId=${encodeURIComponent(userId)}`,
-                { signal: controller.signal }
-              );
+              // Use the same endpoint the button click target uses
+              // (voluntary mode, this receipt). Otherwise the count and
+              // the cards-on-tap diverge — e.g. the legacy
+              // /api/receipts/:id/swipe-queue endpoint advertised 23
+              // cards but tapping landed on an empty queue because
+              // navigation went to a `standalone` mode the queue screen
+              // no longer handles.
+              const [receiptRes, globalRes] = await Promise.all([
+                fetch(
+                  `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue?receiptId=${receiptId}&voluntary=1`,
+                  { signal: controller.signal }
+                ),
+                fetch(
+                  `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue`,
+                  { signal: controller.signal }
+                ),
+              ]);
               clearTimeout(abortTimer);
-              if (!res.ok || cancelled) return;
-              const data = await res.json();
-              const queueSize = Array.isArray(data?.items)
-                ? data.items.reduce(
-                    (sum: number, it: any) =>
-                      sum + (Array.isArray(it.candidates) ? it.candidates.length : 0),
-                    0
-                  )
-                : 0;
+              if (!receiptRes.ok || cancelled) return;
+              const receiptData = await receiptRes.json();
+              const globalData = globalRes.ok ? await globalRes.json() : { items: [] };
+              const receiptItems = Array.isArray(receiptData?.items) ? receiptData.items : [];
+              const globalItems = Array.isArray(globalData?.items) ? globalData.items : [];
+              // Reuse the same cap the queue screen applies so the count
+              // matches exactly what the user will swipe through.
+              const capped = capVoluntaryQueue({ receiptItems, globalItems }).items;
               if (!cancelled) {
-                setSwipeQueueCount(queueSize);
+                setSwipeQueueCount(capped.length);
                 setSwipeQueueFetched(true);
               }
             } catch {
@@ -2981,9 +3073,14 @@ export default function ProcessReceiptScreen() {
             activeOpacity={0.85}
             onPress={() => {
               Haptics.selectionAsync().catch(() => {});
+              // Open the voluntary queue scoped to THIS receipt. Spec:
+              // 3+3+3+1 cap (capVoluntaryQueue). The previous params
+              // `{ standalone: "1" }` didn't match any mode the queue
+              // screen handles, so taps landed on an empty "Ačiū!"
+              // screen instantly.
               router.push({
                 pathname: "/swipe/queue",
-                params: { standalone: "1" },
+                params: { receiptId: String(receiptId), voluntary: "1" },
               } as any);
             }}
           >
@@ -3006,7 +3103,7 @@ export default function ProcessReceiptScreen() {
             still available on the Kvitas footer card.) */}
 
         {/* C3: per-category spending breakdown */}
-        <ReceiptCategoryBreakdown products={products} />
+        <ReceiptCategoryBreakdown products={products} receiptId={receiptId} />
         </>
         )}
         <View style={{ height: 40 }} />
