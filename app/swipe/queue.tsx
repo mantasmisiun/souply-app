@@ -76,6 +76,14 @@ const SWIPE_THRESHOLD_Y = SCREEN_H * 0.16;
 const UNDO_DELAY_MS = 3000;
 const MIN_DWELL_MS = 700;
 
+/**
+ * Hard cap on how many receipts we'll let the user power through in a
+ * single session. 5 × 3 cards = 15 mandatory swipes — past that the user
+ * is doing too much in one go. The banner re-appears on return so they
+ * can finish the rest at their pace.
+ */
+const MAX_RECEIPTS_PER_SESSION = 5;
+
 // ── Sub-components ─────────────────────────────────────────────────────────
 
 function ProgressDots({
@@ -151,24 +159,63 @@ function CardSide({
 
 export default function SwipeQueueScreen() {
   const router = useRouter();
-  // `standalone=1` is passed by the optional button inside receipt-process so
-  // it cannot accidentally inherit a receiptId from the parent route's URL.
-  const { receiptId: receiptIdParam, standalone } = useLocalSearchParams<{
+  // Param surface:
+  //   receiptIds=a,b,c        new batch flow (banner / list tap)
+  //   receiptId=a             legacy single-receipt flow (receipt-process)
+  //   returnTo=/(tabs)/...    where to land after the last receipt
+  //   standalone=1            no receipt context (open from receipt-process button)
+  const {
+    receiptId: receiptIdParam,
+    receiptIds: receiptIdsParam,
+    standalone,
+    returnTo,
+  } = useLocalSearchParams<{
     receiptId?: string;
+    receiptIds?: string;
     standalone?: string;
+    returnTo?: string;
   }>();
-  const receiptId =
-    standalone === "1" ? null : (receiptIdParam ?? null);
+
+  const receiptIdList = useMemo<string[]>(() => {
+    if (standalone === "1") return [];
+    if (receiptIdsParam) {
+      const split = receiptIdsParam
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      // Dedupe defensively; cap to per-session limit.
+      const seen = new Set<string>();
+      const out: string[] = [];
+      for (const id of split) {
+        if (seen.has(id)) continue;
+        seen.add(id);
+        out.push(id);
+        if (out.length >= MAX_RECEIPTS_PER_SESSION) break;
+      }
+      return out;
+    }
+    if (receiptIdParam) return [receiptIdParam];
+    return [];
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [receiptIdParam, receiptIdsParam, standalone]);
+
+  const isMulti = receiptIdList.length > 1;
 
   const colors = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const stashLevel = useLevelStore((s) => s.stashLevel);
   const triggerIfNewLevel = useLevelStore((s) => s.triggerIfNewLevel);
-  const checkCandidate = useLevelStore((s) => s.checkCandidate);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [items, setItems] = useState<SwipeQueueCard[]>([]);
+  /**
+   * receiptId the currently-loaded `items` belong to (or null for standalone).
+   * Drives the staleness gate in `doneWithCurrentReceipt` — without it,
+   * advancing `receiptIdx` flips `done` to true *before* `loadQueue` runs,
+   * which would falsely mark the next receipt complete on entry.
+   */
+  const [itemsReceiptId, setItemsReceiptId] = useState<string | null>(null);
   const [slotCounts, setSlotCounts] = useState<SlotCounts>({
     slot1: 0,
     slot2: 0,
@@ -176,7 +223,13 @@ export default function SwipeQueueScreen() {
   });
   const [idx, setIdx] = useState(0);
   const [sessionNum, setSessionNum] = useState(0);
+  const [receiptIdx, setReceiptIdx] = useState(0);
   const [undoLabel, setUndoLabel] = useState<string | null>(null);
+  /**
+   * Guard against the final-receipt "done" effect navigating twice
+   * (state flips can cause the dep array to re-trigger before unmount).
+   */
+  const finishedRef = useRef(false);
 
   const userIdRef = useRef<string | null>(null);
   const cardShownAtRef = useRef(Date.now());
@@ -186,6 +239,8 @@ export default function SwipeQueueScreen() {
     dwell: number;
     timer: ReturnType<typeof setTimeout>;
   } | null>(null);
+
+  const currentReceiptId = receiptIdList[receiptIdx] ?? null;
 
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
@@ -198,15 +253,44 @@ export default function SwipeQueueScreen() {
       setError(null);
       const userId = userIdRef.current ?? (await getUserId());
       userIdRef.current = userId;
-      const qs = receiptId ? `?receiptId=${encodeURIComponent(receiptId)}` : "";
+      const qs = currentReceiptId ? `?receiptId=${encodeURIComponent(currentReceiptId)}` : "";
       const res = await fetch(
         `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue${qs}`
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
-      setItems(Array.isArray(data?.items) ? data.items : []);
-      setSlotCounts(data?.slotCounts ?? { slot1: 0, slot2: 0, slot3: 0 });
+      let merged: SwipeQueueCard[] = Array.isArray(data?.items) ? data.items : [];
+      const counts: SlotCounts = data?.slotCounts ?? { slot1: 0, slot2: 0, slot3: 0 };
+
+      // EC7: when a receipt has fewer than 3 candidate cards, top up from
+      // the global standalone queue so the user always does meaningful
+      // work in their slot — better than a blank "no cards" state that
+      // makes them feel the receipt was wasted.
+      if (currentReceiptId && merged.length < 3) {
+        try {
+          const res2 = await fetch(
+            `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue`
+          );
+          if (res2.ok) {
+            const data2 = await res2.json();
+            const extras: SwipeQueueCard[] = Array.isArray(data2?.items) ? data2.items : [];
+            const seen = new Set(merged.map((c) => c.cardId));
+            for (const c of extras) {
+              if (merged.length >= 3) break;
+              if (seen.has(c.cardId)) continue;
+              seen.add(c.cardId);
+              merged.push(c);
+            }
+          }
+        } catch (e) {
+          console.warn("[SwipeQueue] standalone top-up failed:", e);
+        }
+      }
+
+      setItems(merged);
+      setSlotCounts(counts);
       setIdx(0);
+      setItemsReceiptId(currentReceiptId);
       cardShownAtRef.current = Date.now();
     } catch (e: any) {
       setError(e?.message ?? "Nepavyko gauti eilės");
@@ -224,7 +308,7 @@ export default function SwipeQueueScreen() {
   useEffect(() => {
     loadQueue();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionNum]);
+  }, [sessionNum, receiptIdx]);
 
   // ── Vote dispatch ──────────────────────────────────────────────────────
 
@@ -419,7 +503,7 @@ export default function SwipeQueueScreen() {
   // ── Derived ────────────────────────────────────────────────────────────
 
   const cappedItems = useMemo(() => {
-    if (receiptId) {
+    if (currentReceiptId) {
       // Receipt context: fill up to 3 cards in priority order (slot2 → slot1 → slot3).
       // Take more from a slot when earlier slots are empty so we always reach 3.
       const MANDATORY = 3;
@@ -451,44 +535,89 @@ export default function SwipeQueueScreen() {
       .filter((i) => !picked.has(i.cardId))
       .slice(0, CAP - firstRound.length);
     return [...firstRound, ...overflow];
-  }, [items, receiptId]);
+  }, [items, currentReceiptId]);
 
   const currentItem = cappedItems[idx];
-  const done =
-    !loading && !error && (cappedItems.length === 0 || idx >= cappedItems.length);
+  // `itemsReceiptId === currentReceiptId` is the staleness gate. Until
+  // loadQueue refreshes after a receiptIdx bump, `items` still holds the
+  // previous receipt's cards — without this check, `done` would flip true
+  // for the new receipt instantly and POST complete-swipes for cards the
+  // user never saw.
+  const itemsMatchReceipt = itemsReceiptId === currentReceiptId;
+  const doneWithCurrentReceipt =
+    !loading &&
+    !error &&
+    itemsMatchReceipt &&
+    (cappedItems.length === 0 || idx >= cappedItems.length);
 
-  // Pre-results: mark mandatory swipes complete, stash level, then navigate.
-  // receipt-process has checkCandidate on focus so the modal fires there.
+  // ── Flow control: per-receipt completion ─────────────────────────────
+  //
+  // When the current receipt's 3 cards are done:
+  //   • POST /complete-swipes for that receipt (best-effort).
+  //   • If more receipts remain, advance receiptIdx → loadQueue refires.
+  //   • Else (last receipt), refresh level + navigate to returnTo (or
+  //     legacy /receipt-process when no returnTo).
+  //
+  // The standalone-done branch below handles the no-receipt case.
   useEffect(() => {
-    if (done && receiptId) {
-      (async () => {
-        await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/complete-swipes`, {
+    if (!doneWithCurrentReceipt) return;
+    if (!currentReceiptId) return;
+    if (finishedRef.current) return;
+
+    let cancelled = false;
+    (async () => {
+      // Always mark the current receipt complete — even if cappedItems
+      // was 0 (no candidates available), the server-side counter must
+      // be cleared so the banner count drops on return.
+      try {
+        await fetch(`${API_BASE_URL}/api/receipts/${currentReceiptId}/complete-swipes`, {
           method: "POST",
-        }).catch(() => {});
-        // Ensure the last pending vote (undo timer) is counted before reading
-        // level — wait briefly so the DB write is likely committed.
-        await new Promise((r) => setTimeout(r, 400));
-        const userId = userIdRef.current;
-        if (userId) {
-          try {
-            const r = await fetch(
-              `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/profile`
-            );
-            const d = await r.json();
-            if (d?.level) await stashLevel(d.level);
-          } catch {}
-        }
+        });
+      } catch {}
+      if (cancelled) return;
+
+      const hasNext = receiptIdx + 1 < receiptIdList.length;
+      if (hasNext) {
+        // Move to next receipt; loadQueue fires via the receiptIdx effect.
+        setReceiptIdx((i) => i + 1);
+        return;
+      }
+
+      // Last receipt — wrap the session.
+      finishedRef.current = true;
+      // Give the latest pending vote a chance to commit before fetching
+      // profile (used to decide level-up modal).
+      await new Promise((r) => setTimeout(r, 400));
+      const userId = userIdRef.current;
+      if (userId) {
+        try {
+          const r = await fetch(
+            `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/profile`
+          );
+          const d = await r.json();
+          if (d?.level) await stashLevel(d.level);
+        } catch {}
+      }
+      if (cancelled) return;
+      if (returnTo) {
+        router.replace(returnTo as any);
+      } else {
+        // Legacy single-receipt-from-receipt-process flow.
         router.replace({
           pathname: "/receipt-process",
-          params: { receiptId, swipeDone: "1" },
+          params: { receiptId: currentReceiptId, swipeDone: "1" },
         } as any);
-      })();
-    }
-  }, [done, receiptId]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doneWithCurrentReceipt, currentReceiptId, receiptIdx]);
 
   // Standalone: trigger modal directly on the done screen.
   useEffect(() => {
-    if (done && !receiptId && !loading) {
+    if (doneWithCurrentReceipt && !currentReceiptId && !loading) {
       (async () => {
         const userId = userIdRef.current;
         if (!userId) return;
@@ -501,15 +630,20 @@ export default function SwipeQueueScreen() {
         } catch {}
       })();
     }
-  }, [done, receiptId, loading]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [doneWithCurrentReceipt, currentReceiptId, loading]);
 
   // ── Render ─────────────────────────────────────────────────────────────
+
+  const headerTitle = isMulti
+    ? `Padėk atpažinti · ${receiptIdx + 1}/${receiptIdList.length}`
+    : "Padėk atpažinti";
 
   return (
     <GestureHandlerRootView
       style={{ flex: 1, backgroundColor: colors.pageBackground }}
     >
-      <Stack.Screen options={{ title: "Padėk atpažinti" }} />
+      <Stack.Screen options={{ title: headerTitle }} />
 
       {/* ── Loading ── */}
       {loading && (
@@ -529,7 +663,7 @@ export default function SwipeQueueScreen() {
       )}
 
       {/* ── Done / empty (standalone only — receipt mode auto-navigates) ── */}
-      {!loading && !error && done && !receiptId && (
+      {!loading && !error && doneWithCurrentReceipt && !currentReceiptId && (
         <View style={styles.centered}>
           <Ionicons name="checkmark-circle" size={72} color={colors.primary} />
           <Text style={styles.doneTitle}>Ačiū!</Text>
@@ -555,7 +689,7 @@ export default function SwipeQueueScreen() {
       )}
 
       {/* ── Progress dots — just below nav bar ── */}
-      {!loading && !error && !done && currentItem && (
+      {!loading && !error && !doneWithCurrentReceipt && currentItem && (
         <View style={styles.dotsBar}>
           <ProgressDots
             total={cappedItems.length}
@@ -566,7 +700,7 @@ export default function SwipeQueueScreen() {
       )}
 
       {/* ── Active card ── */}
-      {!loading && !error && !done && currentItem && (
+      {!loading && !error && !doneWithCurrentReceipt && currentItem && (
         <View style={styles.stage}>
           <GestureDetector gesture={pan}>
             <Animated.View style={[styles.card, cardStyle]}>

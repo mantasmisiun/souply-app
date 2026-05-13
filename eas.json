@@ -14,6 +14,13 @@
       "android": { "buildType": "apk" },
       "channel": "production"
     },
+    "ios-dev": {
+      "distribution": "internal",
+      "channel": "dev",
+      "env": {
+        "APP_VARIANT": "dev"
+      }
+    },
     "production": {
       "autoIncrement": true,
       "channel": "production"

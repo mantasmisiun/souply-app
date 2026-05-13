@@ -867,6 +867,34 @@ export default function ReceiptBatchScreen() {
         abortRef.current = true;
     };
 
+    const runSingle = async (idx: number) => {
+        if (running) return;
+        setRunning(true);
+        setStatuses(prev => {
+            const next = [...prev];
+            next[idx] = { ...next[idx], state: 'running' };
+            return next;
+        });
+        await activateKeepAwakeAsync('receipt-batch');
+        try {
+            const result = await processOne(idx);
+            setStatuses(prev => {
+                const next = [...prev];
+                next[idx] = result;
+                return next;
+            });
+        } catch (e: any) {
+            setStatuses(prev => {
+                const next = [...prev];
+                next[idx] = { ...next[idx], state: 'error', message: e?.message ?? String(e) };
+                return next;
+            });
+        } finally {
+            deactivateKeepAwake('receipt-batch');
+            setRunning(false);
+        }
+    };
+
     if (loading) {
         return (
             <View style={styles.centered}>
@@ -905,55 +933,53 @@ export default function ReceiptBatchScreen() {
                         Nerasta nė vieno kvito. Patikrinkite, ar `npm run receipts:stage` pavyko.
                     </Text>
                 )}
-                {statuses.map((s, idx) => (
-                    <TouchableOpacity
-                        key={`${s.chain}-${s.sourcePdf}-${idx}`}
-                        style={styles.row}
-                        // Maxima, Rimi, Norfa, and Lidl rows write V2
-                        // snapshots; chains without one would land on a
-                        // blank detail view, so tap stays disabled until
-                        // they get one.
-                        disabled={
-                            (s.chain !== 'maxima' &&
-                                s.chain !== 'rimi' &&
-                                s.chain !== 'norfa' &&
-                                s.chain !== 'lidl') ||
-                            s.state !== 'done'
-                        }
-                        onPress={() => {
-                            router.push({
-                                pathname: '/dev/receipt-detail',
-                                params: { chain: s.chain, sourcePdf: s.sourcePdf },
-                            });
-                        }}
-                        activeOpacity={0.7}
-                    >
-                        <StatusIcon state={s.state} colors={colors} />
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.rowName}>{s.sourcePdf}</Text>
-                            <Text style={styles.rowMeta}>
-                                {s.chain}
-                                {s.state === 'done' && s.bandsV2Count !== undefined &&
-                                    ` · ${s.bandsV2Count} band${s.bandsV2Count === 1 ? 'a' : 'os'}`}
-                                {s.state === 'done' && s.comparison && (
-                                    ` · score ${s.comparison.score.toFixed(2)} ` +
-                                    `(${s.comparison.productsCorrect}/` +
-                                    `${s.comparison.productsCorrect + s.comparison.productsMissed})`
-                                )}
-                                {s.state === 'done' && s.comparison === null &&
-                                    ' · be truth'}
-                                {s.message && ` · ${s.message}`}
-                            </Text>
-                        </View>
-                        {(s.chain === 'maxima' ||
-                            s.chain === 'rimi' ||
-                            s.chain === 'norfa' ||
-                            s.chain === 'lidl') &&
-                            s.state === 'done' && (
+                {statuses.map((s, idx) => {
+                    const canNavigate = (s.chain === 'maxima' || s.chain === 'rimi' ||
+                        s.chain === 'norfa' || s.chain === 'lidl') && s.state === 'done';
+                    const canRun = s.state === 'pending' || s.state === 'error' || s.state === 'no-chain';
+                    return (
+                        <TouchableOpacity
+                            key={`${s.chain}-${s.sourcePdf}-${idx}`}
+                            style={styles.row}
+                            disabled={running || (!canNavigate && !canRun)}
+                            onPress={() => {
+                                if (canNavigate) {
+                                    router.push({
+                                        pathname: '/dev/receipt-detail',
+                                        params: { chain: s.chain, sourcePdf: s.sourcePdf },
+                                    });
+                                } else if (canRun) {
+                                    runSingle(idx);
+                                }
+                            }}
+                            activeOpacity={0.7}
+                        >
+                            <StatusIcon state={s.state} colors={colors} />
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.rowName}>{s.sourcePdf}</Text>
+                                <Text style={styles.rowMeta}>
+                                    {s.chain}
+                                    {s.state === 'done' && s.bandsV2Count !== undefined &&
+                                        ` · ${s.bandsV2Count} band${s.bandsV2Count === 1 ? 'a' : 'os'}`}
+                                    {s.state === 'done' && s.comparison && (
+                                        ` · score ${s.comparison.score.toFixed(2)} ` +
+                                        `(${s.comparison.productsCorrect}/` +
+                                        `${s.comparison.productsCorrect + s.comparison.productsMissed})`
+                                    )}
+                                    {s.state === 'done' && s.comparison === null &&
+                                        ' · be truth'}
+                                    {s.message && ` · ${s.message}`}
+                                </Text>
+                            </View>
+                            {canNavigate && (
                                 <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
                             )}
-                    </TouchableOpacity>
-                ))}
+                            {canRun && !running && (
+                                <Ionicons name="play-circle-outline" size={18} color={colors.primary} />
+                            )}
+                        </TouchableOpacity>
+                    );
+                })}
             </ScrollView>
         </View>
     );

@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { usePreventRemove, useNavigation, useFocusEffect } from "@react-navigation/native";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
+import * as Haptics from "expo-haptics";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
@@ -20,9 +21,18 @@ import {
     View
 } from "react-native";
 import ReceiptComparisonSection from "../components/receipt/ReceiptComparisonSection";
+import ReceiptCategoryBreakdown from "../components/receipt/ReceiptCategoryBreakdown";
+import ReceiptPhotoView from "../components/receipt/ReceiptPhotoView";
+import { SkeletonBox } from "../components/SkeletonBox";
+import { formatEuro } from "../utils/formatCurrency";
 import { API_BASE_URL } from "../config/api";
 import { getUserId } from "../config/user";
 import { useReceiptComparison } from "../hooks/useReceiptComparison";
+import {
+    computeRehydratedRegions,
+    persistRehydratedRegions,
+    REGIONS_VERSION,
+} from "../services/regionsRehydrationService";
 import { DEV_MODE } from "../constants/flags";
 import { useTheme, type AppTheme } from "../constants/theme";
 import {
@@ -77,6 +87,7 @@ import {
     isRimiReceipt,
     parseRimiHeaderOnly,
     parseRimiReceipt,
+    LabeledRegion,
     Region,
     RimiFooter,
     RimiHeader,
@@ -90,6 +101,10 @@ interface ProductMatchOption {
   storeProductId: number;
   productId: number;
   categoryId: number;
+  /** Server-joined category label (Phase 0d JOIN Category, server-side).
+   *  Optional because pre-redesign receipts may not have it until the
+   *  lazy-hydration GET handler backfills them. */
+  categoryName?: string | null;
   name: string;
   imageUrl: string | null;
   amount: number | null;
@@ -134,6 +149,18 @@ interface HeaderData {
   matchLoading: boolean;
   rawText: string;
   region: Region;
+  /** Per-field source-line bboxes (emitted by every chain parser
+   *  post-Phase-6 refactor). Optional because pre-refactor receipts in
+   *  the DB carry only the block `region`; the photo view falls back
+   *  to that single bbox when this array is absent or empty. Each entry
+   *  carries a `kind` so the renderer can colour + label per field. */
+  lineRegions?: LabeledRegion[];
+  /** Parser-output version. Stamped at upload time and updated by
+   *  rehydration. Mobile compares against the current `REGIONS_VERSION`
+   *  to decide whether to re-OCR a receipt whose persisted bands came
+   *  from an earlier parser revision (e.g. before the Rimi anchored
+   *  receiptNo fix or the Norfa fallback band fix). */
+  regionsVersion?: string;
 }
 
 interface FooterData {
@@ -144,6 +171,7 @@ interface FooterData {
   totalSavings: number | null;
   rawText: string;
   region: Region;
+  lineRegions?: LabeledRegion[];
 }
 
 /**
@@ -171,7 +199,6 @@ interface RegionPreviewProps {
   region: Region;
   cardWidth: number;
 }
-type SaveStatus = "idle" | "saving" | "saved" | "error";
 type AsyncStatus = "idle" | "pending" | "done" | "error";
 
 const CARD_WIDTH = Dimensions.get("window").width - 32 - 32;
@@ -219,6 +246,243 @@ async function ensurePortraitOrientation(uri: string): Promise<string> {
     `[ensurePortraitOrientation] landscape ${dims.width}x${dims.height} -> CW lines=${cwScore}, CCW lines=${ccwScore}`,
   );
   return cwScore >= ccwScore ? rotatedCW.uri : rotatedCCW.uri;
+}
+
+/**
+ * Sharp per-product band crop using `ImageManipulator.manipulateAsync`.
+ *
+ * Why this exists alongside `RegionPreview`: RegionPreview slides a
+ * full-page Image inside an overflow:hidden container with negative
+ * margins. RN on Android downsamples large bitmaps at decode time based
+ * on the visible rectangle — feeding a 1080×5000 page into a 400×24 slot
+ * throws away ~99% of the source pixels before render, producing
+ * unreadable mush for tiny product bands. Pre-cropping to a small file
+ * dodges the downsample heuristic so the band renders at native
+ * resolution. Same fix the `Kvitų paketinis testas` detail screen uses.
+ *
+ * Only used in DEV builds (gated by `__DEV__` at the call site) — the
+ * extra crop file per product isn't worth it for end users, who already
+ * see the matched product image instead.
+ */
+function BandCropImage({ pages, region, cardWidth }: RegionPreviewProps) {
+  const [croppedUri, setCroppedUri] = useState<string | null>(null);
+  const [cropError, setCropError] = useState<string | null>(null);
+
+  // Resolve which page the region lands on + its local pixel coords.
+  // Same algorithm as RegionPreview so the two stay in lockstep.
+  const cropPlan = useMemo(() => {
+    if (region.yBottom <= region.yTop) return null;
+    if (pages.length === 0) return null;
+    let page: PageMeta = pages[0];
+    for (let i = 0; i < pages.length; i++) {
+      const p = pages[i];
+      if (
+        region.yTop >= p.yOffsetScaled &&
+        region.yTop < p.yOffsetScaled + p.pageMaxYScaled + 50
+      ) {
+        page = p;
+        break;
+      }
+      page = p;
+    }
+    const localYTop = Math.max(0, Math.floor(region.yTop - page.yOffsetScaled));
+    const localYBottom = Math.min(
+      Math.ceil(region.yBottom - page.yOffsetScaled),
+      page.pageMaxYScaled,
+      page.pixelHeight,
+    );
+    const heightPx = Math.max(1, localYBottom - localYTop);
+    const pad = 20;
+    const xLeft = Math.max(0, Math.floor(page.receiptXLeftScaled - pad));
+    const xRight = Math.min(
+      page.pixelWidth,
+      Math.ceil(page.receiptXRightScaled + pad),
+    );
+    const widthPx = Math.max(1, xRight - xLeft);
+    return {
+      uri: page.uri,
+      originX: xLeft,
+      originY: localYTop,
+      width: widthPx,
+      height: heightPx,
+    };
+  }, [pages, region]);
+
+  useEffect(() => {
+    if (!cropPlan) return;
+    let cancelled = false;
+    ImageManipulator.manipulateAsync(
+      cropPlan.uri,
+      [
+        {
+          crop: {
+            originX: cropPlan.originX,
+            originY: cropPlan.originY,
+            width: cropPlan.width,
+            height: cropPlan.height,
+          },
+        },
+      ],
+      { compress: 1, format: ImageManipulator.SaveFormat.PNG },
+    )
+      .then((res) => {
+        if (!cancelled) setCroppedUri(res.uri);
+      })
+      .catch((e) => {
+        if (!cancelled) setCropError(String(e?.message ?? e));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [cropPlan]);
+
+  if (!cropPlan) return null;
+  const aspect = cropPlan.width / cropPlan.height;
+  return (
+    <View
+      style={{
+        width: cardWidth,
+        height: cardWidth / aspect,
+        borderRadius: 6,
+        overflow: "hidden",
+        backgroundColor: "#0001",
+      }}
+    >
+      {croppedUri && (
+        <Image
+          source={{ uri: croppedUri }}
+          style={{ width: "100%", height: "100%" }}
+          resizeMode="stretch"
+        />
+      )}
+      {cropError && (
+        <Text style={{ fontSize: 10, color: "#c00", padding: 2 }} numberOfLines={1}>
+          crop failed: {cropError}
+        </Text>
+      )}
+    </View>
+  );
+}
+
+/** Spec C2 — receipt-process screen tabs. */
+type ReceiptTab = "suvestine" | "prekes" | "kvitas";
+
+/**
+ * C2 — Segmented control pinned below the navbar. Three tabs split the
+ * detail screen into a focused-purpose surface each: comparison +
+ * breakdown on Suvestinė, item list on Prekės, footer metadata on Kvitas.
+ *
+ * Default tab is Suvestinė; switching tabs resets that tab's scroll to
+ * top (no per-tab scroll preservation in v1).
+ */
+function SegmentedControl({
+  active,
+  onChange,
+  productCount,
+  styles,
+  colors,
+}: {
+  active: ReceiptTab;
+  onChange: (t: ReceiptTab) => void;
+  productCount: number;
+  styles: ReturnType<typeof makeStyles>;
+  colors: AppTheme;
+}) {
+  const tabs: Array<{ key: ReceiptTab; label: string }> = [
+    { key: "suvestine", label: "Suvestinė" },
+    { key: "prekes", label: `Prekės (${productCount})` },
+    { key: "kvitas", label: "Kvitas" },
+  ];
+  return (
+    <View style={styles.segmentedWrap}>
+      {tabs.map((t) => {
+        const isActive = t.key === active;
+        return (
+          <TouchableOpacity
+            key={t.key}
+            style={[styles.segmentTab, isActive && styles.segmentTabActive]}
+            activeOpacity={0.7}
+            onPress={() => {
+              if (t.key === active) return;
+              Haptics.selectionAsync().catch(() => {});
+              onChange(t.key);
+            }}
+          >
+            <Text style={[styles.segmentTabLabel, isActive && styles.segmentTabLabelActive]} numberOfLines={1}>
+              {t.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * 3-up stat grid for the "Kvito duomenys" footer card (B4).
+ *
+ * Renders Suma · Laikas · Kvito № as equal columns, value on top
+ * (semibold 18 pt), uppercase label below (muted 11 pt). Visually echoes
+ * the per-category breakdown's stat-strip pattern so the cards read as
+ * a family.
+ *
+ * Date is intentionally NOT included — the navbar subtitle already shows
+ * it ("address · date"). Duplicating data on the same screen is noise.
+ */
+function FooterStatGrid({
+  footer,
+  comparison,
+  styles,
+}: {
+  footer: FooterData | null;
+  comparison: { currentChain?: { total?: number | null } } | null;
+  styles: ReturnType<typeof makeStyles>;
+}) {
+  // Sum: prefer parser footer total, fall back to comparison currentChain
+  // total with a tilde prefix when only the chain agg is available.
+  let sumDisplay: string;
+  if (typeof footer?.total === "number") {
+    sumDisplay = formatEuro(footer.total);
+  } else if (typeof comparison?.currentChain?.total === "number") {
+    sumDisplay = `~${formatEuro(comparison.currentChain.total)}`;
+  } else {
+    sumDisplay = "—";
+  }
+
+  // Time: drop seconds (noise) and degrade to "—" if missing.
+  const timeDisplay = (() => {
+    const raw = footer?.time?.trim();
+    if (!raw) return "—";
+    const m = raw.match(/^(\d{1,2}):(\d{2})/);
+    return m ? `${m[1].padStart(2, "0")}:${m[2]}` : raw;
+  })();
+
+  // Receipt №: truncate to first 12 chars + ellipsis to keep the cell
+  // legible when IKI synthesizes long compound IDs.
+  const receiptDisplay = (() => {
+    const raw = footer?.receiptNo?.trim();
+    if (!raw) return "—";
+    return raw.length > 12 ? `${raw.slice(0, 12)}…` : raw;
+  })();
+
+  return (
+    <View style={styles.footerStatGrid}>
+      <View style={styles.footerStatCell}>
+        <Text style={styles.footerStatValue} numberOfLines={1}>{sumDisplay}</Text>
+        <Text style={styles.footerStatLabel}>Suma</Text>
+      </View>
+      <View style={styles.footerStatDivider} />
+      <View style={styles.footerStatCell}>
+        <Text style={styles.footerStatValue} numberOfLines={1}>{timeDisplay}</Text>
+        <Text style={styles.footerStatLabel}>Laikas</Text>
+      </View>
+      <View style={styles.footerStatDivider} />
+      <View style={styles.footerStatCell}>
+        <Text style={styles.footerStatValue} numberOfLines={1}>{receiptDisplay}</Text>
+        <Text style={styles.footerStatLabel}>Kvito Nr.</Text>
+      </View>
+    </View>
+  );
 }
 
 function RegionPreview({ pages, region, cardWidth }: RegionPreviewProps) {
@@ -426,14 +690,20 @@ export default function ProcessReceiptScreen() {
   const [pageMetas, setPageMetas] = useState<PageMeta[]>([]);
   const { pendingPick, clearPendingPick } = useReceiptPickerState();
   const setCreateContext = useReceiptCreateContext((s) => s.setContext);
-  const [productsExpanded, setProductsExpanded] = useState(false);
+  // productsExpanded removed — Prekės is now its own tab (C2 absorbed
+  // the chevron expand/collapse UI). Tab navigation does what the
+  // toggle used to.
   // Save state
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [imageFilePath, setImageFilePath] = useState<string | null>(null);
   // How many swipe cards are currently waiting for this user on this receipt.
   // Fetched on mount and whenever the screen refocuses (so it updates after
-  // the user returns from the swipe screen).
+  // the user returns from the swipe screen). `swipeQueueFetched` toggles
+  // true after the first successful read, so the swipe-entry card can
+  // render optimistically before the (2 s-delayed) fetch lands without
+  // flashing empty in the meantime — see the card render block.
   const [swipeQueueCount, setSwipeQueueCount] = useState<number>(0);
+  const [swipeQueueFetched, setSwipeQueueFetched] = useState<boolean>(false);
   // Per-row three-dots menu state. null = closed.
   const [menuOpenForIndex, setMenuOpenForIndex] = useState<number | null>(null);
   // Issue-report modal (opened from the three-dots menu).
@@ -445,7 +715,6 @@ export default function ProcessReceiptScreen() {
     discount: false,
     image: false,
   });
-  const [saveStatus, setSaveStatus] = useState<SaveStatus>("idle");
   const [postStatus, setPostStatus] = useState<AsyncStatus>("idle");
   const [postErr, setPostErr] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<AsyncStatus>("idle");
@@ -602,11 +871,6 @@ export default function ProcessReceiptScreen() {
     };
   }, []);
 
-  useEffect(() => {
-    if (saveStatus !== "saved") return;
-    const timer = setTimeout(() => setSaveStatus("idle"), 2000);
-    return () => clearTimeout(timer);
-  }, [saveStatus]);
   const loadExistingReceipt = async (id: number) => {
     try {
       setLoading(true);
@@ -688,6 +952,13 @@ export default function ProcessReceiptScreen() {
           xLeft: 0,
           xRight: 0,
         },
+        lineRegions: Array.isArray(parsed.header.lineRegions)
+          ? parsed.header.lineRegions
+          : undefined,
+        regionsVersion:
+          typeof parsed.header.regionsVersion === "string"
+            ? parsed.header.regionsVersion
+            : undefined,
       });
 
       setProducts(
@@ -726,11 +997,12 @@ export default function ProcessReceiptScreen() {
           xLeft: 0,
           xRight: 0,
         },
+        lineRegions: Array.isArray(parsed.footer.lineRegions)
+          ? parsed.footer.lineRegions
+          : undefined,
       });
 
       setReceiptId(id);
-      // Intentionally leave saveStatus as 'idle' on load — the badge
-      // ("Išsaugoma"/"Išsaugota") should only surface on real user edits.
       hasPostedRef.current = true;
 
       if (parsed?.image?.filePath) {
@@ -823,6 +1095,11 @@ export default function ProcessReceiptScreen() {
   const userIdRef = useRef<string | null>(null);
   const hasPostedRef = useRef(false); // guard against double POST from re-renders
   const hasProcessedRef = useRef(false); // guard against double OCR in StrictMode dev builds
+  // Mirrors hasProcessedRef but for the existing-receipt path. Without
+  // this, StrictMode's dev double-mount issues two parallel GETs for the
+  // same receipt id (and runs hydration twice, which racing against the
+  // setTimeout(0) that clears isHydratingRef can slip a stray save through).
+  const hasLoadedExistingRef = useRef(false);
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -850,7 +1127,6 @@ export default function ProcessReceiptScreen() {
     setHeader(null);
     setFooter(null);
     setProducts([]);
-    setSaveStatus("idle");
     setPostStatus("idle");
     setPostErr(null);
     setUploadStatus("idle");
@@ -867,6 +1143,8 @@ export default function ProcessReceiptScreen() {
   // Kick off OCR when uri is provided
   useEffect(() => {
     if (isExistingMode && existingReceiptId) {
+      if (hasLoadedExistingRef.current) return; // StrictMode dev double-mount
+      hasLoadedExistingRef.current = true;
       loadExistingReceipt(existingReceiptId);
       return;
     }
@@ -920,7 +1198,10 @@ export default function ProcessReceiptScreen() {
                     0
                   )
                 : 0;
-              if (!cancelled) setSwipeQueueCount(queueSize);
+              if (!cancelled) {
+                setSwipeQueueCount(queueSize);
+                setSwipeQueueFetched(true);
+              }
             } catch {
               /* swallow — it's advisory UI */
             }
@@ -1012,7 +1293,6 @@ export default function ProcessReceiptScreen() {
         throw new Error(data?.error || `HTTP ${res.status}`);
       }
       setReceiptId(data.id);
-      setSaveStatus("saved");
       setPostStatus("done");
       clearReceiptDraft().catch(() => {});
       if (data.mandatorySwipesRequired > 0) {
@@ -1026,7 +1306,6 @@ export default function ProcessReceiptScreen() {
       }
     } catch (e: any) {
       console.warn("Receipt POST failed:", e);
-      setSaveStatus("error");
       setPostStatus("error");
       setPostErr(e?.message || "Nepavyko išsaugoti kvito");
       hasPostedRef.current = false;
@@ -1298,7 +1577,6 @@ export default function ProcessReceiptScreen() {
 
   const saveNow = async (id: number, data: object) => {
     try {
-      setSaveStatus("saving");
       const userId = userIdRef.current ?? (await getUserId());
       userIdRef.current = userId;
       await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${id}`, {
@@ -1307,15 +1585,16 @@ export default function ProcessReceiptScreen() {
         body: JSON.stringify({ userId, parsedData: data }),
         timeoutMs: TIMEOUT_STANDARD_MS,
       });
-      setSaveStatus("saved");
-
+      // Only refetch the comparison when the user's edit actually changed
+      // a field that feeds into it (price, quantity, store-product link).
+      // Pure metadata edits still get persisted but don't pay the
+      // comparison round-trip.
       if (shouldRefreshComparisonRef.current) {
         shouldRefreshComparisonRef.current = false;
+        fetchComparison(id);
       }
-      fetchComparison(id);
     } catch (e) {
       console.warn("Save failed:", e);
-      setSaveStatus("error");
     }
   };
 
@@ -2417,6 +2696,118 @@ export default function ProcessReceiptScreen() {
     (postStatus === "pending" ||
       uploadStatus === "pending" ||
       comparisonStatus === "pending");
+
+  // Skeleton state for the existing-receipt load path. Gated by a 150 ms
+  // delay so quick loads (cached comparison + warm /receipts/:id) don't
+  // strobe a skeleton frame in and out. Fresh-OCR mode keeps its own
+  // `isProcessing` step overlay below — skeleton would lose the
+  // step-tracking message users actually want there.
+  const [showLoadSkeleton, setShowLoadSkeleton] = useState(false);
+  useEffect(() => {
+    if (!loading || !isExistingMode) {
+      setShowLoadSkeleton(false);
+      return;
+    }
+    const timer = setTimeout(() => setShowLoadSkeleton(true), 150);
+    return () => clearTimeout(timer);
+  }, [loading, isExistingMode]);
+
+  // C2: active tab. Default Suvestinė on every fresh open; resets when
+  // the user navigates away and back (the screen remounts).
+  const [activeTab, setActiveTab] = useState<ReceiptTab>("suvestine");
+
+  // Legacy-receipt region rehydration. Triggers when ANY of:
+  //   1. lineRegions is missing/empty (pre-Phase-5 receipts).
+  //   2. lineRegions entries lack a `kind` (Phase-5 mid-format).
+  //   3. header.regionsVersion is older than REGIONS_VERSION (parser
+  //      revisions that altered emitted bands — e.g. Rimi receiptNo
+  //      anchored, Norfa fallback band — invalidate prior rehydrations).
+  //
+  // Re-OCRs the cached image, runs the chain parser, applies the
+  // result locally + persists back. Runs as soon as the image URL
+  // is available so backfilled values (footer.total, totalSavings)
+  // are visible on EVERY tab — not just Kvitas — without waiting for
+  // the user to switch. The ref guard prevents repeat attempts
+  // within the same session.
+  const regionRehydrationTriedRef = useRef(false);
+  const sectionNeedsRehydration = (regions: LabeledRegion[] | undefined): boolean => {
+    if (!regions || regions.length === 0) return true;
+    return !regions.some((r) => typeof (r as { kind?: string }).kind === 'string');
+  };
+  useEffect(() => {
+    if (regionRehydrationTriedRef.current) return;
+    if (!imageUri) return;
+    if (!receiptId) return;
+    if (!header || header.chainId == null) return;
+    const headerNeeds = sectionNeedsRehydration(header.lineRegions);
+    const footerNeeds = sectionNeedsRehydration(footer?.lineRegions);
+    const versionStale = header.regionsVersion !== REGIONS_VERSION;
+    if (!headerNeeds && !footerNeeds && !versionStale) return;
+
+    regionRehydrationTriedRef.current = true;
+    const chainId = header.chainId;
+    const targetReceiptId = receiptId;
+    const targetImageUri = imageUri;
+    void (async () => {
+      const result = await computeRehydratedRegions(targetImageUri, chainId);
+      if (!result) return;
+      // Apply unconditionally on version stale — even if the section
+      // already has kinded regions, the new parser revision may emit
+      // different bands. Only an empty result array is rejected.
+      setHeader((h) => {
+        if (!h) return h;
+        const next: HeaderData = { ...h, regionsVersion: REGIONS_VERSION };
+        if (result.headerLineRegions.length > 0) {
+          next.lineRegions = result.headerLineRegions;
+        }
+        return next;
+      });
+      setFooter((f) => {
+        if (!f) return f;
+        const next: FooterData = { ...f };
+        if (result.footerLineRegions.length > 0) {
+          next.lineRegions = result.footerLineRegions;
+        }
+        // Re-parse is authoritative when it produced a value (number
+        // or non-empty string). Covers three scenarios:
+        //   1. Stored value is null (original parse failed — e.g. OCR
+        //      diacritic variant) → backfill.
+        //   2. Stored value is non-null but stale/wrong (got persisted
+        //      by a buggy older parser revision) → overwrite, because
+        //      the REGIONS_VERSION bump is the "re-derive everything"
+        //      trigger.
+        //   3. Receipt row's image got swapped (dev batch tool re-
+        //      stages the same filename, or another flow points two
+        //      rows at the same filePath) → identity fields drift
+        //      from the image; backfilling receiptNo/date/time
+        //      from the re-parse converges them back.
+        // When re-parse field is null/empty we leave the existing
+        // value untouched so a transient OCR miss can't wipe data.
+        if (typeof result.total === 'number') {
+          next.total = result.total;
+        }
+        if (typeof result.totalSavings === 'number') {
+          next.totalSavings = result.totalSavings;
+        }
+        if (typeof result.receiptNo === 'string' && result.receiptNo.length > 0) {
+          next.receiptNo = result.receiptNo;
+        }
+        if (typeof result.date === 'string' && result.date.length > 0) {
+          next.date = result.date;
+        }
+        if (typeof result.time === 'string' && result.time.length > 0) {
+          next.time = result.time;
+        }
+        return next;
+      });
+      void persistRehydratedRegions(targetReceiptId, result);
+    })();
+  }, [imageUri, receiptId, header, footer]);
+
+  // C5 pull-down gesture was removed (Android default ScrollView doesn't
+  // surface negative scroll offsets, so the iOS-only bounce mechanic
+  // didn't work cross-platform). The receipt image now lives inline at
+  // the top of the Kvitas tab via <ReceiptPhotoView>.
   const hasAsyncError =
     postStatus === "error" ||
     uploadStatus === "error" ||
@@ -2474,25 +2865,6 @@ export default function ProcessReceiptScreen() {
     );
   }
 
-  // Save status badge (under the title, pill-style)
-  const renderStatusBadge = () => {
-    if (saveStatus === "idle") return null;
-    const config = {
-      saving: { bg: colors.infoMuted, color: colors.info, text: "Saugoma…" },
-      saved: { bg: colors.primaryMuted, color: colors.primary, text: "Išsaugota" },
-      error: { bg: colors.errorMuted, color: colors.error, text: "Nepavyko išsaugoti" },
-    }[saveStatus];
-    return (
-      <View style={styles.statusOverlay}>
-        <View style={[styles.statusBadge, { backgroundColor: config.bg }]}>
-          <Text style={[styles.statusBadgeText, { color: config.color }]}>
-            {config.text}
-          </Text>
-        </View>
-      </View>
-    );
-  };
-
   const processingStep = postStatus === "pending"
     ? "Siunčiami kvito duomenys…"
     : uploadStatus === "pending"
@@ -2540,7 +2912,35 @@ export default function ProcessReceiptScreen() {
           },
         }}
       />
+      {/* C2: segmented control pinned below the navbar. Lives OUTSIDE the
+          per-tab ScrollViews so it stays visible while the body scrolls. */}
+      <SegmentedControl
+        active={activeTab}
+        onChange={setActiveTab}
+        productCount={products.length}
+        styles={styles}
+        colors={colors}
+      />
+
+      {/* ───── TAB: Suvestinė ───── */}
+      {activeTab === "suvestine" && (
       <ScrollView style={styles.container}>
+        {showLoadSkeleton ? (
+          <View style={styles.sectionCard}>
+            <SkeletonBox width="55%" height={16} borderRadius={6} />
+            <View style={{ height: 18 }} />
+            <SkeletonBox width="35%" height={28} borderRadius={6} />
+            <View style={{ height: 4 }} />
+            <SkeletonBox width="50%" height={12} borderRadius={6} />
+            <View style={{ height: 18 }} />
+            <SkeletonBox width="100%" height={56} borderRadius={12} />
+            <View style={{ height: 8 }} />
+            <SkeletonBox width="100%" height={56} borderRadius={12} />
+            <View style={{ height: 8 }} />
+            <SkeletonBox width="100%" height={56} borderRadius={12} />
+          </View>
+        ) : (
+        <>
         <ReceiptComparisonSection
           comparison={comparison}
           loading={comparisonLoading && !comparison || comparisonStatus === "error"}
@@ -2567,94 +2967,132 @@ export default function ProcessReceiptScreen() {
           }}
         />
 
-        {/* Swipe-to-help entry point. When this receipt still has items for
-            the user to act on (queue > 0), show the primary pink CTA. Once
-            drained, swap to a less-accented "Man patinka padėti" button that
-            routes into the cross-chain orphan queue — users who enjoyed the
-            receipt swipe can keep contributing to the matching dataset.
-            Preview mode never persists, so neither appears there. */}
-        {receiptId && (
+        {/* Swipe-to-help entry point. Hidden when the queue is fully
+            drained (swipeQueueFetched && swipeQueueCount === 0) so the
+            CTA doesn't lie to users who already did the work. While the
+            count is still loading (first 2 s after focus, see swipe-
+            queue fetch), render optimistically — if the receipt actually
+            has no work, the card disappears on its own once the fetch
+            lands. Preview mode never persists, so the CTA isn't shown
+            there either. */}
+        {receiptId && (!swipeQueueFetched || swipeQueueCount > 0) && (
           <TouchableOpacity
             style={styles.swipeEntryCard}
             activeOpacity={0.85}
-            onPress={() =>
+            onPress={() => {
+              Haptics.selectionAsync().catch(() => {});
               router.push({
                 pathname: "/swipe/queue",
                 params: { standalone: "1" },
-              } as any)
-            }
+              } as any);
+            }}
           >
             <View style={{ flex: 1 }}>
               <Text style={styles.swipeEntryCta}>Pagerink kainų palyginimą</Text>
               <Text style={styles.swipeEntryCount}>
-                10 kortelių · tikslesniam atpažinimui
+                {swipeQueueFetched && swipeQueueCount > 0
+                  ? `${swipeQueueCount} kortelių · tikslesniam atpažinimui`
+                  : `Tikslesniam atpažinimui`}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={22} color={colors.onPrimary} />
           </TouchableOpacity>
         )}
 
-        {editingSection === "header" &&
-          header?.region &&
-          pageMetas.length > 0 && (
-            <View style={styles.editSection}>
-              <Text style={styles.rawTextLabel}>Nuskaitytas regionas:</Text>
-              <RegionPreview
-                pages={pageMetas}
-                region={header.region}
-                cardWidth={CARD_WIDTH}
-              />
-            </View>
-          )}
+        {/* (header-region preview removed — the only consumer of
+            editingSection === "header" had no path to ever flip the state
+            to that value, leaving this branch unreachable. Header info
+            now lives in the navbar; the dev-only OCR-debug crop is
+            still available on the Kvitas footer card.) */}
 
-        {/* Products section */}
-        <TouchableOpacity
-          style={styles.productsHeader}
-          onPress={() => setProductsExpanded((v) => !v)}
-        >
-          <View style={styles.productsHeaderLeft}>
-            <Ionicons name="cart-outline" size={20} color={colors.primary} />
-            <View style={styles.productsHeaderTextWrap}>
-              <Text style={styles.productsTitle}>
-                Prekės ({products.length})
-              </Text>
-            </View>
+        {/* C3: per-category spending breakdown */}
+        <ReceiptCategoryBreakdown products={products} />
+        </>
+        )}
+        <View style={{ height: 40 }} />
+      </ScrollView>
+      )}
+
+      {/* ───── TAB: Prekės ───── */}
+      {activeTab === "prekes" && (
+      <ScrollView style={styles.container}>
+        {showLoadSkeleton ? (
+          <View style={styles.sectionCard}>
+            <SkeletonBox width="40%" height={16} borderRadius={6} />
+            <View style={{ height: 14 }} />
+            {[0, 1, 2, 3].map((i) => (
+              <View
+                key={i}
+                style={{ flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 8 }}
+              >
+                <SkeletonBox width={44} height={44} borderRadius={8} />
+                <View style={{ flex: 1, gap: 6 }}>
+                  <SkeletonBox width="70%" height={13} borderRadius={6} />
+                  <SkeletonBox width="40%" height={11} borderRadius={6} />
+                </View>
+                <SkeletonBox width={54} height={14} borderRadius={6} />
+              </View>
+            ))}
           </View>
-          <Ionicons
-            name={productsExpanded ? "chevron-up" : "chevron-down"}
-            size={18}
-            color={colors.textSecondary}
-          />
-        </TouchableOpacity>
-        {productsExpanded && (
-          <>
-            {products.map((product, index) => (
+        ) : (
+          <View style={styles.prekesListWrap}>
+            {products.length === 0 ? (
+              <View style={styles.emptyProducts}>
+                <Ionicons name="alert-circle-outline" size={32} color={colors.border} />
+                <Text style={styles.emptyText}>Prekės neatpažintos</Text>
+              </View>
+            ) : (
+              products.map((product, index) => {
+              // B3: three visual states drive border / background.
+              //   S1 confirmed  — matchConfirmed=true. Clean white, soft-accent border.
+              //   S3 partial    — line parsed but no SP match. warning border + tint.
+              //   S4 unrecognised — no name structure or no data. error border + tint, muted thumb, "—" price.
+              const isUnrecognised = isCompletelyUnrecognized(product);
+              const state: "S1" | "S3" | "S4" = product.matchConfirmed
+                ? "S1"
+                : isUnrecognised
+                ? "S4"
+                : "S3";
+              const totalPrice =
+                product.promoPrice != null && product.promoPrice < product.price
+                  ? product.promoPrice * product.quantity
+                  : product.price * product.quantity;
+              const grossTotal = product.price * product.quantity;
+              return (
               <TouchableOpacity
                 key={index}
                 style={[
                   styles.productRowCard,
+                  index === 0 && styles.productRowCardFirst,
                   index === products.length - 1 && styles.productRowCardLast,
+                  state === "S3" && styles.productRowCardS3,
+                  state === "S4" && styles.productRowCardS4,
                 ]}
                 activeOpacity={canExpandProduct(product) ? 0.7 : 1}
                 onPress={
                   canExpandProduct(product)
-                    ? () =>
+                    ? () => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
                         setEditingSection(
                           editingSection === index ? null : index,
-                        )
+                        );
+                      }
                     : undefined
                 }
               >
                 {/* Dev-only band crop: shows the OCR region this row's
                     data was extracted from, sliced from the receipt
                     image. Gated by __DEV__ so release bundles strip
-                    the entire branch at Metro bundle time. */}
+                    the entire branch at Metro bundle time. Uses the
+                    sharper pre-crop component — RegionPreview's
+                    overflow-trick produced unreadable mush on Android
+                    for narrow product bands. */}
                 {__DEV__ &&
                   pageMetas.length > 0 &&
                   product.region &&
                   product.region.yBottom > product.region.yTop && (
                     <View style={styles.productBandCropWrap}>
-                      <RegionPreview
+                      <BandCropImage
                         pages={pageMetas}
                         region={product.region}
                         cardWidth={CARD_WIDTH}
@@ -2662,44 +3100,33 @@ export default function ProcessReceiptScreen() {
                     </View>
                   )}
                 <View style={styles.productRow}>
-                  {product.matchConfirmed && product.storeProductImageUrl ? (
+                  {state === "S1" && product.storeProductImageUrl ? (
                     <Image
                       source={{ uri: product.storeProductImageUrl }}
                       style={styles.productThumb}
                       resizeMode="contain"
                     />
                   ) : (
-                    <View style={styles.productThumbPlaceholder}>
+                    <View
+                      style={[
+                        styles.productThumbPlaceholder,
+                        state === "S4" && styles.productThumbPlaceholderMuted,
+                      ]}
+                    >
                       <Text style={styles.productThumbEmoji}>🫜</Text>
                     </View>
                   )}
                   <View style={styles.productInfo}>
-                    {product.matchConfirmed && product.matchedName ? (
-                      <Text style={styles.matchedName}>
-                        <Ionicons
-                          name="checkmark-circle"
-                          size={16}
-                          color={colors.primary}
-                        />
-                        {"  "}
+                    {/* Name typography: matched products use the primary
+                        colour ("matched"), partial / unrecognised stay
+                        textPrimary. Inline state icons removed — the
+                        row's border + background communicate state now. */}
+                    {state === "S1" && product.matchedName ? (
+                      <Text style={styles.matchedName} numberOfLines={2}>
                         {product.matchedName}
                       </Text>
                     ) : (
-                      <Text style={styles.productName}>
-                        <Ionicons
-                          name={
-                            isCompletelyUnrecognized(product)
-                              ? "help-circle"
-                              : "alert-circle"
-                          }
-                          size={16}
-                          color={
-                            isCompletelyUnrecognized(product)
-                              ? colors.error
-                              : colors.warning
-                          }
-                        />
-                        {"  "}
+                      <Text style={styles.productName} numberOfLines={2}>
                         {product.name}
                       </Text>
                     )}
@@ -2708,26 +3135,23 @@ export default function ProcessReceiptScreen() {
                     </Text>
                   </View>
                   <View style={styles.productPriceCol}>
-                    {product.promoPrice != null &&
-                    product.promoPrice < product.price ? (
+                    {state === "S4" ? (
+                      <Text style={styles.productPrice}>—</Text>
+                    ) : product.promoPrice != null &&
+                      product.promoPrice < product.price ? (
                       <>
-                        <Text style={styles.productPrice}>
-                          {(product.promoPrice * product.quantity).toFixed(2)} €
-                        </Text>
-                        <Text style={styles.productPriceStrike}>
-                          {(product.price * product.quantity).toFixed(2)} €
-                        </Text>
+                        <Text style={styles.productPrice}>{formatEuro(totalPrice)}</Text>
+                        <Text style={styles.productPriceStrike}>{formatEuro(grossTotal)}</Text>
                       </>
                     ) : (
-                      <Text style={styles.productPrice}>
-                        {(product.price * product.quantity).toFixed(2)} €
-                      </Text>
+                      <Text style={styles.productPrice}>{formatEuro(totalPrice)}</Text>
                     )}
                   </View>
                   <TouchableOpacity
                     style={styles.productRowMenuBtn}
                     onPress={(e) => {
                       e.stopPropagation?.();
+                      Haptics.selectionAsync().catch(() => {});
                       setMenuOpenForIndex(index);
                     }}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -2795,71 +3219,68 @@ export default function ProcessReceiptScreen() {
                   </View>
                 )}
               </TouchableOpacity>
-            ))}
-          </>
-        )}
-        {products.length === 0 && (
-          <View style={styles.emptyProducts}>
-            <Ionicons name="alert-circle-outline" size={32} color={colors.border} />
-            <Text style={styles.emptyText}>Prekės neatpažintos</Text>
-          </View>
-        )}
-
-        {/* Footer section */}
-        <TouchableOpacity
-          style={styles.sectionCard}
-          onPress={() =>
-            setEditingSection(editingSection === "footer" ? null : "footer")
-          }
-        >
-          <View style={styles.sectionHeader}>
-            <Ionicons name="document-text-outline" size={20} color={colors.primary} />
-            <Text style={styles.sectionTitle}>Kvito duomenys</Text>
-            <Ionicons
-              name={editingSection === "footer" ? "chevron-up" : "chevron-down"}
-              size={18}
-              color={colors.textSecondary}
-            />
-          </View>
-          <View style={styles.footerContent}>
-            <View style={styles.footerRow}>
-              <Text style={styles.footerLabel}>Suma:</Text>
-              <Text style={styles.footerValue}>
-                {footer?.total
-                  ? `€${footer.total.toFixed(2)}`
-                  : comparison?.currentChain?.total
-                  ? `~€${comparison.currentChain.total.toFixed(2)}`
-                  : "—"}
-              </Text>
-            </View>
-            <View style={styles.footerRow}>
-              <Text style={styles.footerLabel}>Data:</Text>
-              <Text style={styles.footerValue}>
-                {footer?.date || "—"} {footer?.time || ""}
-              </Text>
-            </View>
-            <View style={styles.footerRow}>
-              <Text style={styles.footerLabel}>Kvito Nr.:</Text>
-              <Text style={styles.footerValue}>{footer?.receiptNo || "—"}</Text>
-            </View>
-          </View>
-          {editingSection === "footer" &&
-            footer?.region &&
-            pageMetas.length > 0 && (
-              <View style={styles.editSection}>
-                <Text style={styles.rawTextLabel}>Nuskaitytas regionas:</Text>
-                <RegionPreview
-                  pages={pageMetas}
-                  region={footer.region}
-                  cardWidth={CARD_WIDTH}
-                />
-              </View>
+              );
+              })
             )}
-        </TouchableOpacity>
-
+          </View>
+        )}
         <View style={{ height: 40 }} />
       </ScrollView>
-      {renderStatusBadge()}
+      )}
+
+      {/* ───── TAB: Kvitas ─────
+          Stat grid card on top (Suma · Laikas · Kvito №) followed by
+          the receipt photo with parser-region overlays. The dev-only
+          chevron-to-reveal-OCR-region was dropped — the photo + bands
+          are now the user-facing visual artifact, no separate dev path. */}
+      {activeTab === "kvitas" && (
+      <ScrollView style={styles.container}>
+        {showLoadSkeleton ? (
+          <View style={styles.sectionCard}>
+            <SkeletonBox width="35%" height={16} borderRadius={6} />
+            <View style={{ height: 14 }} />
+            <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+              {[0, 1, 2].map((i) => (
+                <View key={i} style={{ alignItems: "center", flex: 1, gap: 6 }}>
+                  <SkeletonBox width="60%" height={20} borderRadius={6} />
+                  <SkeletonBox width="50%" height={10} borderRadius={4} />
+                </View>
+              ))}
+            </View>
+          </View>
+        ) : (
+          <>
+            <View style={styles.sectionCard}>
+              <View style={styles.sectionHeader}>
+                <Ionicons name="document-text-outline" size={20} color={colors.primary} />
+                <Text style={styles.sectionTitle}>Kvito duomenys</Text>
+              </View>
+              <FooterStatGrid footer={footer} comparison={comparison} styles={styles} />
+            </View>
+            <ReceiptPhotoView
+              imageUri={imageUri}
+              imageDims={imageDims}
+              headerRegions={
+                header?.lineRegions && header.lineRegions.length > 0
+                  ? header.lineRegions
+                  : header?.region
+                  ? [header.region]
+                  : []
+              }
+              productRegions={products.map((p) => p.region).filter(Boolean)}
+              footerRegions={
+                footer?.lineRegions && footer.lineRegions.length > 0
+                  ? footer.lineRegions
+                  : footer?.region
+                  ? [footer.region]
+                  : []
+              }
+            />
+          </>
+        )}
+        <View style={{ height: 40 }} />
+      </ScrollView>
+      )}
       {isProcessing && (
         <View style={styles.processingOverlay} pointerEvents="auto">
           <View style={styles.processingCard}>
@@ -3197,20 +3618,47 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     overflow: 'hidden',
     backgroundColor: c.pageBackground,
   },
+  // B3: S1 (confirmed) is the default. Left edge picks up a 3 px soft
+  // accent border to mark the row as "clean / matched".
   productRowCard: {
     backgroundColor: c.cardBackground,
     marginHorizontal: 16,
     marginTop: 0,
     borderRadius: 0,
     padding: 14,
-    borderLeftWidth: 1,
+    borderTopWidth: 0,
     borderRightWidth: 1,
     borderBottomWidth: 1,
+    borderLeftWidth: 3,
     borderColor: c.borderSubtle,
+    borderLeftColor: c.softAccent,
   },
   productRowCardLast: {
     borderBottomLeftRadius: 12,
     borderBottomRightRadius: 12,
+  },
+  // C2: with the products-header card gone (chevron collapse absorbed by
+  // tabs), the first product row is now the visual top of the list.
+  productRowCardFirst: {
+    borderTopWidth: 1,
+    borderTopLeftRadius: 12,
+    borderTopRightRadius: 12,
+  },
+  // B3 S3 — partial recognition. Warning border + tint.
+  productRowCardS3: {
+    backgroundColor: c.warningMuted,
+    borderLeftColor: c.warning,
+    borderLeftWidth: 4,
+  },
+  // B3 S4 — fully unrecognised. Error border + tint; price collapses to "—",
+  // thumbnail is the muted-emoji placeholder.
+  productRowCardS4: {
+    backgroundColor: c.errorMuted,
+    borderLeftColor: c.error,
+    borderLeftWidth: 4,
+  },
+  productThumbPlaceholderMuted: {
+    opacity: 0.4,
   },
   productsHeaderTextWrap: {
     flex: 1,
@@ -3254,6 +3702,49 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     flexShrink: 1,
   },
   container: { flex: 1, backgroundColor: c.pageBackground },
+
+  // C2 — segmented control pinned below the navbar.
+  segmentedWrap: {
+    flexDirection: "row",
+    backgroundColor: c.surfaceMuted,
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 4,
+    borderRadius: 10,
+    gap: 4,
+  },
+  segmentTab: {
+    flex: 1,
+    paddingVertical: 8,
+    paddingHorizontal: 6,
+    borderRadius: 8,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  segmentTabActive: {
+    backgroundColor: c.cardBackground,
+    elevation: 1,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 1,
+  },
+  segmentTabLabel: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: c.textSecondary,
+  },
+  segmentTabLabelActive: {
+    color: c.textPrimary,
+    fontWeight: "700",
+  },
+
+  // C2 — Prekės tab wrapper: matches the card-stack rhythm of the other
+  // tabs so the product rows don't feel orphaned.
+  prekesListWrap: {
+    marginTop: 8,
+  },
+
   loadingContainer: {
     flex: 1,
     alignItems: "center",
@@ -3262,20 +3753,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     gap: 16,
   },
   loadingText: { fontSize: 15, color: c.textSecondary },
-
-  statusBadgeWrap: {
-    alignItems: "center",
-    marginTop: 12,
-  },
-  statusBadge: {
-    paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  statusBadgeText: {
-    fontSize: 12,
-    fontWeight: "600",
-  },
 
   sectionCard: {
     backgroundColor: c.cardBackground,
@@ -3411,14 +3888,34 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   editField: { flex: 1 },
   editLabel: { fontSize: 11, color: c.textMuted, marginBottom: 4 },
 
-  footerContent: { marginTop: 10 },
-  footerRow: {
+  footerStatGrid: {
+    marginTop: 14,
     flexDirection: "row",
-    justifyContent: "space-between",
-    marginTop: 4,
+    alignItems: "stretch",
   },
-  footerLabel: { fontSize: 13, color: c.textSecondary },
-  footerValue: { fontSize: 13, fontWeight: "600", color: c.textPrimary },
+  footerStatCell: {
+    flex: 1,
+    alignItems: "center",
+    paddingVertical: 4,
+  },
+  footerStatDivider: {
+    width: 1,
+    backgroundColor: c.borderSubtle,
+    marginVertical: 4,
+  },
+  footerStatValue: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: c.textPrimary,
+  },
+  footerStatLabel: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: c.textMuted,
+    letterSpacing: 0.5,
+    marginTop: 4,
+    textTransform: "uppercase",
+  },
 
   emptyProducts: { alignItems: "center", padding: 32, gap: 8 },
   emptyText: { fontSize: 14, color: c.textMuted },
@@ -3464,15 +3961,5 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     fontSize: 14,
     fontWeight: "700",
     color: c.primary,
-  },
-  statusOverlay: {
-    position: "absolute",
-    top: 12,
-    left: 0,
-    right: 0,
-    alignItems: "center",
-    zIndex: 50,
-    elevation: 50,
-    pointerEvents: "none",
   },
 });

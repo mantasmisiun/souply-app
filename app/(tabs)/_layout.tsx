@@ -113,6 +113,11 @@ export default function TabLayout() {
                 name="receipts"
                 options={{
                     title: 'Analizė',
+                    // White navbar to match the L2-category browse screens
+                    // (the receipts tab uses the same card-on-cream layout
+                    // once filter chips are introduced — the navbar→chips
+                    // section reads as one continuous white strip).
+                    headerStyle: { backgroundColor: colors.cardBackground },
                     tabBarIcon: ({ focused, color, size }) => (
                         <View>
                             <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />
