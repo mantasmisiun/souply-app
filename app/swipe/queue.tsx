@@ -23,6 +23,7 @@ import Animated, {
   withTiming,
 } from "react-native-reanimated";
 import { Image } from "expo-image";
+import { useTranslation } from "react-i18next";
 import { ProductImage } from "../../components/ProductImage";
 import { API_BASE_URL } from "../../config/api";
 import { getUserId } from "../../config/user";
@@ -165,6 +166,7 @@ function CardSide({
 
 export default function SwipeQueueScreen() {
   const router = useRouter();
+  const { t } = useTranslation();
   // Param surface:
   //   receiptIds=a,b,c        Banner batch flow — multi-receipt mandatory
   //                           session, 3 cards per receipt.
@@ -345,7 +347,7 @@ export default function SwipeQueueScreen() {
       setItemsReceiptId(currentReceiptId);
       cardShownAtRef.current = Date.now();
     } catch (e: any) {
-      setError(e?.message ?? "Nepavyko gauti eilės");
+      setError(e?.message ?? t('swipe.errorQueue'));
     } finally {
       setLoading(false);
     }
@@ -440,7 +442,7 @@ export default function SwipeQueueScreen() {
     }
 
     const label =
-      vote === "identical" ? "Identiška" : vote === "similar" ? "Panaši" : "Skirtinga";
+      vote === "identical" ? t('swipe.directionIdentical') : vote === "similar" ? t('swipe.directionSimilar') : t('swipe.directionDifferent');
     setUndoLabel(label);
 
     const timer = setTimeout(() => {
@@ -675,8 +677,8 @@ export default function SwipeQueueScreen() {
   // ── Render ─────────────────────────────────────────────────────────────
 
   const headerTitle = isMulti
-    ? `Padėk atpažinti · ${receiptIdx + 1}/${receiptIdList.length}`
-    : "Padėk atpažinti";
+    ? t('swipe.headerProgress', { current: receiptIdx + 1, total: receiptIdList.length })
+    : t('swipe.header');
 
   return (
     <GestureHandlerRootView
@@ -696,7 +698,7 @@ export default function SwipeQueueScreen() {
         <View style={styles.centered}>
           <Text style={styles.errorText}>{error}</Text>
           <TouchableOpacity style={styles.btn} onPress={() => router.back()}>
-            <Text style={styles.btnText}>Grįžti</Text>
+            <Text style={styles.btnText}>{t('swipe.back')}</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -714,14 +716,14 @@ export default function SwipeQueueScreen() {
             color={cappedItems.length === 0 && isVoluntary ? colors.textMuted : colors.primary}
           />
           <Text style={styles.doneTitle}>
-            {cappedItems.length === 0 && isVoluntary ? "Nieko atpažinti" : "Ačiū!"}
+            {cappedItems.length === 0 && isVoluntary ? t('swipe.doneEmpty') : t('swipe.doneAck')}
           </Text>
           <Text style={styles.doneSubtitle}>
             {cappedItems.length === 0 && isVoluntary
-              ? "Šiuo metu šio kvito Nepriskirta prekės neturi panašių kandidatų. Įkėlus daugiau kvitų kortelės atsiras automatiškai."
+              ? t('swipe.emptyVoluntaryReceipt')
               : cappedItems.length === 0
-              ? "Šiuo metu nėra kortelių peržiūrai. Užsukite vėliau."
-              : "Peržiūrėjote visas korteles šioje sesijoje."}
+              ? t('swipe.emptyNothing')
+              : t('swipe.doneAllSeen')}
           </Text>
           <View style={styles.btnRow}>
             {cappedItems.length > 0 && !isVoluntary && (
@@ -729,11 +731,11 @@ export default function SwipeQueueScreen() {
                 style={styles.btnOutline}
                 onPress={() => setSessionNum((n) => n + 1)}
               >
-                <Text style={styles.btnOutlineText}>Gal dar?</Text>
+                <Text style={styles.btnOutlineText}>{t('swipe.moreCta')}</Text>
               </TouchableOpacity>
             )}
             <TouchableOpacity style={styles.btn} onPress={() => router.back()}>
-              <Text style={styles.btnText}>Grįžti</Text>
+              <Text style={styles.btnText}>{t('swipe.back')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -758,7 +760,7 @@ export default function SwipeQueueScreen() {
               global pool (this receipt's own cards exhausted). */}
           {currentItem.fromGlobalFill && (
             <Text style={styles.fromGlobalSubline} numberOfLines={2}>
-              Šio kvito kortelės baigtos — padedi visiems vartotojams
+              {t('swipe.fromGlobalFill')}
             </Text>
           )}
           <GestureDetector gesture={pan}>
@@ -781,28 +783,28 @@ export default function SwipeQueueScreen() {
               onPress={() => advanceTap("different")}
             >
               <Text style={styles.tapBtnArrow}>←</Text>
-              <Text style={styles.tapBtnLabel}>Skirtinga</Text>
+              <Text style={styles.tapBtnLabel}>{t('swipe.directionDifferent')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.tapBtn}
               onPress={() => advanceTap("similar")}
             >
               <Text style={styles.tapBtnArrow}>↑</Text>
-              <Text style={styles.tapBtnLabel}>Panaši</Text>
+              <Text style={styles.tapBtnLabel}>{t('swipe.directionSimilar')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.tapBtn}
               onPress={() => advanceTap(null)}
             >
               <Text style={styles.tapBtnArrow}>↓</Text>
-              <Text style={styles.tapBtnLabel}>Praleisti</Text>
+              <Text style={styles.tapBtnLabel}>{t('swipe.directionSkip')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.tapBtn}
               onPress={() => advanceTap("identical")}
             >
               <Text style={styles.tapBtnArrow}>→</Text>
-              <Text style={styles.tapBtnLabel}>Identiška</Text>
+              <Text style={styles.tapBtnLabel}>{t('swipe.directionIdentical')}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -813,7 +815,7 @@ export default function SwipeQueueScreen() {
         <View style={styles.undoToast}>
           <Text style={styles.undoText}>{undoLabel}</Text>
           <TouchableOpacity onPress={handleUndo} style={styles.undoBtn}>
-            <Text style={styles.undoBtnText}>Atšaukti</Text>
+            <Text style={styles.undoBtnText}>{t('swipe.undoCancel')}</Text>
           </TouchableOpacity>
         </View>
       )}

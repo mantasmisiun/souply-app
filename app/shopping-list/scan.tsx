@@ -3,12 +3,14 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import { Stack, useRouter } from 'expo-router';
 import { useMemo, useRef, useState } from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View, Alert } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { useTheme, type AppTheme } from '../../constants/theme';
 
 export default function ScanShoppingListScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [permission, requestPermission] = useCameraPermissions();
     const router = useRouter();
@@ -33,11 +35,11 @@ export default function ScanShoppingListScreen() {
                 const body = await res.json().catch(() => ({}));
                 const reason = body?.reason;
                 const msg =
-                    reason === 'expired' ? 'QR kodas nebegalioja' :
-                    reason === 'already_claimed' ? 'QR kodas jau panaudotas' :
-                    'Nepavyko prisijungti prie sąrašo';
-                Alert.alert('Klaida', msg, [
-                    { text: 'Gerai', onPress: () => router.back() },
+                    reason === 'expired' ? t('scan.errorExpired') :
+                    reason === 'already_claimed' ? t('scan.errorClaimed') :
+                    t('scan.errorJoin');
+                Alert.alert(t('scan.errorTitle'), msg, [
+                    { text: t('scan.ok'), onPress: () => router.back() },
                 ]);
                 return;
             }
@@ -49,8 +51,8 @@ export default function ScanShoppingListScreen() {
             // users back on the camera.
             router.replace(`/shopping-list/${body.listId}` as any);
         } catch {
-            Alert.alert('Klaida', 'Nepavyko nuskaityti QR', [
-                { text: 'Gerai', onPress: () => router.back() },
+            Alert.alert(t('scan.errorTitle'), t('scan.errorScan'), [
+                { text: t('scan.ok'), onPress: () => router.back() },
             ]);
         } finally {
             setClaiming(false);
@@ -63,11 +65,11 @@ export default function ScanShoppingListScreen() {
     if (!permission.granted) {
         return (
             <View style={styles.permissionContainer}>
-                <Stack.Screen options={{ title: 'Skenuoti QR' }} />
+                <Stack.Screen options={{ title: t('scan.title') }} />
                 <Ionicons name="qr-code-outline" size={64} color={colors.textMuted} />
-                <Text style={styles.permissionText}>Reikia prieigos prie kameros</Text>
+                <Text style={styles.permissionText}>{t('capture.permission')}</Text>
                 <TouchableOpacity style={styles.permissionButton} onPress={requestPermission}>
-                    <Text style={styles.permissionButtonText}>Leisti</Text>
+                    <Text style={styles.permissionButtonText}>{t('capture.permissionGrant')}</Text>
                 </TouchableOpacity>
             </View>
         );
@@ -75,7 +77,7 @@ export default function ScanShoppingListScreen() {
 
     return (
         <View style={styles.container}>
-            <Stack.Screen options={{ title: 'Skenuoti QR' }} />
+            <Stack.Screen options={{ title: t('scan.title') }} />
             <CameraView
                 style={styles.camera}
                 facing="back"
@@ -89,7 +91,7 @@ export default function ScanShoppingListScreen() {
                         <View style={styles.cornerBL} />
                         <View style={styles.cornerBR} />
                     </View>
-                    <Text style={styles.hint}>Nukreipkite kamerą į QR kodą</Text>
+                    <Text style={styles.hint}>{t('scan.hint')}</Text>
                 </View>
             </CameraView>
             {claiming && (

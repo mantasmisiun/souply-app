@@ -1,5 +1,6 @@
 import { StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../constants/theme';
 import { useNetworkStatus } from '../state/networkStatus';
 
@@ -13,6 +14,7 @@ import { useNetworkStatus } from '../state/networkStatus';
 export function OfflineBanner() {
     const isOnline = useNetworkStatus((s) => s.isOnline);
     const colors = useTheme();
+    const { t } = useTranslation();
     if (isOnline) return null;
     return (
         <SafeAreaView
@@ -21,7 +23,7 @@ export function OfflineBanner() {
         >
             <View style={styles.bar}>
                 <Text style={[styles.text, { color: colors.onPrimary ?? '#fff' }]}>
-                    Nėra interneto ryšio
+                    {t('banners.offline')}
                 </Text>
             </View>
         </SafeAreaView>

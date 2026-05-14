@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { useTheme, type AppTheme } from "../constants/theme";
 
 interface Props {
@@ -19,11 +20,14 @@ export function PendingSwipesBanner({
   onPress,
 }: Props) {
   const colors = useTheme();
+  const { t } = useTranslation();
   const styles = makeStyles(colors);
 
   if (pendingCount <= 0) return null;
 
-  const label = `${pendingCount} ${pluralProduct(pendingCount)} laukia patvirtinimo`;
+  // i18next plural selection (lt: one/few/other, en: one/other) — picks
+  // the right form automatically from the count param.
+  const label = t('banners.pendingSwipes.label', { count: pendingCount });
 
   return (
     <TouchableOpacity
@@ -37,14 +41,14 @@ export function PendingSwipesBanner({
       </View>
       <View style={styles.body}>
         <Text style={styles.title} numberOfLines={1}>
-          Padėk atpažinti
+          {t('banners.pendingSwipes.title')}
         </Text>
         <Text style={styles.subtitle} numberOfLines={1}>
           {disabled && disabledHint ? disabledHint : label}
         </Text>
       </View>
       <View style={styles.cta}>
-        <Text style={styles.ctaText}>Pradėti</Text>
+        <Text style={styles.ctaText}>{t('banners.pendingSwipes.cta')}</Text>
         <Ionicons name="arrow-forward" size={14} color={colors.primary} />
       </View>
     </TouchableOpacity>

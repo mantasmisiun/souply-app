@@ -13,8 +13,19 @@ import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext'
 import { OfflineBanner } from '../components/OfflineBanner';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
+import { useSettingsStore } from '../state/settingsStore';
 import { API_BASE_URL } from '../config/api';
 import { useReceiptQueueRunner } from '../hooks/useReceiptQueueRunner';
+import '../i18n';
+import { useTranslation } from 'react-i18next';
+import { installFetchInterceptor } from '../utils/installFetchInterceptor';
+
+// Install the global fetch shim once at module load so every API call
+// — including those that bypass `fetchWithTimeout` — sends the right
+// Accept-Language header. Safe to import here at the top: the
+// interceptor is idempotent and reads i18n.language lazily at call
+// time, so swapping languages mid-session works without re-installing.
+installFetchInterceptor();
 
 /**
  * Copy a content:// or file:// URI into the app cache and return the
@@ -118,10 +129,21 @@ export const unstable_settings = {
 export default function RootLayout() {
   const colorScheme = useColorScheme();
   const colors = useTheme();
+  const { t } = useTranslation();
   // Subscribe to NetInfo once, at the top of the tree. Downstream
   // consumers read via `useNetworkStatus(s => s.isOnline)`.
   useBindNetInfo();
   useReceiptQueueRunner();
+
+  // Hydrate the user-settings store once at app boot — pulls the
+  // persisted language choice (or detects device locale on first launch)
+  // and syncs it into i18next. Subsequent renders see the right
+  // translations because i18next emits `languageChanged` and
+  // useTranslation re-renders consumers.
+  const hydrateSettings = useSettingsStore((s) => s.hydrate);
+  useEffect(() => {
+    hydrateSettings().catch((e) => console.warn('[settings] hydrate failed', e));
+  }, [hydrateSettings]);
 
   // Derive React Navigation's theme from our app theme so every default
   // surface (headers, cards, borders) picks up the palette automatically.
@@ -157,17 +179,19 @@ export default function RootLayout() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         <Stack.Screen name="product" options={{ headerShown: false }} />
-        <Stack.Screen name="basket/[id]" options={{ title: 'Krepšelis' }} />
+        <Stack.Screen name="basket/[id]" options={{ title: t('screens.basket') }} />
         {/* basket/results/[id] intentionally configures its own <Stack.Screen>
             options from inside the screen — registering a default here
             (title: 'Rezultatai' or a stub headerRight) would win on
             initial-mount timing and leave the refresh button missing
             until the child's options apply. File-based routing picks the
             screen up without this entry. */}
-        <Stack.Screen name="shopping-list/[id]" options={{ title: 'Pirkinių sąrašas' }} />
+        <Stack.Screen name="shopping-list/[id]" options={{ title: t('screens.shoppingList') }} />
         <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
-        <Stack.Screen name="receipt-process" options={{ title: 'Kvito peržiūra' }} />
-        <Stack.Screen name="profile/vote-history" options={{ title: 'Balsavimų istorija' }} />
+        <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess') }} />
+        <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
+        <Stack.Screen name="settings" options={{ title: t('settings.title') }} />
+        <Stack.Screen name="profile/restore-account" options={{ title: t('restore.title') }} />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
       </View>

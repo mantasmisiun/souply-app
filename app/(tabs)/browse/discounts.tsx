@@ -21,6 +21,7 @@ import { Toast, type ToastHandle } from '../../../components/Toast';
 import { ScalePressable } from '../../../components/ScalePressable';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { ChainLogoStrip } from '../../../components/ChainLogoStrip';
+import { useTranslation } from 'react-i18next';
 
 interface L2Category {
     id: number;
@@ -61,6 +62,7 @@ const DiscountProductCard = memo(({
     styles: ReturnType<typeof makeStyles>;
     colors: AppTheme;
 }) => {
+    const { t } = useTranslation();
     const fmt = (v: number) => v >= 1000 ? `${v / 1000} kg` : `${v} g`;
     const amountText = item.minAmount != null && item.maxAmount != null
         ? (() => { const min = Number(item.minAmount); const max = Number(item.maxAmount); return min === max ? fmt(min) : `${fmt(min)} - ${fmt(max)}`; })()
@@ -80,7 +82,7 @@ const DiscountProductCard = memo(({
             </View>
             {quantity === 0 ? (
                 <ScalePressable style={[styles.addButton, isAdding && { opacity: 0.5 }]} disabled={isAdding} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); onAdd(item); }}>
-                    <Text style={styles.addButtonText}>Į krepšelį</Text>
+                    <Text style={styles.addButtonText}>{t('browse.addToBasket')}</Text>
                 </ScalePressable>
             ) : (
                 <View style={styles.quantityControl}>
@@ -99,6 +101,7 @@ const DiscountProductCard = memo(({
 
 export default function DiscountsScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
     const navigation = useNavigation();
@@ -293,7 +296,7 @@ export default function DiscountsScreen() {
             if (result.success) {
                 setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
                 setBasketItemCount(prev => prev + 1);
-                toastRef.current?.show('Pridėta į krepšelį');
+                toastRef.current?.show(t('browse.addedToast'));
             }
         }).finally(() => {
             setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
@@ -392,7 +395,7 @@ export default function DiscountsScreen() {
                         <Ionicons name="search" size={18} color={colors.textMuted} style={styles.searchIcon} />
                         <TextInput
                             style={styles.searchInput}
-                            placeholder="Ieškoti prekių su nuolaidomis…"
+                            placeholder={t('browse.searchPlaceholder')}
                             placeholderTextColor={colors.textMuted}
                             value={search}
                             onChangeText={setSearch}
@@ -441,7 +444,7 @@ export default function DiscountsScreen() {
                                 }
                                 ListEmptyComponent={
                                     <Text style={styles.emptyText}>
-                                        {search ? 'Nerasta akcijinių prekių pagal paiešką' : 'Šiuo metu nėra akcijinių prekių'}
+                                        {search ? t('browse.noResultsSearch') : t('browse.noResults')}
                                     </Text>
                                 }
                                 renderItem={renderItem}
@@ -459,14 +462,14 @@ export default function DiscountsScreen() {
                         <View style={styles.basketBarLeft}>
                             <Ionicons name="cart" size={20} color={colors.primary} />
                             <Text style={styles.basketBarCount}>
-                                {basketItemCount} {pluralizeItems(basketItemCount)}
+                                {t('items.count', { count: basketItemCount })}
                             </Text>
                         </View>
                         <ScalePressable
                             style={styles.basketBarButton}
                             onPress={() => router.push(`/basket/${sessionBasketId}` as any)}
                         >
-                            <Text style={styles.basketBarButtonText}>Krepšelis</Text>
+                            <Text style={styles.basketBarButtonText}>{t('browse.basketShortcut')}</Text>
                             <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
                         </ScalePressable>
                     </Animated.View>
@@ -496,7 +499,7 @@ export default function DiscountsScreen() {
                         if (result.success) {
                             setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
                             setBasketItemCount(prev => prev + 1);
-                            toastRef.current?.show('Pridėta į krepšelį');
+                            toastRef.current?.show(t('browse.addedToast'));
                         }
                     }
                 }}
@@ -504,12 +507,6 @@ export default function DiscountsScreen() {
             <Toast ref={toastRef} />
         </>
     );
-}
-
-function pluralizeItems(n: number): string {
-    if (n % 10 === 1 && n % 100 !== 11) return 'prekė';
-    if (n % 10 >= 2 && n % 10 <= 9 && (n % 100 < 10 || n % 100 >= 20)) return 'prekės';
-    return 'prekių';
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({

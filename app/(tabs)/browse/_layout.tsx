@@ -1,11 +1,13 @@
 import { Stack, useRouter } from 'expo-router';
 import { TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../../constants/theme';
 
 export default function BrowseLayout() {
     const router = useRouter();
     const colors = useTheme();
+    const { t } = useTranslation();
 
     // Both L1 (index) and L2 ([categoryId]) get the same magnifying-
     // glass icon in the right side of the nav bar — tap pushes the
@@ -38,7 +40,7 @@ export default function BrowseLayout() {
             <Stack.Screen
                 name="index"
                 options={{
-                    title: 'Naršyti',
+                    title: t('browse.title'),
                     headerRight: searchHeaderRight,
                 }}
             />

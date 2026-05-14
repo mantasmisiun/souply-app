@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { usePreventRemove, useNavigation, useFocusEffect } from "@react-navigation/native";
+import { useTranslation } from "react-i18next";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
 import * as Haptics from "expo-haptics";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -24,7 +25,7 @@ import ReceiptComparisonSection from "../components/receipt/ReceiptComparisonSec
 import ReceiptCategoryBreakdown from "../components/receipt/ReceiptCategoryBreakdown";
 import ReceiptPhotoView from "../components/receipt/ReceiptPhotoView";
 import { SkeletonBox } from "../components/SkeletonBox";
-import { formatEuro } from "../utils/formatCurrency";
+import { formatEuro, formatDate } from "../utils/formatCurrency";
 import { capVoluntaryQueue } from "../utils/swipeQueueCap";
 import { API_BASE_URL } from "../config/api";
 import { getUserId } from "../config/user";
@@ -392,28 +393,29 @@ function SegmentedControl({
   styles: ReturnType<typeof makeStyles>;
   colors: AppTheme;
 }) {
+  const { t } = useTranslation();
   const tabs: Array<{ key: ReceiptTab; label: string }> = [
-    { key: "suvestine", label: "Suvestinė" },
-    { key: "prekes", label: `Prekės (${productCount})` },
-    { key: "kvitas", label: "Kvitas" },
+    { key: "suvestine", label: t('receiptProcess.tabSummary') },
+    { key: "prekes", label: t('receiptProcess.tabProducts', { count: productCount }) },
+    { key: "kvitas", label: t('receiptProcess.tabReceipt') },
   ];
   return (
     <View style={styles.segmentedWrap}>
-      {tabs.map((t) => {
-        const isActive = t.key === active;
+      {tabs.map((tab) => {
+        const isActive = tab.key === active;
         return (
           <TouchableOpacity
-            key={t.key}
+            key={tab.key}
             style={[styles.segmentTab, isActive && styles.segmentTabActive]}
             activeOpacity={0.7}
             onPress={() => {
-              if (t.key === active) return;
+              if (tab.key === active) return;
               Haptics.selectionAsync().catch(() => {});
-              onChange(t.key);
+              onChange(tab.key);
             }}
           >
             <Text style={[styles.segmentTabLabel, isActive && styles.segmentTabLabelActive]} numberOfLines={1}>
-              {t.label}
+              {tab.label}
             </Text>
           </TouchableOpacity>
         );
@@ -442,6 +444,7 @@ function FooterStatGrid({
   comparison: { currentChain?: { total?: number | null } } | null;
   styles: ReturnType<typeof makeStyles>;
 }) {
+  const { t } = useTranslation();
   // Sum: prefer parser footer total, fall back to comparison currentChain
   // total with a tilde prefix when only the chain agg is available.
   let sumDisplay: string;
@@ -473,17 +476,17 @@ function FooterStatGrid({
     <View style={styles.footerStatGrid}>
       <View style={styles.footerStatCell}>
         <Text style={styles.footerStatValue} numberOfLines={1}>{sumDisplay}</Text>
-        <Text style={styles.footerStatLabel}>Suma</Text>
+        <Text style={styles.footerStatLabel}>{t('summary.footerStatSum')}</Text>
       </View>
       <View style={styles.footerStatDivider} />
       <View style={styles.footerStatCell}>
         <Text style={styles.footerStatValue} numberOfLines={1}>{timeDisplay}</Text>
-        <Text style={styles.footerStatLabel}>Laikas</Text>
+        <Text style={styles.footerStatLabel}>{t('summary.footerStatTime')}</Text>
       </View>
       <View style={styles.footerStatDivider} />
       <View style={styles.footerStatCell}>
         <Text style={styles.footerStatValue} numberOfLines={1}>{receiptDisplay}</Text>
-        <Text style={styles.footerStatLabel}>Kvito Nr.</Text>
+        <Text style={styles.footerStatLabel}>{t('summary.footerStatReceiptNo')}</Text>
       </View>
     </View>
   );
@@ -623,6 +626,7 @@ function buildParsedData(
 }
 
 export default function ProcessReceiptScreen() {
+  const { t } = useTranslation();
   const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, swipeDone: swipeDoneParam } = useLocalSearchParams<{
     uri?: string;
     uris?: string;
@@ -879,7 +883,7 @@ export default function ProcessReceiptScreen() {
     try {
       setLoading(true);
       isHydratingRef.current = true;
-      setLoadingMessage("Įkeliami duomenys...");
+      setLoadingMessage(t('receiptProcess.loading'));
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${id}`, {
         timeoutMs: TIMEOUT_STANDARD_MS,
       });
@@ -931,8 +935,8 @@ export default function ProcessReceiptScreen() {
         router.replace("/(tabs)/receipts");
         setTimeout(() => {
           Alert.alert(
-            "Kvito duomenys sugadinti",
-            "Šio kvito duomenys nebeprieinami. Pabandyk įkelti kvitą iš naujo.",
+            t('receiptProcess.savedFailTitle'),
+            t('receiptProcess.savedFail'),
           );
         }, 100);
         return;
@@ -940,7 +944,7 @@ export default function ProcessReceiptScreen() {
 
       setHeader({
         chainName:
-          parsed.header.chainName ?? receipt.chainName ?? "Neatpažinta",
+          parsed.header.chainName ?? receipt.chainName ?? t('receiptProcess.fallbackChain'),
         chainId: parsed.header.chainId ?? null,
         storeCode: parsed.header.storeCode ?? "",
         storeAddress: parsed.header.storeAddress ?? "",
@@ -1019,9 +1023,7 @@ export default function ProcessReceiptScreen() {
         // to silently retry — surface an error badge and let the
         // user know the image is missing.
         setUploadStatus("error");
-        setUploadErr(
-          "Paveikslėlis nebuvo įkeltas. Pakartotinai apdoroti kvitą reikėtų iš Analizės skirtuko.",
-        );
+        setUploadErr(t('receiptProcess.imageMissing'));
       }
       // Image URL and comparison are independent of the receipt data already
       // loaded above — fire both in the background so the loading spinner
@@ -1377,7 +1379,7 @@ export default function ProcessReceiptScreen() {
         useProfileStore.getState().invalidate();
         router.replace("/(tabs)/receipts");
         setTimeout(() => {
-          Alert.alert("Kvitas jau įkeltas", "Šis kvitas jau buvo įkeltas.");
+          Alert.alert(t('receiptProcess.duplicateTitle'), t('receiptProcess.duplicateBody'));
         }, 100);
         return;
       }
@@ -1399,7 +1401,7 @@ export default function ProcessReceiptScreen() {
     } catch (e: any) {
       console.warn("Receipt POST failed:", e);
       setPostStatus("error");
-      setPostErr(e?.message || "Nepavyko išsaugoti kvito");
+      setPostErr(e?.message || t('receiptProcess.errorSave'));
       hasPostedRef.current = false;
     }
   };
@@ -1436,7 +1438,7 @@ export default function ProcessReceiptScreen() {
       });
       if (!urlRes.ok) throw new Error(`upload-url HTTP ${urlRes.status}`);
       const { uploadUrl, filePath } = await urlRes.json();
-      if (!uploadUrl || !filePath) throw new Error("upload-url atsakyme trūksta laukų");
+      if (!uploadUrl || !filePath) throw new Error(t('receiptProcess.errorUploadUrlFields'));
 
       // Local-file blob load is NOT a network call; fetch(imageUri)
       // on a file:// URI is synchronous-ish. No timeout needed.
@@ -1465,7 +1467,7 @@ export default function ProcessReceiptScreen() {
     } catch (e: any) {
       console.warn("MinIO upload failed:", e);
       setUploadStatus("error");
-      setUploadErr(e?.message || "Nepavyko įkelti nuotraukos");
+      setUploadErr(e?.message || t('receiptProcess.errorUploadPhoto'));
     }
   };
 
@@ -1530,7 +1532,7 @@ export default function ProcessReceiptScreen() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch (e: any) {
       console.warn("Issue report failed:", e?.message ?? e);
-      Alert.alert("Nepavyko išsiųsti", "Bandykite dar kartą vėliau.");
+      Alert.alert(t('receiptProcess.errorSendTitle'), t('receiptProcess.errorSendBody'));
     }
   };
 
@@ -1543,8 +1545,8 @@ export default function ProcessReceiptScreen() {
     const line = products[lineIdx];
     if (!line?.storeProductId) {
       Alert.alert(
-        "Produktas neatpažintas",
-        "Nuotraukos galima pridėti tik prie atpažintų produktų.",
+        t('receiptProcess.errorProductUnmatched'),
+        t('receiptProcess.errorProductUnmatchedBody'),
       );
       return;
     }
@@ -1553,8 +1555,8 @@ export default function ProcessReceiptScreen() {
       const perm = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!perm.granted) {
         Alert.alert(
-          "Nėra prieigos",
-          "Leiskite prieigą prie galerijos, kad pridėtumėte nuotrauką.",
+          t('receiptProcess.errorPermissionTitle'),
+          t('receiptProcess.errorPermissionBody'),
         );
         return;
       }
@@ -1611,7 +1613,7 @@ export default function ProcessReceiptScreen() {
       });
     } catch (e: any) {
       console.warn("Photo upload failed:", e?.message ?? e);
-      Alert.alert("Nuotraukos įkėlimas nepavyko", "Bandykite dar kartą.");
+      Alert.alert(t('receiptProcess.errorPhotoUploadTitle'), t('receiptProcess.errorPhotoUploadBody'));
     }
   };
 
@@ -1721,14 +1723,10 @@ export default function ProcessReceiptScreen() {
     | "store_unrecognized";
 
   const USER_FACING_BAIL_MSG: Record<BailReason, string> = {
-    ocr_no_text:
-      "Nepavyko nuskaityti kvito teksto. Pabandyk įkelti geresnę nuotrauką arba kitą kvitą.",
-    ocr_error:
-      "Įvyko klaida skaitant kvitą. Pabandyk dar kartą arba įkelk kitą kvitą.",
-    chain_unrecognized:
-      "Parduotuvės tinklas nebuvo atpažintas. Pabandyk įkelti geresnę nuotrauką arba kitą kvitą.",
-    store_unrecognized:
-      "Parduotuvė nebuvo atpažinta. Pabandyk įkelti geresnę nuotrauką arba kitą kvitą.",
+    ocr_no_text: t('receiptProcess.errorOcrUnreadable'),
+    ocr_error: t('receiptProcess.errorOcrParse'),
+    chain_unrecognized: t('receiptProcess.errorChain'),
+    store_unrecognized: t('receiptProcess.errorStore'),
   };
 
   interface BailContext {
@@ -1777,7 +1775,7 @@ export default function ProcessReceiptScreen() {
   const processReceipt = async (imageUris: string[]) => {
     try {
       setLoading(true);
-      setLoadingMessage("Nuskaitomi ir atpažįstami duomenys");
+      setLoadingMessage(t('receiptProcess.loadingScan'));
 
       interface LineWithFrame {
         text: string;
@@ -1936,7 +1934,7 @@ export default function ProcessReceiptScreen() {
         return;
       }
 
-      setLoadingMessage("Nuskaitomi ir atpažįstami duomenys");
+      setLoadingMessage(t('receiptProcess.loadingScan'));
 
       // Note on setLoading placement: we intentionally hold the main
       // loading overlay up through the ENTIRE applyXxxResult call.
@@ -2759,7 +2757,7 @@ export default function ProcessReceiptScreen() {
 
   const applyGenericResult = (lines: string[]) => {
     setHeader({
-      chainName: "Neatpažinta",
+      chainName: t('receiptProcess.fallbackChain'),
       chainId: null,
       storeCode: "",
       storeAddress: "",
@@ -2907,12 +2905,12 @@ export default function ProcessReceiptScreen() {
 
   usePreventRemove(isProcessing, ({ data }) => {
     Alert.alert(
-      "Kvitas dar apdorojamas",
-      "Jei išeisite dabar, apdorojimas tęsis fone, bet galite matyti nepilną rezultatą.",
+      t('receiptProcess.leaveProcessingTitle'),
+      t('receiptProcess.leaveProcessingBody'),
       [
-        { text: "Palaukti", style: "cancel", onPress: () => {} },
+        { text: t('receiptProcess.leaveWait'), style: "cancel", onPress: () => {} },
         {
-          text: "Išeiti",
+          text: t('receiptProcess.leaveAction'),
           style: "destructive",
           onPress: () => navigation.dispatch(data.action),
         },
@@ -2932,7 +2930,7 @@ export default function ProcessReceiptScreen() {
         {matchProgress && matchProgress.total > 0 && (
           <View style={{ marginTop: 12, alignItems: "center", gap: 8 }}>
             <Text style={{ color: colors.textMuted, fontSize: 13 }}>
-              {matchProgress.done} / {matchProgress.total} prekių atpažinta
+              {t('receiptProcess.matchProgress', { done: matchProgress.done, total: matchProgress.total })}
             </Text>
             <View
               style={{
@@ -2958,11 +2956,11 @@ export default function ProcessReceiptScreen() {
   }
 
   const processingStep = postStatus === "pending"
-    ? "Siunčiami kvito duomenys…"
+    ? t('receiptProcess.loadingSending')
     : uploadStatus === "pending"
-    ? "Siunčiama nuotrauka…"
+    ? t('receiptProcess.loadingPhoto')
     : comparisonStatus === "pending"
-    ? "Skaičiuojamas palyginimas…"
+    ? t('receiptProcess.loadingComparison')
     : null;
 
   return (
@@ -2973,7 +2971,7 @@ export default function ProcessReceiptScreen() {
             if (isPreviewMode) {
               return (
                 <Text style={styles.navTitle} numberOfLines={1}>
-                  Kvito peržiūra (neišsaugoma)
+                  {t('receiptProcess.titlePreview')}
                 </Text>
               );
             }
@@ -2983,11 +2981,9 @@ export default function ProcessReceiptScreen() {
               (header?.chainName && header?.storeName
                 ? `${header.chainName} · ${header.storeName}`
                 : header?.storeName || header?.chainName) ||
-              "Kvito analizė";
+              t('receiptProcess.title');
             const addr = header?.storeAddressMatched || header?.storeAddress || null;
-            const dateLabel = footer?.date
-              ? new Date(footer.date).toLocaleDateString("lt-LT")
-              : null;
+            const dateLabel = footer?.date ? formatDate(footer.date) : null;
             const subtitle = [addr, dateLabel].filter(Boolean).join(" · ");
             return (
               <View style={styles.navHeaderWrap}>
@@ -3047,7 +3043,7 @@ export default function ProcessReceiptScreen() {
                 ? `${header.chainName} · ${header.storeName}`
                 : header?.storeName || header?.chainName) ||
               comparison?.currentChain.storeName ||
-              "Neatpažinta parduotuvė",
+              t('receiptProcess.unknownStore'),
             shopAddress:
               header?.storeAddressMatched ||
               header?.storeAddress ||
@@ -3085,11 +3081,11 @@ export default function ProcessReceiptScreen() {
             }}
           >
             <View style={{ flex: 1 }}>
-              <Text style={styles.swipeEntryCta}>Pagerink kainų palyginimą</Text>
+              <Text style={styles.swipeEntryCta}>{t('receiptProcess.swipeEntryCta')}</Text>
               <Text style={styles.swipeEntryCount}>
                 {swipeQueueFetched && swipeQueueCount > 0
-                  ? `${swipeQueueCount} kortelių · tikslesniam atpažinimui`
-                  : `Tikslesniam atpažinimui`}
+                  ? t('receiptProcess.swipeEntryCount', { count: swipeQueueCount })
+                  : t('receiptProcess.swipeEntryShort')}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={22} color={colors.onPrimary} />
@@ -3136,7 +3132,7 @@ export default function ProcessReceiptScreen() {
             {products.length === 0 ? (
               <View style={styles.emptyProducts}>
                 <Ionicons name="alert-circle-outline" size={32} color={colors.border} />
-                <Text style={styles.emptyText}>Prekės neatpažintos</Text>
+                <Text style={styles.emptyText}>{t('receiptProcess.productsEmpty')}</Text>
               </View>
             ) : (
               products.map((product, index) => {
@@ -3283,7 +3279,7 @@ export default function ProcessReceiptScreen() {
                               });
                               scheduleManualRematch(index, text);
                             }}
-                            placeholder="Įveskite produkto pavadinimą"
+                            placeholder={t('receiptProcess.namePlaceholder')}
                             placeholderTextColor={colors.textMuted}
                           />
                           {rematchLoadingByIndex[index] && (
@@ -3350,7 +3346,7 @@ export default function ProcessReceiptScreen() {
             <View style={styles.sectionCard}>
               <View style={styles.sectionHeader}>
                 <Ionicons name="document-text-outline" size={20} color={colors.primary} />
-                <Text style={styles.sectionTitle}>Kvito duomenys</Text>
+                <Text style={styles.sectionTitle}>{t('summary.footerTitle')}</Text>
               </View>
               <FooterStatGrid footer={footer} comparison={comparison} styles={styles} />
             </View>
@@ -3426,7 +3422,7 @@ export default function ProcessReceiptScreen() {
                         }}
                       >
                         <Ionicons name="camera-outline" size={20} color={colors.textPrimary} />
-                        <Text style={styles.sheetItemText}>Pridėti nuotrauką</Text>
+                        <Text style={styles.sheetItemText}>{t('receiptProcess.addPhoto')}</Text>
                       </TouchableOpacity>
                     )}
                     <TouchableOpacity
@@ -3445,7 +3441,7 @@ export default function ProcessReceiptScreen() {
                       style={[styles.sheetItem, styles.sheetCancel]}
                       onPress={() => setMenuOpenForIndex(null)}
                     >
-                      <Text style={styles.sheetCancelText}>Atšaukti</Text>
+                      <Text style={styles.sheetCancelText}>{t('common.cancel')}</Text>
                     </TouchableOpacity>
                   </>
                 );
@@ -3496,7 +3492,7 @@ export default function ProcessReceiptScreen() {
                 style={[styles.issueModalBtn, styles.issueModalBtnSecondary]}
                 onPress={() => setIssueModalForIndex(null)}
               >
-                <Text style={styles.issueModalBtnTextSecondary}>Atšaukti</Text>
+                <Text style={styles.issueModalBtnTextSecondary}>{t('common.cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
@@ -3511,7 +3507,7 @@ export default function ProcessReceiptScreen() {
                   setIssueModalForIndex(null);
                 }}
               >
-                <Text style={styles.issueModalBtnTextPrimary}>Siųsti</Text>
+                <Text style={styles.issueModalBtnTextPrimary}>{t('receiptProcess.send')}</Text>
               </TouchableOpacity>
             </View>
           </Pressable>

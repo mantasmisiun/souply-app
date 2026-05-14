@@ -8,6 +8,8 @@ import { API_BASE_URL } from '../../config/api';
 import Svg, { Line, Circle, Polygon, Text as SvgText } from 'react-native-svg';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
+import { useTranslation } from 'react-i18next';
+import { formatDate, formatEuro } from '../../utils/formatCurrency';
 
 type Styles = ReturnType<typeof makeStyles>;
 
@@ -100,7 +102,7 @@ function filterByRange(data: PricePoint[], key: RangeKey): PricePoint[] {
 }
 
 const shortDate = (d: string) =>
-    new Date(d).toLocaleDateString('lt-LT', { month: 'short', day: 'numeric' });
+    formatDate(d, { month: 'short', day: 'numeric' });
 
 /**
  * Dual-series price chart. Regular price line in muted gray, promo price
@@ -558,7 +560,7 @@ function MiniPriceChart({
                                 },
                             ]}
                         >
-                            €{rawPrice.toFixed(2)}
+                            {formatEuro(rawPrice)}
                         </Text>
                         <Text
                             style={[
@@ -570,7 +572,7 @@ function MiniPriceChart({
                                 },
                             ]}
                         >
-                            €{rawPromo.toFixed(2)}
+                            {formatEuro(rawPromo)}
                         </Text>
                     </>
                 ) : (
@@ -584,7 +586,7 @@ function MiniPriceChart({
                             },
                         ]}
                     >
-                        €{rawPrice.toFixed(2)}
+                        {formatEuro(rawPrice)}
                     </Text>
                 )}
             </View>
@@ -601,6 +603,7 @@ function ModalChart({
     colors: AppTheme;
     styles: ReturnType<typeof makeStyles>;
 }) {
+    const { t } = useTranslation();
     const [rangeKey, setRangeKey] = useState<RangeKey>('all');
     const [crosshairIndex, setCrosshairIndex] = useState<number | null>(null);
     const crosshairTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -632,12 +635,12 @@ function ModalChart({
     const displayIndex = crosshairIndex ?? (data.length > 0 ? data.length - 1 : null);
     const displayPt = displayIndex !== null ? data[displayIndex] : null;
 
-    const RANGE_LABELS: Record<RangeKey, string> = { '1M': '1M', '3M': '3M', '6M': '6M', 'all': 'Viskas' };
+    const RANGE_LABELS: Record<RangeKey, string> = { '1M': '1M', '3M': '3M', '6M': '6M', 'all': t('product.rangeAll') };
 
     if (data.length === 0) {
         return (
             <View style={styles.chartModalEmpty}>
-                <Text style={styles.chartModalEmptyText}>Nėra duomenų pasirinktam laikotarpiui</Text>
+                <Text style={styles.chartModalEmptyText}>{t('product.noDataForPeriod')}</Text>
             </View>
         );
     }
@@ -651,15 +654,15 @@ function ModalChart({
                         {displayPt.promoPrice !== null && displayPt.promoPrice !== undefined ? (
                             <>
                                 <Text style={styles.chartDisplayPromo}>
-                                    €{Number(displayPt.promoPrice).toFixed(2)}
+                                    {formatEuro(Number(displayPt.promoPrice))}
                                 </Text>
                                 <Text style={styles.chartDisplayStrike}>
-                                    €{Number(displayPt.price).toFixed(2)}
+                                    {formatEuro(Number(displayPt.price))}
                                 </Text>
                             </>
                         ) : (
                             <Text style={styles.chartDisplayPrice}>
-                                €{Number(displayPt.price).toFixed(2)}
+                                {formatEuro(Number(displayPt.price))}
                             </Text>
                         )}
                     </View>
@@ -706,11 +709,11 @@ function ModalChart({
                 <View style={styles.chartModalLegend}>
                     <View style={styles.chartModalLegendItem}>
                         <View style={[styles.chartModalLegendDot, { backgroundColor: colors.textSecondary }]} />
-                        <Text style={styles.chartModalLegendLabel}>Įprasta</Text>
+                        <Text style={styles.chartModalLegendLabel}>{t('product.regularPrice')}</Text>
                     </View>
                     <View style={styles.chartModalLegendItem}>
                         <View style={[styles.chartModalLegendDot, { backgroundColor: colors.primary }]} />
-                        <Text style={styles.chartModalLegendLabel}>Akcija</Text>
+                        <Text style={styles.chartModalLegendLabel}>{t('product.promoPrice')}</Text>
                     </View>
                 </View>
             </View>
@@ -720,6 +723,7 @@ function ModalChart({
 
 export default function ProductDetailScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { id } = useLocalSearchParams<{ id: string }>();
     const [product, setProduct] = useState<Product | null>(null);
@@ -976,8 +980,8 @@ export default function ProductDetailScreen() {
                         <Ionicons name="storefront-outline" size={18} color={colors.textPrimary} />
                         <Text style={styles.dropdownText} numberOfLines={1}>
                             {selectedStoreId
-                                ? stores.find(s => s.id === selectedStoreId)?.name || 'Parduotuvė'
-                                : 'Visos parduotuvės'}
+                                ? stores.find(s => s.id === selectedStoreId)?.name || t('product.fallbackStore')
+                                : t('product.allStores')}
                         </Text>
                         <Ionicons name={showStorePicker ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
                     </TouchableOpacity>
@@ -988,7 +992,7 @@ export default function ProductDetailScreen() {
                                 <Ionicons name="search" size={16} color={colors.textMuted} />
                                 <TextInput
                                     style={styles.searchTextInput}
-                                    placeholder="Ieškoti parduotuvės..."
+                                    placeholder={t('product.searchStorePlaceholder')}
                                     placeholderTextColor={colors.textMuted}
                                     value={storeSearch}
                                     onChangeText={setStoreSearch}
@@ -1005,7 +1009,7 @@ export default function ProductDetailScreen() {
                                 onPress={() => { setSelectedStoreId(null); setShowStorePicker(false); }}
                             >
                                 <Text style={[styles.storeOptionText, !selectedStoreId && styles.storeOptionTextActive]}>
-                                    Visos parduotuvės
+                                    {t('product.allStores')}
                                 </Text>
                             </TouchableOpacity>
                             <ScrollView style={styles.storeList} nestedScrollEnabled={true}>
@@ -1030,7 +1034,7 @@ export default function ProductDetailScreen() {
                 {filteredStoreProducts.length === 0 ? (
                     <View style={styles.emptyContainer}>
                         <Ionicons name="alert-circle-outline" size={40} color={colors.border} />
-                        <Text style={styles.emptyText}>Šioje parduotuvių tinkle produktas nepasiekiamas</Text>
+                        <Text style={styles.emptyText}>{t('product.notAvailable')}</Text>
                     </View>
                 ) : (
                     filteredStoreProducts.map(sp => {
@@ -1062,11 +1066,11 @@ export default function ProductDetailScreen() {
                                                     styles.spPrice,
                                                     latestPrice.promoPrice != null && styles.spPriceStrike,
                                                 ]}>
-                                                    €{Number(latestPrice.price).toFixed(2)}
+                                                    {formatEuro(Number(latestPrice.price))}
                                                 </Text>
                                                 {latestPrice.promoPrice && (
                                                     <Text style={styles.spPromoPrice}>
-                                                        €{Number(latestPrice.promoPrice).toFixed(2)}
+                                                        {formatEuro(Number(latestPrice.promoPrice))}
                                                     </Text>
                                                 )}
                                             </View>
@@ -1107,7 +1111,7 @@ export default function ProductDetailScreen() {
                         <Text style={styles.chartModalTitle} numberOfLines={2}>
                             {chartModalSp?.storeProductName}
                         </Text>
-                        <Text style={styles.chartModalSub}>Kainų istorija</Text>
+                        <Text style={styles.chartModalSub}>{t('product.priceHistory')}</Text>
                         {chartModalSp && (() => {
                             const prices = getPricesForSp(chartModalSp.id);
                             const allData = preparePriceData(prices);
@@ -1115,7 +1119,7 @@ export default function ProductDetailScreen() {
                                 return (
                                     <View style={styles.chartModalEmpty}>
                                         <Ionicons name="analytics-outline" size={28} color={colors.border} />
-                                        <Text style={styles.chartModalEmptyText}>Kainų istorija dar nesukaupta</Text>
+                                        <Text style={styles.chartModalEmptyText}>{t('product.priceHistoryEmpty')}</Text>
                                     </View>
                                 );
                             }

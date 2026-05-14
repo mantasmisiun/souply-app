@@ -2,12 +2,14 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, 
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-handler/ReanimatedSwipeable';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { SkeletonBox } from '../../components/SkeletonBox';
+import { formatDate } from '../../utils/formatCurrency';
 
 interface StoreChain {
     id: number;
@@ -44,6 +46,7 @@ function ShoppingListCard({ item, onDelete, onComplete, onPress, styles, colors 
     styles: Styles;
     colors: AppTheme;
 }) {
+    const { t } = useTranslation();
     const swipeableRef = useRef<SwipeableMethods>(null);
     const progress = item.itemCount > 0 ? item.checkedCount / item.itemCount : 0;
 
@@ -67,7 +70,7 @@ function ShoppingListCard({ item, onDelete, onComplete, onPress, styles, colors 
     const rightActions = () => (
         <View style={styles.deleteAction}>
             <Ionicons name="trash-outline" size={24} color={colors.textInverse} />
-            <Text style={styles.actionText}>Ištrinti</Text>
+            <Text style={styles.actionText}>{t('shoppingListTab.delete')}</Text>
         </View>
     );
 
@@ -76,7 +79,7 @@ function ShoppingListCard({ item, onDelete, onComplete, onPress, styles, colors 
         return (
             <View style={styles.completeAction}>
                 <Ionicons name="checkmark-done-outline" size={24} color={colors.textInverse} />
-                <Text style={styles.actionText}>Užbaigti</Text>
+                <Text style={styles.actionText}>{t('shoppingListTab.complete')}</Text>
             </View>
         );
     };
@@ -112,7 +115,7 @@ function ShoppingListCard({ item, onDelete, onComplete, onPress, styles, colors 
                 <View style={styles.cardContent}>
                     <Text style={styles.storeName}>{item.address}</Text>
                     <Text style={styles.date}>
-                        {new Date(item.createdAt).toLocaleDateString('lt-LT')}
+                        {formatDate(item.createdAt)}
                     </Text>
                     {item.status === 'active' && item.itemCount > 0 && (
                         <View style={styles.progressRow}>
@@ -137,6 +140,7 @@ function ShoppingListCard({ item, onDelete, onComplete, onPress, styles, colors 
 
 export default function ShoppingListScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [lists, setLists] = useState<ShoppingList[]>([]);
     const [loading, setLoading] = useState(true);
@@ -242,7 +246,7 @@ export default function ShoppingListScreen() {
             const storesRes = await fetch(`${API_BASE_URL}/api/stores/chain/${chainId}`);
             const stores: Store[] = await storesRes.json();
             if (!Array.isArray(stores) || stores.length === 0) {
-                Alert.alert('Klaida', 'Šiai parduotuvei nėra pasirinkimų');
+                Alert.alert(t('shoppingListTab.errors.generic'), t('shoppingListTab.errors.noStoreChoices'));
                 return;
             }
             const storeId = stores[0].id;
@@ -258,7 +262,7 @@ export default function ShoppingListScreen() {
             setChainPickerOpen(false);
             router.push(`/shopping-list/${data.id}` as any);
         } catch {
-            Alert.alert('Klaida', 'Nepavyko sukurti sąrašo');
+            Alert.alert(t('shoppingListTab.errors.generic'), t('shoppingListTab.errors.createList'));
         } finally {
             setCreatingChainId(null);
         }
@@ -282,7 +286,7 @@ export default function ShoppingListScreen() {
                     : l
             ));
         } catch {
-            Alert.alert('Klaida', 'Nepavyko užbaigti sąrašo');
+            Alert.alert(t('shoppingListTab.errors.generic'), t('shoppingListTab.errors.completeList'));
         }
     };
 
@@ -318,7 +322,7 @@ export default function ShoppingListScreen() {
                     >
                         <Ionicons name="arrow-undo" size={14} color={colors.onPrimary} />
                         <Text style={styles.undoToastText}>
-                            Ištrinta. Atšaukti?
+                            {t('shoppingListTab.deletedUndo')}
                         </Text>
                     </TouchableOpacity>
                 )}
@@ -338,7 +342,7 @@ export default function ShoppingListScreen() {
                         <>
                             {activeLists.length > 0 && (
                                 <>
-                                    <Text style={styles.sectionTitle}>Aktyvūs</Text>
+                                    <Text style={styles.sectionTitle}>{t('shoppingListTab.sectionActive')}</Text>
                                     {activeLists.map(item => (
                                         <ShoppingListCard
                                             key={item.id}
@@ -354,7 +358,7 @@ export default function ShoppingListScreen() {
                             )}
                             {completedLists.length > 0 && (
                                 <>
-                                    <Text style={styles.sectionTitle}>Užbaigti</Text>
+                                    <Text style={styles.sectionTitle}>{t('shoppingListTab.sectionCompleted')}</Text>
                                     {completedLists.map(item => (
                                         <ShoppingListCard
                                             key={item.id}
@@ -371,10 +375,10 @@ export default function ShoppingListScreen() {
                             {lists.length === 0 && (
                                 <View style={styles.centered}>
                                     <Ionicons name="list-outline" size={56} color={colors.textMuted} />
-                                    <Text style={styles.emptyText}>Pirkinių sąrašų nėra</Text>
-                                    <Text style={styles.emptySubText}>Sudėkite produktus į krepšelį, palyginkite kainas ir sukurkite sąrašą</Text>
+                                    <Text style={styles.emptyText}>{t('shoppingListTab.empty')}</Text>
+                                    <Text style={styles.emptySubText}>{t('shoppingListTab.emptyBody')}</Text>
                                     <TouchableOpacity style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/basket' as any)}>
-                                        <Text style={styles.emptyButtonText}>Eiti į krepšelį</Text>
+                                        <Text style={styles.emptyButtonText}>{t('shoppingListTab.emptyCta')}</Text>
                                     </TouchableOpacity>
                                 </View>
                             )}
@@ -405,12 +409,12 @@ export default function ShoppingListScreen() {
                         <View style={styles.fabMenu}>
                             <TouchableOpacity style={styles.fabMenuItem} onPress={openScanner}>
                                 <Ionicons name="qr-code-outline" size={22} color={colors.textPrimary} />
-                                <Text style={styles.fabMenuItemText}>Skenuoti QR</Text>
+                                <Text style={styles.fabMenuItemText}>{t('shoppingListTab.fabScanQr')}</Text>
                             </TouchableOpacity>
                             <View style={styles.fabMenuDivider} />
                             <TouchableOpacity style={styles.fabMenuItem} onPress={openChainPicker}>
                                 <Ionicons name="add-circle-outline" size={22} color={colors.textPrimary} />
-                                <Text style={styles.fabMenuItemText}>Kurti</Text>
+                                <Text style={styles.fabMenuItemText}>{t('shoppingListTab.fabCreate')}</Text>
                             </TouchableOpacity>
                         </View>
                     </TouchableOpacity>
@@ -428,11 +432,11 @@ export default function ShoppingListScreen() {
                         onPress={() => !creatingChainId && setChainPickerOpen(false)}
                     >
                         <View style={styles.chainPickerSheet}>
-                            <Text style={styles.sheetTitle}>Pasirinkite parduotuvę</Text>
+                            <Text style={styles.sheetTitle}>{t('shoppingListTab.pickStoreTitle')}</Text>
                             {chainsLoading ? (
                                 <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
                             ) : (chains ?? []).length === 0 ? (
-                                <Text style={styles.sheetEmpty}>Nerasta parduotuvių</Text>
+                                <Text style={styles.sheetEmpty}>{t('shoppingListTab.noStoresFound')}</Text>
                             ) : (
                                 (chains ?? []).map(chain => (
                                     <TouchableOpacity

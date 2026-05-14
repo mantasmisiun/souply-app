@@ -18,6 +18,7 @@ import { getUserId } from '../../../config/user';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
 import { Toast, type ToastHandle } from '../../../components/Toast';
+import { useTranslation } from 'react-i18next';
 import { ScalePressable } from '../../../components/ScalePressable';
 
 interface Category {
@@ -55,6 +56,7 @@ const BrowseProductCard = memo(({
     styles: ReturnType<typeof makeStyles>;
     colors: AppTheme;
 }) => {
+    const { t } = useTranslation();
     const fmt = (v: number) => v >= 1000 ? `${v / 1000} kg` : `${v} g`;
     const amountText = item.minAmount != null && item.maxAmount != null
         ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
@@ -75,7 +77,7 @@ const BrowseProductCard = memo(({
                     disabled={isAdding}
                     onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); onAdd(item); }}
                 >
-                    <Text style={styles.addButtonText}>Į krepšelį</Text>
+                    <Text style={styles.addButtonText}>{t('browse.addToBasket')}</Text>
                 </ScalePressable>
             ) : (
                 <View style={styles.quantityControl}>
@@ -94,6 +96,7 @@ const BrowseProductCard = memo(({
 
 export default function CategoryScreen() {
     const colors = useTheme();
+    const { t, i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
     const navigation = useNavigation();
@@ -173,7 +176,10 @@ export default function CategoryScreen() {
             }
         };
         fetchData();
-    }, [categoryId, mode, prefReady]);
+        // i18n.language dep: subcategories carry localised names; re-fetch
+        // when the language changes (or on first hydration) so the chips
+        // don't lag behind the rest of the UI.
+    }, [categoryId, mode, prefReady, i18n.language]);
     useEffect(() => {
         const loadBasketQuantities = async () => {
             if (!draftBasketId) {
@@ -340,7 +346,7 @@ export default function CategoryScreen() {
 
     const commitAdd = async (productId: number, quantity: number) => {
         const target = await resolveBasketForAdd();
-        if (target.kind === 'cancel') return { success: false, message: 'Atšaukta' };
+        if (target.kind === 'cancel') return { success: false, message: t('browse.cancelled') };
 
         if (target.kind === 'revert') {
             // Reusing a compared basket: flip it back to draft first.
@@ -499,7 +505,7 @@ export default function CategoryScreen() {
             if (result.success) {
                 setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
                 setBasketItemCount(prev => prev + 1);
-                toastRef.current?.show('Pridėta į krepšelį');
+                toastRef.current?.show(t('browse.addedToast'));
             }
         }).finally(() => {
             setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
@@ -611,7 +617,7 @@ export default function CategoryScreen() {
             <View style={{ flex: 1 }}>
             <View style={styles.container}>
                 <View style={styles.modeToggleRow}>
-                    <Text style={styles.modeToggleLabel}>Apjungti alternatyvas</Text>
+                    <Text style={styles.modeToggleLabel}>{t('browse.combineAlternatives')}</Text>
                     <TouchableOpacity
                         onPress={() => setHelpOpen(true)}
                         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -639,7 +645,7 @@ export default function CategoryScreen() {
                             onPress={() => selectL3(null)}
                         >
                             <Text style={[styles.bubbleText, selectedL3 === null && styles.bubbleTextActive]}>
-                                Visi produktai
+                                {t('browse.allProducts')}
                             </Text>
                         </TouchableOpacity>
                         {l3Categories.map(cat => (
@@ -680,7 +686,7 @@ export default function CategoryScreen() {
                             numColumns={2}
                             columnWrapperStyle={styles.row}
                             ListEmptyComponent={
-                                <Text style={styles.emptyText}>Ši kategorija neturi produktų</Text>
+                                <Text style={styles.emptyText}>{t('browse.noProducts')}</Text>
                             }
                             renderItem={renderItem}
                         />
@@ -696,14 +702,14 @@ export default function CategoryScreen() {
                     <View style={styles.basketBarLeft}>
                         <Ionicons name="cart" size={20} color={colors.primary} />
                         <Text style={styles.basketBarCount}>
-                            {basketItemCount} {pluralizeItems(basketItemCount)}
+                            {t('items.count', { count: basketItemCount })}
                         </Text>
                     </View>
                     <ScalePressable
                         style={styles.basketBarButton}
                         onPress={() => router.push(`/basket/${draftBasketId}` as any)}
                     >
-                        <Text style={styles.basketBarButtonText}>Krepšelis</Text>
+                        <Text style={styles.basketBarButtonText}>{t('browse.basketShortcut')}</Text>
                         <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
                     </ScalePressable>
                 </Animated.View>
@@ -717,10 +723,9 @@ export default function CategoryScreen() {
             >
                 <View style={styles.helpBackdrop}>
                     <View style={styles.helpCard}>
-                        <Text style={styles.helpTitle}>Keisti režimą?</Text>
+                        <Text style={styles.helpTitle}>{t('browse.modeSwitch.title')}</Text>
                         <Text style={styles.helpBody}>
-                            Jūsų krepšelyje yra prekių. Keičiant režimą jos bus taip
-                            pat pakeistos.
+                            {t('browse.modeSwitch.body')}
                         </Text>
                         <View style={styles.helpActionsRow}>
                             <TouchableOpacity
@@ -728,7 +733,7 @@ export default function CategoryScreen() {
                                 onPress={cancelModeSwitch}
                                 disabled={converting}
                             >
-                                <Text style={styles.helpCloseSecondaryText}>Atšaukti</Text>
+                                <Text style={styles.helpCloseSecondaryText}>{t('common.cancel')}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.helpClose}
@@ -738,7 +743,7 @@ export default function CategoryScreen() {
                                 {converting ? (
                                     <ActivityIndicator size="small" color={colors.onPrimary} />
                                 ) : (
-                                    <Text style={styles.helpCloseText}>Keisti</Text>
+                                    <Text style={styles.helpCloseText}>{t('browse.modeSwitch.confirm')}</Text>
                                 )}
                             </TouchableOpacity>
                         </View>
@@ -762,25 +767,20 @@ export default function CategoryScreen() {
                         onPress={() => {}}
                     >
                         <Text style={styles.helpTitle}>
-                            Apjungti alternatyvas{'  '}
-                            <Text style={styles.helpBadge}>(EKSPERIMENTINĖ)</Text>
+                            {t('browse.modeSwitch.helpTitle')}{'  '}
+                            <Text style={styles.helpBadge}>{t('browse.modeSwitch.experimentalBadge')}</Text>
                         </Text>
                         <Text style={styles.helpBody}>
-                            Įjungus šį režimą, panašūs produktai iš skirtingų gamintojų ar
-                            variantų rodomi kaip viena prekė. Skaičiuojant krepšelio kainą,
-                            kiekvienoje parduotuvėje bus parenkamas pigiausias variantas iš
-                            tos grupės.
+                            {t('browse.modeSwitch.explainer')}
                         </Text>
                         <Text style={styles.helpBody}>
-                            Pavyzdžiui, „Pienas 2,5%“ ir „Pienas 3,5%“ yra laikomi
-                            alternatyvomis — krepšelyje matysite vieną eilutę, o lygindami
-                            parduotuves matysite pigiausio varianto kainą.
+                            {t('browse.modeSwitch.example')}
                         </Text>
                         <TouchableOpacity
                             style={styles.helpClose}
                             onPress={() => setHelpOpen(false)}
                         >
-                            <Text style={styles.helpCloseText}>Supratau</Text>
+                            <Text style={styles.helpCloseText}>{t('browse.modeSwitch.gotIt')}</Text>
                         </TouchableOpacity>
                     </TouchableOpacity>
                 </TouchableOpacity>
@@ -808,7 +808,7 @@ export default function CategoryScreen() {
                         if (result.success) {
                             setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
                             setBasketItemCount(prev => prev + 1);
-                            toastRef.current?.show('Pridėta į krepšelį');
+                            toastRef.current?.show(t('browse.addedToast'));
                         }
                     }
                 }}
@@ -816,12 +816,6 @@ export default function CategoryScreen() {
             <Toast ref={toastRef} />
         </>
     );
-}
-
-function pluralizeItems(n: number): string {
-    if (n % 10 === 1 && n % 100 !== 11) return 'prekė';
-    if (n % 10 >= 2 && n % 10 <= 9 && (n % 100 < 10 || n % 100 >= 20)) return 'prekės';
-    return 'prekių';
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({

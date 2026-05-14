@@ -2,12 +2,14 @@ import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, 
 import { useMemo, useRef, useState, useCallback } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { useBasketState } from '../../state/basketState';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { ScalePressable } from '../../components/ScalePressable';
 import { SkeletonBox } from '../../components/SkeletonBox';
+import { formatDate } from '../../utils/formatCurrency';
 
 interface Basket {
     id: number;
@@ -24,6 +26,7 @@ const PAGE_INCREMENT = 10;
 
 export default function BasketScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [baskets, setBaskets] = useState<Basket[]>([]);
     // `loading` = full-screen spinner on FIRST mount only.
@@ -73,14 +76,14 @@ export default function BasketScreen() {
             await fetchBaskets(true);
             router.push(`/basket/${data.id}`);
         } catch (error) {
-            Alert.alert('Klaida', 'Nepavyko sukurti krepšelio');
+            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.errorCreate'));
         }
     };
 
     const handleCreateBasket = async () => {
         const draft = baskets.find(b => b.status === 'draft');
         if (draft) {
-            Alert.alert('Dėmesio', 'Jau turite aktyvų krepšelį. Užbaikite jį prieš kurdami naują.');
+            Alert.alert(t('basketTab.warnTitle'), t('basketTab.warnActiveExists'));
             return;
         }
         await createBasket();
@@ -102,10 +105,10 @@ export default function BasketScreen() {
 
     const getStatusText = (status: string) => {
         switch (status) {
-            case 'draft': return 'Juodraštis';
-            case 'compared': return 'Palyginta';
-            case 'inProgress': return 'Vykdomas';
-            case 'completed': return 'Įvykdytas';
+            case 'draft': return t('basketTab.statusDraft');
+            case 'compared': return t('basketTab.statusCompared');
+            case 'inProgress': return t('basketTab.statusInProgress');
+            case 'completed': return t('basketTab.statusCompleted');
             default: return status;
         }
     };
@@ -132,7 +135,7 @@ export default function BasketScreen() {
             {refreshing && (
                 <View style={styles.refreshingBanner}>
                     <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={styles.refreshingText}>Įkeliama…</Text>
+                    <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
                 </View>
             )}
             <FlatList
@@ -150,10 +153,10 @@ export default function BasketScreen() {
                 ListEmptyComponent={
                     <View style={styles.centered}>
                         <Ionicons name="cart-outline" size={56} color={colors.textMuted} />
-                        <Text style={styles.emptyText}>Krepšelis tuščias</Text>
-                        <Text style={styles.emptySubText}>Pridėkite produktų ir palyginkite kainas parduotuvėse</Text>
+                        <Text style={styles.emptyText}>{t('basketTab.empty')}</Text>
+                        <Text style={styles.emptySubText}>{t('basketTab.emptyBody')}</Text>
                         <ScalePressable style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/browse' as any)}>
-                            <Text style={styles.emptyButtonText}>Naršyti produktus</Text>
+                            <Text style={styles.emptyButtonText}>{t('basketTab.emptyCta')}</Text>
                         </ScalePressable>
                     </View>
                 }
@@ -164,7 +167,7 @@ export default function BasketScreen() {
                             onPress={() => setVisibleCount(c => c + PAGE_INCREMENT)}
                         >
                             <Text style={styles.loadMoreText}>
-                                Rodyti daugiau ({baskets.length - visibleCount})
+                                {t('basketTab.loadMore', { count: baskets.length - visibleCount })}
                             </Text>
                         </TouchableOpacity>
                     ) : null
@@ -189,12 +192,12 @@ export default function BasketScreen() {
                                 <>
                                     <Text style={styles.cardTitle}>{item.name}</Text>
                                     <Text style={styles.cardDate}>
-                                        {new Date(item.updatedAt).toLocaleDateString('lt-LT')}
+                                        {formatDate(item.updatedAt)}
                                     </Text>
                                 </>
                             ) : (
                                 <Text style={styles.cardTitle}>
-                                    {new Date(item.updatedAt).toLocaleDateString('lt-LT')}
+                                    {formatDate(item.updatedAt)}
                                 </Text>
                             )}
                         </View>

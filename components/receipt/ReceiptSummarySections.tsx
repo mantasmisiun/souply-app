@@ -1,8 +1,10 @@
 import React, { useMemo, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { ReceiptViewModel } from '../../types/receipt-view';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { formatEuro } from '../../utils/formatCurrency';
 
 type Props = {
   vm: ReceiptViewModel;
@@ -31,13 +33,14 @@ const getStatusColor = (status: string, c: AppTheme) => {
 
 export default function ReceiptSummarySections({ vm, status }: Props) {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [expanded, setExpanded] = useState(false);
   return (
     <>
       <View style={styles.sectionCard}>
         <View style={styles.chainRow}>
-          <Text style={styles.chainBadge}>{vm.header.chainName || 'Neatpažinta'}</Text>
+          <Text style={styles.chainBadge}>{vm.header.chainName || t('summary.fallbackChain')}</Text>
           <Ionicons
             name="checkmark-circle"
             size={20}
@@ -55,7 +58,7 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
       <TouchableOpacity style={styles.productsHeader} onPress={() => setExpanded((v) => !v)}>
         <View style={styles.productsHeaderLeft}>
             <Ionicons name="cart-outline" size={20} color={colors.primary} />
-            <Text style={styles.sectionTitle}>Prekės ({vm.products.length})</Text>
+            <Text style={styles.sectionTitle}>{t('summary.productsTitle', { count: vm.products.length })}</Text>
         </View>
         <Ionicons
             name={expanded ? 'chevron-up' : 'chevron-down'}
@@ -87,11 +90,11 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
                     <View style={styles.productPriceCol}>
                     {product.promoPrice !== null && product.promoPrice !== undefined ? (
                         <>
-                        <Text style={styles.productPriceStrike}>€{Number(product.price || 0).toFixed(2)}</Text>
-                        <Text style={styles.productPromoPrice}>€{Number(product.promoPrice).toFixed(2)}</Text>
+                        <Text style={styles.productPriceStrike}>{formatEuro(Number(product.price || 0))}</Text>
+                        <Text style={styles.productPromoPrice}>{formatEuro(Number(product.promoPrice))}</Text>
                         </>
                     ) : (
-                        <Text style={styles.productPrice}>€{Number(product.price || 0).toFixed(2)}</Text>
+                        <Text style={styles.productPrice}>{formatEuro(Number(product.price || 0))}</Text>
                     )}
                     </View>
 
@@ -108,7 +111,7 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
             {vm.products.length === 0 && (
                 <View style={styles.emptyProducts}>
                     <Ionicons name="alert-circle-outline" size={32} color={colors.border} />
-                    <Text style={styles.emptyText}>Prekės neatpažintos</Text>
+                    <Text style={styles.emptyText}>{t('summary.productsEmpty')}</Text>
                 </View>
                 )}
             </>
@@ -122,20 +125,20 @@ export default function ReceiptSummarySections({ vm, status }: Props) {
       )}
 
       <View style={styles.sectionCard}>
-        <Text style={styles.sectionTitle}>Kvito duomenys</Text>
+        <Text style={styles.sectionTitle}>{t('summary.footerTitle')}</Text>
         <View style={styles.footerContent}>
           <View style={styles.footerRow}>
-            <Text style={styles.footerLabel}>Suma:</Text>
+            <Text style={styles.footerLabel}>{t('summary.footerTotal')}</Text>
             <Text style={styles.footerValue}>
-              {typeof vm.footer.total === 'number' ? `€${vm.footer.total.toFixed(2)}` : '—'}
+              {typeof vm.footer.total === 'number' ? formatEuro(vm.footer.total) : '—'}
             </Text>
           </View>
           <View style={styles.footerRow}>
-            <Text style={styles.footerLabel}>Data:</Text>
+            <Text style={styles.footerLabel}>{t('summary.footerDate')}</Text>
             <Text style={styles.footerValue}>{formatDateTime(vm.footer.date, vm.footer.time)}</Text>
           </View>
           <View style={styles.footerRow}>
-            <Text style={styles.footerLabel}>Kvito Nr.:</Text>
+            <Text style={styles.footerLabel}>{t('summary.footerNo')}</Text>
             <Text style={styles.footerValue}>{vm.footer.receiptNo || '—'}</Text>
           </View>
         </View>

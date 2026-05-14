@@ -13,6 +13,8 @@ import ReanimatedSwipeable, { SwipeableMethods } from 'react-native-gesture-hand
 import { ProductImage } from '../../components/ProductImage';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import * as Haptics from 'expo-haptics';
+import { formatEuro } from '../../utils/formatCurrency';
+import { useTranslation } from 'react-i18next';
 
 interface ShoppingList {
     id: number;
@@ -61,6 +63,7 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
     styles: ReturnType<typeof makeStyles>;
     colors: AppTheme;
 }) {
+    const { t } = useTranslation();
     const swipeableRef = useRef<SwipeableMethods>(null);
 
     // Matches the list-tab pattern: swipe-left = immediate delete with a
@@ -76,7 +79,7 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
     const rightActions = () => (
         <View style={styles.deleteAction}>
             <Ionicons name="trash-outline" size={24} color={colors.onPrimary} />
-            <Text style={styles.actionText}>Ištrinti</Text>
+            <Text style={styles.actionText}>{t('shoppingListDetail.delete')}</Text>
         </View>
     );
 
@@ -115,21 +118,21 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
                             {item.productName}
                         </Text>
                         <Text style={styles.itemQuantity}>
-                            Kiekis: {item.storeProductId
+                            {t('shoppingListDetail.quantityLabel')}: {item.storeProductId
                                 ? `${item.quantity} ${item.unit}`
                                 : item.isWeighable
                                     ? (item.quantity < 10 ? `${item.quantity} kg` : `${item.quantity} g`)
-                                    : `${item.quantity} vnt.`}
+                                    : `${item.quantity} ${t('shoppingListDetail.unitPieces')}`}
                         </Text>
                         {item.requiresCoupon && item.couponLabel && !item.isChecked && (
                             <View style={styles.couponBadge}>
-                                <Text style={styles.couponBadgeText}>{item.couponLabel} kuponas</Text>
+                                <Text style={styles.couponBadgeText}>{t('shoppingListDetail.couponBadge', { name: item.couponLabel })}</Text>
                             </View>
                         )}
                     </View>
                     {item.price && (
                         <Text style={[styles.itemPrice, item.isChecked && styles.itemPriceChecked]}>
-                            €{item.price.toFixed(2)}
+                            {formatEuro(item.price)}
                         </Text>
                     )}
                 </TouchableOpacity>
@@ -139,6 +142,7 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
 }
 export default function ShoppingListScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
     const [list, setList] = useState<ShoppingList | null>(null);
@@ -418,12 +422,12 @@ export default function ShoppingListScreen() {
             if (already === '1') return;
             await AsyncStorage.setItem(key, '1');
             Alert.alert(
-                'Pirkiniai surinkti!',
-                'Ar norite pažymėti sąrašą kaip užbaigtą?',
+                t('shoppingListDetail.completeTitle'),
+                t('shoppingListDetail.completeConfirm'),
                 [
-                    { text: 'Ne', style: 'cancel' },
+                    { text: t('shoppingListDetail.completeNo'), style: 'cancel' },
                     {
-                        text: 'Taip',
+                        text: t('shoppingListDetail.completeYes'),
                         onPress: async () => {
                             await fetch(`${API_BASE_URL}/api/shopping-lists/${id}/status`, {
                                 method: 'PATCH',
@@ -493,7 +497,7 @@ export default function ShoppingListScreen() {
     const addProduct = async (productId: number | null, name: string, quantity: number, isWeighable: boolean, storeProductId: number | null = null, imageUrl: string | null = null) => {
         const existing = items.find(i => i.productId === productId && productId !== null);
         if (existing) {
-            Alert.alert('Jau sąraše', `"${name}" jau yra pirkinių sąraše`);
+            Alert.alert(t('shoppingListDetail.alreadyInList'), t('shoppingListDetail.alreadyInListBody', { name }));
             return;
         }
         try {
@@ -540,7 +544,7 @@ export default function ShoppingListScreen() {
             setSearchQuery('');
             setSearchResults([]);
         } catch (error) {
-            Alert.alert('Klaida', 'Nepavyko pridėti produkto');
+            Alert.alert(t('shoppingListDetail.errorGeneric'), t('shoppingListDetail.errorAdd'));
         }
     };
 
@@ -560,7 +564,7 @@ export default function ShoppingListScreen() {
                 router.push(`/shopping-list/${newId}` as any);
             }, 100);
         } catch (error) {
-            Alert.alert('Klaida', 'Nepavyko nukopijuoti sąrašo');
+            Alert.alert(t('shoppingListDetail.errorGeneric'), t('shoppingListDetail.errorCopy'));
         }
     };
 
@@ -583,7 +587,7 @@ export default function ShoppingListScreen() {
         <GestureHandlerRootView style={{ flex: 1 }}>
             <>
                 <Stack.Screen options={{
-                    title: list?.storeAddress || 'Pirkinių sąrašas',
+                    title: list?.storeAddress || t('shoppingListDetail.fallbackTitle'),
                     headerStyle: { backgroundColor: colors.cardBackground },
                     headerShadowVisible: false,
                     headerLeft: () => list?.chainLogoUrl ? (
@@ -614,7 +618,7 @@ export default function ShoppingListScreen() {
                         >
                             <Ionicons name="arrow-undo" size={14} color={colors.onPrimary} />
                             <Text style={styles.undoToastText}>
-                                Ištrinta. Atšaukti?
+                                {t('shoppingListDetail.deletedUndo')}
                             </Text>
                         </TouchableOpacity>
                     )}
@@ -622,7 +626,7 @@ export default function ShoppingListScreen() {
                         <View style={styles.progressBar}>
                             <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
                         </View>
-                        <Text style={styles.progressText}>{checkedCount} iš {totalCount}</Text>
+                        <Text style={styles.progressText}>{t('shoppingListDetail.progress', { checked: checkedCount, total: totalCount })}</Text>
                     </View>
 
                     <ScrollView contentContainerStyle={styles.list}>
@@ -633,8 +637,8 @@ export default function ShoppingListScreen() {
                                     <TextInput
                                         style={styles.quickAddInput}
                                         value={quickAddText}
-                                        onChangeText={(t) => { setQuickAddText(t); handleSearch(t); }}
-                                        placeholder="Ieškoti arba pridėti prekę…"
+                                        onChangeText={(text) => { setQuickAddText(text); handleSearch(text); }}
+                                        placeholder={t('shoppingListDetail.searchPlaceholder')}
                                         placeholderTextColor={colors.textMuted}
                                         onSubmitEditing={() => {
                                             const name = quickAddText.trim();
@@ -666,7 +670,7 @@ export default function ShoppingListScreen() {
                                                     style={styles.searchResultItem}
                                                     onPress={() => {
                                                         if (alreadyInList) {
-                                                            Alert.alert('Jau sąraše', `"${product.storeProductName}" jau yra pirkinių sąraše`);
+                                                            Alert.alert(t('shoppingListDetail.alreadyInList'), t('shoppingListDetail.alreadyInListBody', { name: product.storeProductName }));
                                                             return;
                                                         }
                                                         promptQuantity(product.productId, product.storeProductName, product.isWeighable === 1 || product.isWeighable === true, product.id, product.imageUrl);
@@ -691,7 +695,7 @@ export default function ShoppingListScreen() {
                                             }}
                                         >
                                             <Ionicons name="add-circle-outline" size={18} color={colors.primary} />
-                                            <Text style={styles.customItemText}>Pridėti "{quickAddText}" kaip naują prekę</Text>
+                                            <Text style={styles.customItemText}>{t('shoppingListDetail.addCustom', { name: quickAddText })}</Text>
                                         </TouchableOpacity>
                                     </View>
                                 )}
@@ -736,7 +740,7 @@ export default function ShoppingListScreen() {
                         )}
                         {items.length === 0 && (
                             <View style={styles.centered}>
-                                <Text style={styles.emptyText}>Sąrašas tuščias</Text>
+                                <Text style={styles.emptyText}>{t('shoppingListDetail.empty')}</Text>
                             </View>
                         )}
                     </ScrollView>
@@ -756,7 +760,7 @@ export default function ShoppingListScreen() {
                                     }}
                                 >
                                     <Ionicons name="copy-outline" size={18} color={colors.textPrimary} />
-                                    <Text style={styles.menuItemText}>Nukopijuoti sąrašą</Text>
+                                    <Text style={styles.menuItemText}>{t('shoppingListDetail.copyList')}</Text>
                                 </TouchableOpacity>
                             </View>
                         </TouchableOpacity>
@@ -810,14 +814,14 @@ export default function ShoppingListScreen() {
                                     style={styles.modalCancel}
                                     onPress={() => setQuantityModal(null)}
                                 >
-                                    <Text style={styles.modalCancelText}>Atšaukti</Text>
+                                    <Text style={styles.modalCancelText}>{t('common.cancel')}</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
                                     style={styles.modalConfirm}
                                     onPress={() => {
                                         const qty = parseFloat(quantityInput);
                                         if (!qty || qty <= 0) {
-                                            Alert.alert('Klaida', 'Įveskite teisingą kiekį');
+                                            Alert.alert(t('shoppingListDetail.errorGeneric'), t('shoppingListDetail.errorAmount'));
                                             return;
                                         }
                                         const modal = quantityModal;
@@ -825,7 +829,7 @@ export default function ShoppingListScreen() {
                                         addProduct(modal.productId, modal.name, qty, modalIsWeighable, modal.storeProductId, modal.imageUrl);
                                     }}
                                 >
-                                    <Text style={styles.modalConfirmText}>Pridėti</Text>
+                                    <Text style={styles.modalConfirmText}>{t('shoppingListDetail.modalAdd')}</Text>
                                 </TouchableOpacity>
                             </View>
                         </View>
@@ -846,12 +850,12 @@ export default function ShoppingListScreen() {
                         <View style={styles.couponModalContainer}>
                             <View style={styles.couponBadgeLarge}>
                                 <Text style={styles.couponBadgeLargeText}>
-                                    {couponQueue[0]} kuponas
+                                    {t('shoppingListDetail.couponBadge', { name: couponQueue[0] })}
                                 </Text>
                             </View>
-                            <Text style={styles.couponModalTitle}>Prisiminkite kuponą!</Text>
+                            <Text style={styles.couponModalTitle}>{t('shoppingListDetail.couponTitle')}</Text>
                             <Text style={styles.couponModalBody}>
-                                Suaktyvinkite {couponQueue[0]} kuponą <Text style={{ fontWeight: '700' }}>Lidl Plus</Text> programėlėje prieš atsiskaitydami.
+                                {t('shoppingListDetail.couponBodyPart1', { name: couponQueue[0] })} <Text style={{ fontWeight: '700' }}>{t('shoppingListDetail.couponApp')}</Text> {t('shoppingListDetail.couponBodyPart2')}
                             </Text>
                             <TouchableOpacity
                                 style={styles.couponDontShowRow}
@@ -860,13 +864,13 @@ export default function ShoppingListScreen() {
                                 <View style={[styles.checkbox, couponDontShow && styles.checkboxChecked]}>
                                     {couponDontShow && <Ionicons name="checkmark" size={14} color="#fff" />}
                                 </View>
-                                <Text style={styles.couponDontShowLabel}>Daugiau nerodyti</Text>
+                                <Text style={styles.couponDontShowLabel}>{t('shoppingListDetail.couponNeverShow')}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={styles.couponModalBtn}
                                 onPress={dismissCoupon}
                             >
-                                <Text style={styles.couponModalBtnText}>Supratau</Text>
+                                <Text style={styles.couponModalBtnText}>{t('shoppingListDetail.couponGotIt')}</Text>
                             </TouchableOpacity>
                         </View>
                     </View>
@@ -890,32 +894,32 @@ export default function ShoppingListScreen() {
                                     <View style={styles.shareCheckCircle}>
                                         <Ionicons name="checkmark" size={40} color={colors.onPrimary} />
                                     </View>
-                                    <Text style={styles.shareTitle}>Sąrašas prijungtas</Text>
-                                    <Text style={styles.shareSubtitle}>Kitas vartotojas prisijungė prie sąrašo.</Text>
+                                    <Text style={styles.shareTitle}>{t('shoppingListDetail.shareConnected')}</Text>
+                                    <Text style={styles.shareSubtitle}>{t('shoppingListDetail.shareConnectedSub')}</Text>
                                     <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
-                                        <Text style={styles.shareCloseBtnText}>Uždaryti</Text>
+                                        <Text style={styles.shareCloseBtnText}>{t('shoppingListDetail.shareClose')}</Text>
                                     </TouchableOpacity>
                                 </>
                             ) : shareStatus === 'expired' ? (
                                 <>
-                                    <Text style={styles.shareTitle}>QR kodas nebegalioja</Text>
-                                    <Text style={styles.shareSubtitle}>Sukurkite naują, jei norite pasidalinti.</Text>
+                                    <Text style={styles.shareTitle}>{t('shoppingListDetail.shareExpiredTitle')}</Text>
+                                    <Text style={styles.shareSubtitle}>{t('shoppingListDetail.shareCreateForShare')}</Text>
                                     <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
-                                        <Text style={styles.shareCloseBtnText}>Uždaryti</Text>
+                                        <Text style={styles.shareCloseBtnText}>{t('shoppingListDetail.shareClose')}</Text>
                                     </TouchableOpacity>
                                 </>
                             ) : shareStatus === 'error' ? (
                                 <>
-                                    <Text style={styles.shareTitle}>Klaida</Text>
-                                    <Text style={styles.shareSubtitle}>Nepavyko sukurti QR kodo.</Text>
+                                    <Text style={styles.shareTitle}>{t('shoppingListDetail.shareErrorTitle')}</Text>
+                                    <Text style={styles.shareSubtitle}>{t('shoppingListDetail.shareErrorBody')}</Text>
                                     <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
-                                        <Text style={styles.shareCloseBtnText}>Uždaryti</Text>
+                                        <Text style={styles.shareCloseBtnText}>{t('shoppingListDetail.shareClose')}</Text>
                                     </TouchableOpacity>
                                 </>
                             ) : (
                                 <>
-                                    <Text style={styles.shareTitle}>Dalintis sąrašu</Text>
-                                    <Text style={styles.shareSubtitle}>Tegul kitas vartotojas nuskaito QR kodą.</Text>
+                                    <Text style={styles.shareTitle}>{t('shoppingListDetail.shareTitle')}</Text>
+                                    <Text style={styles.shareSubtitle}>{t('shoppingListDetail.shareSubtitle')}</Text>
                                     <View style={styles.shareQrWrap}>
                                         {shareLoading || !shareToken ? (
                                             <ActivityIndicator size="large" color={colors.primary} />
@@ -924,7 +928,7 @@ export default function ShoppingListScreen() {
                                         )}
                                     </View>
                                     <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
-                                        <Text style={styles.shareCloseBtnText}>Uždaryti</Text>
+                                        <Text style={styles.shareCloseBtnText}>{t('shoppingListDetail.shareClose')}</Text>
                                     </TouchableOpacity>
                                 </>
                             )}

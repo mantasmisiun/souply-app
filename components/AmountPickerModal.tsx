@@ -1,6 +1,7 @@
 import { View, Text, TouchableOpacity, StyleSheet, Modal, TextInput } from 'react-native';
 import { useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../constants/theme';
 
 interface AmountPickerModalProps {
@@ -28,6 +29,7 @@ export default function AmountPickerModal({
     onCancel,
 }: AmountPickerModalProps) {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
 
     const isKg = unit === 'kg' || unit === 'g';
@@ -63,13 +65,13 @@ export default function AmountPickerModal({
                     <Text style={styles.title}>{productName}</Text>
                     <Text style={styles.subtitle}>
                         {isWeighable
-                            ? 'Parduodama pagal svorį'
-                            : `Pakuotės: ${minAmount === maxAmount
-                                ? `${minAmount} ${unit}`
-                                : `${minAmount} – ${maxAmount} ${unit}`}`}
+                            ? t('amountPicker.weighable')
+                            : (minAmount === maxAmount
+                                ? t('amountPicker.packages', { count: 1, value: minAmount, unit })
+                                : t('amountPicker.packages', { count: 2, min: minAmount, max: maxAmount, unit }))}
                     </Text>
 
-                    <Text style={styles.label}>Kiek jums reikia?</Text>
+                    <Text style={styles.label}>{t('amountPicker.label')}</Text>
 
                     <View style={styles.pickerRow}>
                         <TouchableOpacity style={styles.roundButton} onPress={decrease}>
@@ -93,14 +95,12 @@ export default function AmountPickerModal({
                     </View>
 
                     <Text style={styles.hint}>
-                        {isWeighable
-                            ? 'Kiekis bus pasvertas parduotuvėje'
-                            : 'Kiekis bus suapvalintas pagal pakuotės dydį'}
+                        {isWeighable ? t('amountPicker.hintWeighable') : t('amountPicker.hintPackages')}
                     </Text>
 
                     <View style={styles.actions}>
                         <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
-                            <Text style={styles.cancelText}>Atšaukti</Text>
+                            <Text style={styles.cancelText}>{t('common.cancel')}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={styles.confirmButton}
@@ -111,7 +111,7 @@ export default function AmountPickerModal({
                                 }
                             }}
                         >
-                            <Text style={styles.confirmText}>Pridėti</Text>
+                            <Text style={styles.confirmText}>{t('amountPicker.add')}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>

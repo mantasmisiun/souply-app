@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { TouchableOpacity, View, Text, StyleSheet } from 'react-native';
 import Svg, { Line, Path as SvgPath } from 'react-native-svg';
+import { formatEuro } from '../utils/formatCurrency';
 
 export interface BarSlice {
     label: string;
@@ -155,7 +156,7 @@ export function BarChart({ data, color, height = 140 }: Props) {
                                             textAlign: 'center',
                                         }}
                                     >
-                                        {bar.total.toFixed(2)}€
+                                        {formatEuro(bar.total)}
                                     </Text>
                                 );
                             })}

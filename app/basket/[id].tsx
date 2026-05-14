@@ -13,7 +13,9 @@ import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import LocationPromptModal from '../../components/LocationPromptModal';
 import * as Haptics from 'expo-haptics';
 import { ScalePressable } from '../../components/ScalePressable';
+import { formatDate } from '../../utils/formatCurrency';
 import { loadCachedCoords, persistCoords, tryGpsCoords, type UserCoords, VILNIUS_FALLBACK } from '../../utils/location';
+import { useTranslation } from 'react-i18next';
 
 interface BasketItem {
     id: number;
@@ -36,6 +38,7 @@ interface Basket {
 
 export default function BasketDetailScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
     const { id } = useLocalSearchParams();
@@ -219,7 +222,7 @@ export default function BasketDetailScreen() {
             }
         } catch {
             setItems(previous);
-            Alert.alert('Klaida', 'Nepavyko pašalinti produkto');
+            Alert.alert(t('basketTab.errorGeneric'), t('basketDetail.errorRemove'));
         }
     };
 
@@ -250,7 +253,7 @@ export default function BasketDetailScreen() {
             await persistCoords(coords);
             router.push(`/basket/results/${id}`);
         } catch {
-            setCalcError('Nepavyko apskaičiuoti. Patikrinkite interneto ryšį ir bandykite dar kartą.');
+            setCalcError(t('basketDetail.errorCalculate'));
         } finally {
             setCalcing(false);
         }
@@ -285,12 +288,12 @@ export default function BasketDetailScreen() {
 
     const handleRevertToDraft = async () => {
         Alert.alert(
-            'Grąžinti į juodraštį',
-            'Ar tikrai norite grąžinti krepšelį į juodraštį?',
+            t('basketDetail.revertTitle'),
+            t('basketDetail.revertBody'),
             [
-                { text: 'Atšaukti', style: 'cancel' },
+                { text: t('common.cancel'), style: 'cancel' },
                 {
-                    text: 'Grąžinti',
+                    text: t('basketDetail.revertConfirm'),
                     onPress: async () => {
                         try {
                             await fetch(`${API_BASE_URL}/api/baskets/${id}/status`, {
@@ -302,7 +305,7 @@ export default function BasketDetailScreen() {
                             setDraftBasketId(Number(id));
                             fetchBasket();
                         } catch {
-                            Alert.alert('Klaida', 'Nepavyko grąžinti krepšelio');
+                            Alert.alert(t('basketTab.errorGeneric'), t('basketDetail.errorRevert'));
                         }
                     }
                 }
@@ -329,7 +332,7 @@ export default function BasketDetailScreen() {
         </View>
     );
 
-    const fallbackTitle = new Date(basket?.createdAt || '').toLocaleDateString('lt-LT');
+    const fallbackTitle = formatDate(basket?.createdAt || '');
     const titleText = basketName || fallbackTitle;
 
     return (
@@ -383,8 +386,8 @@ export default function BasketDetailScreen() {
                     contentContainerStyle={styles.list}
                     ListEmptyComponent={
                         <View style={styles.centered}>
-                            <Text style={styles.emptyText}>Krepšelis tuščias</Text>
-                            <Text style={styles.emptySubText}>Pridėkite produktų naršydami katalogą</Text>
+                            <Text style={styles.emptyText}>{t('basketDetail.empty')}</Text>
+                            <Text style={styles.emptySubText}>{t('basketDetail.emptyBody')}</Text>
                         </View>
                     }
                     renderItem={({ item }) => {
@@ -479,7 +482,7 @@ export default function BasketDetailScreen() {
                             >
                                 <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
                                 <Text style={styles.showResultsText}>
-                                    {basket?.status === 'inProgress' ? 'Peržiūrėti' : 'Peržiūrėti (užbaigta)'}
+                                    {basket?.status === 'inProgress' ? t('basketDetail.viewInProgress') : t('basketDetail.viewCompleted')}
                                 </Text>
                             </ScalePressable>
                         ) : basket?.status === 'compared' ? (
@@ -488,7 +491,7 @@ export default function BasketDetailScreen() {
                                     style={[styles.showResultsButton, styles.secondaryButton]}
                                     onPress={handleRevertToDraft}
                                 >
-                                    <Text style={styles.secondaryButtonText}>Juodraštis</Text>
+                                    <Text style={styles.secondaryButtonText}>{t('basketDetail.draft')}</Text>
                                 </ScalePressable>
                                 <ScalePressable
                                     style={styles.showResultsButton}
@@ -508,12 +511,12 @@ export default function BasketDetailScreen() {
                                 {calcing ? (
                                     <>
                                         <ActivityIndicator size="small" color={colors.onPrimary} />
-                                        <Text style={styles.showResultsText}>Skaičiuojama…</Text>
+                                        <Text style={styles.showResultsText}>{t('basketDetail.calculating')}</Text>
                                     </>
                                 ) : (
                                     <>
                                         <Ionicons name="calculator-outline" size={20} color={colors.onPrimary} />
-                                        <Text style={styles.showResultsText}>Apskaičiuoti</Text>
+                                        <Text style={styles.showResultsText}>{t('basketDetail.calculate')}</Text>
                                     </>
                                 )}
                             </ScalePressable>
@@ -540,9 +543,9 @@ export default function BasketDetailScreen() {
                 <View style={styles.calcModalBackdrop}>
                     <View style={styles.calcModalCard}>
                         <ActivityIndicator size="large" color={colors.primary} />
-                        <Text style={styles.calcModalTitle}>Skaičiuojama…</Text>
+                        <Text style={styles.calcModalTitle}>{t('basketDetail.calculating')}</Text>
                         <Text style={styles.calcModalSub}>
-                            Lyginame kainas 10 artimiausių parduotuvių
+                            {t('basketDetail.calcModalSub')}
                         </Text>
                     </View>
                 </View>

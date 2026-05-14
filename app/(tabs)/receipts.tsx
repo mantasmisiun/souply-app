@@ -3,6 +3,8 @@ import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import { useFocusEffect, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 import { useReceiptQueueStore, type QueueItem } from "../../state/receiptQueueStore";
 import {
     ActivityIndicator,
@@ -29,6 +31,7 @@ import {
     loadReceiptDraft,
 } from "../../state/receiptDraft";
 import { fetchWithTimeout, TIMEOUT_HEAVY_MS, TIMEOUT_STANDARD_MS } from "../../utils/fetchWithTimeout";
+import { formatDate } from "../../utils/formatCurrency";
 import { useNetworkStatus } from "../../state/networkStatus";
 import { useLevelStore } from "../../state/levelStore";
 
@@ -41,6 +44,7 @@ interface Receipt {
   receiptNo: string | null;
   chainName: string | null;
   chainLogoUrl: string | null;
+  chainMiniLogoUrl: string | null;
   storeName: string | null;
   storeAddress: string | null;
   mandatorySwipesRequired: number;
@@ -72,25 +76,53 @@ const safeJsonParse = (raw: string): any => {
   }
 };
 
-function queueStatusLabel(item: QueueItem): string {
-  if (item.status === "pending") return "Laukiama";
-  if (item.status === "awaiting_network") return "Laukiama tinklo";
-  if (item.status === "error") {
-    return item.error === "Kvitas jau įkeltas" ? "Jau įkeltas" : "Nepavyko";
+/**
+ * The `StoreChain.name` column stores the legal entity (e.g. "UAB RIMI
+ * LIETUVA"), which is what scrapers see in receipt headers. Map it to
+ * the short brand name for UI surfaces like the filter chips. Falls
+ * through to the raw name when an entry isn't in the table — safer
+ * than silently dropping unfamiliar chains.
+ */
+const CHAIN_BRAND_NAMES: Array<{ match: RegExp; brand: string }> = [
+  { match: /maxima/i, brand: 'Maxima' },
+  { match: /rimi/i,   brand: 'Rimi'   },
+  { match: /\biki\b/i, brand: 'Iki'   },
+  { match: /norf/i,   brand: 'Norfa'  },
+  { match: /lidl/i,   brand: 'Lidl'   },
+];
+function chainBrandName(chainName: string): string {
+  for (const entry of CHAIN_BRAND_NAMES) {
+    if (entry.match.test(chainName)) return entry.brand;
   }
-  // processing
+  return chainName;
+}
+
+function queueStatusLabel(item: QueueItem, t: TFunction): string {
+  if (item.status === "pending") return t('receipts.status.pending');
+  if (item.status === "awaiting_network") return t('receipts.status.awaitingNetworkBadge');
+  if (item.status === "error") {
+    // Duplicate-detection key compares against the RAW backend error
+    // string (Lithuanian-only on the server) — that comparison stays
+    // hardcoded. The UI label is translated.
+    return item.error === "Kvitas jau įkeltas"
+      ? t('receipts.status.duplicate')
+      : t('receipts.status.failed');
+  }
+  // processing — `progress` is a server-emitted Lithuanian phase string
+  // ("Nuskaitoma", "Atpažįstama X/Y", "Išsaugoma..."). We pattern-match
+  // its prefix to pick a translated badge label.
   const p = item.progress;
-  if (!p) return "Apdorojama";
-  if (p.startsWith("Nusk")) return "Nuskaitoma";
-  if (p.startsWith("Atpažįst") || p.includes("/")) return "Atpažįstama";
-  if (p.startsWith("Išsaug")) return "Įkeliama";
-  return "Apdorojama";
+  if (!p) return t('receipts.status.processing');
+  if (p.startsWith("Nusk")) return t('receipts.status.scanning');
+  if (p.startsWith("Atpažįst") || p.includes("/")) return t('receipts.status.recognising');
+  if (p.startsWith("Išsaug")) return t('receipts.status.saving');
+  return t('receipts.status.processing');
 }
 
 /** Title that appears as the queue card heading. Filename when known. */
-function queueCardTitle(item: QueueItem): string {
+function queueCardTitle(item: QueueItem, t: TFunction): string {
   if (item.name) return item.name;
-  return "Kvitas";
+  return t('receipts.status.defaultTitle');
 }
 
 /** Progress fraction 0..1 for the bottom bar. Returns null for indeterminate. */
@@ -111,6 +143,7 @@ const hasPendingSwipes = (item: Receipt) =>
 
 export default function ReceiptsScreen() {
   const colors = useTheme();
+  const { t } = useTranslation();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const checkCandidate = useLevelStore(s => s.checkCandidate);
   useFocusEffect(useCallback(() => { checkCandidate(); }, [checkCandidate]));
@@ -214,10 +247,7 @@ export default function ReceiptsScreen() {
     }
     if (hasPdf) setPdfConverting(false);
     if (entries.length === 0) {
-      Alert.alert(
-        "Įkėlimas nepavyko",
-        "Nepavyko paruošti nė vieno failo. Patikrinkite internetą ir bandykite vėl.",
-      );
+      Alert.alert(t('receipts.uploadFail.title'), t('receipts.uploadFail.body'));
       return;
     }
     addItems(entries);
@@ -302,18 +332,18 @@ export default function ReceiptsScreen() {
       if (!active) return;
       if (!draft) return;
       Alert.alert(
-        "Tęsti kvito analizę?",
-        "Anksčiau pradėtas kvito apdorojimas nebuvo užbaigtas. Ar tęsti?",
+        t('receipts.resume.title'),
+        t('receipts.resume.body'),
         [
           {
-            text: "Atšaukti",
+            text: t('common.cancel'),
             style: "cancel",
             onPress: () => {
               clearReceiptDraft().catch(() => {});
             },
           },
           {
-            text: "Tęsti",
+            text: t('common.continue'),
             onPress: () => {
               const params = new URLSearchParams();
               if (draft.imageUris.length > 1) {
@@ -347,16 +377,16 @@ export default function ReceiptsScreen() {
   };
 
   const getStatusText = (item: Receipt) => {
-    if (hasPendingSwipes(item)) return "Padėk atpažinti";
+    if (hasPendingSwipes(item)) return t('receipts.status.helpRecognise');
     switch (item.processingStatus) {
       case "completed":
-        return "Apdorotas";
+        return t('receipts.status.completed');
       case "processing":
-        return "Apdorojama";
+        return t('receipts.status.processing');
       case "failed":
-        return "Nepavyko";
+        return t('receipts.status.failed');
       default:
-        return "Laukiama";
+        return t('receipts.status.pending');
     }
   };
 
@@ -397,16 +427,26 @@ export default function ReceiptsScreen() {
   // Aggregate receipts by chainName, sort by count desc so the chains
   // the user actually shops at most appear first. Chains with zero
   // receipts (and the bucket for receipts whose chain couldn't be
-  // matched — chainName null) don't get their own chip.
+  // matched — chainName null) don't get their own chip. Keeps a logo
+  // URL per chip so we can render a mini brand mark instead of the
+  // raw legal entity name ("UAB RIMI LIETUVA" → Rimi logo).
   const chainFilters = useMemo(() => {
-    const counts = new Map<string, number>();
+    const acc = new Map<string, { name: string; logoUrl: string | null; count: number }>();
     for (const r of receipts) {
       if (!r.chainName) continue;
-      counts.set(r.chainName, (counts.get(r.chainName) ?? 0) + 1);
+      // Prefer the mini logo (square brand mark) for the chip — falls
+      // back to the full logo when a chain doesn't have a dedicated
+      // mini asset (Iki, Lidl ship the same image for both).
+      const logo = r.chainMiniLogoUrl ?? r.chainLogoUrl ?? null;
+      const existing = acc.get(r.chainName);
+      if (existing) {
+        existing.count += 1;
+        if (!existing.logoUrl && logo) existing.logoUrl = logo;
+      } else {
+        acc.set(r.chainName, { name: r.chainName, logoUrl: logo, count: 1 });
+      }
     }
-    return Array.from(counts.entries())
-      .sort((a, b) => b[1] - a[1])
-      .map(([name, count]) => ({ name, count }));
+    return Array.from(acc.values()).sort((a, b) => b.count - a.count);
   }, [receipts]);
 
   // Drop the selected filter if the underlying chain no longer has
@@ -431,10 +471,10 @@ export default function ReceiptsScreen() {
     const recent = filtered.filter((r) => recentIds.includes(r.id));
     const older = filtered.filter((r) => !recentIds.includes(r.id));
     if (recent.length > 0) {
-      out.push({ kind: "section", title: "Nauji", id: "sec-nauji" });
+      out.push({ kind: "section", title: t('receipts.sections.new'), id: "sec-nauji" });
       for (const r of recent) out.push({ kind: "receipt", data: r });
       if (older.length > 0) {
-        out.push({ kind: "section", title: "Anksčiau", id: "sec-anksciau" });
+        out.push({ kind: "section", title: t('receipts.sections.earlier'), id: "sec-anksciau" });
       }
     }
     for (const r of older) out.push({ kind: "receipt", data: r });
@@ -462,7 +502,7 @@ export default function ReceiptsScreen() {
   }
 
   const renderQueueCard = (item: QueueItem) => {
-    const statusLabel = queueStatusLabel(item);
+    const statusLabel = queueStatusLabel(item, t);
     const isDuplicate = item.error === "Kvitas jau įkeltas";
     const isError = item.status === "error";
     const isPending = item.status === "pending";
@@ -488,7 +528,7 @@ export default function ReceiptsScreen() {
 
     const subline = (() => {
       if (isError) return item.error && !isDuplicate ? item.error : null;
-      if (isAwaiting) return "Atnaujinsime, kai grįš internetas";
+      if (isAwaiting) return t('receipts.status.awaitingNetwork');
       if (isPending) return null;
       return item.progress ?? null;
     })();
@@ -509,7 +549,7 @@ export default function ReceiptsScreen() {
         <View style={{ flex: 1, minWidth: 0 }}>
           <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
             <Text style={styles.queueTitle} numberOfLines={1}>
-              {queueCardTitle(item)}
+              {queueCardTitle(item, t)}
             </Text>
             <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>
               <Text style={styles.statusText}>{statusLabel}</Text>
@@ -544,7 +584,7 @@ export default function ReceiptsScreen() {
 
   const renderReceiptCard = (item: Receipt) => {
     const shopHeadline =
-      item.storeName || item.chainName || "Neatpažinta parduotuvė";
+      item.storeName || item.chainName || t('receipts.status.unknownStore');
     const shopAddress = item.storeAddress || null;
     const parsedFooterDate = (() => {
       const pd = item.parsedData;
@@ -554,9 +594,7 @@ export default function ReceiptsScreen() {
       return typeof raw === "string" && raw.trim() ? raw : null;
     })();
     const dateSource = parsedFooterDate ?? item.receiptDate;
-    const dateLabel = dateSource
-      ? new Date(dateSource).toLocaleDateString("lt-LT")
-      : "—";
+    const dateLabel = dateSource ? formatDate(dateSource) : "—";
     return (
       <TouchableOpacity
         style={[styles.card, hasPendingSwipes(item) && styles.cardPending]}
@@ -630,7 +668,7 @@ export default function ReceiptsScreen() {
               onPress={() => setSelectedChain(null)}
             >
               <Text style={[styles.chipText, selectedChain === null && styles.chipTextActive]}>
-                Visi
+                {t('receipts.filterAll')}
               </Text>
             </TouchableOpacity>
             {chainFilters.map((f) => {
@@ -641,8 +679,15 @@ export default function ReceiptsScreen() {
                   style={[styles.chip, active && styles.chipActive]}
                   onPress={() => setSelectedChain(f.name)}
                 >
+                  {f.logoUrl && (
+                    <Image
+                      source={{ uri: f.logoUrl }}
+                      style={styles.chipLogo}
+                      resizeMode="contain"
+                    />
+                  )}
                   <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                    {f.name}
+                    {chainBrandName(f.name)}
                   </Text>
                 </TouchableOpacity>
               );
@@ -663,7 +708,7 @@ export default function ReceiptsScreen() {
             <PendingSwipesBanner
               pendingCount={pendingSwipesCount}
               disabled={bannerDisabled}
-              disabledHint={bannerDisabled ? "Laukiama interneto" : undefined}
+              disabledHint={bannerDisabled ? t('receipts.status.bannerDisabled') : undefined}
               onPress={onStartBanner}
             />
           ) : null
@@ -680,10 +725,10 @@ export default function ReceiptsScreen() {
           queueItems.length === 0 ? (
             <View style={styles.centered}>
               <Ionicons name="receipt-outline" size={56} color={colors.textMuted} />
-              <Text style={styles.emptyText}>Kvitų nėra</Text>
-              <Text style={styles.emptySubText}>Įkelkite pirkinių kvitą ir stebėkite savo išlaidas</Text>
+              <Text style={styles.emptyText}>{t('receipts.empty')}</Text>
+              <Text style={styles.emptySubText}>{t('receipts.emptyBody')}</Text>
               <TouchableOpacity style={styles.emptyButton} onPress={() => setUploadMenuOpen(true)}>
-                <Text style={styles.emptyButtonText}>Įkelti kvitą</Text>
+                <Text style={styles.emptyButtonText}>{t('receipts.uploadCta')}</Text>
               </TouchableOpacity>
             </View>
           ) : null
@@ -702,10 +747,7 @@ export default function ReceiptsScreen() {
         style={[styles.fab, !isOnline && { opacity: 0.4 }]}
         onPress={() => {
           if (!isOnline) {
-            Alert.alert(
-              "Nėra interneto ryšio",
-              "Kvitų įkėlimas neįmanomas be interneto. Prisijunk prie tinklo ir bandyk vėl.",
-            );
+            Alert.alert(t('receipts.offline.title'), t('receipts.offline.body'));
             return;
           }
           setUploadMenuOpen(true);
@@ -722,7 +764,7 @@ export default function ReceiptsScreen() {
         <View style={styles.menuBackdrop}>
           <View style={[styles.menuCard, { alignItems: "center", gap: 12 }]}>
             <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={styles.menuTitle}>PDF konvertuojamas į vaizdą</Text>
+            <Text style={styles.menuTitle}>{t('receipts.menu.pdfConverting')}</Text>
           </View>
         </View>
       </Modal>
@@ -735,16 +777,16 @@ export default function ReceiptsScreen() {
       >
         <Pressable style={styles.menuBackdrop} onPress={() => setUploadMenuOpen(false)}>
           <Pressable style={styles.menuCard} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.menuTitle}>Kvito įkėlimas</Text>
+            <Text style={styles.menuTitle}>{t('receipts.menu.uploadTitle')}</Text>
 
             <TouchableOpacity style={styles.menuRow} onPress={onPickCamera}>
               <Ionicons name="camera-outline" size={22} color={colors.primary} />
-              <Text style={styles.menuRowText}>Fotografuoti</Text>
+              <Text style={styles.menuRowText}>{t('receipts.menu.uploadCamera')}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.menuRow} onPress={onPickFile}>
               <Ionicons name="cloud-upload-outline" size={22} color={colors.primary} />
-              <Text style={styles.menuRowText}>Įkelti</Text>
+              <Text style={styles.menuRowText}>{t('receipts.menu.uploadAction')}</Text>
             </TouchableOpacity>
 
             {/* Preview-only mode is a parser-iteration tool, not a user
@@ -762,9 +804,9 @@ export default function ReceiptsScreen() {
                   color={previewOnly ? colors.primary : colors.textMuted}
                 />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.previewToggleText}>Peržiūra — neišsaugoti</Text>
+                  <Text style={styles.previewToggleText}>{t('receipts.menu.previewToggle')}</Text>
                   <Text style={styles.previewToggleHint}>
-                    OCR ir parserio išvestis rodoma, bet kvitas nesukuriamas duomenų bazėje.
+                    {t('receipts.menu.previewHint')}
                   </Text>
                 </View>
               </TouchableOpacity>
@@ -774,7 +816,7 @@ export default function ReceiptsScreen() {
               style={styles.menuCancel}
               onPress={() => setUploadMenuOpen(false)}
             >
-              <Text style={styles.menuCancelText}>Atšaukti</Text>
+              <Text style={styles.menuCancelText}>{t('common.cancel')}</Text>
             </TouchableOpacity>
           </Pressable>
         </Pressable>
@@ -804,6 +846,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     gap: 8,
   },
   chip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
     paddingHorizontal: 14,
     paddingVertical: 7,
     borderRadius: 20,
@@ -822,6 +867,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   chipTextActive: {
     color: c.onPrimary,
     fontWeight: "600",
+  },
+  chipLogo: {
+    width: 16,
+    height: 16,
   },
   card: {
     backgroundColor: c.cardBackground,

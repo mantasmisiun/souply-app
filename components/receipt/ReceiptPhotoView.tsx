@@ -10,6 +10,8 @@ import {
     View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
 
 /**
@@ -70,33 +72,33 @@ interface BandStyle {
     group: BandGroup;
 }
 
-const headerBandStyle = (kind: string | undefined, colors: AppTheme): BandStyle => {
+const headerBandStyle = (kind: string | undefined, colors: AppTheme, t: TFunction): BandStyle => {
     switch (kind) {
         case 'storeAddress':
         case 'storeName':
         case 'storeCode':
-            return { colour: colors.info, label: 'Parduotuvės adresas', group: 'address' };
+            return { colour: colors.info, label: t('receiptPhoto.bands.address'), group: 'address' };
         default:
             // Legacy header without kind — single block-bbox case.
-            return { colour: colors.info, label: 'Parduotuvės adresas', group: 'address' };
+            return { colour: colors.info, label: t('receiptPhoto.bands.address'), group: 'address' };
     }
 };
 
-const footerBandStyle = (kind: string | undefined, colors: AppTheme): BandStyle => {
+const footerBandStyle = (kind: string | undefined, colors: AppTheme, t: TFunction): BandStyle => {
     switch (kind) {
         case 'total':
-            return { colour: colors.warning, label: 'Suma', group: 'total' };
+            return { colour: colors.warning, label: t('receiptPhoto.bands.total'), group: 'total' };
         case 'date':
         case 'time':
         case 'dateTime':
-            return { colour: PALETTE_DATETIME, label: 'Data ir laikas', group: 'dateTime' };
+            return { colour: PALETTE_DATETIME, label: t('receiptPhoto.bands.dateTime'), group: 'dateTime' };
         case 'receiptNo':
-            return { colour: PALETTE_RECEIPT_NO, label: 'Kvito Nr.', group: 'receiptNo' };
+            return { colour: PALETTE_RECEIPT_NO, label: t('receiptPhoto.bands.receiptNo'), group: 'receiptNo' };
         default:
             // Legacy footer without kind — single block-bbox covering
             // total + date + receipt №. The generic "Suma" label /
             // orange colour matches the pre-Phase-6 behaviour.
-            return { colour: colors.warning, label: 'Suma', group: 'total' };
+            return { colour: colors.warning, label: t('receiptPhoto.bands.total'), group: 'total' };
     }
 };
 
@@ -120,6 +122,7 @@ export default function ReceiptPhotoView({
     footerRegions,
 }: Props) {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [explainerOpen, setExplainerOpen] = useState(false);
 
@@ -280,30 +283,30 @@ export default function ReceiptPhotoView({
     const legendItems = useMemo(() => {
         const groups = new Map<BandGroup | 'products', { colour: string; label: string; order: number }>();
         for (const r of headerRegions) {
-            const s = headerBandStyle(r.kind, colors);
+            const s = headerBandStyle(r.kind, colors, t);
             if (!groups.has(s.group)) {
                 groups.set(s.group, { colour: s.colour, label: s.label, order: 0 });
             }
         }
         if (productRegions.length > 0) {
-            groups.set('products', { colour: colors.success, label: 'Prekės', order: 1 });
+            groups.set('products', { colour: colors.success, label: t('receiptPhoto.bands.products'), order: 1 });
         }
         for (const r of footerRegions) {
-            const s = footerBandStyle(r.kind, colors);
+            const s = footerBandStyle(r.kind, colors, t);
             if (groups.has(s.group)) continue;
             const order = s.group === 'total' ? 2 : s.group === 'dateTime' ? 3 : 4;
             groups.set(s.group, { colour: s.colour, label: s.label, order });
         }
         return Array.from(groups.values()).sort((a, b) => a.order - b.order);
-    }, [headerRegions, productRegions.length, footerRegions, colors]);
+    }, [headerRegions, productRegions.length, footerRegions, colors, t]);
 
     if (!imageUri || !imageDims) {
         return (
             <View style={styles.card}>
                 <View style={styles.fallbackWrap}>
-                    <Text style={styles.fallbackTitle}>Kvito nuotrauka</Text>
+                    <Text style={styles.fallbackTitle}>{t('receiptPhoto.fallbackTitle')}</Text>
                     <Text style={styles.fallbackBody}>
-                        Šio kvito nuotrauka neprieinama.
+                        {t('receiptPhoto.fallbackBody')}
                     </Text>
                 </View>
             </View>
@@ -314,7 +317,7 @@ export default function ReceiptPhotoView({
         <View style={styles.card}>
             {/* Compact title row + (?) for the explainer modal. */}
             <View style={styles.titleRow}>
-                <Text style={styles.title}>Atpažinti duomenys</Text>
+                <Text style={styles.title}>{t('receiptPhoto.title')}</Text>
                 <TouchableOpacity
                     onPress={() => setExplainerOpen(true)}
                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -363,7 +366,7 @@ export default function ReceiptPhotoView({
                             cross into each other. */}
                         {layoutSection(headerRegions, true).map((rect, i) => {
                             if (!rect) return null;
-                            const s = headerBandStyle(headerRegions[i].kind, colors);
+                            const s = headerBandStyle(headerRegions[i].kind, colors, t);
                             return (
                                 <View
                                     key={`h-${i}`}
@@ -432,7 +435,7 @@ export default function ReceiptPhotoView({
                             Legacy block-bbox renders orange. */}
                         {layoutSection(footerRegions, true).map((rect, i) => {
                             if (!rect) return null;
-                            const s = footerBandStyle(footerRegions[i].kind, colors);
+                            const s = footerBandStyle(footerRegions[i].kind, colors, t);
                             return (
                                 <View
                                     key={`f-${i}`}
@@ -467,43 +470,37 @@ export default function ReceiptPhotoView({
                         style={styles.modalCard}
                         onPress={(e) => e.stopPropagation()}
                     >
-                        <Text style={styles.modalTitle}>Kokius duomenis Souply atpažįsta</Text>
-                        <Text style={styles.modalBody}>
-                            Souply pažymi kvite kiekvieną duomenų lauką spalvotu
-                            rėmeliu — taip matote tiksliai, kuriuos pikselius
-                            nuskaitėme ir kokia informacija renkama. Šie duomenys
-                            naudojami tik kainų palyginimui ir jūsų asmeninei
-                            pirkimų analizei.
-                        </Text>
+                        <Text style={styles.modalTitle}>{t('receiptPhoto.explainer.title')}</Text>
+                        <Text style={styles.modalBody}>{t('receiptPhoto.explainer.body')}</Text>
                         <View style={styles.modalLegendList}>
                             <ExplainerRow
                                 colour={colors.info}
-                                title="Parduotuvės adresas"
-                                body="Parduotuvės adresas — pagal jį susiejama su mūsų parduotuvių katalogu."
+                                title={t('receiptPhoto.bands.address')}
+                                body={t('receiptPhoto.explainer.addressBody')}
                                 styles={styles}
                             />
                             <ExplainerRow
                                 colour={colors.success}
-                                title="Prekės"
-                                body="Kiekviena pirkta prekė su pavadinimu, kiekiu ir kaina."
+                                title={t('receiptPhoto.bands.products')}
+                                body={t('receiptPhoto.explainer.productsBody')}
                                 styles={styles}
                             />
                             <ExplainerRow
                                 colour={colors.warning}
-                                title="Suma"
-                                body="Bendra kvito suma."
+                                title={t('receiptPhoto.bands.total')}
+                                body={t('receiptPhoto.explainer.totalBody')}
                                 styles={styles}
                             />
                             <ExplainerRow
                                 colour={PALETTE_DATETIME}
-                                title="Data ir laikas"
-                                body="Kvito data ir laikas."
+                                title={t('receiptPhoto.bands.dateTime')}
+                                body={t('receiptPhoto.explainer.dateTimeBody')}
                                 styles={styles}
                             />
                             <ExplainerRow
                                 colour={PALETTE_RECEIPT_NO}
-                                title="Kvito Nr."
-                                body="Unikalus kvito numeris — pagal jį atskiriamos pakartotinai įkeltos nuotraukos."
+                                title={t('receiptPhoto.bands.receiptNo')}
+                                body={t('receiptPhoto.explainer.receiptNoBody')}
                                 styles={styles}
                             />
                         </View>
@@ -511,7 +508,7 @@ export default function ReceiptPhotoView({
                             style={styles.modalCloseBtn}
                             onPress={() => setExplainerOpen(false)}
                         >
-                            <Text style={styles.modalCloseText}>Supratau</Text>
+                            <Text style={styles.modalCloseText}>{t('receiptPhoto.explainer.close')}</Text>
                         </TouchableOpacity>
                     </Pressable>
                 </Pressable>

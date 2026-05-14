@@ -1,7 +1,9 @@
 import { View, Text, TouchableOpacity, StyleSheet, Modal } from 'react-native';
 import { useMemo } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../constants/theme';
+import { formatDate } from '../utils/formatCurrency';
 
 export interface ComparedBasketChoice {
     id: number;
@@ -39,20 +41,20 @@ export default function ComparedBasketChoiceModal({
     subtitle,
 }: ComparedBasketChoiceModalProps) {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
 
     if (!compared) return null;
 
-    const title =
-        compared.name || new Date(compared.updatedAt).toLocaleDateString('lt-LT');
+    const title = compared.name || formatDate(compared.updatedAt);
 
     return (
         <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
             <View style={styles.overlay}>
                 <View style={styles.card}>
-                    <Text style={styles.title}>Kur pridėti prekę?</Text>
+                    <Text style={styles.title}>{t('comparedBasketChoice.title')}</Text>
                     <Text style={styles.sub}>
-                        {subtitle ?? 'Turite palygintą krepšelį. Jei pridėsite į jį, krepšelis vėl taps redaguojamu juodraščiu.'}
+                        {subtitle ?? t('comparedBasketChoice.body')}
                     </Text>
 
                     <TouchableOpacity style={styles.optionRow} onPress={onUseExisting}>
@@ -60,8 +62,8 @@ export default function ComparedBasketChoiceModal({
                         <View style={styles.optionBody}>
                             <Text style={styles.optionTitle} numberOfLines={1}>{title}</Text>
                             <Text style={styles.optionSub}>
-                                {compared.itemCount} prek{compared.itemCount === 1 ? 'ė' : 'ės'} ·
-                                {' '}{new Date(compared.updatedAt).toLocaleDateString('lt-LT')}
+                                {t('comparedBasketChoice.itemCount', { count: compared.itemCount })} ·
+                                {' '}{formatDate(compared.updatedAt)}
                             </Text>
                         </View>
                         <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
@@ -70,14 +72,14 @@ export default function ComparedBasketChoiceModal({
                     <TouchableOpacity style={styles.optionRow} onPress={onCreateNew}>
                         <Ionicons name="add-circle-outline" size={22} color={colors.primary} />
                         <View style={styles.optionBody}>
-                            <Text style={styles.optionTitle}>Kurti naują krepšelį</Text>
-                            <Text style={styles.optionSub}>Pradėti nuo tuščio</Text>
+                            <Text style={styles.optionTitle}>{t('comparedBasketChoice.createNew')}</Text>
+                            <Text style={styles.optionSub}>{t('comparedBasketChoice.createNewSub')}</Text>
                         </View>
                         <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
                     </TouchableOpacity>
 
                     <TouchableOpacity style={styles.cancelButton} onPress={onCancel}>
-                        <Text style={styles.cancelText}>Atšaukti</Text>
+                        <Text style={styles.cancelText}>{t('common.cancel')}</Text>
                     </TouchableOpacity>
                 </View>
             </View>

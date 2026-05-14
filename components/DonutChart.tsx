@@ -1,6 +1,8 @@
 import { View, Text, Image, StyleSheet } from 'react-native';
 import Svg, { Path, Circle } from 'react-native-svg';
 import * as Haptics from 'expo-haptics';
+import { useTranslation } from 'react-i18next';
+import { formatEuro } from '../utils/formatCurrency';
 
 export interface DonutSlice {
     label: string;
@@ -50,6 +52,7 @@ export function DonutChart({
     onSelect,
     cardBackground = '#FFFFFF',
 }: Props) {
+    const { t } = useTranslation();
     const svgSize = size + OVERFLOW * 2;
     const cx = svgSize / 2;
     const cy = svgSize / 2;
@@ -86,7 +89,7 @@ export function DonutChart({
     const anySelected = selectedIndex !== null && selectedIndex !== undefined;
     const selectedSlice = anySelected && selectedIndex! < data.length ? data[selectedIndex!] : null;
     const centerValue = selectedSlice ? selectedSlice.value : total;
-    const centerLabel = selectedSlice ? selectedSlice.label : 'Iš viso';
+    const centerLabel = selectedSlice ? selectedSlice.label : t('donut.total');
     const displayLabel = centerLabel.length > 14 ? centerLabel.slice(0, 13) + '…' : centerLabel;
 
     const holeRadius = r - thickness / 2 - 4;
@@ -147,7 +150,7 @@ export function DonutChart({
                 its natural height so the amount renders at the exact same position as in
                 the total (unselected) state — same font context, same pixel position. */}
             <View pointerEvents="none" style={styles.centerLabel}>
-                <Text style={styles.centerValue}>{centerValue.toFixed(2)}€</Text>
+                <Text style={styles.centerValue}>{formatEuro(centerValue)}</Text>
                 <Text style={[styles.centerSub, selectedSlice?.logoUri ? { opacity: 0 } : null]}>
                     {displayLabel}
                 </Text>

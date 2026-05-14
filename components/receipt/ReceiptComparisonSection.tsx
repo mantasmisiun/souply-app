@@ -2,6 +2,7 @@ import { ReceiptComparison } from '../../types/receipt-view';
 import React, { useEffect, useMemo, useRef } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet, Image, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { chainBrandColour } from '../../constants/chainBrandColours';
 import { formatEuro, formatKm } from '../../utils/formatCurrency';
@@ -48,6 +49,7 @@ const getInitials = (value?: string) => {
 
 export default function ReceiptComparisonSection({ comparison, loading, error, summary }: Props) {
   const colors = useTheme();
+  const { t } = useTranslation();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const progress = useRef(new Animated.Value(0)).current;
   // Guards against the cache→fresh double-animation: `useReceiptComparison`
@@ -84,7 +86,7 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
         <View style={styles.sectionInner}>
           <View style={styles.loadingRow}>
             <ActivityIndicator size="small" color={colors.primary} />
-            <Text style={styles.sectionSubvalue}>Skaičiuojama...</Text>
+            <Text style={styles.sectionSubvalue}>{t('comparison.calculating')}</Text>
           </View>
         </View>
       </View>
@@ -152,11 +154,11 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
     if (visitedIsCheapest) {
       const delta = worstTotal - visitedTotal;
       if (delta < SAVING_HIDE_BELOW) return null;
-      return { amount: formatEuro(delta), label: 'sutaupėte', colour: colors.success };
+      return { amount: formatEuro(delta), label: t('comparison.saved'), colour: colors.success };
     }
     const delta = visitedTotal - cheapestTotal;
     if (delta < SAVING_HIDE_BELOW) return null;
-    return { amount: formatEuro(delta), label: 'galėjote sutaupyti', colour: colors.primary };
+    return { amount: formatEuro(delta), label: t('comparison.couldHaveSaved'), colour: colors.primary };
   })();
 
   // --- B1 brand strip -----------------------------------------------------
@@ -170,7 +172,7 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
       <View style={styles.sectionHeader}>
         <Ionicons name="analytics-outline" size={20} color={colors.primary} />
         <Text style={styles.sectionTitle}>
-          Apsipirkimo analizė ({comparedCount}/{totalCount})
+          {t('comparison.title', { compared: comparedCount, total: totalCount })}
         </Text>
         {hasUnrecognized && (
           <Ionicons name="alert-circle" size={18} color={colors.warning} />
@@ -232,7 +234,7 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
                     )}
                     {row.isVisited && !isCheapest && (
                       <View style={styles.visitedBadgeInline}>
-                        <Text style={styles.visitedBadgeText}>Jūs pirkote</Text>
+                        <Text style={styles.visitedBadgeText}>{t('comparison.youShopped')}</Text>
                       </View>
                     )}
                   </View>
@@ -245,7 +247,7 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
                       or "12 km" via formatKm; the cluster-fallback case
                       naturally surfaces here as a larger number. */}
                   {row.isVisited ? (
-                    <Text style={styles.storeDistanceLine}>(jūsų parduotuvė)</Text>
+                    <Text style={styles.storeDistanceLine}>{t('comparison.yourStore')}</Text>
                   ) : typeof row.distanceKm === 'number' ? (
                     <Text style={styles.storeDistanceLine}>{formatKm(row.distanceKm)}</Text>
                   ) : null}
@@ -265,7 +267,7 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
                   </Text>
                 )}
                 {row.isVisited && isCheapest && (
-                  <Text style={styles.deltaNeutral}>pirkote čia</Text>
+                  <Text style={styles.deltaNeutral}>{t('comparison.boughtHere')}</Text>
                 )}
               </View>
             </View>

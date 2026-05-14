@@ -4,12 +4,17 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
+import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 
 interface Category {
     id: number;
     name: string;
+    /** Canonical Lithuanian name (used for icon lookup). Present on
+     *  responses from /api/categories/* — falls back to `name` when
+     *  server is older or response shape differs. */
+    nameKey?: string;
     parentCategoryId: number | null;
 }
 
@@ -92,7 +97,7 @@ const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, router, co
                 style={[styles.l1Row, isExpanded && styles.l1RowExpanded]}
                 onPress={() => onToggle(item.id)}
             >
-                <Text style={styles.l1Icon}>{CATEGORY_ICONS[item.name] || '📦'}</Text>
+                <Text style={styles.l1Icon}>{CATEGORY_ICONS[item.nameKey ?? item.name] || '📦'}</Text>
                 <Text style={styles.l1Text}>{item.name}</Text>
                 <Animated.View style={chevronStyle}>
                     <Ionicons name="chevron-down" size={20} color={isExpanded ? colors.primary : colors.success} />
@@ -116,6 +121,7 @@ const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, router, co
 
 export default function BrowseIndex() {
     const colors = useTheme();
+    const { t, i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [l1Categories, setL1Categories] = useState<Category[]>([]);
     const [l2Map, setL2Map] = useState<Record<number, Category[]>>({});
@@ -123,6 +129,14 @@ export default function BrowseIndex() {
     const [loading, setLoading] = useState(true);
     const router = useRouter();
 
+    // Re-fetch on language change. Two reasons:
+    //  - First launch: i18n boots at 'lt' (see i18n/index.ts) and only flips
+    //    to the persisted language once settingsStore.hydrate() resolves.
+    //    Without this dep, the L1 fetch on mount races hydration and bakes
+    //    LT names into state for the whole tab-screen lifetime (React
+    //    Navigation keeps tab screens mounted).
+    //  - User toggles language in settings: cached L1/L2 would otherwise
+    //    stay in the previous language until the app restarts.
     useEffect(() => {
         fetch(`${API_BASE_URL}/api/categories`)
             .then(r => r.json())
@@ -143,7 +157,7 @@ export default function BrowseIndex() {
                 });
             })
             .finally(() => setLoading(false));
-    }, []);
+    }, [i18n.language]);
 
     const toggleL1 = useCallback((id: number) => {
         setExpandedL1(prev => prev === id ? null : id);
@@ -176,8 +190,8 @@ export default function BrowseIndex() {
                     >
                         <Text style={styles.discountsIcon}>🔥</Text>
                         <View style={styles.discountsTextWrap}>
-                            <Text style={styles.discountsTitle}>Nuolaidos</Text>
-                            <Text style={styles.discountsSub}>Akcijinės prekės iš visų parduotuvių</Text>
+                            <Text style={styles.discountsTitle}>{t('browse.discountsCardTitle')}</Text>
+                            <Text style={styles.discountsSub}>{t('browse.discountsSub')}</Text>
                         </View>
                         <Ionicons name="chevron-forward" size={20} color={colors.onPrimary} />
                     </TouchableOpacity>

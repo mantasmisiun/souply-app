@@ -1,3 +1,6 @@
+import i18n from '../i18n';
+import { API_BASE_URL } from '../config/api';
+
 /**
  * Centralised fetch wrapper with per-call timeouts and a one-shot
  * extended timeout for the very first request of the app session.
@@ -80,8 +83,20 @@ export async function fetchWithTimeout(
         externalSignal.addEventListener('abort', externalHandler);
     }
 
+    // Inject Accept-Language for our own API calls so server-side
+    // localization (e.g. category names) reflects the user's chosen
+    // language. Non-API URLs (third-party CDNs, MinIO uploads) skip
+    // this — they don't care about our locale and some are strict
+    // about extraneous headers.
+    const urlStr = typeof input === 'string' ? input : (input as URL).toString();
+    const isOwnApi = urlStr.startsWith(API_BASE_URL);
+    const headers = new Headers(rest.headers ?? {});
+    if (isOwnApi && !headers.has('Accept-Language')) {
+        headers.set('Accept-Language', i18n.language || 'lt');
+    }
+
     try {
-        const response = await fetch(input, { ...rest, signal: controller.signal });
+        const response = await fetch(input, { ...rest, headers, signal: controller.signal });
         firstCallDone = true;
         return response;
     } catch (e) {

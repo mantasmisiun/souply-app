@@ -4,10 +4,13 @@ import {
 } from 'react-native';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect, useNavigation } from 'expo-router';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
+import { formatDate as formatLocalisedDate } from '../../utils/formatCurrency';
 
 const BURST_DWELL_MS = 1000;
 const PAGE_SIZE = 15;
@@ -16,11 +19,11 @@ const SEARCH_DEBOUNCE_MS = 300;
 type VoteValue = 'identical' | 'similar' | 'different';
 type Filter = 'all' | VoteValue;
 
-const FILTERS: { key: Filter; label: string }[] = [
-    { key: 'all',       label: 'Visi' },
-    { key: 'identical', label: 'Identiški' },
-    { key: 'similar',   label: 'Panašūs' },
-    { key: 'different', label: 'Skirtingi' },
+const buildFilters = (t: TFunction): { key: Filter; label: string }[] => [
+    { key: 'all',       label: t('voteHistory.filterAll') },
+    { key: 'identical', label: t('voteHistory.filterIdentical') },
+    { key: 'similar',   label: t('voteHistory.filterSimilar') },
+    { key: 'different', label: t('voteHistory.filterDifferent') },
 ];
 
 interface VoteRow {
@@ -40,10 +43,10 @@ interface VotePage {
     nextCursor: string | null;
 }
 
-const VOTE_LABELS: Record<VoteValue, string> = {
-    identical: 'Identiški',
-    similar: 'Panašūs',
-    different: 'Skirtingi',
+const voteLabel = (vote: VoteValue, t: TFunction): string => {
+    if (vote === 'identical') return t('voteHistory.voteIdentical');
+    if (vote === 'similar') return t('voteHistory.voteSimilar');
+    return t('voteHistory.voteDifferent');
 };
 
 const VOTE_ICONS: Record<VoteValue, keyof typeof Ionicons.glyphMap> = {
@@ -59,12 +62,13 @@ function voteColor(vote: VoteValue, colors: AppTheme): string {
 }
 
 function formatDate(iso: string): string {
-    const d = new Date(iso);
-    return d.toLocaleDateString('lt-LT', { year: 'numeric', month: 'short', day: 'numeric' });
+    return formatLocalisedDate(iso, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 export default function VoteHistoryScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
+    const FILTERS = useMemo(() => buildFilters(t), [t]);
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const navigation = useNavigation();
 
@@ -189,7 +193,7 @@ export default function VoteHistoryScreen() {
                     </View>
                     <View style={styles.dividerRow}>
                         <Ionicons name={VOTE_ICONS[item.vote]} size={16} color={color} />
-                        <Text style={[styles.voteLabel, { color }]}>{VOTE_LABELS[item.vote]}</Text>
+                        <Text style={[styles.voteLabel, { color }]}>{voteLabel(item.vote, t)}</Text>
                         {isBurst && (
                             <Ionicons name="warning-outline" size={14} color={colors.warning} style={{ marginLeft: 4 }} />
                         )}
@@ -219,7 +223,7 @@ export default function VoteHistoryScreen() {
                 <Ionicons name="search-outline" size={18} color={colors.textMuted} style={styles.searchIcon} />
                 <TextInput
                     style={styles.searchInput}
-                    placeholder="Ieškoti produktų..."
+                    placeholder={t('voteHistory.searchPlaceholder')}
                     placeholderTextColor={colors.textMuted}
                     value={search}
                     onChangeText={setSearch}
@@ -254,7 +258,7 @@ export default function VoteHistoryScreen() {
                 <View style={styles.empty}>
                     <Ionicons name="layers-outline" size={48} color={colors.textMuted} />
                     <Text style={styles.emptyText}>
-                        {debouncedSearch || filter !== 'all' ? 'Nėra tokių balsavimų' : 'Dar nėra balsavimų'}
+                        {debouncedSearch || filter !== 'all' ? t('voteHistory.emptyFiltered') : t('voteHistory.emptyNone')}
                     </Text>
                 </View>
             ) : (
@@ -281,18 +285,12 @@ export default function VoteHistoryScreen() {
                         <View style={styles.helpIconRow}>
                             <Ionicons name="layers-outline" size={32} color={colors.primary} />
                         </View>
-                        <Text style={styles.sheetTitle}>Balsavimų istorija</Text>
-                        <Text style={styles.helpText}>
-                            Čia matosi visi produktų palyginimai, kuriuos atlikai įkeldamas kvitus iš skirtingų parduotuvių.
-                        </Text>
-                        <Text style={styles.helpText}>
-                            Jei atsakei neteisingai — bakstelėk ant įrašo ir pataisyk. Taip naršydamas produktus matysi tikslesnius rezultatus.
-                        </Text>
-                        <Text style={styles.helpText}>
-                            Paieška ir filtrai viršuje padės greičiau rasti, ko ieškai.
-                        </Text>
+                        <Text style={styles.sheetTitle}>{t('voteHistory.helpTitle')}</Text>
+                        <Text style={styles.helpText}>{t('voteHistory.helpBody1')}</Text>
+                        <Text style={styles.helpText}>{t('voteHistory.helpBody2')}</Text>
+                        <Text style={styles.helpText}>{t('voteHistory.helpBody3')}</Text>
                         <TouchableOpacity style={styles.helpCloseBtn} onPress={() => setShowHelp(false)}>
-                            <Text style={styles.helpCloseBtnText}>Supratau</Text>
+                            <Text style={styles.helpCloseBtnText}>{t('voteHistory.helpClose')}</Text>
                         </TouchableOpacity>
                     </Pressable>
                 </Pressable>
@@ -307,7 +305,7 @@ export default function VoteHistoryScreen() {
             >
                 <Pressable style={styles.backdrop} onPress={() => !saving && setEditing(null)}>
                     <Pressable style={styles.sheet} onPress={e => e.stopPropagation()}>
-                        <Text style={styles.sheetTitle}>Pakeisti balsavimą</Text>
+                        <Text style={styles.sheetTitle}>{t('voteHistory.editTitle')}</Text>
                         {editing && (
                             <Text style={styles.sheetPair} numberOfLines={2}>
                                 {editing.nameA} · {editing.nameB}
@@ -329,7 +327,7 @@ export default function VoteHistoryScreen() {
                                         >
                                             <Ionicons name={VOTE_ICONS[v]} size={20} color={color} />
                                             <Text style={[styles.optionLabel, active && { color }]}>
-                                                {VOTE_LABELS[v]}
+                                                {voteLabel(v, t)}
                                             </Text>
                                             {active && <Ionicons name="checkmark" size={18} color={color} />}
                                         </TouchableOpacity>
@@ -339,7 +337,7 @@ export default function VoteHistoryScreen() {
                         )}
 
                         <TouchableOpacity style={styles.cancelBtn} onPress={() => setEditing(null)} disabled={saving}>
-                            <Text style={styles.cancelText}>Atšaukti</Text>
+                            <Text style={styles.cancelText}>{t('common.cancel')}</Text>
                         </TouchableOpacity>
                     </Pressable>
                 </Pressable>

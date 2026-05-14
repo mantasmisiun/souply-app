@@ -1,6 +1,7 @@
 import { View, Text, TouchableOpacity, StyleSheet, Modal, TextInput, ActivityIndicator } from 'react-native';
 import { useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../constants/theme';
 import { geocodeAddress, type UserCoords, VILNIUS_FALLBACK } from '../utils/location';
 
@@ -25,6 +26,7 @@ export default function LocationPromptModal({
     onCancel,
 }: LocationPromptModalProps) {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
 
     const [address, setAddress] = useState('');
@@ -40,7 +42,7 @@ export default function LocationPromptModal({
     const handleSubmit = async () => {
         const trimmed = address.trim();
         if (trimmed.length < 3) {
-            setError('Įveskite bent keletą simbolių');
+            setError(t('locationPrompt.errorMinLength'));
             return;
         }
         setLoading(true);
@@ -48,7 +50,7 @@ export default function LocationPromptModal({
         const result = await geocodeAddress(trimmed);
         setLoading(false);
         if (!result) {
-            setError('Nepavyko rasti adreso. Pabandykite patikslinti arba naudokite Vilniaus centrą.');
+            setError(t('locationPrompt.errorGeocode'));
             return;
         }
         onResolved(result);
@@ -71,19 +73,15 @@ export default function LocationPromptModal({
                 <View style={styles.card}>
                     <View style={styles.headerRow}>
                         <Ionicons name="location-outline" size={22} color={colors.primary} />
-                        <Text style={styles.title}>Įveskite adresą</Text>
+                        <Text style={styles.title}>{t('locationPrompt.title')}</Text>
                     </View>
-                    <Text style={styles.sub}>
-                        Be vietos informacijos palyginimas būtų tik apytikslis. Įveskite namo
-                        adresą arba tik miestą — naudosime tai, kad rastume artimiausias
-                        parduotuves.
-                    </Text>
+                    <Text style={styles.sub}>{t('locationPrompt.body')}</Text>
 
                     <TextInput
                         style={styles.input}
                         value={address}
                         onChangeText={setAddress}
-                        placeholder="pvz. Vilniaus g. 10, Kaunas"
+                        placeholder={t('locationPrompt.placeholder')}
                         placeholderTextColor={colors.textMuted}
                         autoFocus
                         onSubmitEditing={handleSubmit}
@@ -98,7 +96,7 @@ export default function LocationPromptModal({
                             onPress={useVilniusFallback}
                             disabled={loading}
                         >
-                            <Text style={styles.buttonSecondaryText}>Naudoti Vilnių</Text>
+                            <Text style={styles.buttonSecondaryText}>{t('locationPrompt.useVilnius')}</Text>
                         </TouchableOpacity>
                         <TouchableOpacity
                             style={styles.button}
@@ -108,7 +106,7 @@ export default function LocationPromptModal({
                             {loading ? (
                                 <ActivityIndicator size="small" color={colors.onPrimary} />
                             ) : (
-                                <Text style={styles.buttonText}>Tęsti</Text>
+                                <Text style={styles.buttonText}>{t('locationPrompt.continue')}</Text>
                             )}
                         </TouchableOpacity>
                     </View>

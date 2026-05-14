@@ -1,15 +1,17 @@
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Dimensions, Image, Animated, Easing } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useNavigation } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
+import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
-import { getLevelData } from '../../constants/levels';
+import { getLevelData, getLevelName } from '../../constants/levels';
 import { DonutChart, type DonutSlice } from '../../components/DonutChart';
 import { BarChart, type BarSlice } from '../../components/BarChart';
 import { useLevelStore } from '../../state/levelStore';
 import { useProfileStore, fetchProfileIfStale } from '../../state/profileStore';
 import { SkeletonBox } from '../../components/SkeletonBox';
+import { formatEuro } from '../../utils/formatCurrency';
 import * as Haptics from 'expo-haptics';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { BottomSheetModal, BottomSheetModalProvider, BottomSheetFlatList, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
@@ -46,7 +48,7 @@ function Legend({
                             <View style={[legendStyles.dot, { backgroundColor: item.color }]} />
                         )}
                         <Text style={legendStyles.label} numberOfLines={1}>{item.label}</Text>
-                        <Text style={legendStyles.value}>{item.value.toFixed(2)}€</Text>
+                        <Text style={legendStyles.value}>{formatEuro(item.value)}</Text>
                     </View>
                 );
             })}
@@ -65,9 +67,29 @@ const legendStyles = StyleSheet.create({
 
 export default function ProfilisScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
+    const navigation = useNavigation();
     const triggerIfNewLevel = useLevelStore(s => s.triggerIfNewLevel);
+
+    // Settings gear in the top-right of the Profilis tab header. Set via
+    // navigation.setOptions because the static Tabs.Screen options can't
+    // carry a router-aware tap handler. useLayoutEffect runs synchronously
+    // before paint so the icon never flashes in on first focus.
+    useLayoutEffect(() => {
+        navigation.setOptions({
+            headerRight: () => (
+                <TouchableOpacity
+                    onPress={() => router.push('/settings' as any)}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                    style={{ paddingHorizontal: 16 }}
+                >
+                    <Ionicons name="settings-outline" size={22} color={colors.textPrimary} />
+                </TouchableOpacity>
+            ),
+        });
+    }, [navigation, router, colors.textPrimary]);
     const profile = useProfileStore(s => s.profile);
     const stats = useProfileStore(s => s.stats);
     const loading = useProfileStore(s => s.profile === null && s.fetching);
@@ -133,7 +155,7 @@ export default function ProfilisScreen() {
     }, []));
 
     const devItems: Array<{ label: string; icon: keyof typeof Ionicons.glyphMap; route: string }> = [
-        { label: 'Kvitų paketinis testas', icon: 'flask-outline', route: '/dev/receipt-batch' },
+        { label: t('profilis.devReceiptBatch'), icon: 'flask-outline', route: '/dev/receipt-batch' },
         { label: 'Admin', icon: 'shield-outline', route: '/dev/admin' },
     ];
 
@@ -159,7 +181,7 @@ export default function ProfilisScreen() {
 
     const pages = [
         {
-            title: 'Išlaidos pagal parduotuvę',
+            title: t('profilis.carouselStores'),
             content: (
                 <View style={styles.chartPage}>
                     <DonutChart
@@ -179,7 +201,7 @@ export default function ProfilisScreen() {
             ),
         },
         {
-            title: showKita ? 'Kitos kategorijos' : 'Išlaidos pagal kategoriją',
+            title: showKita ? t('profilis.carouselKita') : t('profilis.carouselCategories'),
             content: (
                 <Animated.View
                     style={[styles.categoryChartPage, { opacity: donutAnim }]}
@@ -211,7 +233,7 @@ export default function ProfilisScreen() {
                             onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); kitaSheetRef.current?.present(); }}
                         >
                             <Text style={[styles.showAllBtnText, { color: colors.primary }]}>
-                                Rodyti visas ({kitaSlices.length} kategorijų)
+                                {t('profilis.kitaShowAll', { count: kitaSlices.length })}
                             </Text>
                             <Ionicons name="chevron-forward" size={13} color={colors.primary} />
                         </TouchableOpacity>
@@ -220,13 +242,13 @@ export default function ProfilisScreen() {
             ),
         },
         {
-            title: 'Mėnesinės išlaidos',
+            title: t('profilis.carouselMonthly'),
             content: (
                 <View style={styles.barChartPage}>
                     {monthlyMax > 0 ? (
                         <BarChart data={barData} color={colors.primary} height={140} />
                     ) : (
-                        <Text style={styles.emptyChartText}>Duomenų dar nėra</Text>
+                        <Text style={styles.emptyChartText}>{t('profilis.noData')}</Text>
                     )}
                 </View>
             ),
@@ -254,15 +276,15 @@ export default function ProfilisScreen() {
                         <View style={styles.iconCircle}>
                             <Text style={styles.levelEmoji}>{getLevelData(level).emoji}</Text>
                         </View>
-                        <Text style={styles.levelLabel}>Lygis {level}</Text>
-                        <Text style={styles.levelName}>{getLevelData(level).name}</Text>
-                        <Text style={styles.points}>{profile?.points ?? 0} taškai</Text>
+                        <Text style={styles.levelLabel}>{t('profilis.levelLabel', { level })}</Text>
+                        <Text style={styles.levelName}>{getLevelName(level, t)}</Text>
+                        <Text style={styles.points}>{t('profilis.points', { count: profile?.points ?? 0 })}</Text>
 
                         <View style={styles.progressTrack}>
                             <View style={[styles.progressFill, { width: `${progressPercent}%` }]} />
                         </View>
                         <Text style={styles.progressLabel}>
-                            {profile?.pointsIntoLevel ?? 0} / {profile?.pointsNeededForNext ?? 10} iki kito lygio
+                            {t('profilis.progressLabel', { current: profile?.pointsIntoLevel ?? 0, target: profile?.pointsNeededForNext ?? 10 })}
                         </Text>
                     </>
                 )}
@@ -279,10 +301,10 @@ export default function ProfilisScreen() {
                     />
                     <View style={{ flex: 1 }}>
                         <Text style={styles.savingsLabel}>
-                            {(stats?.totalSavings ?? 0) > 0 ? 'Iš viso sutaupėte' : 'Iš viso galėjote sutaupyti'}
+                            {(stats?.totalSavings ?? 0) > 0 ? t('profilis.savedTotal') : t('profilis.couldHaveSavedTotal')}
                         </Text>
                         <Text style={[styles.savingsAmount, { color: (stats?.totalSavings ?? 0) > 0 ? colors.success : colors.textPrimary }]}>
-                            {Math.abs(stats?.totalSavings ?? 0).toFixed(2)}€
+                            {formatEuro(Math.abs(stats?.totalSavings ?? 0))}
                         </Text>
                     </View>
                 </View>
@@ -290,7 +312,7 @@ export default function ProfilisScreen() {
 
             {/* Stats carousel */}
             <View style={styles.statsCard}>
-                <Text style={styles.sectionTitle}>Statistika</Text>
+                <Text style={styles.sectionTitle}>{t('profilis.statsTitle')}</Text>
                 {statsLoading ? (
                     <View style={{ gap: 16, paddingVertical: 24, alignItems: 'center' }}>
                         <SkeletonBox width={160} height={160} borderRadius={80} style={{ alignSelf: 'center' }} />
@@ -343,7 +365,7 @@ export default function ProfilisScreen() {
                         </View>
 
                         <Text style={styles.finePrint}>
-                            Duomenys pagrįsti įkeltais kvitais
+                            {t('profilis.dataFootnote')}
                         </Text>
                     </>
                 )}
@@ -356,7 +378,7 @@ export default function ProfilisScreen() {
                     onPress={() => router.push('/profile/vote-history')}
                 >
                     <Ionicons name="layers-outline" size={22} color={colors.textSecondary} />
-                    <Text style={styles.rowText}>Balsavimų istorija</Text>
+                    <Text style={styles.rowText}>{t('profilis.voteHistory')}</Text>
                     <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
                 </TouchableOpacity>
             </View>
@@ -364,7 +386,7 @@ export default function ProfilisScreen() {
             {/* Dev tools — only in dev builds */}
             {__DEV__ && (
                 <View style={{ marginTop: 24 }}>
-                    <Text style={styles.sectionTitle}>Kūrėjo įrankiai</Text>
+                    <Text style={styles.sectionTitle}>{t('profilis.devTools')}</Text>
                     {devItems.map((item) => (
                         <TouchableOpacity
                             key={item.route}
@@ -393,15 +415,15 @@ export default function ProfilisScreen() {
                 contentContainerStyle={styles.sheetList}
                 ListHeaderComponent={
                     <View style={styles.sheetHeader}>
-                        <Text style={styles.sheetTitle}>Kitos kategorijos</Text>
-                        <Text style={styles.sheetSubtitle}>{kitaTotal.toFixed(2)}€ iš viso</Text>
+                        <Text style={styles.sheetTitle}>{t('profilis.carouselKita')}</Text>
+                        <Text style={styles.sheetSubtitle}>{t('profilis.kitaTotal', { total: formatEuro(kitaTotal) })}</Text>
                     </View>
                 }
                 renderItem={({ item, index }) => (
                     <View style={styles.sheetRow}>
                         <View style={[styles.sheetDot, { backgroundColor: item.color }]} />
                         <Text style={styles.sheetLabel} numberOfLines={1}>{item.label}</Text>
-                        <Text style={styles.sheetAmount}>{item.value.toFixed(2)}€</Text>
+                        <Text style={styles.sheetAmount}>{formatEuro(item.value)}</Text>
                         <Text style={styles.sheetPct}>
                             {kitaTotal > 0 ? `${Math.round((item.value / kitaTotal) * 100)}%` : ''}
                         </Text>

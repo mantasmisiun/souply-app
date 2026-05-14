@@ -15,6 +15,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../../config/api";
 import { useReceiptCreateContext } from "../../state/basketState";
 import { parseProductName } from "@shared/parsers/productNameParser";
@@ -53,6 +54,7 @@ export default function CreateStoreProductModal({
   onCreated,
 }: CreateStoreProductModalProps) {
   const colors = useTheme();
+  const { t } = useTranslation();
   const styles = useMemo(() => makeStyles(colors), [colors]);
 
   const [draftName, setDraftName] = useState("");
@@ -138,9 +140,9 @@ export default function CreateStoreProductModal({
   }, [categoryInput, selectedCategoryPath, visible]);
 
   const pickCreateImage = () => {
-    Alert.alert("Pridėti paveiksliuką", "Pasirinkite būdą", [
+    Alert.alert(t('createProduct.pickerTitle'), t('createProduct.pickerBody'), [
       {
-        text: "Fotografuoti",
+        text: t('createProduct.pickerCamera'),
         onPress: async () => {
           const r = await ImagePicker.launchCameraAsync({
             mediaTypes: ["images"],
@@ -150,7 +152,7 @@ export default function CreateStoreProductModal({
         },
       },
       {
-        text: "Iš galerijos",
+        text: t('createProduct.pickerGallery'),
         onPress: async () => {
           const r = await ImagePicker.launchImageLibraryAsync({
             mediaTypes: ["images"],
@@ -159,7 +161,7 @@ export default function CreateStoreProductModal({
           if (!r.canceled && r.assets[0]) setCreateImageUri(r.assets[0].uri);
         },
       },
-      { text: "Atšaukti", style: "cancel" },
+      { text: t('common.cancel'), style: "cancel" },
     ]);
   };
 
@@ -197,7 +199,7 @@ export default function CreateStoreProductModal({
     );
     const urlData = await urlRes.json();
     if (!urlRes.ok || !urlData?.uploadUrl || !urlData?.filePath) {
-      throw new Error(urlData?.error || "Nepavyko gauti įkėlimo URL");
+      throw new Error(urlData?.error || t('createProduct.errors.uploadUrl'));
     }
 
     const blob = await (await fetch(compressedUri)).blob();
@@ -207,7 +209,7 @@ export default function CreateStoreProductModal({
       body: blob,
     });
     if (!putRes.ok) {
-      throw new Error("Nepavyko įkelti paveiksliuko");
+      throw new Error(t('createProduct.errors.uploadImage'));
     }
 
     return urlData.filePath as string;
@@ -216,18 +218,18 @@ export default function CreateStoreProductModal({
   const submit = async () => {
     const trimmedName = draftName.trim();
     if (!trimmedName) {
-      Alert.alert("Trūksta pavadinimo", "Įveskite produkto pavadinimą.");
+      Alert.alert(t('createProduct.errors.missingName'), t('createProduct.errors.missingNameBody'));
       return;
     }
     if (!Number.isFinite(chainId) || chainId <= 0) {
-      Alert.alert("Klaida", "Nerasta parduotuvių tinklo informacija.");
+      Alert.alert(t('createProduct.errors.missingChain'), t('createProduct.errors.missingChainBody'));
       return;
     }
     if (
       !Number.isFinite(selectedCategoryId) ||
       Number(selectedCategoryId) <= 0
     ) {
-      Alert.alert("Trūksta kategorijos", "Pasirinkite L3 kategoriją.");
+      Alert.alert(t('createProduct.errors.missingCategory'), t('createProduct.errors.missingCategoryBody'));
       return;
     }
 
@@ -255,7 +257,7 @@ export default function CreateStoreProductModal({
       });
       const pData = await pRes.json();
       if (!pRes.ok || !pData?.id) {
-        throw new Error(pData?.error || "Nepavyko sukurti produkto");
+        throw new Error(pData?.error || t('createProduct.errors.createProduct'));
       }
 
       const spRes = await fetch(`${API_BASE_URL}/api/store-products`, {
@@ -275,7 +277,7 @@ export default function CreateStoreProductModal({
       const spData = await spRes.json();
       if (!spRes.ok || !spData?.id) {
         throw new Error(
-          spData?.error || "Nepavyko sukurti parduotuvės produkto",
+          spData?.error || t('createProduct.errors.createStoreProduct'),
         );
       }
 
@@ -313,8 +315,10 @@ export default function CreateStoreProductModal({
         } catch (e: any) {
           console.warn("Price creation failed:", e);
           Alert.alert(
-            "Įspėjimas",
-            `Produktas sukurtas, bet kainos išsaugoti nepavyko: ${e?.message ?? "nežinoma klaida"}. Galite pabandyti dar kartą vėliau.`,
+            t('createProduct.errors.priceWarningTitle'),
+            t('createProduct.errors.priceWarningBody', {
+              detail: e?.message ?? t('createProduct.errors.unknown'),
+            }),
           );
         }
       }
@@ -329,7 +333,7 @@ export default function CreateStoreProductModal({
       });
       onClose();
     } catch (e: any) {
-      Alert.alert("Klaida", e?.message || "Nepavyko sukurti produkto");
+      Alert.alert(t('createProduct.errors.generic'), e?.message || t('createProduct.errors.createProduct'));
     } finally {
       setSubmitting(false);
     }
@@ -347,18 +351,18 @@ export default function CreateStoreProductModal({
         behavior={Platform.OS === "ios" ? "padding" : undefined}
       >
         <View style={styles.card}>
-          <Text style={styles.title}>Kurti naują produktą</Text>
+          <Text style={styles.title}>{t('createProduct.title')}</Text>
 
-          <Text style={styles.label}>Pavadinimas</Text>
+          <Text style={styles.label}>{t('createProduct.name')}</Text>
           <TextInput
             value={draftName}
             onChangeText={setDraftName}
             style={styles.input}
-            placeholder="Įveskite produkto pavadinimą"
+            placeholder={t('createProduct.namePlaceholder')}
             placeholderTextColor={colors.textMuted}
           />
 
-          <Text style={styles.label}>Kategorija (L3)</Text>
+          <Text style={styles.label}>{t('createProduct.categoryL3')}</Text>
           <TextInput
             value={categoryInput}
             onChangeText={(v) => {
@@ -367,7 +371,7 @@ export default function CreateStoreProductModal({
               setSelectedCategoryPath("");
             }}
             style={styles.input}
-            placeholder="Rašykite kategorijos pavadinimą"
+            placeholder={t('createProduct.categorySearchPlaceholder')}
             placeholderTextColor={colors.textMuted}
           />
 
@@ -400,8 +404,8 @@ export default function CreateStoreProductModal({
 
           <Text style={styles.categoryHint}>
             {selectedCategoryId
-              ? "Kategorija pasirinkta"
-              : "Pasirinkite L3 kategoriją"}
+              ? t('createProduct.categorySelected')
+              : t('createProduct.categoryHint')}
           </Text>
 
           <TouchableOpacity
@@ -411,8 +415,8 @@ export default function CreateStoreProductModal({
           >
             <Text style={styles.imageButtonText}>
               {createImageUri
-                ? "Pakeisti paveiksliuką"
-                : "Pridėti paveiksliuką"}
+                ? t('createProduct.imageReplace')
+                : t('createProduct.imageAdd')}
             </Text>
           </TouchableOpacity>
 
@@ -429,7 +433,7 @@ export default function CreateStoreProductModal({
               onPress={onClose}
               disabled={submitting}
             >
-              <Text style={styles.cancelText}>Atšaukti</Text>
+              <Text style={styles.cancelText}>{t('common.cancel')}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.actionBtn, styles.confirmBtn]}
@@ -437,7 +441,7 @@ export default function CreateStoreProductModal({
               disabled={submitting}
             >
               <Text style={styles.confirmText}>
-                {submitting ? "Kuriama..." : "Pridėti"}
+                {submitting ? t('createProduct.creating') : t('createProduct.add')}
               </Text>
             </TouchableOpacity>
           </View>

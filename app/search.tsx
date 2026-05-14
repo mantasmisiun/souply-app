@@ -1,6 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import {
     ActivityIndicator,
     Alert,
@@ -83,6 +84,7 @@ const safeDecode = (v?: string) => {
 
 export default function SearchScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const params = useLocalSearchParams<{
         mode?: string;
@@ -230,12 +232,12 @@ export default function SearchScreen() {
     if (!Number.isFinite(chainId) || !Number.isFinite(productIndex)) return;
 
     Alert.alert(
-        "Kitur rastas produktas",
-        `Pridėti „${p.productName}“ į šios parduotuvės sąrašą?`,
+        t('search.foundElsewhereTitle'),
+        t('search.addPrompt', { name: p.productName }),
         [
-        { text: "Atšaukti", style: "cancel" },
+        { text: t('common.cancel'), style: "cancel" },
         {
-            text: "Pridėti",
+            text: t('search.addAction'),
             onPress: async () => {
             try {
                 const res = await fetch(`${API_BASE_URL}/api/store-products`, {
@@ -248,7 +250,7 @@ export default function SearchScreen() {
                 }),
                 });
                 const created = await res.json();
-                if (!res.ok || !created?.id) throw new Error("Nepavyko sukurti StoreProduct");
+                if (!res.ok || !created?.id) throw new Error(t('search.errorCreateSp'));
 
                 setPendingPick({
                 productIndex: Number(productIndex),
@@ -261,7 +263,7 @@ export default function SearchScreen() {
                 });
                 closeAfterReceiptPick();
             } catch (e: any) {
-                Alert.alert("Klaida", e?.message || "Nepavyko pridėti produkto");
+                Alert.alert(t('search.errorGeneric'), e?.message || t('search.errorAdd'));
             }
             },
         },
@@ -383,10 +385,10 @@ export default function SearchScreen() {
         </View>
         <View style={styles.productInfo}>
           <Text style={styles.productName} numberOfLines={2}>
-            Kurti naują produktą
+            {t('search.createNewTitle')}
           </Text>
           <Text style={styles.amountText} numberOfLines={2}>
-            {draftName ? `Pavadinimas: ${draftName}` : "Įveskite pavadinimą"}
+            {draftName ? t('search.createNewName', { name: draftName }) : t('search.createNewPrompt')}
           </Text>
         </View>
       </TouchableOpacity>
@@ -410,7 +412,7 @@ export default function SearchScreen() {
             <TextInput
               key={inputKey}
               autoFocus
-              placeholder="Ieškoti produkto..."
+              placeholder={t('search.searchPlaceholder')}
               placeholderTextColor={colors.textMuted}
               defaultValue={query}
               onChangeText={setQuery}
@@ -450,7 +452,7 @@ export default function SearchScreen() {
             columnWrapperStyle={styles.row}
             ListEmptyComponent={
               <Text style={styles.emptyText}>
-                {query.trim() ? "Produktų nerasta" : "Įveskite paieškos tekstą"}
+                {query.trim() ? t('search.notFound') : t('search.enterQuery')}
               </Text>
             }
             renderItem={({ item }) => {
@@ -469,7 +471,7 @@ export default function SearchScreen() {
             columnWrapperStyle={styles.row}
             ListEmptyComponent={
               <Text style={styles.emptyText}>
-                {query.trim() ? "Produktų nerasta" : "Įveskite paieškos tekstą"}
+                {query.trim() ? t('search.notFound') : t('search.enterQuery')}
               </Text>
             }
             renderItem={({ item }) => {

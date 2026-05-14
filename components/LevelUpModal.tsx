@@ -1,19 +1,34 @@
 import { View, Text, StyleSheet, Modal, TouchableOpacity, Pressable } from 'react-native';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { useTheme } from '../constants/theme';
-import { getLevelData } from '../constants/levels';
+import { getLevelData, getLevelName } from '../constants/levels';
 import { useLevelStore } from '../state/levelStore';
+import { useSettingsStore } from '../state/settingsStore';
 
 export function LevelUpModal() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const { pendingLevel, acknowledge } = useLevelStore();
+    const showLevelUpModal = useSettingsStore((s) => s.showLevelUpModal);
     const [neverShow, setNeverShow] = useState(false);
 
-    if (!pendingLevel) return null;
+    // User has globally disabled level-up celebrations from Settings →
+    // Pranešimai. Quietly drop the pending candidate so the modal doesn't
+    // sit waiting for input that never comes. Done in an effect (not during
+    // render) so the state change is not committed mid-render.
+    useEffect(() => {
+        if (pendingLevel && !showLevelUpModal) {
+            acknowledge(false, pendingLevel);
+        }
+    }, [pendingLevel, showLevelUpModal, acknowledge]);
 
-    const { emoji, name } = getLevelData(pendingLevel);
-    const nextName = getLevelData(pendingLevel + 1).name;
+    if (!pendingLevel || !showLevelUpModal) return null;
+
+    const { emoji } = getLevelData(pendingLevel);
+    const name = getLevelName(pendingLevel, t);
+    const nextName = getLevelName(pendingLevel + 1, t);
 
     const dismiss = () => acknowledge(neverShow, pendingLevel);
 
@@ -22,11 +37,10 @@ export function LevelUpModal() {
             <Pressable style={s(colors).backdrop} onPress={dismiss}>
                 <Pressable style={s(colors).sheet} onPress={e => e.stopPropagation()}>
                     <Text style={s(colors).emoji}>{emoji}</Text>
-                    <Text style={s(colors).title}>Naujas lygis!</Text>
+                    <Text style={s(colors).title}>{t('levelUp.title')}</Text>
                     <Text style={s(colors).levelName}>{name}</Text>
                     <Text style={s(colors).body}>
-                        Sveikiname — pasiekei {pendingLevel} lygį! 🎉{'\n\n'}
-                        Tęsk įkeldamas kvitus ir lygindamas produktus, kad greičiau pasiektum kitą lygį — <Text style={{ fontWeight: '700' }}>{nextName}</Text>.
+                        {t('levelUp.body', { level: pendingLevel, nextName })}
                     </Text>
 
                     <TouchableOpacity
@@ -37,11 +51,11 @@ export function LevelUpModal() {
                         <View style={[s(colors).box, neverShow && s(colors).boxChecked]}>
                             {neverShow && <Ionicons name="checkmark" size={14} color="#fff" />}
                         </View>
-                        <Text style={s(colors).checkboxLabel}>Daugiau nerodyti</Text>
+                        <Text style={s(colors).checkboxLabel}>{t('levelUp.neverShow')}</Text>
                     </TouchableOpacity>
 
                     <TouchableOpacity style={s(colors).btn} onPress={dismiss}>
-                        <Text style={s(colors).btnText}>Puiku!</Text>
+                        <Text style={s(colors).btnText}>{t('levelUp.cta')}</Text>
                     </TouchableOpacity>
                 </Pressable>
             </Pressable>

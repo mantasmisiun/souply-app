@@ -1,0 +1,573 @@
+{
+  "tabs": {
+    "receipts": "Analizė",
+    "browse": "Naršyti",
+    "basket": "Krepšelis",
+    "shoppingList": "Pirkinių sąrašas",
+    "profilis": "Profilis"
+  },
+  "screens": {
+    "basket": "Krepšelis",
+    "shoppingList": "Pirkinių sąrašas",
+    "receiptProcess": "Kvito peržiūra",
+    "voteHistory": "Balsavimų istorija"
+  },
+  "settings": {
+    "title": "Nustatymai",
+    "language": {
+      "section": "Kalba",
+      "label": "Pasirinkite kalbą"
+    },
+    "notifications": {
+      "section": "Pranešimai",
+      "levelUp": {
+        "label": "Rodyti lygio pakėlimo pranešimą",
+        "hint": "Kai pasieksite naują lygį, parodysime sveikinimą."
+      },
+      "nepriskirtaExplainer": {
+        "label": "Rodyti „Neatpažinta\" paaiškinimą",
+        "hint": "Kai paspausite ❓ ant „Neatpažinta\" eilutės, paaiškinsime, kas tai. Išjungus, paspaudimas iš karto atvers kortelių rūšiavimą."
+      }
+    },
+    "account": {
+      "section": "Paskyra",
+      "restore": {
+        "label": "Atkurti paskyrą",
+        "hint": "Praradote telefoną? Atkurkite paskyrą naudodami įkeltus kvitus."
+      },
+      "delete": {
+        "label": "Ištrinti paskyrą",
+        "hint": "Negrįžtamas veiksmas."
+      }
+    },
+    "about": {
+      "section": "Apie",
+      "version": "Versija",
+      "build": "Versija (build)"
+    }
+  },
+  "delete": {
+    "stage1": {
+      "title": "Ar tikrai norite ištrinti paskyrą?",
+      "willDelete": "Bus ištrinta:",
+      "willDeleteItems": [
+        "jūsų įkelti kvitai ir jų nuotraukos",
+        "krepšeliai",
+        "pirkinių sąrašai",
+        "lygis ir taškai"
+      ],
+      "willKeep": "Liks (anonimizuoti):",
+      "willKeepItems": [
+        "jūsų balsai, prisidedantys prie bendro kainų katalogo"
+      ],
+      "cancel": "Atšaukti",
+      "continue": "Tęsti"
+    },
+    "stage2": {
+      "title": "Negrįžtamas veiksmas",
+      "body": "Norėdami patvirtinti, įveskite IŠTRINTI",
+      "placeholder": "IŠTRINTI",
+      "cancel": "Atšaukti",
+      "confirm": "Patvirtinti",
+      "magic": "IŠTRINTI"
+    },
+    "goodbye": {
+      "title": "Paskyra ištrinta",
+      "body": "Ačiū, kad naudojaisi Souply.",
+      "cta": "Atidaryti naują paskyrą"
+    },
+    "errorTitle": "Klaida",
+    "errorBody": "Nepavyko ištrinti paskyros. Pabandykite vėliau."
+  },
+  "restore": {
+    "title": "Atkurti paskyrą",
+    "comingSoon": "Greitai bus prieinama",
+    "body": "Atkurkite paskyrą įkėlę 3 kvitus, kuriuos anksčiau buvote įkėlę į Souply. Ši funkcija bus prieinama netrukus.",
+    "back": "Grįžti",
+    "intro": "Pridėk 3 kvitus, kuriuos anksčiau buvai įkėlęs į Souply. Reikės kvitų bent iš 2 skirtingų parduotuvių.",
+    "slotEmpty": "Pridėti kvitą",
+    "slotProcessing": "Apdorojama…",
+    "slotInvalid": "Nepavyko atpažinti — pabandyk kitą failą",
+    "addFiles": "Pridėti failus",
+    "submit": "Atkurti paskyrą",
+    "submitting": "Atkuriama…",
+    "failedTitle": "Nepavyko atpažinti paskyros",
+    "failedBody": "Bandyk dar kartą vėliau.",
+    "failedClose": "Uždaryti",
+    "lockedTitle": "Per daug bandymų",
+    "lockedBody": "Bandyk dar kartą vėliau.",
+    "lockedClose": "Uždaryti",
+    "successTitle": "Paskyra atkurta",
+    "successBody": "Norint užbaigti atkūrimą, reikia paleisti programą iš naujo.",
+    "successReload": "Paleisti iš naujo"
+  },
+  "common": {
+    "back": "Grįžti",
+    "close": "Uždaryti",
+    "ok": "Gerai",
+    "save": "Išsaugoti",
+    "cancel": "Atšaukti",
+    "continue": "Tęsti",
+    "confirm": "Patvirtinti",
+    "delete": "Ištrinti",
+    "edit": "Redaguoti",
+    "retry": "Bandyti dar kartą",
+    "loading": "Įkeliama...",
+    "search": "Ieškoti",
+    "yes": "Taip",
+    "no": "Ne"
+  },
+  "banners": {
+    "offline": "Nėra interneto ryšio",
+    "pendingSwipes": {
+      "title": "Padėk atpažinti",
+      "cta": "Pradėti",
+      "label_one": "{{count}} prekė laukia patvirtinimo",
+      "label_few": "{{count}} prekės laukia patvirtinimo",
+      "label_other": "{{count}} prekių laukia patvirtinimo"
+    }
+  },
+  "levelUp": {
+    "title": "Naujas lygis!",
+    "body": "Sveikiname — pasiekei {{level}} lygį! 🎉\n\nTęsk įkeldamas kvitus ir lygindamas produktus, kad greičiau pasiektum kitą lygį — {{nextName}}.",
+    "neverShow": "Daugiau nerodyti",
+    "cta": "Puiku!"
+  },
+  "locationPrompt": {
+    "title": "Įveskite adresą",
+    "body": "Be vietos informacijos palyginimas būtų tik apytikslis. Įveskite namo adresą arba tik miestą — naudosime tai, kad rastume artimiausias parduotuves.",
+    "errorMinLength": "Įveskite bent keletą simbolių",
+    "errorGeocode": "Nepavyko rasti adreso. Pabandykite patikslinti arba naudokite Vilniaus centrą.",
+    "placeholder": "pvz. Vilniaus g. 10, Kaunas",
+    "useVilnius": "Naudoti Vilnių",
+    "continue": "Tęsti"
+  },
+  "donut": {
+    "total": "Iš viso"
+  },
+  "amountPicker": {
+    "weighable": "Parduodama pagal svorį",
+    "packages_one": "Pakuotė: {{value}} {{unit}}",
+    "packages_other": "Pakuotės: {{min}} – {{max}} {{unit}}",
+    "label": "Kiek jums reikia?",
+    "hintWeighable": "Kiekis bus pasvertas parduotuvėje",
+    "hintPackages": "Kiekis bus suapvalintas pagal pakuotės dydį",
+    "add": "Pridėti"
+  },
+  "comparedBasketChoice": {
+    "title": "Kur pridėti prekę?",
+    "body": "Turite palygintą krepšelį. Jei pridėsite į jį, krepšelis vėl taps redaguojamu juodraščiu.",
+    "itemCount_one": "{{count}} prekė",
+    "itemCount_few": "{{count}} prekės",
+    "itemCount_other": "{{count}} prekių",
+    "createNew": "Kurti naują krepšelį",
+    "createNewSub": "Pradėti nuo tuščio"
+  },
+  "browse": {
+    "addToBasket": "Į krepšelį",
+    "title": "Naršyti",
+    "discountsCardTitle": "Nuolaidos",
+    "discountsTitle": "Akcijos",
+    "discountsSub": "Akcijinės prekės iš visų parduotuvių",
+    "searchPlaceholder": "Ieškoti prekių su nuolaidomis…",
+    "noResultsSearch": "Nerasta akcijinių prekių pagal paiešką",
+    "noResults": "Šiuo metu nėra akcijinių prekių",
+    "basketShortcut": "Krepšelis",
+    "addedToast": "Pridėta į krepšelį",
+    "cancelled": "Atšaukta",
+    "noProducts": "Ši kategorija neturi produktų",
+    "combineAlternatives": "Apjungti alternatyvas",
+    "allProducts": "Visi produktai",
+    "modeSwitch": {
+      "title": "Keisti režimą?",
+      "body": "Jūsų krepšelyje yra prekių. Keičiant režimą jos bus taip pat pakeistos.",
+      "confirm": "Keisti",
+      "experimentalBadge": "(EKSPERIMENTINĖ)",
+      "helpTitle": "Apjungti alternatyvas",
+      "explainer": "Įjungus šį režimą, panašūs produktai iš skirtingų gamintojų ar variantų rodomi kaip viena prekė. Skaičiuojant krepšelio kainą, kiekvienoje parduotuvėje bus parenkamas pigiausias variantas iš tos grupės.",
+      "example": "Pavyzdžiui, „Pienas 2,5%\" ir „Pienas 3,5%\" yra laikomi alternatyvomis — krepšelyje matysite vieną eilutę, o lygindami parduotuves matysite pigiausio varianto kainą.",
+      "gotIt": "Supratau"
+    }
+  },
+  "createProduct": {
+    "title": "Kurti naują produktą",
+    "name": "Pavadinimas",
+    "namePlaceholder": "Įveskite produkto pavadinimą",
+    "categoryL3": "Kategorija (L3)",
+    "categorySearchPlaceholder": "Rašykite kategorijos pavadinimą",
+    "categorySelected": "Kategorija pasirinkta",
+    "categoryHint": "Pasirinkite L3 kategoriją",
+    "imageAdd": "Pridėti paveiksliuką",
+    "imageReplace": "Pakeisti paveiksliuką",
+    "creating": "Kuriama...",
+    "add": "Pridėti",
+    "pickerTitle": "Pridėti paveiksliuką",
+    "pickerBody": "Pasirinkite būdą",
+    "pickerCamera": "Fotografuoti",
+    "pickerGallery": "Iš galerijos",
+    "errors": {
+      "missingName": "Trūksta pavadinimo",
+      "missingNameBody": "Įveskite produkto pavadinimą.",
+      "missingChain": "Klaida",
+      "missingChainBody": "Nerasta parduotuvių tinklo informacija.",
+      "missingCategory": "Trūksta kategorijos",
+      "missingCategoryBody": "Pasirinkite L3 kategoriją.",
+      "uploadUrl": "Nepavyko gauti įkėlimo URL",
+      "uploadImage": "Nepavyko įkelti paveiksliuko",
+      "createProduct": "Nepavyko sukurti produkto",
+      "createStoreProduct": "Nepavyko sukurti parduotuvės produkto",
+      "priceWarningTitle": "Įspėjimas",
+      "priceWarningBody": "Produktas sukurtas, bet kainos išsaugoti nepavyko: {{detail}}. Galite pabandyti dar kartą vėliau.",
+      "unknown": "nežinoma klaida",
+      "generic": "Klaida"
+    }
+  },
+  "breakdown": {
+    "title": "Pirkinių pasiskirstymas",
+    "other": "Kita",
+    "unrecognised": "Neatpažinta",
+    "modal": {
+      "title": "Neatpažintos prekės",
+      "rowNoCategory": "Šios prekės dar be kategorijos.",
+      "rowSortCards": "Rūšiuok korteles – padėk joms rasti vietą.",
+      "rowSelfResolve": "Kai kurios susitvarkys pačios, kai bus daugiau panašių prekių.",
+      "improve": "Pagerinti atpažinimą"
+    }
+  },
+  "receipts": {
+    "empty": "Kvitų nėra",
+    "emptyBody": "Įkelkite pirkinių kvitą ir stebėkite savo išlaidas",
+    "uploadCta": "Įkelti kvitą",
+    "offline": {
+      "title": "Nėra interneto ryšio",
+      "body": "Kvitų įkėlimas neįmanomas be interneto. Prisijunk prie tinklo ir bandyk vėl."
+    },
+    "uploadFail": {
+      "title": "Įkėlimas nepavyko",
+      "body": "Nepavyko paruošti nė vieno failo. Patikrinkite internetą ir bandykite vėl."
+    },
+    "resume": {
+      "title": "Tęsti kvito analizę?",
+      "body": "Anksčiau pradėtas kvito apdorojimas nebuvo užbaigtas. Ar tęsti?"
+    },
+    "sections": {
+      "new": "Nauji",
+      "earlier": "Anksčiau"
+    },
+    "status": {
+      "duplicate": "Jau įkeltas",
+      "duplicateRaw": "Kvitas jau įkeltas",
+      "failed": "Nepavyko",
+      "recognising": "Atpažįstama",
+      "saving": "Įkeliama",
+      "awaitingNetwork": "Atnaujinsime, kai grįš internetas",
+      "helpRecognise": "Padėk atpažinti",
+      "unknownStore": "Neatpažinta parduotuvė",
+      "pending": "Laukiama",
+      "awaitingNetworkBadge": "Laukiama tinklo",
+      "processing": "Apdorojama",
+      "scanning": "Nuskaitoma",
+      "completed": "Apdorotas",
+      "defaultTitle": "Kvitas",
+      "bannerDisabled": "Laukiama interneto"
+    },
+    "filterAll": "Visi",
+    "menu": {
+      "pdfConverting": "PDF konvertuojamas į vaizdą",
+      "uploadTitle": "Kvito įkėlimas",
+      "uploadAction": "Įkelti",
+      "uploadCamera": "Fotografuoti",
+      "previewToggle": "Peržiūra — neišsaugoti",
+      "previewHint": "OCR ir parserio išvestis rodoma, bet kvitas nesukuriamas duomenų bazėje."
+    }
+  },
+  "basketTab": {
+    "errorCreate": "Nepavyko sukurti krepšelio",
+    "warnActiveExists": "Jau turite aktyvų krepšelį. Užbaikite jį prieš kurdami naują.",
+    "warnTitle": "Dėmesio",
+    "errorGeneric": "Klaida",
+    "statusDraft": "Juodraštis",
+    "statusCompared": "Palyginta",
+    "statusInProgress": "Vykdomas",
+    "statusCompleted": "Įvykdytas",
+    "loading": "Įkeliama…",
+    "empty": "Krepšelis tuščias",
+    "emptyBody": "Pridėkite produktų ir palyginkite kainas parduotuvėse",
+    "emptyCta": "Naršyti produktus",
+    "loadMore": "Rodyti daugiau ({{count}})"
+  },
+  "basketDetail": {
+    "errorRemove": "Nepavyko pašalinti produkto",
+    "errorCalculate": "Nepavyko apskaičiuoti. Patikrinkite interneto ryšį ir bandykite dar kartą.",
+    "revertTitle": "Grąžinti į juodraštį",
+    "revertBody": "Ar tikrai norite grąžinti krepšelį į juodraštį?",
+    "revertConfirm": "Grąžinti",
+    "errorRevert": "Nepavyko grąžinti krepšelio",
+    "empty": "Krepšelis tuščias",
+    "emptyBody": "Pridėkite produktų naršydami katalogą",
+    "viewInProgress": "Peržiūrėti",
+    "viewCompleted": "Peržiūrėti (užbaigta)",
+    "draft": "Juodraštis",
+    "calculating": "Skaičiuojama…",
+    "calculate": "Apskaičiuoti",
+    "calcModalSub": "Lyginame kainas 10 artimiausių parduotuvių"
+  },
+  "shoppingListDetail": {
+    "delete": "Ištrinti",
+    "completeTitle": "Pirkiniai surinkti!",
+    "completeConfirm": "Ar norite pažymėti sąrašą kaip užbaigtą?",
+    "completeYes": "Taip",
+    "completeNo": "Ne",
+    "alreadyInList": "Jau sąraše",
+    "alreadyInListBody": "\"{{name}}\" jau yra pirkinių sąraše",
+    "errorAdd": "Nepavyko pridėti produkto",
+    "errorCopy": "Nepavyko nukopijuoti sąrašo",
+    "errorGeneric": "Klaida",
+    "fallbackTitle": "Pirkinių sąrašas",
+    "deletedUndo": "Ištrinta. Atšaukti?",
+    "progress": "{{checked}} iš {{total}}",
+    "searchPlaceholder": "Ieškoti arba pridėti prekę…",
+    "addCustom": "Pridėti \"{{name}}\" kaip naują prekę",
+    "empty": "Sąrašas tuščias",
+    "copyList": "Nukopijuoti sąrašą",
+    "modalCancel": "Atšaukti",
+    "errorAmount": "Įveskite teisingą kiekį",
+    "modalAdd": "Pridėti",
+    "quantityLabel": "Kiekis",
+    "unitPieces": "vnt.",
+    "couponTitle": "Prisiminkite kuponą!",
+    "couponBadge": "{{name}} kuponas",
+    "couponBodyPart1": "Suaktyvinkite {{name}} kuponą",
+    "couponApp": "Lidl Plus",
+    "couponBodyPart2": "programėlėje prieš atsiskaitydami.",
+    "couponNeverShow": "Daugiau nerodyti",
+    "couponGotIt": "Supratau",
+    "shareExpiredTitle": "QR kodas nebegalioja",
+    "shareErrorTitle": "Klaida",
+    "shareErrorBody": "Nepavyko sukurti QR kodo.",
+    "shareConnected": "Sąrašas prijungtas",
+    "shareConnectedSub": "Kitas vartotojas prisijungė prie sąrašo.",
+    "shareCreateForShare": "Sukurkite naują, jei norite pasidalinti.",
+    "shareTitle": "Dalintis sąrašu",
+    "shareSubtitle": "Tegul kitas vartotojas nuskaito QR kodą.",
+    "shareClose": "Uždaryti"
+  },
+  "swipe": {
+    "errorQueue": "Nepavyko gauti eilės",
+    "directionIdentical": "Identiška",
+    "directionSimilar": "Panaši",
+    "directionDifferent": "Skirtinga",
+    "directionSkip": "Praleisti",
+    "header": "Padėk atpažinti",
+    "headerProgress": "Padėk atpažinti · {{current}}/{{total}}",
+    "back": "Grįžti",
+    "doneAck": "Ačiū!",
+    "doneEmpty": "Nieko atpažinti",
+    "emptyVoluntaryReceipt": "Šiuo metu šio kvito Nepriskirta prekės neturi panašių kandidatų. Įkėlus daugiau kvitų kortelės atsiras automatiškai.",
+    "emptyNothing": "Šiuo metu nėra kortelių peržiūrai. Užsukite vėliau.",
+    "doneAllSeen": "Peržiūrėjote visas korteles šioje sesijoje.",
+    "fromGlobalFill": "Šio kvito kortelės baigtos — padedi visiems vartotojams",
+    "undoCancel": "Atšaukti",
+    "moreCta": "Gal dar?"
+  },
+  "voteHistory": {
+    "filterAll": "Visi",
+    "filterIdentical": "Identiški",
+    "filterSimilar": "Panašūs",
+    "filterDifferent": "Skirtingi",
+    "voteIdentical": "Identiški",
+    "voteSimilar": "Panašūs",
+    "voteDifferent": "Skirtingi",
+    "searchPlaceholder": "Ieškoti produktų...",
+    "emptyFiltered": "Nėra tokių balsavimų",
+    "emptyNone": "Dar nėra balsavimų",
+    "helpTitle": "Balsavimų istorija",
+    "helpBody1": "Čia matosi visi produktų palyginimai, kuriuos atlikai įkeldamas kvitus iš skirtingų parduotuvių.",
+    "helpBody2": "Jei atsakei neteisingai — bakstelėk ant įrašo ir pataisyk. Taip naršydamas produktus matysi tikslesnius rezultatus.",
+    "helpBody3": "Paieška ir filtrai viršuje padės greičiau rasti, ko ieškai.",
+    "editTitle": "Pakeisti balsavimą",
+    "helpClose": "Supratau"
+  },
+  "search": {
+    "foundElsewhereTitle": "Kitur rastas produktas",
+    "addPrompt": "Pridėti „{{name}}\" į šios parduotuvės sąrašą?",
+    "addAction": "Pridėti",
+    "errorAdd": "Nepavyko pridėti produkto",
+    "errorCreateSp": "Nepavyko sukurti StoreProduct",
+    "createNewTitle": "Kurti naują produktą",
+    "createNewName": "Pavadinimas: {{name}}",
+    "createNewPrompt": "Įveskite pavadinimą",
+    "searchPlaceholder": "Ieškoti produkto...",
+    "notFound": "Produktų nerasta",
+    "enterQuery": "Įveskite paieškos tekstą",
+    "errorGeneric": "Klaida",
+    "noOcrName": "Nėra OCR pavadinimo",
+    "pickCategory": "Pasirinkite kategoriją"
+  },
+  "items": {
+    "count_one": "{{count}} prekė",
+    "count_few": "{{count}} prekės",
+    "count_other": "{{count}} prekių"
+  },
+  "capture": {
+    "retake": "Iš naujo",
+    "continue": "Tęsti",
+    "permission": "Reikia prieigos prie kameros",
+    "permissionGrant": "Leisti"
+  },
+  "scan": {
+    "title": "Skenuoti QR",
+    "hint": "Nukreipkite kamerą į QR kodą",
+    "errorExpired": "QR kodas nebegalioja",
+    "errorClaimed": "QR kodas jau panaudotas",
+    "errorJoin": "Nepavyko prisijungti prie sąrašo",
+    "errorScan": "Nepavyko nuskaityti QR",
+    "errorTitle": "Klaida",
+    "ok": "Gerai"
+  },
+  "comparison": {
+    "calculating": "Skaičiuojama...",
+    "saved": "sutaupėte",
+    "couldHaveSaved": "galėjote sutaupyti",
+    "title": "Apsipirkimo analizė ({{compared}}/{{total}})",
+    "youShopped": "Jūs pirkote",
+    "yourStore": "(jūsų parduotuvė)",
+    "boughtHere": "pirkote čia"
+  },
+  "summary": {
+    "fallbackChain": "Neatpažinta",
+    "productsTitle": "Prekės ({{count}})",
+    "productsEmpty": "Prekės neatpažintos",
+    "footerTitle": "Kvito duomenys",
+    "footerTotal": "Suma:",
+    "footerDate": "Data:",
+    "footerNo": "Kvito Nr.:",
+    "footerStatSum": "Suma",
+    "footerStatTime": "Laikas",
+    "footerStatReceiptNo": "Kvito Nr."
+  },
+  "receiptProcess": {
+    "tabSummary": "Suvestinė",
+    "tabProducts": "Prekės ({{count}})",
+    "tabReceipt": "Kvitas",
+    "loading": "Įkeliami duomenys...",
+    "loadingScan": "Nuskaitomi ir atpažįstami duomenys",
+    "loadingSending": "Siunčiami kvito duomenys…",
+    "loadingPhoto": "Siunčiama nuotrauka…",
+    "loadingComparison": "Skaičiuojamas palyginimas…",
+    "matchProgress": "{{done}} / {{total}} prekių atpažinta",
+    "title": "Kvito analizė",
+    "titlePreview": "Kvito peržiūra (neišsaugoma)",
+    "unrecognised": "Neatpažinta",
+    "unknownStore": "Neatpažinta parduotuvė",
+    "savedFailTitle": "Kvito duomenys sugadinti",
+    "savedFail": "Šio kvito duomenys nebeprieinami. Pabandyk įkelti kvitą iš naujo.",
+    "fallbackChain": "Neatpažinta",
+    "imageMissing": "Paveikslėlis nebuvo įkeltas. Pakartotinai apdoroti kvitą reikėtų iš Analizės skirtuko.",
+    "duplicateTitle": "Kvitas jau įkeltas",
+    "duplicateBody": "Šis kvitas jau buvo įkeltas.",
+    "errorSave": "Nepavyko išsaugoti kvito",
+    "errorUploadUrlFields": "upload-url atsakyme trūksta laukų",
+    "errorUploadPhoto": "Nepavyko įkelti nuotraukos",
+    "errorSendTitle": "Nepavyko išsiųsti",
+    "errorSendBody": "Bandykite dar kartą vėliau.",
+    "errorProductUnmatched": "Produktas neatpažintas",
+    "errorProductUnmatchedBody": "Nuotraukos galima pridėti tik prie atpažintų produktų.",
+    "errorPermissionTitle": "Nėra prieigos",
+    "errorPermissionBody": "Leiskite prieigą prie galerijos, kad pridėtumėte nuotrauką.",
+    "errorPhotoUploadTitle": "Nuotraukos įkėlimas nepavyko",
+    "errorPhotoUploadBody": "Bandykite dar kartą.",
+    "errorOcrUnreadable": "Nepavyko nuskaityti kvito teksto. Pabandyk įkelti geresnę nuotrauką arba kitą kvitą.",
+    "errorOcrParse": "Įvyko klaida skaitant kvitą. Pabandyk dar kartą arba įkelk kitą kvitą.",
+    "errorChain": "Parduotuvės tinklas nebuvo atpažintas. Pabandyk įkelti geresnę nuotrauką arba kitą kvitą.",
+    "errorStore": "Parduotuvė nebuvo atpažinta. Pabandyk įkelti geresnę nuotrauką arba kitą kvitą.",
+    "leaveProcessingTitle": "Kvitas dar apdorojamas",
+    "leaveProcessingBody": "Jei išeisite dabar, apdorojimas tęsis fone, bet galite matyti nepilną rezultatą.",
+    "leaveWait": "Palaukti",
+    "leaveAction": "Išeiti",
+    "swipeEntryCta": "Pagerink kainų palyginimą",
+    "swipeEntryCount": "{{count}} kortelių · tikslesniam atpažinimui",
+    "swipeEntryShort": "Tikslesniam atpažinimui",
+    "productsEmpty": "Prekės neatpažintos",
+    "namePlaceholder": "Įveskite produkto pavadinimą",
+    "addPhoto": "Pridėti nuotrauką",
+    "send": "Siųsti"
+  },
+  "product": {
+    "noDataForPeriod": "Nėra duomenų pasirinktam laikotarpiui",
+    "regularPrice": "Įprasta",
+    "promoPrice": "Akcija",
+    "rangeAll": "Viskas",
+    "fallbackStore": "Parduotuvė",
+    "allStores": "Visos parduotuvės",
+    "searchStorePlaceholder": "Ieškoti parduotuvės...",
+    "notAvailable": "Šioje parduotuvių tinkle produktas nepasiekiamas",
+    "priceHistory": "Kainų istorija",
+    "priceHistoryEmpty": "Kainų istorija dar nesukaupta"
+  },
+  "shoppingListTab": {
+    "delete": "Ištrinti",
+    "complete": "Užbaigti",
+    "errors": {
+      "noStoreChoices": "Šiai parduotuvei nėra pasirinkimų",
+      "createList": "Nepavyko sukurti sąrašo",
+      "completeList": "Nepavyko užbaigti sąrašo",
+      "generic": "Klaida"
+    },
+    "deletedUndo": "Ištrinta. Atšaukti?",
+    "sectionActive": "Aktyvūs",
+    "sectionCompleted": "Užbaigti",
+    "empty": "Pirkinių sąrašų nėra",
+    "emptyBody": "Sudėkite produktus į krepšelį, palyginkite kainas ir sukurkite sąrašą",
+    "emptyCta": "Eiti į krepšelį",
+    "pickStoreTitle": "Pasirinkite parduotuvę",
+    "noStoresFound": "Nerasta parduotuvių",
+    "fabScanQr": "Skenuoti QR",
+    "fabCreate": "Kurti"
+  },
+  "profilis": {
+    "levelLabel": "Lygis {{level}}",
+    "progressLabel": "{{current}} / {{target}} iki kito lygio",
+    "statsTitle": "Statistika",
+    "carouselStores": "Išlaidos pagal parduotuvę",
+    "carouselCategories": "Išlaidos pagal kategoriją",
+    "carouselKita": "Kitos kategorijos",
+    "carouselMonthly": "Mėnesinės išlaidos",
+    "noData": "Duomenų dar nėra",
+    "points_one": "{{count}} taškas",
+    "points_few": "{{count}} taškai",
+    "points_other": "{{count}} taškų",
+    "savedTotal": "Iš viso sutaupėte",
+    "couldHaveSavedTotal": "Iš viso galėjote sutaupyti",
+    "dataFootnote": "Duomenys pagrįsti įkeltais kvitais",
+    "voteHistory": "Balsavimų istorija",
+    "devTools": "Kūrėjo įrankiai",
+    "devReceiptBatch": "Kvitų paketinis testas",
+    "kitaTotal": "{{total}} iš viso",
+    "kitaShowAll_one": "Rodyti visas ({{count}} kategoriją)",
+    "kitaShowAll_few": "Rodyti visas ({{count}} kategorijas)",
+    "kitaShowAll_other": "Rodyti visas ({{count}} kategorijų)"
+  },
+  "receiptPhoto": {
+    "title": "Atpažinti duomenys",
+    "fallbackTitle": "Kvito nuotrauka",
+    "fallbackBody": "Šio kvito nuotrauka neprieinama.",
+    "bands": {
+      "address": "Parduotuvės adresas",
+      "products": "Prekės",
+      "total": "Suma",
+      "dateTime": "Data ir laikas",
+      "receiptNo": "Kvito Nr."
+    },
+    "explainer": {
+      "title": "Kokius duomenis Souply atpažįsta",
+      "body": "Souply pažymi kvite kiekvieną duomenų lauką spalvotu rėmeliu — taip matote tiksliai, kuriuos pikselius nuskaitėme ir kokia informacija renkama. Šie duomenys naudojami tik kainų palyginimui ir jūsų asmeninei pirkimų analizei.",
+      "addressBody": "Parduotuvės adresas — pagal jį susiejama su mūsų parduotuvių katalogu.",
+      "productsBody": "Kiekviena pirkta prekė su pavadinimu, kiekiu ir kaina.",
+      "totalBody": "Bendra kvito suma.",
+      "dateTimeBody": "Kvito data ir laikas.",
+      "receiptNoBody": "Unikalus kvito numeris — pagal jį atskiriamos pakartotinai įkeltos nuotraukos.",
+      "close": "Supratau"
+    }
+  }
+}

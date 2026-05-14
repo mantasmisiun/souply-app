@@ -1,6 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useMemo } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import { ProductImage } from '../ProductImage';
 import { useTheme, type AppTheme } from '../../constants/theme';
 
@@ -26,6 +27,7 @@ export default function BasketProductCard({
     onInc,
 }: Props) {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
 
     return (
@@ -51,7 +53,7 @@ export default function BasketProductCard({
 
             {quantity === 0 ? (
                 <TouchableOpacity style={styles.addButton} onPress={onAdd}>
-                    <Text style={styles.addButtonText}>Į krepšelį</Text>
+                    <Text style={styles.addButtonText}>{t('browse.addToBasket')}</Text>
                 </TouchableOpacity>
             ) : (
                 <View style={styles.quantityControl}>

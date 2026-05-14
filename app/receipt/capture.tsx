@@ -3,10 +3,12 @@ import { CameraView, useCameraPermissions } from "expo-camera";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useMemo, useRef, useState } from "react";
 import { Image, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useTranslation } from "react-i18next";
 import { useTheme, type AppTheme } from "../../constants/theme";
 
 export default function CaptureReceiptScreen() {
   const colors = useTheme();
+  const { t } = useTranslation();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [permission, requestPermission] = useCameraPermissions();
   const [photo, setPhoto] = useState<string | null>(null);
@@ -23,12 +25,12 @@ export default function CaptureReceiptScreen() {
     return (
       <View style={styles.permissionContainer}>
         <Ionicons name="camera-outline" size={64} color={colors.textMuted} />
-        <Text style={styles.permissionText}>Reikia prieigos prie kameros</Text>
+        <Text style={styles.permissionText}>{t('capture.permission')}</Text>
         <TouchableOpacity
           style={styles.permissionButton}
           onPress={requestPermission}
         >
-          <Text style={styles.permissionButtonText}>Leisti</Text>
+          <Text style={styles.permissionButtonText}>{t('capture.permissionGrant')}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -68,11 +70,11 @@ export default function CaptureReceiptScreen() {
         <View style={styles.previewActions}>
           <TouchableOpacity style={styles.retakeButton} onPress={retakePhoto}>
             <Ionicons name="refresh" size={24} color={colors.onPrimary} />
-            <Text style={styles.retakeText}>Iš naujo</Text>
+            <Text style={styles.retakeText}>{t('capture.retake')}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.confirmButton} onPress={confirmPhoto}>
             <Ionicons name="checkmark" size={24} color={colors.onPrimary} />
-            <Text style={styles.confirmText}>Tęsti</Text>
+            <Text style={styles.confirmText}>{t('capture.continue')}</Text>
           </TouchableOpacity>
         </View>
       </View>

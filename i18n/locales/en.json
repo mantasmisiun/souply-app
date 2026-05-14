@@ -1,0 +1,610 @@
+{
+  "tabs": {
+    "receipts": "Analyze",
+    "browse": "Browse",
+    "basket": "Basket",
+    "shoppingList": "Shopping list",
+    "profilis": "Profile"
+  },
+  "levels": {
+    "0": "Onion",
+    "1": "Potato",
+    "2": "Beetroot",
+    "3": "Carrot",
+    "4": "Garlic",
+    "5": "Cucumber",
+    "6": "Tomato",
+    "7": "Corn",
+    "8": "Broccoli",
+    "9": "Egg",
+    "10": "Bread",
+    "11": "Butter",
+    "12": "Milk",
+    "13": "Cheese",
+    "14": "Sausage",
+    "15": "Chicken",
+    "16": "Beef",
+    "17": "Herring",
+    "18": "Eggplant",
+    "19": "Peach",
+    "20": "Chili",
+    "21": "Banana",
+    "22": "Nut",
+    "23": "Pizza",
+    "24": "Chocolate",
+    "25": "Salmon",
+    "26": "Strawberry",
+    "27": "Blueberry",
+    "28": "Avocado",
+    "29": "Wine",
+    "30": "Shrimp",
+    "31": "Olive",
+    "32": "Lobster",
+    "33": "Crab",
+    "34": "Oyster",
+    "35": "Sushi",
+    "36": "Whisky",
+    "37": "Chestnut",
+    "38": "Mango",
+    "39": "Mushroom"
+  },
+  "screens": {
+    "basket": "Basket",
+    "shoppingList": "Shopping list",
+    "receiptProcess": "Receipt",
+    "voteHistory": "Vote history"
+  },
+  "settings": {
+    "title": "Settings",
+    "language": {
+      "section": "Language",
+      "label": "Choose language"
+    },
+    "notifications": {
+      "section": "Notifications",
+      "levelUp": {
+        "label": "Show level-up notification",
+        "hint": "When you reach a new level, we'll show a celebration."
+      },
+      "nepriskirtaExplainer": {
+        "label": "Show \"Unrecognised\" explainer",
+        "hint": "When you tap ❓ on the \"Unrecognised\" row, we'll explain what it means. If off, tapping it opens the swipe queue directly."
+      }
+    },
+    "account": {
+      "section": "Account",
+      "restore": {
+        "label": "Restore account",
+        "hint": "Lost your phone? Restore your account using uploaded receipts."
+      },
+      "delete": {
+        "label": "Delete account",
+        "hint": "Irreversible action."
+      }
+    },
+    "about": {
+      "section": "About",
+      "version": "Version",
+      "build": "Build"
+    }
+  },
+  "delete": {
+    "stage1": {
+      "title": "Are you sure you want to delete your account?",
+      "willDelete": "Will be deleted:",
+      "willDeleteItems": [
+        "your uploaded receipts and their photos",
+        "baskets",
+        "shopping lists",
+        "level and points"
+      ],
+      "willKeep": "Will remain (anonymised):",
+      "willKeepItems": [
+        "your votes contributing to the shared price catalog"
+      ],
+      "cancel": "Cancel",
+      "continue": "Continue"
+    },
+    "stage2": {
+      "title": "Irreversible action",
+      "body": "To confirm, type DELETE",
+      "placeholder": "DELETE",
+      "cancel": "Cancel",
+      "confirm": "Confirm",
+      "magic": "DELETE"
+    },
+    "goodbye": {
+      "title": "Account deleted",
+      "body": "Thanks for using Souply.",
+      "cta": "Open new account"
+    },
+    "errorTitle": "Error",
+    "errorBody": "Could not delete account. Try again later."
+  },
+  "restore": {
+    "title": "Restore account",
+    "comingSoon": "Coming soon",
+    "body": "Restore your account by uploading 3 receipts you've previously uploaded to Souply. This feature will be available soon.",
+    "back": "Back",
+    "intro": "Add 3 receipts you've previously uploaded to Souply. You'll need receipts from at least 2 different stores.",
+    "slotEmpty": "Add receipt",
+    "slotProcessing": "Processing…",
+    "slotInvalid": "Couldn't read this file — try another",
+    "addFiles": "Add files",
+    "submit": "Restore account",
+    "submitting": "Restoring…",
+    "failedTitle": "Couldn't identify account",
+    "failedBody": "Please try again later.",
+    "failedClose": "Close",
+    "lockedTitle": "Too many attempts",
+    "lockedBody": "Please try again later.",
+    "lockedClose": "Close",
+    "successTitle": "Account restored",
+    "successBody": "Please reload the app to finish restoring your account.",
+    "successReload": "Reload app"
+  },
+  "common": {
+    "back": "Back",
+    "close": "Close",
+    "ok": "OK",
+    "save": "Save",
+    "cancel": "Cancel",
+    "continue": "Continue",
+    "confirm": "Confirm",
+    "delete": "Delete",
+    "edit": "Edit",
+    "retry": "Retry",
+    "loading": "Loading...",
+    "search": "Search",
+    "yes": "Yes",
+    "no": "No"
+  },
+  "banners": {
+    "offline": "No internet connection",
+    "pendingSwipes": {
+      "title": "Help us recognise",
+      "cta": "Start",
+      "label_one": "{{count}} item awaits confirmation",
+      "label_other": "{{count}} items await confirmation"
+    }
+  },
+  "levelUp": {
+    "title": "New level!",
+    "body": "Congratulations — you reached level {{level}}! 🎉\n\nKeep uploading receipts and comparing products to reach the next level faster — {{nextName}}.",
+    "neverShow": "Don't show again",
+    "cta": "Great!"
+  },
+  "locationPrompt": {
+    "title": "Enter your address",
+    "body": "Without location info, comparison would only be approximate. Enter your home address or just a city — we'll use it to find the nearest stores.",
+    "errorMinLength": "Enter at least a few characters",
+    "errorGeocode": "Couldn't find the address. Try refining it or use Vilnius centre.",
+    "placeholder": "e.g. Vilniaus g. 10, Kaunas",
+    "useVilnius": "Use Vilnius",
+    "continue": "Continue"
+  },
+  "donut": {
+    "total": "Total"
+  },
+  "amountPicker": {
+    "weighable": "Sold by weight",
+    "packages_one": "Package: {{value}} {{unit}}",
+    "packages_other": "Packages: {{min}} – {{max}} {{unit}}",
+    "label": "How much do you need?",
+    "hintWeighable": "Amount will be weighed at the store",
+    "hintPackages": "Amount will be rounded to package size",
+    "add": "Add"
+  },
+  "comparedBasketChoice": {
+    "title": "Where to add the item?",
+    "body": "You have a compared basket. Adding to it will turn it back into an editable draft.",
+    "itemCount_one": "{{count}} item",
+    "itemCount_other": "{{count}} items",
+    "createNew": "Create new basket",
+    "createNewSub": "Start from empty"
+  },
+  "browse": {
+    "addToBasket": "Add",
+    "title": "Browse",
+    "discountsCardTitle": "Discounts",
+    "discountsTitle": "Discounts",
+    "discountsSub": "Discounted items from all stores",
+    "searchPlaceholder": "Search discounted items…",
+    "noResultsSearch": "No discounted items match your search",
+    "noResults": "No discounted items right now",
+    "basketShortcut": "Basket",
+    "addedToast": "Added to basket",
+    "cancelled": "Cancelled",
+    "noProducts": "No products in this category",
+    "combineAlternatives": "Merge alternatives",
+    "allProducts": "All products",
+    "modeSwitch": {
+      "title": "Change mode?",
+      "body": "Your basket has items. Changing the mode will recalculate them too.",
+      "confirm": "Change",
+      "experimentalBadge": "(EXPERIMENTAL)",
+      "helpTitle": "Merge alternatives",
+      "explainer": "When this mode is on, similar products from different brands or variants are shown as one item. When pricing the basket, each store uses the cheapest variant from the group.",
+      "example": "For example, \"Milk 2.5%\" and \"Milk 3.5%\" are treated as alternatives — you'll see one line in the basket and the cheapest variant's price when comparing stores.",
+      "gotIt": "Got it"
+    }
+  },
+  "createProduct": {
+    "title": "Create new product",
+    "name": "Name",
+    "namePlaceholder": "Enter product name",
+    "categoryL3": "Category (L3)",
+    "categorySearchPlaceholder": "Type a category name",
+    "categorySelected": "Category selected",
+    "categoryHint": "Pick an L3 category",
+    "imageAdd": "Add image",
+    "imageReplace": "Replace image",
+    "creating": "Creating...",
+    "add": "Add",
+    "pickerTitle": "Add image",
+    "pickerBody": "Choose a method",
+    "pickerCamera": "Take photo",
+    "pickerGallery": "From gallery",
+    "errors": {
+      "missingName": "Missing name",
+      "missingNameBody": "Enter a product name.",
+      "missingChain": "Error",
+      "missingChainBody": "Store chain information not found.",
+      "missingCategory": "Missing category",
+      "missingCategoryBody": "Pick an L3 category.",
+      "uploadUrl": "Could not get upload URL",
+      "uploadImage": "Could not upload image",
+      "createProduct": "Could not create product",
+      "createStoreProduct": "Could not create store product",
+      "priceWarningTitle": "Warning",
+      "priceWarningBody": "Product created, but the price couldn't be saved: {{detail}}. You can retry later.",
+      "unknown": "unknown error",
+      "generic": "Error"
+    }
+  },
+  "breakdown": {
+    "title": "Spending breakdown",
+    "other": "Other",
+    "unrecognised": "Unrecognised",
+    "modal": {
+      "title": "Unrecognised items",
+      "rowNoCategory": "These items don't have a category yet.",
+      "rowSortCards": "Sort the cards – help them find a place.",
+      "rowSelfResolve": "Some will resolve themselves once more similar items are uploaded.",
+      "improve": "Improve recognition"
+    }
+  },
+  "receipts": {
+    "empty": "No receipts yet",
+    "emptyBody": "Upload a receipt and start tracking your spending",
+    "uploadCta": "Upload receipt",
+    "offline": {
+      "title": "No internet connection",
+      "body": "Receipts can't be uploaded offline. Reconnect and try again."
+    },
+    "uploadFail": {
+      "title": "Upload failed",
+      "body": "Couldn't prepare any of the files. Check your connection and try again."
+    },
+    "resume": {
+      "title": "Resume receipt analysis?",
+      "body": "A previous receipt's processing wasn't finished. Continue?"
+    },
+    "sections": {
+      "new": "New",
+      "earlier": "Earlier"
+    },
+    "status": {
+      "duplicate": "Already uploaded",
+      "duplicateRaw": "Receipt already uploaded",
+      "failed": "Failed",
+      "recognising": "Recognising",
+      "saving": "Uploading",
+      "awaitingNetwork": "Will retry when back online",
+      "helpRecognise": "Help us recognise",
+      "unknownStore": "Unknown store",
+      "pending": "Pending",
+      "awaitingNetworkBadge": "Awaiting network",
+      "processing": "Processing",
+      "scanning": "Scanning",
+      "completed": "Processed",
+      "defaultTitle": "Receipt",
+      "bannerDisabled": "Waiting for network"
+    },
+    "filterAll": "All",
+    "menu": {
+      "pdfConverting": "Converting PDF to image",
+      "uploadTitle": "Upload receipt",
+      "uploadAction": "Upload",
+      "uploadCamera": "Take photo",
+      "previewToggle": "Preview — don't save",
+      "previewHint": "OCR and parser output is shown, but the receipt isn't stored."
+    }
+  },
+  "basketTab": {
+    "errorCreate": "Couldn't create basket",
+    "warnActiveExists": "You already have an active basket. Finish it before creating a new one.",
+    "warnTitle": "Notice",
+    "errorGeneric": "Error",
+    "statusDraft": "Draft",
+    "statusCompared": "Compared",
+    "statusInProgress": "In progress",
+    "statusCompleted": "Completed",
+    "loading": "Loading…",
+    "empty": "Basket is empty",
+    "emptyBody": "Add products and compare prices across stores",
+    "emptyCta": "Browse products",
+    "loadMore": "Show more ({{count}})"
+  },
+  "basketDetail": {
+    "errorRemove": "Couldn't remove product",
+    "errorCalculate": "Couldn't calculate. Check your connection and try again.",
+    "revertTitle": "Revert to draft",
+    "revertBody": "Are you sure you want to revert the basket to draft?",
+    "revertConfirm": "Revert",
+    "errorRevert": "Couldn't revert basket",
+    "empty": "Basket is empty",
+    "emptyBody": "Add products by browsing the catalog",
+    "viewInProgress": "View",
+    "viewCompleted": "View (completed)",
+    "draft": "Draft",
+    "calculating": "Calculating…",
+    "calculate": "Calculate",
+    "calcModalSub": "Comparing prices across the 10 nearest stores"
+  },
+  "shoppingListDetail": {
+    "delete": "Delete",
+    "completeTitle": "Items collected!",
+    "completeConfirm": "Mark the list as completed?",
+    "completeYes": "Yes",
+    "completeNo": "No",
+    "alreadyInList": "Already in list",
+    "alreadyInListBody": "\"{{name}}\" is already in the list",
+    "errorAdd": "Couldn't add product",
+    "errorCopy": "Couldn't copy list",
+    "errorGeneric": "Error",
+    "fallbackTitle": "Shopping list",
+    "deletedUndo": "Deleted. Undo?",
+    "progress": "{{checked}} of {{total}}",
+    "searchPlaceholder": "Search or add an item…",
+    "addCustom": "Add \"{{name}}\" as a new item",
+    "empty": "List is empty",
+    "copyList": "Copy list",
+    "modalCancel": "Cancel",
+    "errorAmount": "Enter a valid amount",
+    "modalAdd": "Add",
+    "quantityLabel": "Quantity",
+    "unitPieces": "pcs",
+    "couponTitle": "Remember the coupon!",
+    "couponBadge": "{{name}} coupon",
+    "couponBodyPart1": "Activate the {{name}} coupon",
+    "couponApp": "Lidl Plus",
+    "couponBodyPart2": "in the app before paying.",
+    "couponNeverShow": "Don't show again",
+    "couponGotIt": "Got it",
+    "shareExpiredTitle": "QR code expired",
+    "shareErrorTitle": "Error",
+    "shareErrorBody": "Couldn't create QR code.",
+    "shareConnected": "List connected",
+    "shareConnectedSub": "Another user joined the list.",
+    "shareCreateForShare": "Create a new one if you want to share.",
+    "shareTitle": "Share list",
+    "shareSubtitle": "Let the other user scan the QR code.",
+    "shareClose": "Close"
+  },
+  "swipe": {
+    "errorQueue": "Couldn't fetch queue",
+    "directionIdentical": "Identical",
+    "directionSimilar": "Similar",
+    "directionDifferent": "Different",
+    "directionSkip": "Skip",
+    "header": "Help us recognise",
+    "headerProgress": "Help us recognise · {{current}}/{{total}}",
+    "back": "Back",
+    "doneAck": "Thanks!",
+    "doneEmpty": "Nothing to recognise",
+    "emptyVoluntaryReceipt": "Currently this receipt's Unrecognised items have no similar candidates. As more receipts are uploaded, cards will appear automatically.",
+    "emptyNothing": "No cards to review right now. Check back later.",
+    "doneAllSeen": "You've reviewed all the cards in this session.",
+    "fromGlobalFill": "This receipt's cards are done — helping all users",
+    "undoCancel": "Undo",
+    "moreCta": "More?"
+  },
+  "voteHistory": {
+    "filterAll": "All",
+    "filterIdentical": "Identical",
+    "filterSimilar": "Similar",
+    "filterDifferent": "Different",
+    "voteIdentical": "Identical",
+    "voteSimilar": "Similar",
+    "voteDifferent": "Different",
+    "searchPlaceholder": "Search products...",
+    "emptyFiltered": "No votes match",
+    "emptyNone": "No votes yet",
+    "helpTitle": "Vote history",
+    "helpBody1": "Here are all the product comparisons you've made by uploading receipts from different stores.",
+    "helpBody2": "If you answered incorrectly — tap an entry and fix it. This way, browsing products shows you more accurate results.",
+    "helpBody3": "Search and filters at the top help you find what you're looking for faster.",
+    "editTitle": "Edit vote",
+    "helpClose": "Got it"
+  },
+  "search": {
+    "foundElsewhereTitle": "Product found elsewhere",
+    "addPrompt": "Add \"{{name}}\" to this store's list?",
+    "addAction": "Add",
+    "errorAdd": "Couldn't add product",
+    "errorCreateSp": "Couldn't create StoreProduct",
+    "createNewTitle": "Create new product",
+    "createNewName": "Name: {{name}}",
+    "createNewPrompt": "Enter a name",
+    "searchPlaceholder": "Search product...",
+    "notFound": "No products found",
+    "enterQuery": "Enter a search term",
+    "errorGeneric": "Error",
+    "noOcrName": "No OCR name",
+    "pickCategory": "Pick a category"
+  },
+  "items": {
+    "count_one": "{{count}} item",
+    "count_other": "{{count}} items"
+  },
+  "capture": {
+    "retake": "Retake",
+    "continue": "Continue",
+    "permission": "Camera access required",
+    "permissionGrant": "Allow"
+  },
+  "scan": {
+    "title": "Scan QR",
+    "hint": "Point the camera at a QR code",
+    "errorExpired": "QR code expired",
+    "errorClaimed": "QR code already used",
+    "errorJoin": "Couldn't join the list",
+    "errorScan": "Couldn't scan QR",
+    "errorTitle": "Error",
+    "ok": "OK"
+  },
+  "comparison": {
+    "calculating": "Calculating...",
+    "saved": "saved",
+    "couldHaveSaved": "could have saved",
+    "title": "Shopping analysis ({{compared}}/{{total}})",
+    "youShopped": "You shopped",
+    "yourStore": "(your store)",
+    "boughtHere": "bought here"
+  },
+  "summary": {
+    "fallbackChain": "Unknown",
+    "productsTitle": "Items ({{count}})",
+    "productsEmpty": "No items recognised",
+    "footerTitle": "Receipt details",
+    "footerTotal": "Total:",
+    "footerDate": "Date:",
+    "footerNo": "Receipt no.:",
+    "footerStatSum": "Total",
+    "footerStatTime": "Time",
+    "footerStatReceiptNo": "Receipt no."
+  },
+  "receiptProcess": {
+    "tabSummary": "Summary",
+    "tabProducts": "Items ({{count}})",
+    "tabReceipt": "Receipt",
+    "loading": "Loading data...",
+    "loadingScan": "Scanning and recognising data",
+    "loadingSending": "Sending receipt data…",
+    "loadingPhoto": "Sending photo…",
+    "loadingComparison": "Calculating comparison…",
+    "matchProgress": "{{done}} / {{total}} items recognised",
+    "title": "Receipt analysis",
+    "titlePreview": "Receipt preview (not saved)",
+    "unrecognised": "Unrecognised",
+    "unknownStore": "Unknown store",
+    "savedFailTitle": "Receipt data corrupted",
+    "savedFail": "This receipt's data is no longer available. Try uploading the receipt again.",
+    "fallbackChain": "Unknown",
+    "imageMissing": "The image wasn't uploaded. To reprocess this receipt, restart from the Analyze tab.",
+    "duplicateTitle": "Receipt already uploaded",
+    "duplicateBody": "This receipt has already been uploaded.",
+    "errorSave": "Couldn't save receipt",
+    "errorUploadUrlFields": "upload-url response is missing fields",
+    "errorUploadPhoto": "Couldn't upload photo",
+    "errorSendTitle": "Couldn't send",
+    "errorSendBody": "Try again later.",
+    "errorProductUnmatched": "Product not recognised",
+    "errorProductUnmatchedBody": "Photos can only be added to recognised products.",
+    "errorPermissionTitle": "No access",
+    "errorPermissionBody": "Grant gallery access to add a photo.",
+    "errorPhotoUploadTitle": "Photo upload failed",
+    "errorPhotoUploadBody": "Try again.",
+    "errorOcrUnreadable": "Couldn't read the receipt text. Try uploading a better photo or a different receipt.",
+    "errorOcrParse": "An error occurred while reading the receipt. Try again or upload a different receipt.",
+    "errorChain": "Store chain wasn't recognised. Try uploading a better photo or a different receipt.",
+    "errorStore": "Store wasn't recognised. Try uploading a better photo or a different receipt.",
+    "leaveProcessingTitle": "Receipt still processing",
+    "leaveProcessingBody": "If you leave now, processing will continue in the background but you might see partial results.",
+    "leaveWait": "Wait",
+    "leaveAction": "Leave",
+    "swipeEntryCta": "Improve price comparison",
+    "swipeEntryCount": "{{count}} cards · for better recognition",
+    "swipeEntryShort": "For better recognition",
+    "productsEmpty": "No products recognised",
+    "namePlaceholder": "Enter product name",
+    "addPhoto": "Add photo",
+    "send": "Send"
+  },
+  "product": {
+    "noDataForPeriod": "No data for the selected period",
+    "regularPrice": "Regular",
+    "promoPrice": "Sale",
+    "rangeAll": "All",
+    "fallbackStore": "Store",
+    "allStores": "All stores",
+    "searchStorePlaceholder": "Search store...",
+    "notAvailable": "This product isn't available at this chain",
+    "priceHistory": "Price history",
+    "priceHistoryEmpty": "Price history not yet collected"
+  },
+  "shoppingListTab": {
+    "delete": "Delete",
+    "complete": "Complete",
+    "errors": {
+      "noStoreChoices": "No options for this store",
+      "createList": "Couldn't create list",
+      "completeList": "Couldn't complete list",
+      "generic": "Error"
+    },
+    "deletedUndo": "Deleted. Undo?",
+    "sectionActive": "Active",
+    "sectionCompleted": "Completed",
+    "empty": "No shopping lists yet",
+    "emptyBody": "Add products to a basket, compare prices, and create a list",
+    "emptyCta": "Go to basket",
+    "pickStoreTitle": "Pick a store",
+    "noStoresFound": "No stores found",
+    "fabScanQr": "Scan QR",
+    "fabCreate": "Create"
+  },
+  "profilis": {
+    "levelLabel": "Level {{level}}",
+    "progressLabel": "{{current}} / {{target}} to next level",
+    "statsTitle": "Statistics",
+    "carouselStores": "Spending by store",
+    "carouselCategories": "Spending by category",
+    "carouselKita": "Other categories",
+    "carouselMonthly": "Monthly spending",
+    "noData": "No data yet",
+    "points_one": "{{count}} point",
+    "points_other": "{{count}} points",
+    "savedTotal": "Saved in total",
+    "couldHaveSavedTotal": "Could have saved in total",
+    "dataFootnote": "Data based on uploaded receipts",
+    "voteHistory": "Vote history",
+    "devTools": "Developer tools",
+    "devReceiptBatch": "Receipt batch test",
+    "kitaTotal": "{{total}} total",
+    "kitaShowAll_one": "Show all ({{count}} category)",
+    "kitaShowAll_other": "Show all ({{count}} categories)"
+  },
+  "receiptPhoto": {
+    "title": "Recognised data",
+    "fallbackTitle": "Receipt photo",
+    "fallbackBody": "This receipt's photo isn't available.",
+    "bands": {
+      "address": "Store address",
+      "products": "Items",
+      "total": "Total",
+      "dateTime": "Date and time",
+      "receiptNo": "Receipt no."
+    },
+    "explainer": {
+      "title": "What Souply recognises",
+      "body": "Souply highlights each data field on the receipt with a coloured frame so you can see exactly which pixels were read and what information is collected. This data is used only for price comparison and your personal purchase analysis.",
+      "addressBody": "Store address — used to match against our store catalog.",
+      "productsBody": "Every purchased item with name, quantity, and price.",
+      "totalBody": "Receipt grand total.",
+      "dateTimeBody": "Receipt date and time.",
+      "receiptNoBody": "Unique receipt number — used to distinguish re-uploaded photos.",
+      "close": "Got it"
+    }
+  }
+}

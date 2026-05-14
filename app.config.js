@@ -60,6 +60,7 @@ export default {
         },
       ],
       'expo-router',
+      'expo-localization',
       [
         'expo-splash-screen',
         {

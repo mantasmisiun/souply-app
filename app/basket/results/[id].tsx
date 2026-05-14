@@ -12,6 +12,7 @@ import { useBasketState } from '../../../state/basketState';
 import { useProfileStore } from '../../../state/profileStore';
 import { loadCachedCoords, tryGpsCoords, persistCoords, type UserCoords } from '../../../utils/location';
 import LocationPromptModal from '../../../components/LocationPromptModal';
+import { formatEuro } from '../../../utils/formatCurrency';
 
 /** Lithuanian plural inflection for "prekė":
  *    1  → prekės     (gen. sg.) "1 prekės"
@@ -367,7 +368,7 @@ export default function BasketResultsScreen() {
                                                 </Text>
                                             )}
                                         </View>
-                                        <Text style={styles.price}>€{item.total.toFixed(2)}</Text>
+                                        <Text style={styles.price}>{formatEuro(item.total)}</Text>
                                     </TouchableOpacity>
                                 </Animated.View>
                             );

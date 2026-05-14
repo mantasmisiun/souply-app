@@ -1,12 +1,16 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import { API_BASE_URL } from './api';
+import { DEV_RANDOM_USER_UUID } from '../constants/flags';
 
 const USER_ID_KEY = 'userId';
 const USER_SYNCED_KEY = 'userSyncedToBackend';
 
-// In debug builds (npx expo run:android) always use the fixed dev user so
-// test data is easy to identify and wipe. __DEV__ is false in production.
+// In debug builds (npx expo run:android) the fixed dev user makes test data
+// easy to identify and wipe — unless DEV_RANDOM_USER_UUID is on, in which
+// case dev behaves identically to production (real per-install UUID). Use
+// that flag when exercising the account-recovery flow on a dev build.
+// __DEV__ is false in production.
 const DEV_USER_ID = '00000000-0000-0000-0000-000000000000';
 
 /**
@@ -31,7 +35,7 @@ const DEV_USER_ID = '00000000-0000-0000-0000-000000000000';
 let initPromise: Promise<string> | null = null;
 
 async function initUserId(): Promise<string> {
-    if (__DEV__) {
+    if (__DEV__ && !DEV_RANDOM_USER_UUID) {
         syncToBackendIfNeeded(DEV_USER_ID);
         return DEV_USER_ID;
     }
@@ -72,4 +76,38 @@ export const getUserId = async (): Promise<string> => {
     // Cheap: AsyncStorage read + one early-return when already synced.
     syncToBackendIfNeeded(id);
     return id;
+};
+
+/**
+ * Reset the device's stored identity. Used by the account-delete flow:
+ * after the server-side `anonymize` removes the User row, the client
+ * wipes its UUID + sync flag so the next `getUserId()` call generates a
+ * fresh UUID and POSTs to /api/users to create a new account.
+ *
+ * Production-only impact — in __DEV__ the UUID is hardcoded to
+ * `DEV_USER_ID` so this just nudges the sync retry path. That's the
+ * right testing behaviour: delete locally then immediately recreate
+ * the same dev User row on next backend sync.
+ */
+export const resetUserId = async (): Promise<void> => {
+    await AsyncStorage.multiRemove([USER_ID_KEY, USER_SYNCED_KEY]);
+    // Drop the memoised promise so `getUserId()` re-runs `initUserId()`.
+    initPromise = null;
+};
+
+/**
+ * Adopt a server-issued UUID as the local identity. Used by the account
+ * recovery flow: after the server confirms the recovered userId, the
+ * client overwrites its local UUID and marks it already-synced (the
+ * recovered User row obviously exists server-side, so no POST is
+ * required).
+ *
+ * Caller is expected to immediately reload the app afterwards so every
+ * Zustand store hydrates against the new identity — `expo-updates`
+ * `reloadAsync()` is the path used by the restore screen.
+ */
+export const setUserId = async (recoveredId: string): Promise<void> => {
+    await AsyncStorage.setItem(USER_ID_KEY, recoveredId);
+    await AsyncStorage.setItem(USER_SYNCED_KEY, '1');
+    initPromise = null;
 };

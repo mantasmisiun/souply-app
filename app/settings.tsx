@@ -1,0 +1,601 @@
+import {
+    View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch,
+    Modal, Pressable, TextInput, ActivityIndicator, Alert,
+} from 'react-native';
+import { useMemo, useState } from 'react';
+import { useRouter } from 'expo-router';
+import { useTranslation } from 'react-i18next';
+import { Ionicons } from '@expo/vector-icons';
+import Constants from 'expo-constants';
+import { useTheme, type AppTheme } from '../constants/theme';
+import { useSettingsStore, type AppLanguage } from '../state/settingsStore';
+import { getUserId, resetUserId } from '../config/user';
+import { API_BASE_URL } from '../config/api';
+
+/**
+ * Single source of truth for the languages we ship. Adding a new one is
+ * just a row here + a new locale JSON + a translation pass.
+ */
+const LANGUAGE_OPTIONS: { code: AppLanguage; label: string }[] = [
+    { code: 'lt', label: 'Lietuvių' },
+    { code: 'en', label: 'English' },
+];
+
+export default function SettingsScreen() {
+    const router = useRouter();
+    const { t } = useTranslation();
+    const colors = useTheme();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
+
+    const language = useSettingsStore((s) => s.language);
+    const setLanguage = useSettingsStore((s) => s.setLanguage);
+    const showLevelUpModal = useSettingsStore((s) => s.showLevelUpModal);
+    const setShowLevelUpModal = useSettingsStore((s) => s.setShowLevelUpModal);
+    const showNepriskirtaExplainer = useSettingsStore((s) => s.showNepriskirtaExplainer);
+    const setShowNepriskirtaExplainer = useSettingsStore((s) => s.setShowNepriskirtaExplainer);
+
+    const [langPickerOpen, setLangPickerOpen] = useState(false);
+    const [deleteStage, setDeleteStage] = useState<0 | 1 | 2 | 'goodbye'>(0);
+    const [deleteInput, setDeleteInput] = useState('');
+    const [deleting, setDeleting] = useState(false);
+
+    const currentLangLabel = LANGUAGE_OPTIONS.find((l) => l.code === language)?.label
+        ?? LANGUAGE_OPTIONS[0].label;
+
+    const handleDelete = async () => {
+        setDeleting(true);
+        try {
+            const userId = await getUserId();
+            const res = await fetch(
+                `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}`,
+                { method: 'DELETE' },
+            );
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            setDeleteStage('goodbye');
+        } catch (e) {
+            Alert.alert(t('delete.errorTitle'), t('delete.errorBody'));
+            setDeleteStage(0);
+            setDeleteInput('');
+        } finally {
+            setDeleting(false);
+        }
+    };
+
+    const handleOpenNewAccount = async () => {
+        // Reset device identity, drop back to the receipts tab. The next
+        // getUserId() call in any subsequent fetch will mint a fresh UUID
+        // and POST /api/users to register it.
+        await resetUserId();
+        router.replace('/(tabs)/receipts' as any);
+    };
+
+    return (
+        <ScrollView style={styles.page} contentContainerStyle={styles.pageContent}>
+            {/* ── Language ─────────────────────────────────────────────── */}
+            <Section title={t('settings.language.section')} styles={styles}>
+                <TouchableOpacity
+                    style={styles.row}
+                    onPress={() => setLangPickerOpen(true)}
+                    activeOpacity={0.7}
+                >
+                    <View style={styles.rowMain}>
+                        <Text style={styles.rowLabel}>{t('settings.language.label')}</Text>
+                        <Text style={styles.rowValue}>{currentLangLabel}</Text>
+                    </View>
+                    <Ionicons name="chevron-down" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
+            </Section>
+
+            {/* ── Notifications / modal toggles ────────────────────────── */}
+            <Section title={t('settings.notifications.section')} styles={styles}>
+                <ToggleRow
+                    label={t('settings.notifications.levelUp.label')}
+                    hint={t('settings.notifications.levelUp.hint')}
+                    value={showLevelUpModal}
+                    onChange={setShowLevelUpModal}
+                    styles={styles}
+                    colors={colors}
+                />
+                <Divider styles={styles} />
+                <ToggleRow
+                    label={t('settings.notifications.nepriskirtaExplainer.label')}
+                    hint={t('settings.notifications.nepriskirtaExplainer.hint')}
+                    value={showNepriskirtaExplainer}
+                    onChange={setShowNepriskirtaExplainer}
+                    styles={styles}
+                    colors={colors}
+                />
+            </Section>
+
+            {/* ── Account ──────────────────────────────────────────────── */}
+            <Section title={t('settings.account.section')} styles={styles}>
+                <TouchableOpacity
+                    style={styles.row}
+                    onPress={() => router.push('/profile/restore-account' as any)}
+                    activeOpacity={0.7}
+                >
+                    <View style={styles.rowMain}>
+                        <Text style={styles.rowLabel}>{t('settings.account.restore.label')}</Text>
+                        <Text style={styles.rowHint}>{t('settings.account.restore.hint')}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
+                <Divider styles={styles} />
+                <TouchableOpacity
+                    style={styles.row}
+                    onPress={() => setDeleteStage(1)}
+                    activeOpacity={0.7}
+                >
+                    <View style={styles.rowMain}>
+                        <Text style={[styles.rowLabel, styles.rowLabelDanger]}>
+                            {t('settings.account.delete.label')}
+                        </Text>
+                        <Text style={styles.rowHint}>{t('settings.account.delete.hint')}</Text>
+                    </View>
+                    <Ionicons name="chevron-forward" size={18} color={colors.error} />
+                </TouchableOpacity>
+            </Section>
+
+            {/* ── About ────────────────────────────────────────────────── */}
+            <Section title={t('settings.about.section')} styles={styles}>
+                <View style={styles.row}>
+                    <View style={styles.rowMain}>
+                        <Text style={styles.rowLabel}>{t('settings.about.version')}</Text>
+                        <Text style={styles.rowValue}>
+                            {Constants.expoConfig?.version ?? '—'}
+                        </Text>
+                    </View>
+                </View>
+                <Divider styles={styles} />
+                <View style={styles.row}>
+                    <View style={styles.rowMain}>
+                        <Text style={styles.rowLabel}>{t('settings.about.build')}</Text>
+                        <Text style={styles.rowValue}>
+                            {String(
+                                Constants.expoConfig?.runtimeVersion
+                                ?? Constants.expoConfig?.ios?.buildNumber
+                                ?? Constants.expoConfig?.android?.versionCode
+                                ?? '—'
+                            )}
+                        </Text>
+                    </View>
+                </View>
+            </Section>
+
+            {/* ── Language picker modal ────────────────────────────────── */}
+            <Modal
+                visible={langPickerOpen}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setLangPickerOpen(false)}
+            >
+                <Pressable
+                    style={styles.modalBackdrop}
+                    onPress={() => setLangPickerOpen(false)}
+                >
+                    <Pressable
+                        style={styles.modalCard}
+                        onPress={(e) => e.stopPropagation()}
+                    >
+                        <Text style={styles.modalTitle}>{t('settings.language.label')}</Text>
+                        {LANGUAGE_OPTIONS.map((opt) => {
+                            const selected = opt.code === language;
+                            return (
+                                <TouchableOpacity
+                                    key={opt.code}
+                                    style={styles.langOption}
+                                    onPress={async () => {
+                                        await setLanguage(opt.code);
+                                        setLangPickerOpen(false);
+                                    }}
+                                >
+                                    <Text style={[styles.langLabel, selected && styles.langLabelSelected]}>
+                                        {opt.label}
+                                    </Text>
+                                    {selected ? (
+                                        <Ionicons name="checkmark" size={20} color={colors.primary} />
+                                    ) : null}
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
+            {/* ── Delete stage 1: what gets deleted vs kept ─────────────── */}
+            <Modal
+                visible={deleteStage === 1}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setDeleteStage(0)}
+            >
+                <Pressable
+                    style={styles.modalBackdrop}
+                    onPress={() => setDeleteStage(0)}
+                >
+                    <Pressable
+                        style={styles.modalCard}
+                        onPress={(e) => e.stopPropagation()}
+                    >
+                        <Text style={styles.modalTitle}>{t('delete.stage1.title')}</Text>
+
+                        <Text style={styles.bulletHeader}>{t('delete.stage1.willDelete')}</Text>
+                        {(t('delete.stage1.willDeleteItems', { returnObjects: true }) as string[]).map((it, i) => (
+                            <BulletRow key={i} text={it} color={colors.error} styles={styles} />
+                        ))}
+
+                        <Text style={[styles.bulletHeader, { marginTop: 12 }]}>
+                            {t('delete.stage1.willKeep')}
+                        </Text>
+                        {(t('delete.stage1.willKeepItems', { returnObjects: true }) as string[]).map((it, i) => (
+                            <BulletRow key={i} text={it} color={colors.success} styles={styles} />
+                        ))}
+
+                        <View style={styles.modalBtnRow}>
+                            <TouchableOpacity
+                                style={[styles.modalBtn, styles.modalBtnSecondary]}
+                                onPress={() => setDeleteStage(0)}
+                            >
+                                <Text style={styles.modalBtnTextSecondary}>
+                                    {t('delete.stage1.cancel')}
+                                </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[styles.modalBtn, styles.modalBtnDanger]}
+                                onPress={() => setDeleteStage(2)}
+                            >
+                                <Text style={styles.modalBtnTextPrimary}>
+                                    {t('delete.stage1.continue')}
+                                </Text>
+                            </TouchableOpacity>
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
+            {/* ── Delete stage 2: type-to-confirm ───────────────────────── */}
+            <Modal
+                visible={deleteStage === 2}
+                transparent
+                animationType="fade"
+                onRequestClose={() => deleting ? null : setDeleteStage(0)}
+            >
+                <Pressable
+                    style={styles.modalBackdrop}
+                    onPress={() => (!deleting ? setDeleteStage(0) : null)}
+                >
+                    <Pressable
+                        style={styles.modalCard}
+                        onPress={(e) => e.stopPropagation()}
+                    >
+                        <Text style={styles.modalTitle}>{t('delete.stage2.title')}</Text>
+                        <Text style={styles.modalBody}>{t('delete.stage2.body')}</Text>
+                        <TextInput
+                            style={styles.textInput}
+                            value={deleteInput}
+                            onChangeText={setDeleteInput}
+                            placeholder={t('delete.stage2.placeholder')}
+                            placeholderTextColor={colors.textMuted}
+                            autoCapitalize="characters"
+                            autoCorrect={false}
+                            editable={!deleting}
+                        />
+                        <View style={styles.modalBtnRow}>
+                            <TouchableOpacity
+                                style={[styles.modalBtn, styles.modalBtnSecondary]}
+                                onPress={() => {
+                                    if (deleting) return;
+                                    setDeleteStage(0);
+                                    setDeleteInput('');
+                                }}
+                            >
+                                <Text style={styles.modalBtnTextSecondary}>
+                                    {t('delete.stage2.cancel')}
+                                </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={[
+                                    styles.modalBtn,
+                                    styles.modalBtnDanger,
+                                    deleteInput !== t('delete.stage2.magic') && styles.modalBtnDisabled,
+                                ]}
+                                disabled={deleteInput !== t('delete.stage2.magic') || deleting}
+                                onPress={handleDelete}
+                            >
+                                {deleting ? (
+                                    <ActivityIndicator color={colors.onPrimary} />
+                                ) : (
+                                    <Text style={styles.modalBtnTextPrimary}>
+                                        {t('delete.stage2.confirm')}
+                                    </Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
+            {/* ── Goodbye screen ────────────────────────────────────────── */}
+            <Modal
+                visible={deleteStage === 'goodbye'}
+                transparent={false}
+                animationType="fade"
+            >
+                <View style={[styles.page, styles.goodbye]}>
+                    <Ionicons name="heart-outline" size={64} color={colors.primary} />
+                    <Text style={styles.goodbyeTitle}>{t('delete.goodbye.title')}</Text>
+                    <Text style={styles.goodbyeBody}>{t('delete.goodbye.body')}</Text>
+                    <TouchableOpacity
+                        style={[styles.modalBtn, styles.modalBtnPrimary, { marginTop: 24, minWidth: 220 }]}
+                        onPress={handleOpenNewAccount}
+                    >
+                        <Text style={styles.modalBtnTextPrimary}>{t('delete.goodbye.cta')}</Text>
+                    </TouchableOpacity>
+                </View>
+            </Modal>
+        </ScrollView>
+    );
+}
+
+// ── Subcomponents ──────────────────────────────────────────────────────────
+
+function Section({
+    title, children, styles,
+}: {
+    title: string;
+    children: React.ReactNode;
+    styles: ReturnType<typeof makeStyles>;
+}) {
+    return (
+        <View style={styles.section}>
+            <Text style={styles.sectionTitle}>{title}</Text>
+            <View style={styles.card}>{children}</View>
+        </View>
+    );
+}
+
+function ToggleRow({
+    label, hint, value, onChange, styles, colors,
+}: {
+    label: string;
+    hint?: string;
+    value: boolean;
+    onChange: (v: boolean) => Promise<void> | void;
+    styles: ReturnType<typeof makeStyles>;
+    colors: AppTheme;
+}) {
+    return (
+        <View style={styles.row}>
+            <View style={styles.rowMain}>
+                <Text style={styles.rowLabel}>{label}</Text>
+                {hint ? <Text style={styles.rowHint}>{hint}</Text> : null}
+            </View>
+            <Switch
+                value={value}
+                onValueChange={onChange}
+                trackColor={{ false: colors.surfaceMuted, true: colors.primaryMuted }}
+                thumbColor={value ? colors.primary : colors.textMuted}
+            />
+        </View>
+    );
+}
+
+function Divider({ styles }: { styles: ReturnType<typeof makeStyles> }) {
+    return <View style={styles.divider} />;
+}
+
+function BulletRow({
+    text, color, styles,
+}: {
+    text: string;
+    color: string;
+    styles: ReturnType<typeof makeStyles>;
+}) {
+    return (
+        <View style={styles.bulletRow}>
+            <View style={[styles.bulletDot, { backgroundColor: color }]} />
+            <Text style={styles.bulletText}>{text}</Text>
+        </View>
+    );
+}
+
+// ── Styles ─────────────────────────────────────────────────────────────────
+
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    page: {
+        flex: 1,
+        backgroundColor: c.pageBackground,
+    },
+    pageContent: {
+        paddingVertical: 16,
+        paddingBottom: 48,
+    },
+
+    section: {
+        marginBottom: 24,
+    },
+    sectionTitle: {
+        fontSize: 12,
+        fontWeight: '700',
+        color: c.textMuted,
+        textTransform: 'uppercase',
+        letterSpacing: 0.6,
+        marginHorizontal: 20,
+        marginBottom: 8,
+    },
+    card: {
+        backgroundColor: c.cardBackground,
+        marginHorizontal: 16,
+        borderRadius: 12,
+        overflow: 'hidden',
+    },
+
+    row: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 12,
+        paddingHorizontal: 16,
+        paddingVertical: 14,
+    },
+    rowMain: {
+        flex: 1,
+        gap: 2,
+    },
+    rowLabel: {
+        fontSize: 15,
+        color: c.textPrimary,
+    },
+    rowLabelDanger: {
+        color: c.error,
+        fontWeight: '600',
+    },
+    rowValue: {
+        fontSize: 13,
+        color: c.textSecondary,
+    },
+    rowHint: {
+        fontSize: 12,
+        color: c.textMuted,
+        lineHeight: 17,
+    },
+    divider: {
+        height: StyleSheet.hairlineWidth,
+        backgroundColor: c.borderSubtle,
+        marginLeft: 16,
+    },
+
+    // ── Modal common ─────────────────────────────────────
+    modalBackdrop: {
+        flex: 1,
+        backgroundColor: c.overlayBackdrop,
+        justifyContent: 'center',
+        paddingHorizontal: 24,
+    },
+    modalCard: {
+        backgroundColor: c.cardBackground,
+        borderRadius: 16,
+        padding: 20,
+        gap: 8,
+    },
+    modalTitle: {
+        fontSize: 17,
+        fontWeight: '700',
+        color: c.textPrimary,
+        marginBottom: 4,
+    },
+    modalBody: {
+        fontSize: 13,
+        lineHeight: 19,
+        color: c.textSecondary,
+    },
+    modalBtnRow: {
+        flexDirection: 'row',
+        gap: 10,
+        marginTop: 12,
+    },
+    modalBtn: {
+        flex: 1,
+        paddingVertical: 12,
+        borderRadius: 10,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    modalBtnSecondary: {
+        backgroundColor: c.surfaceMuted,
+    },
+    modalBtnPrimary: {
+        backgroundColor: c.primary,
+    },
+    modalBtnDanger: {
+        backgroundColor: c.error,
+    },
+    modalBtnDisabled: {
+        opacity: 0.4,
+    },
+    modalBtnTextSecondary: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: c.textPrimary,
+    },
+    modalBtnTextPrimary: {
+        fontSize: 14,
+        fontWeight: '700',
+        color: c.onPrimary,
+    },
+
+    // ── Language picker ─────────────────────────────────
+    langOption: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingVertical: 12,
+    },
+    langLabel: {
+        fontSize: 15,
+        color: c.textPrimary,
+    },
+    langLabelSelected: {
+        fontWeight: '700',
+        color: c.primary,
+    },
+
+    // ── Delete bullets ──────────────────────────────────
+    bulletHeader: {
+        fontSize: 13,
+        fontWeight: '600',
+        color: c.textSecondary,
+        marginTop: 4,
+        marginBottom: 6,
+    },
+    bulletRow: {
+        flexDirection: 'row',
+        alignItems: 'flex-start',
+        gap: 10,
+        paddingVertical: 2,
+    },
+    bulletDot: {
+        width: 6,
+        height: 6,
+        borderRadius: 3,
+        marginTop: 7,
+    },
+    bulletText: {
+        flex: 1,
+        fontSize: 13,
+        lineHeight: 19,
+        color: c.textPrimary,
+    },
+
+    // ── Stage 2 input ───────────────────────────────────
+    textInput: {
+        borderWidth: 1,
+        borderColor: c.border,
+        borderRadius: 10,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        fontSize: 15,
+        color: c.textPrimary,
+        marginTop: 4,
+        backgroundColor: c.pageBackground,
+    },
+
+    // ── Goodbye screen ──────────────────────────────────
+    goodbye: {
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: 24,
+    },
+    goodbyeTitle: {
+        fontSize: 22,
+        fontWeight: '700',
+        color: c.textPrimary,
+        marginTop: 16,
+        textAlign: 'center',
+    },
+    goodbyeBody: {
+        fontSize: 14,
+        color: c.textSecondary,
+        marginTop: 8,
+        textAlign: 'center',
+    },
+});

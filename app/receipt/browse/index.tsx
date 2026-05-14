@@ -2,12 +2,16 @@ import { View, FlatList, TouchableOpacity, Text, StyleSheet, ActivityIndicator, 
 import { useEffect, useMemo, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 
 interface Category {
     id: number;
     name: string;
+    /** Canonical Lithuanian name used for icon lookup — server returns
+     *  this alongside the translated `name` field. */
+    nameKey?: string;
     parentCategoryId: number | null;
 }
 
@@ -27,6 +31,7 @@ const CATEGORY_ICONS: Record<string, string> = {
 
 export default function ReceiptBrowseIndex() {
     const colors = useTheme();
+    const { t, i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { chainId, productIndex, preselectL1, ocrName } = useLocalSearchParams<{
         chainId: string;
@@ -40,6 +45,11 @@ export default function ReceiptBrowseIndex() {
     const [expandedL1, setExpandedL1] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
 
+    // Re-fetch when language changes — same reasoning as the main
+    // browse index: settingsStore.hydrate() flips i18n.language from
+    // the boot default to the persisted choice asynchronously, so
+    // the initial fetch races hydration. Adding the dep ensures we
+    // re-run after hydration *and* on user-triggered language toggle.
     useEffect(() => {
         (async () => {
             try {
@@ -59,7 +69,7 @@ export default function ReceiptBrowseIndex() {
                 setLoading(false);
             }
         })();
-    }, [preselectL1]);
+    }, [preselectL1, i18n.language]);
 
     const toggleL1 = async (id: number) => {
         LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
@@ -81,7 +91,7 @@ export default function ReceiptBrowseIndex() {
         <>
             <Stack.Screen
                 options={{
-                    title: 'Pasirinkite kategoriją',
+                    title: t('search.pickCategory'),
                     headerRight: () => (
                         <TouchableOpacity
                             onPress={() => router.push({
@@ -111,7 +121,7 @@ export default function ReceiptBrowseIndex() {
                     return (
                         <View style={styles.l1Container}>
                             <TouchableOpacity style={styles.l1Row} onPress={() => toggleL1(item.id)}>
-                                <Text style={styles.l1Icon}>{CATEGORY_ICONS[item.name] || '📦'}</Text>
+                                <Text style={styles.l1Icon}>{CATEGORY_ICONS[item.nameKey ?? item.name] || '📦'}</Text>
                                 <Text style={styles.l1Text}>{item.name}</Text>
                                 <Ionicons
                                     name={isExpanded ? 'chevron-up' : 'chevron-down'}

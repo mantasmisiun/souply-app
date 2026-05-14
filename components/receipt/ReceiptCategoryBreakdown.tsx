@@ -2,8 +2,10 @@ import React, { useMemo, useState } from 'react';
 import { Modal, Pressable, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useRouter } from 'expo-router';
+import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { formatEuro } from '../../utils/formatCurrency';
+import { useSettingsStore } from '../../state/settingsStore';
 
 /**
  * Spec C3 — per-category spending breakdown.
@@ -178,9 +180,35 @@ function buildBuckets(products: BreakdownProduct[]): {
 
 export default function ReceiptCategoryBreakdown({ products, receiptId }: Props) {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
     const [explainerOpen, setExplainerOpen] = useState(false);
+    const showExplainer = useSettingsStore((s) => s.showNepriskirtaExplainer);
+
+    // Render-time label resolver — buildBuckets keeps the data pure
+    // (sentinel keys), so we localise only at display time. Falls back
+    // to the bucket's stored label for real category names which already
+    // come from the server.
+    const bucketLabel = (b: Bucket): string => {
+        if (b.isOther) return t('breakdown.other');
+        if (b.isUnrecognised) return t('breakdown.unrecognised');
+        return b.label;
+    };
+
+    /** Navigate straight to the voluntary swipe queue for this receipt
+     *  (or the global queue when no receiptId is available). Used both
+     *  from the modal's "Pagerinti atpažinimą" CTA and — when the user
+     *  has disabled the explainer modal in Settings — as the direct
+     *  action on the ❓ icon. */
+    const openSwipeQueue = () => {
+        router.push({
+            pathname: '/swipe/queue',
+            params: receiptId
+                ? { receiptId: String(receiptId), voluntary: '1' }
+                : { voluntary: '1' },
+        } as any);
+    };
 
     const { buckets, grandTotal } = useMemo(() => buildBuckets(products), [products]);
 
@@ -191,7 +219,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
     return (
         <View style={styles.card}>
             <View style={styles.headerRow}>
-                <Text style={styles.title}>Pirkinių pasiskirstymas</Text>
+                <Text style={styles.title}>{t('breakdown.title')}</Text>
             </View>
 
             <View style={styles.stackedBar}>
@@ -238,7 +266,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
                                 links the row to its bar segment. */}
                             {b.isUnrecognised ? (
                                 <TouchableOpacity
-                                    onPress={() => setExplainerOpen(true)}
+                                    onPress={() => (showExplainer ? setExplainerOpen(true) : openSwipeQueue())}
                                     hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                                     style={styles.rowGlyphTouch}
                                 >
@@ -263,7 +291,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
                                 ]}
                                 numberOfLines={1}
                             >
-                                {b.label}
+                                {bucketLabel(b)}
                             </Text>
                             <Text style={styles.rowTotal}>{formatEuro(b.total)}</Text>
                             <Text style={styles.rowPct}>{pct}%</Text>
@@ -293,7 +321,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
                         <View style={styles.modalIconWrap}>
                             <Ionicons name="help-circle" size={32} color={colors.warning} />
                         </View>
-                        <Text style={styles.modalTitle}>Neatpažintos prekės</Text>
+                        <Text style={styles.modalTitle}>{t('breakdown.modal.title')}</Text>
                         <View style={styles.modalRows}>
                             <View style={styles.modalRow}>
                                 <Ionicons
@@ -303,7 +331,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
                                     style={styles.modalRowIcon}
                                 />
                                 <Text style={styles.modalRowText}>
-                                    Šios prekės dar be kategorijos.
+                                    {t('breakdown.modal.rowNoCategory')}
                                 </Text>
                             </View>
                             <View style={styles.modalRow}>
@@ -314,7 +342,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
                                     style={styles.modalRowIcon}
                                 />
                                 <Text style={styles.modalRowText}>
-                                    Rūšiuok korteles – padėk joms rasti vietą.
+                                    {t('breakdown.modal.rowSortCards')}
                                 </Text>
                             </View>
                             <View style={styles.modalRow}>
@@ -325,7 +353,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
                                     style={styles.modalRowIcon}
                                 />
                                 <Text style={styles.modalRowText}>
-                                    Kai kurios susitvarkys pačios, kai bus daugiau panašių prekių.
+                                    {t('breakdown.modal.rowSelfResolve')}
                                 </Text>
                             </View>
                         </View>
@@ -334,29 +362,17 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
                                 style={[styles.modalBtn, styles.modalBtnSecondary]}
                                 onPress={() => setExplainerOpen(false)}
                             >
-                                <Text style={styles.modalBtnTextSecondary}>Uždaryti</Text>
+                                <Text style={styles.modalBtnTextSecondary}>{t('common.close')}</Text>
                             </TouchableOpacity>
                             <TouchableOpacity
                                 style={[styles.modalBtn, styles.modalBtnPrimary]}
                                 onPress={() => {
                                     setExplainerOpen(false);
-                                    // Voluntary mode anchored to THIS receipt
-                                    // so the queue serves cards targeting the
-                                    // user's actual Nepriskirta lines. The
-                                    // pink button used to drop into the
-                                    // global queue (standalone=1), which
-                                    // surfaced unrelated cards — defeating
-                                    // the modal's "padėk atpažinti" promise.
-                                    router.push({
-                                        pathname: '/swipe/queue',
-                                        params: receiptId
-                                            ? { receiptId: String(receiptId), voluntary: '1' }
-                                            : { voluntary: '1' },
-                                    } as any);
+                                    openSwipeQueue();
                                 }}
                             >
                                 <Text style={styles.modalBtnTextPrimary}>
-                                    Pagerinti atpažinimą
+                                    {t('breakdown.modal.improve')}
                                 </Text>
                             </TouchableOpacity>
                         </View>
