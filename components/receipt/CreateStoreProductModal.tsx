@@ -17,6 +17,7 @@ import {
 } from "react-native";
 import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../../config/api";
+import { getUserId } from "../../config/user";
 import { useReceiptCreateContext } from "../../state/basketState";
 import { parseProductName } from "@shared/parsers/productNameParser";
 import { useTheme, type AppTheme } from "../../constants/theme";
@@ -260,6 +261,10 @@ export default function CreateStoreProductModal({
         throw new Error(pData?.error || t('createProduct.errors.createProduct'));
       }
 
+      // Send userId so the server can decide whether a user-supplied
+      // imageUrl publishes directly (admin) or lands in the admin
+      // pending queue (regular user).
+      const userId = await getUserId();
       const spRes = await fetch(`${API_BASE_URL}/api/store-products`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -272,6 +277,7 @@ export default function CreateStoreProductModal({
           amount: parsed.amount,
           unit: parsed.unit,
           imageUrl: uploadedImageUrl,
+          userId,
         }),
       });
       const spData = await spRes.json();
@@ -323,14 +329,21 @@ export default function CreateStoreProductModal({
         }
       }
 
+      // When the server quarantined the image, drop it from the
+      // local notification so the create-page UI doesn't show the
+      // user's not-yet-public photo as if it were live.
+      const effectiveImageUrl = spData?.imageQueued ? null : (spData?.imageUrl ?? uploadedImageUrl);
       await onCreated({
         productId: pData.id,
         storeProductId: spData.id,
         storeProductName: finalName,
-        imageUrl: uploadedImageUrl,
+        imageUrl: effectiveImageUrl,
         amount: parsed.amount,
         unit: parsed.unit,
       });
+      if (spData?.imageQueued) {
+        Alert.alert(t('imageUpload.sentForReviewTitle'), t('imageUpload.sentForReviewBody'));
+      }
       onClose();
     } catch (e: any) {
       Alert.alert(t('createProduct.errors.generic'), e?.message || t('createProduct.errors.createProduct'));

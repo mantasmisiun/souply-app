@@ -11,6 +11,7 @@ export interface ProfileData {
     nextLevelAt: number;
     pendingSwipes: boolean;
     showBurstWarning: boolean;
+    isAdmin: boolean;
 }
 
 export interface StoreSlice { chainName: string; total: number; color: string; miniLogoUrl?: string | null; }

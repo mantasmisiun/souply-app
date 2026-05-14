@@ -1592,25 +1592,33 @@ export default function ProcessReceiptScreen() {
       });
       if (!putRes.ok) throw new Error(`MinIO PUT HTTP ${putRes.status}`);
 
+      const userId = await getUserId();
       const patchRes = await fetch(
         `${API_BASE_URL}/api/store-products/${line.storeProductId}/image`,
         {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filePath }),
+          body: JSON.stringify({ filePath, userId }),
         },
       );
       if (!patchRes.ok) throw new Error(`image PATCH HTTP ${patchRes.status}`);
-      const { imageUrl } = await patchRes.json();
+      const patchBody = await patchRes.json();
 
-      // Update the local ProductLine so the thumbnail appears immediately.
-      setProducts((prev) => {
-        const next = [...prev];
-        if (next[lineIdx]) {
-          next[lineIdx] = { ...next[lineIdx], storeProductImageUrl: imageUrl };
-        }
-        return next;
-      });
+      if (patchBody.queued) {
+        // Regular user upload — the photo is in the admin pending
+        // queue, not yet published. Tell the user clearly so they
+        // don't expect to see their image instantly.
+        Alert.alert(t('imageUpload.sentForReviewTitle'), t('imageUpload.sentForReviewBody'));
+      } else if (patchBody.imageUrl) {
+        // Admin upload — published immediately, update the thumbnail.
+        setProducts((prev) => {
+          const next = [...prev];
+          if (next[lineIdx]) {
+            next[lineIdx] = { ...next[lineIdx], storeProductImageUrl: patchBody.imageUrl };
+          }
+          return next;
+        });
+      }
     } catch (e: any) {
       console.warn("Photo upload failed:", e?.message ?? e);
       Alert.alert(t('receiptProcess.errorPhotoUploadTitle'), t('receiptProcess.errorPhotoUploadBody'));

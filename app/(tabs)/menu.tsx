@@ -381,6 +381,37 @@ export default function ProfilisScreen() {
                     <Text style={styles.rowText}>{t('profilis.voteHistory')}</Text>
                     <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
                 </TouchableOpacity>
+
+                {/* Admin panel entry — only when the server marks this
+                    user as admin (isAdmin column). Tapping persists the
+                    mode and replaces the root stack with the admin tabs. */}
+                {profile?.isAdmin && (
+                    <TouchableOpacity
+                        style={styles.row}
+                        onPress={async () => {
+                            const { useAdminModeStore } = await import('../../state/adminModeStore');
+                            await useAdminModeStore.getState().setMode('admin');
+                            // Full reload — cross-group navigation
+                            // doesn't always cleanly tear down the
+                            // (tabs) navigator. Boot effect reads
+                            // 'admin' from AsyncStorage and routes to
+                            // the admin panel. Same pattern as the
+                            // inverse switch in (admin)/menu.tsx.
+                            try {
+                                const Updates = await import('expo-updates');
+                                await Updates.reloadAsync();
+                            } catch {
+                                router.replace('/' as any);
+                            }
+                        }}
+                    >
+                        <Ionicons name="shield-checkmark-outline" size={22} color={colors.primary} />
+                        <Text style={[styles.rowText, { color: colors.primary, fontWeight: '600' }]}>
+                            {t('admin.enterButton')}
+                        </Text>
+                        <Ionicons name="chevron-forward" size={18} color={colors.primary} />
+                    </TouchableOpacity>
+                )}
             </View>
 
             {/* Dev tools — only in dev builds */}

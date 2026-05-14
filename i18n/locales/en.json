@@ -121,6 +121,55 @@
     "errorTitle": "Error",
     "errorBody": "Could not delete account. Try again later."
   },
+  "imageUpload": {
+    "sentForReviewTitle": "Photo sent for review",
+    "sentForReviewBody": "An admin will review it. If approved, it'll be visible to everyone."
+  },
+  "admin": {
+    "enterButton": "Enter admin mode",
+    "title": "Admin",
+    "subtitle": "{{points}} points",
+    "switchToUser": "Enter user mode",
+    "tabImages": "Images",
+    "tabPlaceholder": "Soon",
+    "placeholderTitle": "Coming soon",
+    "placeholderBody": "This admin tab isn't ready yet.",
+    "auditLogTitle": "Audit log",
+    "images": {
+      "headerTitle": "Images",
+      "outstanding": "{{n}} left in global queue",
+      "leaseProgress": "{{done}} / {{total}} cards",
+      "claimBatch": "Claim new batch",
+      "emptyTitle": "All done",
+      "emptyBody": "Nothing in queue right now. Check back later.",
+      "flagBanner": "A user reported this image as wrong",
+      "currentLabel": "Current",
+      "selectedLabel": "Selected",
+      "selectHint": "Pick one from suggestions below",
+      "candidatesLabel": "Suggestions",
+      "noCandidates": "No suggestions. Upload your own or remove.",
+      "sourceCrossChain": "From {{chain}}",
+      "sourceLink": "Similar variant {{chain}}",
+      "sourcePending": "User contribution",
+      "confirmAdopt": "Confirm",
+      "uploadOwn": "Upload your own",
+      "removeImage": "Remove image",
+      "skipCard": "Skip",
+      "rejectPending": "Reject",
+      "uploading": "Uploading…",
+      "lastPropagationAuto": "Auto: from {{source}} {{ago}} ago",
+      "lastPropagationAdmin": "Admin set this {{ago}} ago",
+      "revert": "Revert",
+      "errorToast": "Something went wrong, please try again",
+      "rateLimitToast": "Too many actions. Try again later."
+    },
+    "audit": {
+      "headerTitle": "Audit log",
+      "empty": "No actions yet",
+      "reversed": "Reverted",
+      "revertButton": "Revert"
+    }
+  },
   "restore": {
     "title": "Restore account",
     "comingSoon": "Coming soon",

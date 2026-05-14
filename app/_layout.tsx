@@ -145,6 +145,23 @@ export default function RootLayout() {
     hydrateSettings().catch((e) => console.warn('[settings] hydrate failed', e));
   }, [hydrateSettings]);
 
+  // Hydrate admin-mode flag and, if the user last left the app in admin
+  // mode, route into the admin section immediately. Cheap — the store
+  // reads one AsyncStorage key. No-op when the user has never been an
+  // admin on this device.
+  const router = useRouter();
+  useEffect(() => {
+    (async () => {
+      const { useAdminModeStore } = await import('../state/adminModeStore');
+      await useAdminModeStore.getState().hydrate();
+      if (useAdminModeStore.getState().mode === 'admin') {
+        router.replace('/(admin)/images' as any);
+      }
+    })().catch((e) => console.warn('[adminMode] hydrate failed', e));
+    // Intentionally one-shot — once on boot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Derive React Navigation's theme from our app theme so every default
   // surface (headers, cards, borders) picks up the palette automatically.
   const navTheme = {
@@ -177,6 +194,7 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        <Stack.Screen name="(admin)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         <Stack.Screen name="product" options={{ headerShown: false }} />
         <Stack.Screen name="basket/[id]" options={{ title: t('screens.basket') }} />
@@ -192,6 +210,7 @@ export default function RootLayout() {
         <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
         <Stack.Screen name="settings" options={{ title: t('settings.title') }} />
         <Stack.Screen name="profile/restore-account" options={{ title: t('restore.title') }} />
+        <Stack.Screen name="profile/audit-log" options={{ title: t('admin.auditLogTitle') }} />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
       </View>

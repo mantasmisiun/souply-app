@@ -79,6 +79,55 @@
     "errorTitle": "Klaida",
     "errorBody": "Nepavyko ištrinti paskyros. Pabandykite vėliau."
   },
+  "imageUpload": {
+    "sentForReviewTitle": "Nuotrauka išsiųsta",
+    "sentForReviewBody": "Ją peržiūrės admin. Jei patvirtins, ją matys visi."
+  },
+  "admin": {
+    "enterButton": "Pereiti į administratoriaus režimą",
+    "title": "Admin",
+    "subtitle": "{{points}} taškai",
+    "switchToUser": "Pereiti į vartotojo režimą",
+    "tabImages": "Nuotraukos",
+    "tabPlaceholder": "Tuoj bus",
+    "placeholderTitle": "Tuoj bus",
+    "placeholderBody": "Šis admin skirtukas dar nepasiruošęs.",
+    "auditLogTitle": "Veiksmų istorija",
+    "images": {
+      "headerTitle": "Nuotraukos",
+      "outstanding": "{{n}} liko eilėje",
+      "leaseProgress": "{{done}} / {{total}} kortelės",
+      "claimBatch": "Imti naują paketą",
+      "emptyTitle": "Visi atlikti",
+      "emptyBody": "Nieko nėra eilėje šią akimirką. Patikrink vėliau.",
+      "flagBanner": "Vartotojas pranešė, kad nuotrauka klaidinga",
+      "currentLabel": "Dabartinė",
+      "selectedLabel": "Pasirinkta",
+      "selectHint": "Pasirink iš pasiūlymų žemiau",
+      "candidatesLabel": "Pasirinkimai",
+      "noCandidates": "Nėra pasiūlymų. Įkelk savo nuotrauką arba pašalink.",
+      "sourceCrossChain": "Iš {{chain}}",
+      "sourceLink": "Panašus variantas {{chain}}",
+      "sourcePending": "Vartotojo pasiūlymas",
+      "confirmAdopt": "Patvirtinti",
+      "uploadOwn": "Įkelti savo nuotrauką",
+      "removeImage": "Pašalinti nuotrauką",
+      "skipCard": "Praleisti",
+      "rejectPending": "Atmesti",
+      "uploading": "Įkeliama…",
+      "lastPropagationAuto": "Auto: iš {{source}} prieš {{ago}}",
+      "lastPropagationAdmin": "Admin nustatė prieš {{ago}}",
+      "revert": "Atstatyti",
+      "errorToast": "Įvyko klaida, bandyk dar kartą",
+      "rateLimitToast": "Per daug veiksmų. Bandyk vėliau."
+    },
+    "audit": {
+      "headerTitle": "Veiksmų istorija",
+      "empty": "Nėra veiksmų",
+      "reversed": "Atstatyta",
+      "revertButton": "Atstatyti"
+    }
+  },
   "restore": {
     "title": "Atkurti paskyrą",
     "comingSoon": "Greitai bus prieinama",
