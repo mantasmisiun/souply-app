@@ -56,6 +56,16 @@ export interface AuditLogRow {
     valueAfter: any;
     reversedAt: string | null;
     createdAt: string;
+    /** Hydrated context from the server — null when the target was
+     *  deleted or doesn't have a hydratable shape. */
+    context: {
+        productName?: string | null;
+        spName?: string | null;
+        imageUrl?: string | null;
+        chainName?: string | null;
+        receiptId?: number;
+        lineIdx?: number;
+    } | null;
 }
 
 async function adminFetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -143,12 +153,18 @@ export async function revertImageChange(auditId: number): Promise<void> {
     if (!res.ok) throw new Error(`revert ${res.status}`);
 }
 
-export async function getAdminAuditLog(page: number = 0, pageSize: number = 50): Promise<{
+export async function getAdminAuditLog(
+    page: number = 0,
+    pageSize: number = 50,
+    actions?: string[],
+): Promise<{
     rows: AuditLogRow[];
     page: number;
     pageSize: number;
 }> {
-    const res = await adminFetch(`/api/admin/audit?page=${page}&pageSize=${pageSize}`);
+    const params = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
+    if (actions && actions.length > 0) params.set('actions', actions.join(','));
+    const res = await adminFetch(`/api/admin/audit?${params.toString()}`);
     if (!res.ok) throw new Error(`audit ${res.status}`);
     return res.json();
 }
@@ -402,6 +418,87 @@ export async function skipAdminFlag(flagKey: string): Promise<void> {
  */
 export function flaggedReceiptCropUrl(receiptId: number, lineIdx: number): string {
     return `${API_BASE_URL}/api/admin/flags/receipts/${receiptId}/${lineIdx}/crop`;
+}
+
+// ── Uncategorised tab ───────────────────────────────────────────────
+
+export interface AdminUncategorisedRow {
+    productId: number;
+    productName: string;
+    categoryId: number | null;
+    categoryName: string | null;
+    bestImageUrl: string | null;
+    recentPurchaseCount: number;
+    chainCoverage: string;
+    spCount: number;
+    hasPendingFlags: boolean;
+    baseProductLinkCount: number;
+}
+
+export interface UncategorisedBatchResponse {
+    rows: AdminUncategorisedRow[];
+    leaseCount: number;
+    resumed?: boolean;
+}
+
+export async function getAdminUncategorisedQueue(): Promise<UncategorisedBatchResponse> {
+    const res = await adminFetch('/api/admin/uncategorised/queue');
+    if (!res.ok) throw new Error(`uncategorised queue ${res.status}`);
+    return res.json();
+}
+
+export async function claimAdminUncategorisedBatch(size: number = 10): Promise<UncategorisedBatchResponse> {
+    const res = await adminFetch('/api/admin/uncategorised/claim-batch', {
+        method: 'POST',
+        body: JSON.stringify({ size }),
+    });
+    if (!res.ok) throw new Error(`uncategorised claim ${res.status}`);
+    return res.json();
+}
+
+export async function releaseAdminUncategorisedBatch(): Promise<{ released: number }> {
+    const res = await adminFetch('/api/admin/uncategorised/release-batch', { method: 'POST' });
+    if (!res.ok) throw new Error(`uncategorised release ${res.status}`);
+    return res.json();
+}
+
+export interface ConfirmUncategorisedPayload {
+    categoryId: number;
+    name?: string;
+}
+
+export async function confirmAdminUncategorised(
+    productId: number,
+    payload: ConfirmUncategorisedPayload,
+): Promise<void> {
+    const res = await adminFetch(`/api/admin/uncategorised/${productId}/confirm`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`uncategorised confirm ${res.status}`);
+}
+
+export type DeleteUncategorisedOutcome =
+    | { ok: true }
+    | { ok: false; blockers: { prices: number; basketItems: number; shoppingListItems: number } };
+
+export async function deleteAdminUncategorised(productId: number): Promise<DeleteUncategorisedOutcome> {
+    const res = await adminFetch(`/api/admin/uncategorised/${productId}/delete`, {
+        method: 'POST',
+    });
+    if (res.status === 409) {
+        const body = await res.json();
+        return { ok: false, blockers: body.blockers ?? { prices: 0, basketItems: 0, shoppingListItems: 0 } };
+    }
+    if (!res.ok) throw new Error(`uncategorised delete ${res.status}`);
+    return { ok: true };
+}
+
+export async function skipAdminUncategorised(productId: number): Promise<void> {
+    const res = await adminFetch(`/api/admin/uncategorised/${productId}/skip`, {
+        method: 'POST',
+    });
+    if (!res.ok) throw new Error(`uncategorised skip ${res.status}`);
 }
 
 export async function fetchFlaggedReceiptCrop(

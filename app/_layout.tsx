@@ -155,7 +155,7 @@ export default function RootLayout() {
       const { useAdminModeStore } = await import('../state/adminModeStore');
       await useAdminModeStore.getState().hydrate();
       if (useAdminModeStore.getState().mode === 'admin') {
-        router.replace('/(admin)/images' as any);
+        router.replace('/(admin)/flags' as any);
       }
     })().catch((e) => console.warn('[adminMode] hydrate failed', e));
     // Intentionally one-shot — once on boot.
@@ -210,7 +210,15 @@ export default function RootLayout() {
         <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
         <Stack.Screen name="settings" options={{ title: t('settings.title') }} />
         <Stack.Screen name="profile/restore-account" options={{ title: t('restore.title') }} />
-        <Stack.Screen name="profile/audit-log" options={{ title: t('admin.auditLogTitle') }} />
+        <Stack.Screen
+          name="profile/audit-log"
+          options={{
+            title: t('admin.auditLogTitle'),
+            // White header matches the chip strip directly below it,
+            // so the top of the screen reads as one continuous surface.
+            headerStyle: { backgroundColor: colors.cardBackground },
+          }}
+        />
       </Stack>
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
       </View>

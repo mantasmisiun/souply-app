@@ -80,6 +80,7 @@ export default function AdminTabLayout() {
 
     return (
         <Tabs
+            initialRouteName="flags"
             screenOptions={{
                 tabBarButton: HapticTab,
                 tabBarActiveTintColor: colors.primary,
@@ -99,6 +100,15 @@ export default function AdminTabLayout() {
                     title: t('admin.tabFlags'),
                     tabBarIcon: ({ focused, color, size }) => (
                         <Ionicons name={focused ? 'flag' : 'flag-outline'} size={size} color={color} />
+                    ),
+                }}
+            />
+            <Tabs.Screen
+                name="uncategorised"
+                options={{
+                    title: t('admin.tabUncategorised'),
+                    tabBarIcon: ({ focused, color, size }) => (
+                        <Ionicons name={focused ? 'help-circle' : 'help-circle-outline'} size={size} color={color} />
                     ),
                 }}
             />
