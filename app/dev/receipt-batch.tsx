@@ -32,6 +32,7 @@ import {
     ActivityIndicator,
     Alert,
     Image,
+    Platform,
     ScrollView,
     StyleSheet,
     Switch,
@@ -39,6 +40,12 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
+
+// iOS MLKit splits each receipt row into 2-4 fragments at near-same
+// y-coords, so the Maxima + Lidl parsers need their row-defragmenter
+// turned on. Android emits one OCR line per row already, so the option
+// stays off and the existing behaviour is bit-for-bit identical.
+const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
 import { ocrImageTiled } from '../../utils/mlkitOcr';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
@@ -263,11 +270,11 @@ const detectChain = (lines: PageLine[]): ChainName | null => {
 };
 
 const runParser = (chain: ChainName | 'iki', lines: PageLine[]) => {
-    if (chain === 'maxima') return parseMaximaReceipt(lines as any);
+    if (chain === 'maxima') return parseMaximaReceipt(lines as any, PARSER_OPTS);
     if (chain === 'rimi') return parseRimiReceipt(lines as any);
     if (chain === 'iki') return parseIkiReceipt(lines as any);
     if (chain === 'norfa') return parseNorfaReceipt(lines as any);
-    if (chain === 'lidl') return parseLidlReceipt(lines as any);
+    if (chain === 'lidl') return parseLidlReceipt(lines as any, PARSER_OPTS);
     return null;
 };
 
@@ -506,7 +513,7 @@ export default function ReceiptBatchScreen() {
         // overlay; full traces dumped to console for diagnosis.
         if (detected === 'maxima') {
             try {
-                const planV2 = findProductBands(allLines as any);
+                const planV2 = findProductBands(allLines as any, PARSER_OPTS);
                 status.bandsV2Count = planV2.bands.length;
                 const ranges = planV2.bands
                     .map((b, i) => `#${i + 1} ${Math.round(b.yTop)}-${Math.round(b.yBottom)}`)

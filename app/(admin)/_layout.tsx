@@ -1,10 +1,12 @@
 import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useMemo } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { useEffect, useMemo, useState } from 'react';
+import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { HapticTab } from '../../components/haptic-tab';
+import { useProfileStore } from '../../state/profileStore';
+import { useAdminModeStore } from '../../state/adminModeStore';
 
 /**
  * Tab bar shown when the user is in admin mode (toggled from Profilis).
@@ -21,14 +23,60 @@ import { HapticTab } from '../../components/haptic-tab';
  * and `router.replace` to the appropriate root.
  */
 
-function PlaceholderTabIcon({ color, size }: { color: string; size: number }) {
-    return <Ionicons name="ellipsis-horizontal" size={size} color={color} />;
-}
-
 export default function AdminTabLayout() {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+
+    // ── Cosmetic hardening ──────────────────────────────────────────
+    // If a user spoofs the AsyncStorage `admin_mode` flag they can
+    // make the boot effect mount this layout. Every server endpoint
+    // is already gated by `requireAdmin` so they can't DO anything,
+    // but they'd still see the admin tab shell. Verify against the
+    // server-trusted `profile.isAdmin` and bounce back to user mode
+    // if the local flag is lying.
+    //
+    // Verification states:
+    //   verifying      — profile not loaded yet; render spinner
+    //   verifyFailed   — profile arrived, isAdmin=false; reload to /(tabs)
+    //   verified       — profile arrived, isAdmin=true; render the tab bar
+    const profile = useProfileStore(s => s.profile);
+    const fetchProfile = useProfileStore(s => s.fetchProfile);
+    const [bouncing, setBouncing] = useState(false);
+
+    useEffect(() => {
+        // Trigger a profile fetch in case the user landed here without
+        // mounting (tabs) first (e.g. boot-effect routing). No-op when
+        // already in flight; uses the store's existing in-flight guard.
+        if (!profile) fetchProfile();
+    }, [profile, fetchProfile]);
+
+    useEffect(() => {
+        if (profile && profile.isAdmin === false && !bouncing) {
+            setBouncing(true);
+            (async () => {
+                try {
+                    await useAdminModeStore.getState().setMode('user');
+                    const Updates = await import('expo-updates');
+                    await Updates.reloadAsync();
+                } catch (e) {
+                    console.warn('[admin/_layout] verify-failed bounce failed', e);
+                }
+            })();
+        }
+    }, [profile, bouncing]);
+
+    // Block render until we know `isAdmin === true`. profile===null
+    // (still loading) or profile.isAdmin===false (bouncing) both
+    // render the spinner so a spoofed user never sees the admin shell.
+    const verified = profile?.isAdmin === true;
+    if (!verified) {
+        return (
+            <View style={styles.verifying}>
+                <ActivityIndicator size="large" color={colors.primary} />
+            </View>
+        );
+    }
 
     return (
         <Tabs
@@ -46,6 +94,15 @@ export default function AdminTabLayout() {
             }}
         >
             <Tabs.Screen
+                name="flags"
+                options={{
+                    title: t('admin.tabFlags'),
+                    tabBarIcon: ({ focused, color, size }) => (
+                        <Ionicons name={focused ? 'flag' : 'flag-outline'} size={size} color={color} />
+                    ),
+                }}
+            />
+            <Tabs.Screen
                 name="images"
                 options={{
                     title: t('admin.tabImages'),
@@ -59,24 +116,12 @@ export default function AdminTabLayout() {
                 }}
             />
             <Tabs.Screen
-                name="placeholder1"
+                name="amounts"
                 options={{
-                    title: t('admin.tabPlaceholder'),
-                    tabBarIcon: ({ color, size }) => <PlaceholderTabIcon color={color} size={size} />,
-                }}
-            />
-            <Tabs.Screen
-                name="placeholder2"
-                options={{
-                    title: t('admin.tabPlaceholder'),
-                    tabBarIcon: ({ color, size }) => <PlaceholderTabIcon color={color} size={size} />,
-                }}
-            />
-            <Tabs.Screen
-                name="placeholder3"
-                options={{
-                    title: t('admin.tabPlaceholder'),
-                    tabBarIcon: ({ color, size }) => <PlaceholderTabIcon color={color} size={size} />,
+                    title: t('admin.tabAmounts'),
+                    tabBarIcon: ({ focused, color, size }) => (
+                        <Ionicons name={focused ? 'scale' : 'scale-outline'} size={size} color={color} />
+                    ),
                 }}
             />
             <Tabs.Screen
@@ -92,4 +137,11 @@ export default function AdminTabLayout() {
     );
 }
 
-const makeStyles = (_c: AppTheme) => StyleSheet.create({});
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    verifying: {
+        flex: 1,
+        backgroundColor: c.pageBackground,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+});

@@ -1,4 +1,5 @@
 const IS_DEV = process.env.APP_VARIANT === 'dev';
+const ICON = IS_DEV ? './assets/images/DEV.png' : './assets/images/icon.png';
 
 export default {
   expo: {
@@ -6,7 +7,7 @@ export default {
     slug: 'souply',
     version: '1.0.0',
     orientation: 'portrait',
-    icon: './assets/images/icon.png',
+    icon: ICON,
     scheme: 'souply',
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
@@ -36,7 +37,7 @@ export default {
     android: {
       adaptiveIcon: {
         backgroundColor: '#FBF3E6',
-        foregroundImage: './assets/images/icon.png',
+        foregroundImage: ICON,
       },
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
@@ -48,7 +49,7 @@ export default {
     },
     web: {
       output: 'static',
-      favicon: './assets/images/icon.png',
+      favicon: ICON,
     },
     plugins: [
       [
@@ -64,7 +65,7 @@ export default {
       [
         'expo-splash-screen',
         {
-          image: './assets/images/icon.png',
+          image: ICON,
           imageWidth: 220,
           resizeMode: 'contain',
           backgroundColor: '#FBF3E6',

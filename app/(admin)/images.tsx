@@ -19,7 +19,6 @@ import {
     removeImage,
     skipImageCard,
     rejectPendingImageUpload,
-    resolveReceiptLineIssue,
     revertImageChange,
     type AdminImageQueueRow,
     type AdminImageCandidate,
@@ -84,25 +83,13 @@ export default function AdminImagesScreen() {
         loadQueue();
     }, [loadQueue]));
 
-    // After every action, drop the top card. If the stack empties, claim
-    // the next batch automatically so the admin keeps a steady stream.
+    // Pop the top card and stop. When the local stack drops to 0,
+    // the empty-state with "Imti naują paketą" renders and the admin
+    // explicitly claims the next batch. Auto-claim used to flash the
+    // empty state for a frame before the next batch arrived; explicit-
+    // only is steadier and matches the amounts tab.
     const advance = useCallback(async () => {
-        setRows(prev => {
-            const next = prev.slice(1);
-            if (next.length === 0) {
-                // Defer the claim — let React flush the empty state first
-                // so the loading indicator shows during the network hop.
-                setTimeout(() => {
-                    claimAdminImageBatch(BATCH_SIZE)
-                        .then(res => {
-                            setRows(res.rows);
-                            setOutstanding(res.outstanding);
-                        })
-                        .catch(e => console.warn('[admin/images] auto-claim failed', e));
-                }, 0);
-            }
-            return next;
-        });
+        setRows(prev => prev.slice(1));
     }, []);
 
     const wrapAction = useCallback(async (op: () => Promise<void>) => {
@@ -110,22 +97,10 @@ export default function AdminImagesScreen() {
         setActioning(true);
         try {
             await op();
-            // Resolve the user-flagged issue when the action targets a
-            // flagged card. The backend keeps the row alive otherwise.
-            if (currentCard.flaggedByUser && currentCard.flagReceiptId !== null
-                && currentCard.flagLineIdx !== null) {
-                const userId = await getUserId();
-                try {
-                    await resolveReceiptLineIssue({
-                        receiptId: currentCard.flagReceiptId,
-                        receiptLineIdx: currentCard.flagLineIdx,
-                        userId,
-                    });
-                } catch (e) {
-                    // Non-fatal — the main action succeeded.
-                    console.warn('[admin/images] resolve-issue failed', e);
-                }
-            }
+            // No auto-resolve of ReceiptLineIssue from this tab —
+            // user-flagged image complaints now live exclusively in
+            // the Flags tab. This tab handles heuristic missing
+            // images only and ignores flag-status entirely.
             advance();
         } catch (e: any) {
             const msg = String(e?.message ?? '');

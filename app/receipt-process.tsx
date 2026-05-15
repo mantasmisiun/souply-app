@@ -13,6 +13,7 @@ import {
     Dimensions,
     Image,
     Modal,
+    Platform,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -21,6 +22,13 @@ import {
     TouchableOpacity,
     View
 } from "react-native";
+
+// Toggle for the iOS-only row-fragment merger in the Maxima + Lidl
+// parsers. iOS MLKit splits each receipt row into multiple boxes at
+// near-same y-coords; the merger glues them back into one Android-
+// shaped line. Android emits one OCR line per row already, so the
+// option stays off and the existing pipeline is bit-for-bit identical.
+const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
 import ReceiptComparisonSection from "../components/receipt/ReceiptComparisonSection";
 import ReceiptCategoryBreakdown from "../components/receipt/ReceiptCategoryBreakdown";
 import ReceiptPhotoView from "../components/receipt/ReceiptPhotoView";
@@ -1998,7 +2006,7 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        const parsed = parseMaximaReceipt(allLines);
+        const parsed = parseMaximaReceipt(allLines, PARSER_OPTS);
         if (__DEV__) {
           // Diagnostic: surface what the parser actually captured
           // from the footer so we can compare against the printed
@@ -2061,7 +2069,7 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        const parsed = parseLidlReceipt(allLines);
+        const parsed = parseLidlReceipt(allLines, PARSER_OPTS);
         await applyLidlResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
       } else if (isIkiReceipt(lineTexts)) {

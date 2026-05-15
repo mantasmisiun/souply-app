@@ -15,6 +15,15 @@ import { formatEuro } from '../../utils/formatCurrency';
 import * as Haptics from 'expo-haptics';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { BottomSheetModal, BottomSheetModalProvider, BottomSheetFlatList, BottomSheetBackdrop } from '@gorhom/bottom-sheet';
+import Constants from 'expo-constants';
+
+// True when this app was built with `APP_VARIANT=dev` (EAS `ios-dev`/
+// `development` profile). `__DEV__` alone isn't enough: the EAS internal-
+// distribution build ships a minified JS bundle without Metro, so
+// `__DEV__` is false even though the build is meant for development
+// testing. The app name from app.config.js is bundled at build time, so
+// it's a reliable runtime tag.
+const IS_DEV_BUILD = __DEV__ || Constants.expoConfig?.name === 'Souply (DEV)';
 
 const SCREEN_WIDTH = Dimensions.get('window').width;
 // CAROUSEL_WIDTH must account for both the outer ScrollView padding (16 each side)
@@ -414,8 +423,9 @@ export default function ProfilisScreen() {
                 )}
             </View>
 
-            {/* Dev tools — only in dev builds */}
-            {__DEV__ && (
+            {/* Dev tools — visible in Metro dev mode AND in the EAS DEV variant.
+                EAS-built internal-distribution bundles minify with __DEV__=false. */}
+            {IS_DEV_BUILD && (
                 <View style={{ marginTop: 24 }}>
                     <Text style={styles.sectionTitle}>{t('profilis.devTools')}</Text>
                     {devItems.map((item) => (
