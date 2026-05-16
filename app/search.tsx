@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { GlassIconButton } from "../components/GlassIconButton";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
@@ -401,12 +402,7 @@ export default function SearchScreen() {
         options={{
           title: "",
           headerLeft: () => (
-            <TouchableOpacity
-              onPress={closeAndBack}
-              style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
-            >
-              <Ionicons name="chevron-back" size={28} color={colors.primary} />
-            </TouchableOpacity>
+            <GlassIconButton icon="chevron-back" onPress={closeAndBack} size={24} />
           ),
           headerTitle: () => (
             <TextInput
@@ -422,12 +418,7 @@ export default function SearchScreen() {
             />
           ),
           headerRight: () => (
-            <TouchableOpacity
-              onPress={closeAndBack}
-              style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
-            >
-              <Ionicons name="close" size={24} color={colors.primary} />
-            </TouchableOpacity>
+            <GlassIconButton icon="close" onPress={closeAndBack} size={22} />
           ),
         }}
       />

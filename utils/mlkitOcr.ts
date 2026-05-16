@@ -1,6 +1,8 @@
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { Image } from 'react-native';
+import { Image, Platform } from 'react-native';
+import { devLog } from './devLog';
+import { normalizeLithuanianText } from '@shared/parsers/normalizeLithuanianText';
 
 export interface OcrLine {
     text: string;
@@ -37,9 +39,26 @@ export interface OcrResult {
  * Short images pass through unchanged — single-shot OCR with the
  * same scale-inference logic the inline code used before.
  */
-const TILE_HEIGHT = 3000;
-const TILE_OVERLAP = 300;
-const TILING_THRESHOLD = 3500;
+// Tile geometry differs by platform because MLKit's iOS line/block
+// grouping is empirically more aggressive at splitting same-row text
+// from same-row price into separate blocks when the horizontal gap
+// between them is large in pixels. Smaller tiles + a target image
+// width compress that gap and tend to keep rows intact. Android's
+// grouping is fine at native res, so its constants stay unchanged.
+const TILE_HEIGHT = Platform.OS === 'ios' ? 1500 : 3000;
+const TILE_OVERLAP = Platform.OS === 'ios' ? 150 : 300;
+const TILING_THRESHOLD = Platform.OS === 'ios' ? 1800 : 3500;
+
+// iOS-only target width for the recognizer's input. Phone-photographed
+// Maxima receipts come in around 3000–4000 px wide; downsampling them
+// to ~1500 px halves MLKit's perceived text-to-price column gap and,
+// in spot-tests, dramatically reduces row fragmentation. Coords are
+// scaled back to the original image space before returning so the
+// parser + band-crop pipeline keep working in source-image
+// coordinates.
+const IOS_MAX_WIDTH = 1500;
+const IOS_TILE_JPEG_QUALITY = 0.92;
+
 // Dedupe distance for "same text at similar y from adjacent tiles".
 // Text row height is ~25-30 px on typical receipt OCR, so anything
 // beyond ~40 px is a different physical row. Using TILE_OVERLAP here
@@ -66,26 +85,84 @@ export async function ocrImageTiled(uri: string): Promise<OcrResult> {
     const info = await ImageManipulator.manipulateAsync(uri, []);
     const trueWidth = info.width;
     const trueHeight = info.height;
-    // Use the ImageManipulator output URI for OCR as well — on some
-    // Android devices passing the original content:// URI to MLKit
-    // re-triggers BitmapFactory sampling even though the file on disk
-    // is high-res; feeding ImageManipulator's re-encoded file URI
-    // keeps MLKit on a file:// path with no sampling surprises.
-    const srcUri = info.uri;
+
+    // iOS-only: downscale wide images before feeding them to MLKit.
+    // The phone-side image stays untouched on disk; this is a one-off
+    // re-encode for the recognizer pass. Coords come back in the
+    // resized space and get scaled to the original at the end so
+    // every downstream consumer (parser, RegionPreview, BandCropImage)
+    // continues to work in source-image coordinates.
+    const needsResize =
+        Platform.OS === 'ios' && trueWidth > IOS_MAX_WIDTH;
+    let workingUri = info.uri;
+    let workingWidth = trueWidth;
+    let workingHeight = trueHeight;
+    let resizeFactor = 1;
+    if (needsResize) {
+        const resized = await ImageManipulator.manipulateAsync(
+            info.uri,
+            [{ resize: { width: IOS_MAX_WIDTH } }],
+            { compress: IOS_TILE_JPEG_QUALITY, format: ImageManipulator.SaveFormat.JPEG },
+        );
+        workingUri = resized.uri;
+        workingWidth = resized.width;
+        workingHeight = resized.height;
+        resizeFactor = workingWidth / trueWidth;
+        devLog('mlkitOcr.resize', {
+            origWidth: trueWidth,
+            origHeight: trueHeight,
+            workingWidth,
+            workingHeight,
+            resizeFactor,
+        });
+    }
+    // Use the working URI for OCR (resized on iOS, original on
+    // Android). On some Android devices passing the original
+    // content:// URI to MLKit re-triggers BitmapFactory sampling even
+    // though the file on disk is high-res; feeding ImageManipulator's
+    // re-encoded file URI keeps MLKit on a file:// path with no
+    // sampling surprises.
+    const srcUri = workingUri;
+
+    // Scale coords from working (resized) space back to original
+    // pixel space. No-op when resizeFactor === 1.
+    const invFactor = 1 / resizeFactor;
+    const remap = (line: OcrLine): OcrLine => (
+        resizeFactor === 1
+            ? line
+            : {
+                  text: line.text,
+                  yTop: line.yTop * invFactor,
+                  yBottom: line.yBottom * invFactor,
+                  xLeft: line.xLeft * invFactor,
+                  xRight: line.xRight * invFactor,
+              }
+    );
 
     // Short image — single-shot path matches the legacy pipeline so
     // existing parser/RegionPreview math stays valid.
-    if (trueHeight <= TILING_THRESHOLD) {
-        const res = await runMlkitOnUri(srcUri, 0, trueWidth, trueHeight);
+    if (workingHeight <= TILING_THRESHOLD) {
+        const res = await runMlkitOnUri(srcUri, 0, workingWidth, workingHeight);
+        const remapped = res.lines.map(remap);
         // Parsers assume y-sorted lines (findHeaderEnd scans the first
         // ~20 entries for `#NNNNN` / `Kvitas N/N` markers). MLKit returns
         // blocks in reading order, not strict y-order, so sort explicitly.
-        res.lines.sort((a, b) => a.yTop - b.yTop);
+        remapped.sort((a, b) => a.yTop - b.yTop);
+        const summary = {
+            mode: 'single-shot',
+            workingWidth,
+            workingHeight,
+            origWidth: trueWidth,
+            origHeight: trueHeight,
+            frameScale: res.frameScale,
+            lineCount: remapped.length,
+        };
         console.log(
-            `[ocr] single-shot ${trueWidth}x${trueHeight} → frameScale=${res.frameScale.toFixed(3)}, ${res.lines.length} lines`,
+            `[ocr] single-shot working=${workingWidth}x${workingHeight} orig=${trueWidth}x${trueHeight} → frameScale=${res.frameScale.toFixed(3)}, ${remapped.length} lines`,
         );
+        devLog('mlkitOcr.singleShot', summary);
         return {
-            lines: res.lines,
+            lines: remapped,
             pixelWidth: trueWidth,
             pixelHeight: trueHeight,
             frameScale: res.frameScale,
@@ -101,18 +178,18 @@ export async function ocrImageTiled(uri: string): Promise<OcrResult> {
     // of vertical content appears in both adjacent tiles.
     const tiles: { yStart: number; h: number }[] = [];
     let y = 0;
-    while (y < trueHeight) {
-        const h = Math.min(TILE_HEIGHT, trueHeight - y);
+    while (y < workingHeight) {
+        const h = Math.min(TILE_HEIGHT, workingHeight - y);
         tiles.push({ yStart: y, h });
-        if (y + h >= trueHeight) break;
+        if (y + h >= workingHeight) break;
         y += TILE_HEIGHT - TILE_OVERLAP;
     }
 
     // OCR tiles in parallel. Each tile's result coords are returned
     // with that tile's yStart already added to yTop/yBottom. Source
-    // for the crop is `srcUri` (ImageManipulator's re-encoded file)
-    // so the crop coordinates line up with the true pixel dims we
-    // just measured, not whatever size BitmapFactory would report.
+    // for the crop is `srcUri` (the working image — resized on iOS,
+    // original on Android) so the crop coordinates line up with
+    // `workingWidth`/`workingHeight`.
     const tileResults = await Promise.all(
         tiles.map(async ({ yStart, h }) => {
             const tile = await ImageManipulator.manipulateAsync(
@@ -122,12 +199,15 @@ export async function ocrImageTiled(uri: string): Promise<OcrResult> {
                         crop: {
                             originX: 0,
                             originY: yStart,
-                            width: trueWidth,
+                            width: workingWidth,
                             height: h,
                         },
                     },
                 ],
-                { compress: 1, format: ImageManipulator.SaveFormat.JPEG },
+                {
+                    compress: Platform.OS === 'ios' ? IOS_TILE_JPEG_QUALITY : 1,
+                    format: ImageManipulator.SaveFormat.JPEG,
+                },
             );
             return runMlkitOnUri(tile.uri, yStart, tile.width, tile.height);
         }),
@@ -135,15 +215,27 @@ export async function ocrImageTiled(uri: string): Promise<OcrResult> {
 
     // Merge and dedupe. Text lines that fall inside the overlap zone
     // get two reads (one from each adjacent tile); we keep the first
-    // occurrence by y to avoid double-counting.
+    // occurrence by y to avoid double-counting. Dedupe runs BEFORE
+    // remap so the y-tolerance constant stays in the same coord
+    // space it was tuned in (post-tiling working space).
     const allLines = tileResults.flatMap((r) => r.lines);
-    const deduped = dedupeOverlap(allLines);
+    const deduped = dedupeOverlap(allLines).map(remap);
     deduped.sort((a, b) => a.yTop - b.yTop);
 
     const scaleSummary = tileResults.map((r) => r.frameScale.toFixed(2)).join(', ');
     console.log(
-        `[ocr] tiled ${trueWidth}x${trueHeight} → ${tiles.length} tiles, frameScales=[${scaleSummary}], ${deduped.length} lines (${allLines.length - deduped.length} deduped)`,
+        `[ocr] tiled working=${workingWidth}x${workingHeight} orig=${trueWidth}x${trueHeight} → ${tiles.length} tiles, frameScales=[${scaleSummary}], ${deduped.length} lines (${allLines.length - deduped.length} deduped)`,
     );
+    devLog('mlkitOcr.tiled', {
+        workingWidth,
+        workingHeight,
+        origWidth: trueWidth,
+        origHeight: trueHeight,
+        tileCount: tiles.length,
+        lineCount: deduped.length,
+        duped: allLines.length - deduped.length,
+        resizeFactor,
+    });
 
     return {
         lines: deduped,
@@ -151,8 +243,9 @@ export async function ocrImageTiled(uri: string): Promise<OcrResult> {
         pixelHeight: trueHeight,
         // When tiled, each tile's frame coords are already in that
         // tile's native pixel space (frameScale=1 per tile), and
-        // offsets land them in the whole image's native pixel space.
-        // Callers should treat this as no additional scaling needed.
+        // offsets land them in the working image's native pixel
+        // space, which we then remap to original. Callers should
+        // treat this as no additional scaling needed.
         frameScale: 1,
         mlkitMaxX: Math.max(...tileResults.map((r) => r.mlkitMaxX)),
         mlkitMaxY: Math.max(...tileResults.map((r) => r.mlkitMaxY)),
@@ -200,8 +293,18 @@ async function runMlkitOnUri(
     for (const block of pageResult.blocks) {
         for (const line of block.lines) {
             if (line.frame && line.text.trim()) {
+                // Normalize to Lithuanian alphabet here, before any
+                // parser sees the text. iOS MLKit emits non-Lithuanian
+                // Latin diacritics on receipt fonts (`Ā`/`É`/`Ǔ` etc.)
+                // that are pure OCR confusions, never legitimate on
+                // Lithuanian text. Mapping them back to ą/č/ė/š/ų/ū/ž
+                // or ASCII removes a class of cascading failures
+                // (name-token mismatches, regex anchors that demand
+                // `\p{L}` and trip on combining marks, etc.). Platform-
+                // agnostic — Android lines pass through identically
+                // because they rarely produce these confusions.
                 lines.push({
-                    text: line.text.trim(),
+                    text: normalizeLithuanianText(line.text.trim()),
                     yTop: line.frame.top * frameScale + yOffset,
                     yBottom: (line.frame.top + line.frame.height) * frameScale + yOffset,
                     xLeft: line.frame.left * frameScale,

@@ -32,6 +32,7 @@
  */
 
 import { Ionicons } from '@expo/vector-icons';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
@@ -44,6 +45,7 @@ import {
     View,
 } from 'react-native';
 import { API_BASE_URL } from '../../config/api';
+import { devLog } from '../../utils/devLog';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import {
     getReceiptSnapshot,
@@ -210,6 +212,42 @@ export default function ReceiptDetailScreen() {
         [snap, productCropBands],
     );
 
+    // iOS ImageManipulator refuses HTTP URIs and aborts with the
+    // cryptic `calling the 'renderAsync' function has failed`. Cache
+    // each batch-staging page to local FS once, hand the file:// URI
+    // down to ProductRow. While the download is in flight the row's
+    // uri stays empty and the crop effect bails — that's fine, it
+    // re-runs as soon as state populates.
+    const [localPageUris, setLocalPageUris] = useState<Record<string, string>>({});
+    useEffect(() => {
+        if (!snap) return;
+        let cancelled = false;
+        (async () => {
+            const cacheDir = FileSystem.cacheDirectory ?? '';
+            for (const page of snap.pages) {
+                const src = `${API_BASE_URL}/receipts-batch/${snap.chain}/${encodeURIComponent(page.name)}`;
+                const dest = `${cacheDir}batch-${snap.chain}-${page.name}`;
+                try {
+                    devLog('receipt-detail.downloadStart', { src, dest });
+                    const dl = await FileSystem.downloadAsync(src, dest);
+                    devLog('receipt-detail.downloadResult', {
+                        name: page.name,
+                        uri: dl?.uri,
+                        status: dl?.status,
+                        size: dl?.headers?.['Content-Length'] ?? dl?.headers?.['content-length'],
+                    });
+                    if (cancelled) return;
+                    if (dl?.status === 200 && dl?.uri) {
+                        setLocalPageUris((prev) => ({ ...prev, [page.name]: dl.uri }));
+                    }
+                } catch (e: any) {
+                    devLog('receipt-detail.downloadThrew', { name: page.name, err: e?.message ?? String(e) });
+                }
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [snap]);
+
     if (!snap || !overlayBuckets || !productBuckets) {
         return (
             <View style={styles.centered}>
@@ -330,13 +368,16 @@ export default function ReceiptDetailScreen() {
                     {snap.bands.map((bandResult, idx) => {
                         const onPage = productBuckets.perBand[idx];
                         const page = snap.pages[onPage.pageIdx];
-                        const url = `${API_BASE_URL}/receipts-batch/${snap.chain}/${encodeURIComponent(page.name)}`;
+                        // file:// URI once the page has cached locally;
+                        // empty string before that — ProductRow's crop
+                        // effect bails on empty and re-runs on update.
+                        const localUri = localPageUris[page.name] ?? '';
                         return (
                             <ProductRow
                                 key={idx}
                                 bandIdx={idx}
                                 bandResult={bandResult}
-                                uri={url}
+                                uri={localUri}
                                 pageWidth={page.pixelWidth}
                                 pageHeight={page.pixelHeight}
                                 yTopOnPage={onPage.yTopOnPage}
@@ -404,6 +445,9 @@ const ProductRow = ({
     const [croppedUri, setCroppedUri] = useState<string | null>(null);
     const [cropError, setCropError] = useState<string | null>(null);
     useEffect(() => {
+        // uri stays empty while the parent's per-page download is in
+        // flight. Bail; the effect re-runs once it populates.
+        if (!uri) return;
         let cancelled = false;
         const yTop = Math.max(0, Math.floor(yTopOnPage));
         const heightPx = Math.min(
@@ -411,30 +455,30 @@ const ProductRow = ({
             pageHeight - yTop,
         );
         if (heightPx <= 0) return;
+        const cropArgs = { uri, originX: 0, originY: yTop, width: pageWidth, height: heightPx };
+        devLog('receipt-detail.cropAttempt', { bandIdx, ...cropArgs });
+        // JPEG output: PNG via expo-image-manipulator v14 on iOS
+        // trips `calling the 'renderAsync' function has failed`
+        // regardless of legacy vs new context API. JPEG output works
+        // with the same source URIs in rotatePortrait and mlkitOcr's
+        // tile crop, so the PNG encoder path is the broken one.
         ImageManipulator.manipulateAsync(
             uri,
-            [
-                {
-                    crop: {
-                        originX: 0,
-                        originY: yTop,
-                        width: pageWidth,
-                        height: heightPx,
-                    },
-                },
-            ],
-            { compress: 1, format: ImageManipulator.SaveFormat.PNG },
+            [{ crop: { originX: 0, originY: yTop, width: pageWidth, height: heightPx } }],
+            { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
         )
             .then((res) => {
+                devLog('receipt-detail.cropSuccess', { bandIdx, resultUri: res?.uri });
                 if (!cancelled) setCroppedUri(res.uri);
             })
             .catch((e) => {
-                if (!cancelled) setCropError(String(e?.message ?? e));
+                const errMsg = e?.message ?? String(e);
+                console.warn('[receipt-detail] band crop failed', { ...cropArgs, err: errMsg });
+                devLog('receipt-detail.cropFailed', { bandIdx, ...cropArgs, err: errMsg });
+                if (!cancelled) setCropError(errMsg);
             });
-        return () => {
-            cancelled = true;
-        };
-    }, [uri, yTopOnPage, yBottomOnPage, pageWidth, pageHeight]);
+        return () => { cancelled = true; };
+    }, [uri, yTopOnPage, yBottomOnPage, pageWidth, pageHeight, bandIdx]);
 
     return (
         <View style={styles.productRow}>
@@ -452,7 +496,7 @@ const ProductRow = ({
                     />
                 )}
                 {cropError && (
-                    <Text style={styles.cropErrorText} numberOfLines={1}>
+                    <Text style={styles.cropErrorText} numberOfLines={5}>
                         crop failed: {cropError}
                     </Text>
                 )}
@@ -469,7 +513,7 @@ const ProductRow = ({
                         </Text>
                     ) : (
                         <Text style={styles.productSkipName} numberOfLines={2}>
-                            {bandResult.warnings.find((w) => w.startsWith('skip:')) ?? 'praleista'}
+                            {skipLabel(bandResult.warnings)}
                         </Text>
                     )}
                 </View>
@@ -546,6 +590,24 @@ const statusColor = (s: StatusKind, c: AppTheme): string => {
     if (s === 'WARN') return c.error;
     return c.textMuted; // SKIP
 };
+
+/**
+ * Map a parser `skip:*` warning to a human-readable label for the
+ * "no product extracted" row. Defaults to the raw warning text so
+ * any new skip code shows up verbatim during dev before we localise.
+ */
+const SKIP_LABELS: Record<string, string> = {
+    'skip:ocr-price-dropped': 'Neatpažinta kaina',
+    'skip:taisymas-refund': 'Taisymo grąžinimas',
+    'skip:non-catalog': 'Nekatalogo įrašas',
+    'skip:deposit-only': 'Tik užstatas',
+};
+function skipLabel(warnings: string[]): string {
+    const w = warnings.find((x) => x.startsWith('skip:'));
+    if (!w) return 'praleista';
+    const code = w.split(/[\s"]/, 1)[0]; // strip any trailing text after the code
+    return SKIP_LABELS[code] ?? w;
+}
 
 const StatusIcon = ({ status, colors }: { status: StatusKind; colors: AppTheme }) => {
     const color = statusColor(status, colors);

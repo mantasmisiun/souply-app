@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
 import * as Haptics from "expo-haptics";
 import * as ImageManipulator from "expo-image-manipulator";
+import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -35,6 +36,7 @@ import ReceiptPhotoView from "../components/receipt/ReceiptPhotoView";
 import { SkeletonBox } from "../components/SkeletonBox";
 import { formatEuro, formatDate } from "../utils/formatCurrency";
 import { capVoluntaryQueue } from "../utils/swipeQueueCap";
+import { devLog } from "../utils/devLog";
 import { API_BASE_URL } from "../config/api";
 import { getUserId } from "../config/user";
 import { useReceiptComparison } from "../hooks/useReceiptComparison";
@@ -324,29 +326,48 @@ function BandCropImage({ pages, region, cardWidth }: RegionPreviewProps) {
   useEffect(() => {
     if (!cropPlan) return;
     let cancelled = false;
+    // JPEG output: PNG via expo-image-manipulator v14 on iOS trips
+    // `calling the 'renderAsync' function has failed` regardless of
+    // legacy vs new context API. JPEG output works in rotatePortrait
+    // and mlkitOcr's tile crop with the same source URIs, so it's the
+    // PNG encoder path that's broken — not the source, not the crop.
+    // Quality 0.9 is fine for an admin-preview thumbnail.
+    const { uri, originX, originY, width, height } = cropPlan;
+    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+      setCropError('invalid crop bounds');
+      return;
+    }
+    const cropArgs = {
+      uri,
+      originX: Math.floor(originX),
+      originY: Math.floor(originY),
+      width: Math.floor(width),
+      height: Math.floor(height),
+    };
+    devLog('BandCropImage.attempt', cropArgs);
     ImageManipulator.manipulateAsync(
-      cropPlan.uri,
-      [
-        {
-          crop: {
-            originX: cropPlan.originX,
-            originY: cropPlan.originY,
-            width: cropPlan.width,
-            height: cropPlan.height,
-          },
+      uri,
+      [{
+        crop: {
+          originX: cropArgs.originX,
+          originY: cropArgs.originY,
+          width: cropArgs.width,
+          height: cropArgs.height,
         },
-      ],
-      { compress: 1, format: ImageManipulator.SaveFormat.PNG },
+      }],
+      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
     )
       .then((res) => {
+        devLog('BandCropImage.success', { uri, resultUri: res?.uri });
         if (!cancelled) setCroppedUri(res.uri);
       })
       .catch((e) => {
+        const errMsg = e?.message ?? String(e);
+        console.warn('[BandCropImage] crop failed', { ...cropArgs, err: errMsg });
+        devLog('BandCropImage.failed', { ...cropArgs, err: errMsg });
         if (!cancelled) setCropError(String(e?.message ?? e));
       });
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, [cropPlan]);
 
   if (!cropPlan) return null;
@@ -369,7 +390,7 @@ function BandCropImage({ pages, region, cardWidth }: RegionPreviewProps) {
         />
       )}
       {cropError && (
-        <Text style={{ fontSize: 10, color: "#c00", padding: 2 }} numberOfLines={1}>
+        <Text style={{ fontSize: 10, color: "#c00", padding: 2 }} numberOfLines={5}>
           crop failed: {cropError}
         </Text>
       )}
@@ -1047,6 +1068,43 @@ export default function ProcessReceiptScreen() {
           if (imageData?.url) {
             setImageUri(imageData.url);
 
+            // `<Image>` is happy with the remote URL, but
+            // ImageManipulator.manipulateAsync (used by BandCropImage)
+            // requires a LOCAL file URI per its docs — passing the
+            // HTTPS MinIO URL trips a native crash with the cryptic
+            // "calling the 'renderAsync' function has failed". Cache
+            // the image to the local FS once, then point pageMetas
+            // at the local path so every band crop runs against a
+            // file:// URI.
+            let localUri = imageData.url as string;
+            try {
+              const cacheDir = FileSystem.cacheDirectory ?? '';
+              const dest = `${cacheDir}receipt-${id}.jpg`;
+              devLog('loadExistingReceipt.downloadStart', { id, src: imageData.url, dest });
+              const dl = await FileSystem.downloadAsync(imageData.url, dest);
+              const dlSummary = {
+                id,
+                uri: dl?.uri,
+                status: dl?.status,
+                size: dl?.headers?.['Content-Length'] ?? dl?.headers?.['content-length'],
+              };
+              devLog('loadExistingReceipt.downloadResult', dlSummary);
+              if (dl?.uri && dl?.status === 200) {
+                localUri = dl.uri;
+                try {
+                  const info = await FileSystem.getInfoAsync(dl.uri);
+                  devLog('loadExistingReceipt.fileInfo', { id, exists: info.exists, size: (info as any).size, uri: info.uri });
+                } catch (infoErr: any) {
+                  devLog('loadExistingReceipt.fileInfoError', { id, err: infoErr?.message ?? String(infoErr) });
+                }
+              } else {
+                devLog('loadExistingReceipt.downloadNon200', dlSummary);
+              }
+            } catch (e: any) {
+              devLog('loadExistingReceipt.downloadThrew', { id, err: e?.message ?? String(e) });
+            }
+            devLog('loadExistingReceipt.localUri', { id, localUri });
+
             const parsedWidth = Number(parsed?.image?.width);
             const parsedHeight = Number(parsed?.image?.height);
 
@@ -1054,7 +1112,7 @@ export default function ProcessReceiptScreen() {
               setImageDims({ width: w, height: h });
               setPageMetas([
                 {
-                  uri: imageData.url,
+                  uri: localUri,
                   pixelWidth: w,
                   pixelHeight: h,
                   frameScale: 1,
@@ -1075,7 +1133,7 @@ export default function ProcessReceiptScreen() {
               applyDims(parsedWidth, parsedHeight);
             } else {
               Image.getSize(
-                imageData.url,
+                localUri,
                 (width, height) => applyDims(width, height),
                 () => {},
               );

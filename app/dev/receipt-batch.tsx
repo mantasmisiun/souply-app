@@ -149,6 +149,12 @@ interface RowStatus {
     /** Comparison vs hand-annotated truth file (if present alongside
      *  the PDF/PNG). null if no truth file or comparison failed. */
     comparison?: ParserComparison | null;
+    /** `true` when the matched truth file was auto-bootstrapped by
+     *  the dev script (not hand-curated). Carried into the per-receipt
+     *  entry of the results JSON so a reader can tell which scores
+     *  reflect parser-vs-reality and which are parser-vs-parser's
+     *  prior self. */
+    truthProvisional?: boolean;
     /** Snapshot of parser-emitted products (lean fields used by the
      *  truth comparison). Persisted into the _results JSON so the
      *  truth files can be reconstructed when the parser is treated
@@ -485,6 +491,7 @@ export default function ReceiptBatchScreen() {
         try {
             const truth = await loadTruth(row.chain, row.sourcePdf);
             if (truth) {
+                status.truthProvisional = truth.provisional === true;
                 const parsedTotal = parsed.footer?.total ?? null;
                 status.comparison = compareToTruth(
                     parsed.products as any,
@@ -685,7 +692,7 @@ export default function ReceiptBatchScreen() {
         // are dropped entirely per project policy.
         if (detected === 'lidl') {
             try {
-                const planV2 = findReceiptBandsLidl(allLines as any);
+                const planV2 = findReceiptBandsLidl(allLines as any, PARSER_OPTS);
                 status.bandsV2Count = planV2.bands.length;
                 const summary = planV2.bands
                     .map((b) => `${b.label}=${Math.round(b.yTop)}-${Math.round(b.yBottom)}`)
@@ -809,6 +816,7 @@ export default function ReceiptBatchScreen() {
                     return {
                         pdf: r.sourcePdf,
                         truthProductCount: c.productsCorrect + c.productsMissed,
+                        truthProvisional: r.truthProvisional === true,
                         v2: {
                             productCount: c.productCount,
                             productsCorrect: c.productsCorrect,

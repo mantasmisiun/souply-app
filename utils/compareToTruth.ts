@@ -35,6 +35,18 @@ export interface TruthProduct {
 
 export interface TruthFile {
     $schema: string;
+    /**
+     * `true` when this truth file was auto-bootstrapped from a parser
+     * run (typically Android, which is the reliable baseline) rather
+     * than hand-curated. Provisional truths still feed `compareToTruth`
+     * unchanged — the flag's only semantic role is downstream: review
+     * tooling treats them as not-yet-trusted, and the batch test's
+     * result JSON surfaces them so consumers know which scores are
+     * "parser vs reality" vs "parser vs parser's old self".
+     *
+     * Absent or `false` ⇒ hand-verified, treated as ground truth.
+     */
+    provisional?: boolean;
     source: { pdf: string; annotatedAt: string };
     store: { chainName: string; storeCode: string; name: string; address: string };
     receipt: {
