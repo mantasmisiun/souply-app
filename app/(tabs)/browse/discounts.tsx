@@ -10,6 +10,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../../config/api';
 import { useBasketState } from '../../../state/basketState';
 import { addProductToBasket } from '../../../utils/basketUtils';
+import { resolveCanonicalStep } from '../../../utils/canonicalStep';
 import { ProductImage } from '../../../components/ProductImage';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { getUserId } from '../../../config/user';
@@ -43,6 +44,10 @@ interface DiscountedProduct {
     unit: string | null;
     hasWeighable: boolean;
     bestDiscountPct: number;
+    /** Canonical-unit fields populated server-side (productCanonical.ts). */
+    canonicalUnit: string | null;
+    canonicalStep: number | null;
+    canonicalFamily: 'fluid' | 'count' | null;
 }
 
 interface CardCallbacks {
@@ -63,7 +68,13 @@ const DiscountProductCard = memo(({
     colors: AppTheme;
 }) => {
     const { t } = useTranslation();
-    const fmt = (v: number) => v >= 1000 ? `${v / 1000} kg` : `${v} g`;
+    // minAmount/maxAmount are server-normalised into grams (g/ml as 1000-base).
+    // Re-label as l/ml for fluid Products whose canonical unit is l, since
+    // kg ≈ l in the canonical-unit transitional simplification — same
+    // numeric value, different label.
+    const bigUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
+    const smallUnit = item.canonicalUnit === 'l' ? 'ml' : 'g';
+    const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
     const amountText = item.minAmount != null && item.maxAmount != null
         ? (() => { const min = Number(item.minAmount); const max = Number(item.maxAmount); return min === max ? fmt(min) : `${fmt(min)} - ${fmt(max)}`; })()
         : '';
@@ -291,10 +302,14 @@ export default function DiscountsScreen() {
     const onAdd = useCallback((item: DiscountedProduct) => {
         const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
         if (hasRange || item.hasWeighable) { setAmountModal({ visible: true, product: item }); return; }
+        // First-tap quick-add: send one canonical step as the quantity so
+        // server pack-math lands on exactly one pack (1L for a 1L SP, but
+        // 0.5L = 1 bottle for a 500ml SP — never half a pack).
+        const initialQty = resolveCanonicalStep(item);
         setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
-        commitAddRef.current(item.id, 1).then(result => {
+        commitAddRef.current(item.id, initialQty).then(result => {
             if (result.success) {
-                setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
+                setBasketQuantities(prev => ({ ...prev, [item.id]: initialQty }));
                 setBasketItemCount(prev => prev + 1);
                 toastRef.current?.show(t('browse.addedToast'));
             }
@@ -304,8 +319,8 @@ export default function DiscountsScreen() {
     }, [setAmountModal]);
 
     const onDecrement = useCallback((item: DiscountedProduct, qty: number) => {
-        const step = item.hasWeighable ? 0.1 : 1;
-        const newQty = Math.round((qty - step) * 10) / 10;
+        const step = resolveCanonicalStep(item);
+        const newQty = Math.round((qty - step) / step) * step;
         const bid = draftBasketIdRef.current;
         if (newQty <= 0) {
             setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
@@ -328,8 +343,8 @@ export default function DiscountsScreen() {
     }, [clearSessionBasket]);
 
     const onIncrement = useCallback((item: DiscountedProduct, qty: number) => {
-        const step = item.hasWeighable ? 0.1 : 1;
-        const newQty = Math.round((qty + step) * 10) / 10;
+        const step = resolveCanonicalStep(item);
+        const newQty = Math.round((qty + step) / step) * step;
         const bid = draftBasketIdRef.current;
         setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
         if (!bid) return;
@@ -486,6 +501,9 @@ export default function DiscountsScreen() {
             <AmountPickerModal
                 visible={amountModal.visible}
                 productName={amountModal.product?.name || ''}
+                canonicalUnit={amountModal.product?.canonicalUnit ?? null}
+                canonicalStep={amountModal.product?.canonicalStep ?? null}
+                canonicalFamily={amountModal.product?.canonicalFamily ?? null}
                 minAmount={amountModal.product?.minAmount || 0}
                 maxAmount={amountModal.product?.maxAmount || 0}
                 unit={amountModal.product?.unit || 'g'}

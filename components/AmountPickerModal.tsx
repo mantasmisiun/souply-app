@@ -1,5 +1,5 @@
 import { View, Text, TouchableOpacity, StyleSheet, Modal, TextInput } from 'react-native';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../constants/theme';
@@ -7,13 +7,37 @@ import { useTheme, type AppTheme } from '../constants/theme';
 interface AmountPickerModalProps {
     visible: boolean;
     productName: string;
+    /**
+     * Canonical display unit decided server-side from the Product's SPs.
+     * Always kg / l / vnt / pak / rit — never g / ml. Falls back to `unit`
+     * (legacy) when canonicalUnit is null (Product has no SPs / unknown).
+     */
+    canonicalUnit?: string | null;
+    /**
+     * Step in canonical units (e.g. 0.5 when the smallest pack is 500ml
+     * and canonical is l). The +/- buttons step by this amount; the
+     * confirmed value is rounded up to the next multiple.
+     */
+    canonicalStep?: number | null;
+    /**
+     * Family: `fluid` (kg/l) or `count` (vnt/pak/rit). Drives small UX
+     * decisions like decimal formatting.
+     */
+    canonicalFamily?: 'fluid' | 'count' | null;
+    /** Legacy fallback shown in the subtitle when canonical isn't set. */
     minAmount: number;
     maxAmount: number;
     unit: string;
-    /** True when the product is sold by weight (bulk fruit/veg/meat) rather
-     *  than in packs. Changes the modal subtitle + hint so the user isn't
-     *  told about package sizes that don't apply. */
+    /** True when the product is sold by weight (bulk fruit/veg/meat). */
     isWeighable?: boolean;
+    /**
+     * Called with the user's chosen amount in **canonical units** (kg, l,
+     * or pack-content count). The server interprets this as the requested
+     * total — for non-weighables it rounds up to whole packs and charges
+     * accordingly. The picker enforces "multiple of canonicalStep" on
+     * confirm so the user can't request a quantity that wastes a fraction
+     * of a pack.
+     */
     onConfirm: (amount: number) => void;
     onCancel: () => void;
 }
@@ -21,6 +45,9 @@ interface AmountPickerModalProps {
 export default function AmountPickerModal({
     visible,
     productName,
+    canonicalUnit,
+    canonicalStep,
+    canonicalFamily,
     minAmount,
     maxAmount,
     unit,
@@ -32,25 +59,50 @@ export default function AmountPickerModal({
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
 
-    const isKg = unit === 'kg' || unit === 'g';
-    const step = isKg ? 0.1 : 1;
-    const defaultAmount = isKg ? 1.0 : 1;
-    const [amount, setAmount] = useState(defaultAmount);
-    const displayAmount = isKg ? amount.toFixed(1) : amount.toString();
-    const [inputText, setInputText] = useState(isKg ? '1.0' : '1');
-    const displayUnit = isKg ? 'kg' : unit;
+    // Resolve effective unit + step. New canonical fields win; legacy
+    // props are a fallback for Products fetched before the server attached
+    // canonical metadata (e.g. cached responses, older clients).
+    const displayUnit = canonicalUnit ?? (unit === 'g' ? 'kg' : unit === 'ml' ? 'l' : unit);
+    const step = canonicalStep && canonicalStep > 0
+        ? canonicalStep
+        : (isWeighable || displayUnit === 'kg' || displayUnit === 'l' ? 0.1 : 1);
+    // Fractional steps (kg / l with pack sizes like 0.5) want decimal
+    // formatting; whole-number steps (vnt / pak) want integers.
+    const isFractional = step < 1 || canonicalFamily === 'fluid';
+
+    const formatValue = (n: number): string => {
+        if (!isFractional) return String(Math.round(n));
+        // Keep at most 3 significant fractional digits, trim trailing zeros.
+        return Number(n.toFixed(3)).toString();
+    };
+
+    // Default start: one step. Reset whenever the picker opens for a new
+    // product so the previous user's choice doesn't leak.
+    const defaultAmount = step;
+    const [inputText, setInputText] = useState(formatValue(defaultAmount));
+
+    useEffect(() => {
+        if (visible) setInputText(formatValue(defaultAmount));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [visible, productName, step]);
+
+    const parseInput = (): number => {
+        const parsed = parseFloat(inputText.replace(',', '.'));
+        return Number.isFinite(parsed) && parsed > 0 ? parsed : defaultAmount;
+    };
+
     const decrease = () => {
-        const current = parseFloat(inputText) || 0;
-        const newAmount = Math.round((current - step) * 10) / 10;
-        if (newAmount >= step) {
-            setInputText(isKg ? newAmount.toFixed(1) : newAmount.toString());
+        const current = parseInput();
+        const next = current - step;
+        if (next >= step - 1e-9) {
+            setInputText(formatValue(Math.round(next / step) * step));
         }
     };
 
     const increase = () => {
-        const current = parseFloat(inputText) || 0;
-        const newAmount = Math.round((current + step) * 10) / 10;
-        setInputText(isKg ? newAmount.toFixed(1) : newAmount.toString());
+        const current = parseInput();
+        const next = current + step;
+        setInputText(formatValue(Math.round(next / step) * step));
     };
 
     return (
@@ -94,6 +146,22 @@ export default function AmountPickerModal({
                         </TouchableOpacity>
                     </View>
 
+                    {(() => {
+                        // Preview the step-snap target when the user has typed
+                        // something that doesn't fall on a valid pack multiple.
+                        // Communicates "you'll actually get N" before they tap
+                        // Add, so the round-up isn't a surprise.
+                        const raw = parseInput();
+                        const snapped = Math.max(step, Math.ceil(raw / step) * step);
+                        const diff = Math.abs(snapped - raw);
+                        if (diff < 1e-6) return null;
+                        return (
+                            <Text style={styles.roundUpHint}>
+                                {t('amountPicker.willGet', { amount: formatValue(snapped), unit: displayUnit })}
+                            </Text>
+                        );
+                    })()}
+
                     <Text style={styles.hint}>
                         {isWeighable ? t('amountPicker.hintWeighable') : t('amountPicker.hintPackages')}
                     </Text>
@@ -105,10 +173,12 @@ export default function AmountPickerModal({
                         <TouchableOpacity
                             style={styles.confirmButton}
                             onPress={() => {
-                                const parsed = parseFloat(inputText.replace(',', '.'));
-                                if (!isNaN(parsed) && parsed > 0) {
-                                    onConfirm(Math.round(parsed * 10) / 10);
-                                }
+                                const value = parseInput();
+                                // Snap to the nearest step multiple ≥ value so the
+                                // server doesn't round up surprisingly (avoids the
+                                // user typing "1.3" and getting charged for 1.5).
+                                const snapped = Math.max(step, Math.ceil(value / step) * step);
+                                onConfirm(Math.round(snapped * 1000) / 1000);
                             }}
                         >
                             <Text style={styles.confirmText}>{t('amountPicker.add')}</Text>
@@ -195,6 +265,17 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         color: c.textMuted,
         textAlign: 'center',
         marginBottom: 20,
+    },
+    // Preview shown when the typed value rounds up to the next pack —
+    // primary tint so it reads as "this is what you'll get" rather than
+    // a passive hint.
+    roundUpHint: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: c.primary,
+        textAlign: 'center',
+        marginTop: 4,
+        marginBottom: 4,
     },
     actions: {
         flexDirection: 'row',

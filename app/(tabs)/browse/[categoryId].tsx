@@ -21,6 +21,7 @@ import { Toast, type ToastHandle } from '../../../components/Toast';
 import { useTranslation } from 'react-i18next';
 import { ScalePressable } from '../../../components/ScalePressable';
 import { GlassButton } from '../../../components/GlassButton';
+import { resolveCanonicalStep } from '../../../utils/canonicalStep';
 
 interface Category {
     id: number;
@@ -38,6 +39,10 @@ interface Product {
     unit: string | null;
     hasWeighable: boolean;
     bestDiscountPct?: number | null;
+    /** Canonical-unit fields populated server-side (productCanonical.ts). */
+    canonicalUnit: string | null;
+    canonicalStep: number | null;
+    canonicalFamily: 'fluid' | 'count' | null;
 }
 
 interface CardCallbacks {
@@ -58,7 +63,15 @@ const BrowseProductCard = memo(({
     colors: AppTheme;
 }) => {
     const { t } = useTranslation();
-    const fmt = (v: number) => v >= 1000 ? `${v / 1000} kg` : `${v} g`;
+    // minAmount/maxAmount come from the server normalised into grams
+    // (BROWSE_SELECT uses g/ml as the 1000-base). The canonical-unit
+    // system treats kg ≈ l for fluid items, so for a Product whose
+    // dominant unit is `l` we just re-label the same value: "0.5 l"
+    // instead of "500 g". Without this, milk shows as "1 kg - 2 kg"
+    // even though every SP is in litres.
+    const bigUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
+    const smallUnit = item.canonicalUnit === 'l' ? 'ml' : 'g';
+    const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
     const amountText = item.minAmount != null && item.maxAmount != null
         ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
         : '';
@@ -501,10 +514,14 @@ export default function CategoryScreen() {
     const onAdd = useCallback((item: Product) => {
         const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
         if (hasRange || !!item.hasWeighable) { setAmountModal({ visible: true, product: item }); return; }
+        // Send one canonical step as the initial quantity (e.g. 1L for a
+        // 1L milk SP, 0.5L for a 500ml SP) so the server pack-math lands
+        // on exactly one pack — never half a pack.
+        const initialQty = resolveCanonicalStep(item);
         setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
-        commitAddRef.current(item.id, 1).then(result => {
+        commitAddRef.current(item.id, initialQty).then(result => {
             if (result.success) {
-                setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
+                setBasketQuantities(prev => ({ ...prev, [item.id]: initialQty }));
                 setBasketItemCount(prev => prev + 1);
                 toastRef.current?.show(t('browse.addedToast'));
             }
@@ -514,9 +531,8 @@ export default function CategoryScreen() {
     }, [setAmountModal]);
 
     const onDecrement = useCallback((item: Product, qty: number) => {
-        const hasRange = item.minAmount !== null && item.maxAmount !== null && Number(item.minAmount) !== Number(item.maxAmount);
-        const step = (hasRange || item.hasWeighable) ? 0.1 : 1;
-        const newQty = Math.round((qty - step) * 10) / 10;
+        const step = resolveCanonicalStep(item);
+        const newQty = Math.round((qty - step) / step) * step;
         const bid = draftBasketIdRef.current;
         if (newQty <= 0) {
             setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
@@ -539,9 +555,8 @@ export default function CategoryScreen() {
     }, [setDraftBasketId]);
 
     const onIncrement = useCallback((item: Product, qty: number) => {
-        const hasRange = item.minAmount !== null && item.maxAmount !== null && Number(item.minAmount) !== Number(item.maxAmount);
-        const step = (hasRange || item.hasWeighable) ? 0.1 : 1;
-        const newQty = Math.round((qty + step) * 10) / 10;
+        const step = resolveCanonicalStep(item);
+        const newQty = Math.round((qty + step) / step) * step;
         const bid = draftBasketIdRef.current;
         setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
         if (!bid) return;
@@ -793,6 +808,9 @@ export default function CategoryScreen() {
             <AmountPickerModal
                 visible={amountModal.visible}
                 productName={amountModal.product?.name || ''}
+                canonicalUnit={amountModal.product?.canonicalUnit ?? null}
+                canonicalStep={amountModal.product?.canonicalStep ?? null}
+                canonicalFamily={amountModal.product?.canonicalFamily ?? null}
                 minAmount={amountModal.product?.minAmount || 0}
                 maxAmount={amountModal.product?.maxAmount || 0}
                 unit={amountModal.product?.unit || 'g'}
