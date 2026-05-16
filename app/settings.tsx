@@ -11,6 +11,7 @@ import { useTheme, type AppTheme } from '../constants/theme';
 import { useSettingsStore, type AppLanguage } from '../state/settingsStore';
 import { getUserId, resetUserId } from '../config/user';
 import { API_BASE_URL } from '../config/api';
+import { GlassButton } from '../components/GlassButton';
 
 /**
  * Single source of truth for the languages we ship. Adding a new one is
@@ -232,22 +233,18 @@ export default function SettingsScreen() {
                         ))}
 
                         <View style={styles.modalBtnRow}>
-                            <TouchableOpacity
-                                style={[styles.modalBtn, styles.modalBtnSecondary]}
+                            <GlassButton
+                                title={t('delete.stage1.cancel')}
+                                variant="secondary"
                                 onPress={() => setDeleteStage(0)}
-                            >
-                                <Text style={styles.modalBtnTextSecondary}>
-                                    {t('delete.stage1.cancel')}
-                                </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.modalBtn, styles.modalBtnDanger]}
+                                flex
+                            />
+                            <GlassButton
+                                title={t('delete.stage1.continue')}
+                                variant="danger"
                                 onPress={() => setDeleteStage(2)}
-                            >
-                                <Text style={styles.modalBtnTextPrimary}>
-                                    {t('delete.stage1.continue')}
-                                </Text>
-                            </TouchableOpacity>
+                                flex
+                            />
                         </View>
                     </Pressable>
                 </Pressable>
@@ -281,35 +278,24 @@ export default function SettingsScreen() {
                             editable={!deleting}
                         />
                         <View style={styles.modalBtnRow}>
-                            <TouchableOpacity
-                                style={[styles.modalBtn, styles.modalBtnSecondary]}
+                            <GlassButton
+                                title={t('delete.stage2.cancel')}
+                                variant="secondary"
                                 onPress={() => {
                                     if (deleting) return;
                                     setDeleteStage(0);
                                     setDeleteInput('');
                                 }}
-                            >
-                                <Text style={styles.modalBtnTextSecondary}>
-                                    {t('delete.stage2.cancel')}
-                                </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[
-                                    styles.modalBtn,
-                                    styles.modalBtnDanger,
-                                    deleteInput !== t('delete.stage2.magic') && styles.modalBtnDisabled,
-                                ]}
+                                disabled={deleting}
+                                flex
+                            />
+                            <GlassButton
+                                title={deleting ? '…' : t('delete.stage2.confirm')}
+                                variant="danger"
                                 disabled={deleteInput !== t('delete.stage2.magic') || deleting}
                                 onPress={handleDelete}
-                            >
-                                {deleting ? (
-                                    <ActivityIndicator color={colors.onPrimary} />
-                                ) : (
-                                    <Text style={styles.modalBtnTextPrimary}>
-                                        {t('delete.stage2.confirm')}
-                                    </Text>
-                                )}
-                            </TouchableOpacity>
+                                flex
+                            />
                         </View>
                     </Pressable>
                 </Pressable>
@@ -325,12 +311,12 @@ export default function SettingsScreen() {
                     <Ionicons name="heart-outline" size={64} color={colors.primary} />
                     <Text style={styles.goodbyeTitle}>{t('delete.goodbye.title')}</Text>
                     <Text style={styles.goodbyeBody}>{t('delete.goodbye.body')}</Text>
-                    <TouchableOpacity
-                        style={[styles.modalBtn, styles.modalBtnPrimary, { marginTop: 24, minWidth: 220 }]}
+                    <GlassButton
+                        title={t('delete.goodbye.cta')}
+                        variant="primary"
                         onPress={handleOpenNewAccount}
-                    >
-                        <Text style={styles.modalBtnTextPrimary}>{t('delete.goodbye.cta')}</Text>
-                    </TouchableOpacity>
+                        style={{ marginTop: 24, minWidth: 220 }}
+                    />
                 </View>
             </Modal>
         </ScrollView>

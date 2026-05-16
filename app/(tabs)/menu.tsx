@@ -1,4 +1,5 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Dimensions, Image, Animated, Easing } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Dimensions, Image, Animated, Easing, Platform } from 'react-native';
+import { IOSTabHeader } from '../../components/IOSTabHeader';
 import { useRouter, useNavigation } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
@@ -82,11 +83,12 @@ export default function ProfilisScreen() {
     const navigation = useNavigation();
     const triggerIfNewLevel = useLevelStore(s => s.triggerIfNewLevel);
 
-    // Settings gear in the top-right of the Profilis tab header. Set via
-    // navigation.setOptions because the static Tabs.Screen options can't
-    // carry a router-aware tap handler. useLayoutEffect runs synchronously
-    // before paint so the icon never flashes in on first focus.
+    // Settings gear lives in the JS Tabs header on Android (via
+    // navigation.setOptions) and in IOSTabHeader.rightAction on iOS —
+    // NativeTabs renders no header, so the gear would otherwise be
+    // unreachable.
     useLayoutEffect(() => {
+        if (Platform.OS === 'ios') return;
         navigation.setOptions({
             headerRight: () => (
                 <TouchableOpacity
@@ -266,9 +268,20 @@ export default function ProfilisScreen() {
 
     const kitaTotal = kitaSlices.reduce((s, c) => s + c.value, 0);
 
+    const settingsGear = (
+        <TouchableOpacity
+            onPress={() => router.push('/settings' as any)}
+            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+        >
+            <Ionicons name="settings-outline" size={24} color={colors.textPrimary} />
+        </TouchableOpacity>
+    );
+
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
         <BottomSheetModalProvider>
+        <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
+        <IOSTabHeader title={t('tabs.profilis')} rightAction={settingsGear} />
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
             {/* Level card */}
             <View style={styles.levelCard}>
@@ -473,6 +486,7 @@ export default function ProfilisScreen() {
             />
         </BottomSheetModal>
 
+        </View>
         </BottomSheetModalProvider>
         </GestureHandlerRootView>
     );

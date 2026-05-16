@@ -2,6 +2,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
 import { useFocusEffect, useRouter } from "expo-router";
+import { useSafeBottomTabBarHeight } from "../../hooks/useSafeBottomTabBarHeight";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -20,6 +21,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { IOSTabHeader } from "../../components/IOSTabHeader";
 import { API_BASE_URL } from "../../config/api";
 import { getUserId } from "../../config/user";
 import { useTheme, type AppTheme } from "../../constants/theme";
@@ -145,6 +147,10 @@ export default function ReceiptsScreen() {
   const colors = useTheme();
   const { t } = useTranslation();
   const styles = useMemo(() => makeStyles(colors), [colors]);
+  // Tab bar is position:absolute on iOS (liquid-glass), so the FAB
+  // needs to sit above it instead of using a static bottom: 24 which
+  // gets hidden under the bar.
+  const tabBarHeight = useSafeBottomTabBarHeight();
   const checkCandidate = useLevelStore(s => s.checkCandidate);
   useFocusEffect(useCallback(() => { checkCandidate(); }, [checkCandidate]));
   const [receipts, setReceipts] = useState<Receipt[]>([]);
@@ -652,6 +658,7 @@ export default function ReceiptsScreen() {
 
   return (
     <View style={styles.container}>
+      <IOSTabHeader title={t('tabs.receipts')} />
       {/* Chain filter chips — own section under the navbar, white
           background continuous with the (now-white) navbar above.
           Hidden when the user has no receipts yet (nothing to filter)
@@ -744,7 +751,7 @@ export default function ReceiptsScreen() {
         }}
       />
       <TouchableOpacity
-        style={[styles.fab, !isOnline && { opacity: 0.4 }]}
+        style={[styles.fab, { bottom: tabBarHeight + 16 }, !isOnline && { opacity: 0.4 }]}
         onPress={() => {
           if (!isOnline) {
             Alert.alert(t('receipts.offline.title'), t('receipts.offline.body'));
@@ -957,7 +964,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   fab: {
     position: "absolute",
     bottom: 24,
-    right: 24,
+    right: 20,
     backgroundColor: c.primary,
     width: 56,
     height: 56,

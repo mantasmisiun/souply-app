@@ -3,7 +3,7 @@
     "receipts": "Analyze",
     "browse": "Browse",
     "basket": "Basket",
-    "shoppingList": "Shopping list",
+    "shoppingList": "List",
     "profilis": "Profile"
   },
   "levels": {
@@ -135,6 +135,17 @@
     "placeholderTitle": "Coming soon",
     "placeholderBody": "This admin tab isn't ready yet.",
     "auditLogTitle": "Audit log",
+    "build": {
+      "title": "Build",
+      "embedded": "EMBEDDED",
+      "noId": "no id",
+      "checkNow": "Check for updates",
+      "upToDateTitle": "Up to date",
+      "upToDateBody": "Running the latest version.",
+      "fetchedTitle": "Update fetched",
+      "fetchedBody": "Tap OK to reload the app.",
+      "errorTitle": "Update check failed"
+    },
     "images": {
       "headerTitle": "Images",
       "outstanding": "{{n}} left in global queue",
@@ -340,6 +351,11 @@
   },
   "banners": {
     "offline": "No internet connection",
+    "devUpdate": {
+      "message": "Update ready",
+      "restart": "Restart",
+      "fetching": "Downloading…"
+    },
     "pendingSwipes": {
       "title": "Help us recognise",
       "cta": "Start",

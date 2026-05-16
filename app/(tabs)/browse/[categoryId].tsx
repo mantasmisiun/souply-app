@@ -1,4 +1,4 @@
-import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, ActivityIndicator, Switch, Modal } from 'react-native';
+import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, Switch, Modal } from 'react-native';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { ChainLogoStrip } from '../../../components/ChainLogoStrip';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
@@ -20,6 +20,7 @@ import * as Haptics from 'expo-haptics';
 import { Toast, type ToastHandle } from '../../../components/Toast';
 import { useTranslation } from 'react-i18next';
 import { ScalePressable } from '../../../components/ScalePressable';
+import { GlassButton } from '../../../components/GlassButton';
 
 interface Category {
     id: number;
@@ -728,24 +729,20 @@ export default function CategoryScreen() {
                             {t('browse.modeSwitch.body')}
                         </Text>
                         <View style={styles.helpActionsRow}>
-                            <TouchableOpacity
-                                style={[styles.helpClose, styles.helpCloseSecondary]}
+                            <GlassButton
+                                title={t('common.cancel')}
+                                variant="secondary"
                                 onPress={cancelModeSwitch}
                                 disabled={converting}
-                            >
-                                <Text style={styles.helpCloseSecondaryText}>{t('common.cancel')}</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={styles.helpClose}
+                                flex
+                            />
+                            <GlassButton
+                                title={converting ? '…' : t('browse.modeSwitch.confirm')}
+                                variant="primary"
                                 onPress={confirmModeSwitch}
                                 disabled={converting}
-                            >
-                                {converting ? (
-                                    <ActivityIndicator size="small" color={colors.onPrimary} />
-                                ) : (
-                                    <Text style={styles.helpCloseText}>{t('browse.modeSwitch.confirm')}</Text>
-                                )}
-                            </TouchableOpacity>
+                                flex
+                            />
                         </View>
                     </View>
                 </View>
@@ -776,12 +773,13 @@ export default function CategoryScreen() {
                         <Text style={styles.helpBody}>
                             {t('browse.modeSwitch.example')}
                         </Text>
-                        <TouchableOpacity
-                            style={styles.helpClose}
+                        <GlassButton
+                            title={t('browse.modeSwitch.gotIt')}
+                            variant="primary"
                             onPress={() => setHelpOpen(false)}
-                        >
-                            <Text style={styles.helpCloseText}>{t('browse.modeSwitch.gotIt')}</Text>
-                        </TouchableOpacity>
+                            style={{ alignSelf: 'flex-end', marginTop: 4, minWidth: 84 }}
+                        />
+
                     </TouchableOpacity>
                 </TouchableOpacity>
             </Modal>

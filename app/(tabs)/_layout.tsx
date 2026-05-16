@@ -1,15 +1,32 @@
 import { Tabs } from 'expo-router';
+import { NativeTabs, Icon, Label, Badge } from 'expo-router/unstable-native-tabs';
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { BlurView } from 'expo-blur';
+import { Component, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Platform, View, Text, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { useProfileStore } from '../../state/profileStore';
 import { HapticTab } from '../../components/haptic-tab';
+import { devLog } from '../../utils/devLog';
 
-function Badge({ count, styles }: { count: number; styles: ReturnType<typeof makeStyles> }) {
+class NativeTabsBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { hasError: boolean }> {
+    state = { hasError: false };
+    static getDerivedStateFromError() { return { hasError: true }; }
+    componentDidCatch(error: Error, info: { componentStack?: string | null }) {
+        devLog('tabs.iosBoundaryCaught', {
+            name: error?.name,
+            message: error?.message,
+            stack: error?.stack?.split('\n').slice(0, 30).join('\n'),
+            componentStack: info?.componentStack?.split('\n').slice(0, 30).join('\n'),
+        });
+    }
+    render() { return this.state.hasError ? this.props.fallback : this.props.children; }
+}
+
+function TabBadge({ count, styles }: { count: number; styles: ReturnType<typeof makeStyles> }) {
     if (count === 0) return null;
     return (
         <View style={styles.badge}>
@@ -62,7 +79,7 @@ export default function TabLayout() {
         useProfileStore.getState().fetchProfile();
     }, []);
 
-    return (
+    const jsTabs = (
         <Tabs
             screenOptions={{
                 tabBarButton: HapticTab,
@@ -94,7 +111,7 @@ export default function TabLayout() {
                     tabBarIcon: ({ focused, color, size }) => (
                         <View>
                             <Ionicons name={focused ? 'cart' : 'cart-outline'} size={size} color={color} />
-                            <Badge count={basketCount} styles={styles} />
+                            <TabBadge count={basketCount} styles={styles} />
                         </View>
                     ),
                 }}
@@ -106,7 +123,7 @@ export default function TabLayout() {
                     tabBarIcon: ({ focused, color, size }) => (
                         <View>
                             <Ionicons name={focused ? 'list' : 'list-outline'} size={size} color={color} />
-                            <Badge count={listCount} styles={styles} />
+                            <TabBadge count={listCount} styles={styles} />
                         </View>
                     ),
                 }}
@@ -115,15 +132,11 @@ export default function TabLayout() {
                 name="receipts"
                 options={{
                     title: t('tabs.receipts'),
-                    // White navbar to match the L2-category browse screens
-                    // (the receipts tab uses the same card-on-cream layout
-                    // once filter chips are introduced — the navbar→chips
-                    // section reads as one continuous white strip).
                     headerStyle: { backgroundColor: colors.cardBackground },
                     tabBarIcon: ({ focused, color, size }) => (
                         <View>
                             <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />
-                            {pendingSwipeCount > 0 && <Badge count={pendingSwipeCount} styles={styles} />}
+                            {pendingSwipeCount > 0 && <TabBadge count={pendingSwipeCount} styles={styles} />}
                         </View>
                     ),
                 }}
@@ -139,6 +152,45 @@ export default function TabLayout() {
             />
         </Tabs>
     );
+
+    if (Platform.OS === 'ios') {
+        devLog('tabs.iosLayoutMount', { basketCount, listCount, pendingSwipeCount });
+        const fmt = (n: number) => (n > 0 ? (n > 9 ? '9+' : String(n)) : undefined);
+        const basketBadge = fmt(basketCount);
+        const listBadge = fmt(listCount);
+        const swipeBadge = fmt(pendingSwipeCount);
+        return (
+            <NativeTabsBoundary fallback={jsTabs}>
+                <NativeTabs tintColor={colors.primary}>
+                    <NativeTabs.Trigger name="browse">
+                        <Icon sf="magnifyingglass" />
+                        <Label>{t('tabs.browse')}</Label>
+                    </NativeTabs.Trigger>
+                    <NativeTabs.Trigger name="basket">
+                        <Icon sf={{ default: 'cart', selected: 'cart.fill' }} />
+                        <Label>{t('tabs.basket')}</Label>
+                        {basketBadge ? <Badge>{basketBadge}</Badge> : null}
+                    </NativeTabs.Trigger>
+                    <NativeTabs.Trigger name="shoppingList">
+                        <Icon sf="list.bullet" />
+                        <Label>{t('tabs.shoppingList')}</Label>
+                        {listBadge ? <Badge>{listBadge}</Badge> : null}
+                    </NativeTabs.Trigger>
+                    <NativeTabs.Trigger name="receipts">
+                        <Icon sf={{ default: 'doc.text', selected: 'doc.text.fill' }} />
+                        <Label>{t('tabs.receipts')}</Label>
+                        {swipeBadge ? <Badge>{swipeBadge}</Badge> : null}
+                    </NativeTabs.Trigger>
+                    <NativeTabs.Trigger name="menu">
+                        <Icon sf={{ default: 'person', selected: 'person.fill' }} />
+                        <Label>{t('tabs.profilis')}</Label>
+                    </NativeTabs.Trigger>
+                </NativeTabs>
+            </NativeTabsBoundary>
+        );
+    }
+
+    return jsTabs;
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({

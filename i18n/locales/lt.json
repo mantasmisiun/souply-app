@@ -3,7 +3,7 @@
     "receipts": "Analizė",
     "browse": "Naršyti",
     "basket": "Krepšelis",
-    "shoppingList": "Pirkinių sąrašas",
+    "shoppingList": "Sąrašas",
     "profilis": "Profilis"
   },
   "screens": {
@@ -93,6 +93,17 @@
     "placeholderTitle": "Tuoj bus",
     "placeholderBody": "Šis admin skirtukas dar nepasiruošęs.",
     "auditLogTitle": "Veiksmų istorija",
+    "build": {
+      "title": "Versija",
+      "embedded": "EMBEDDED",
+      "noId": "be id",
+      "checkNow": "Tikrinti atnaujinimus",
+      "upToDateTitle": "Atnaujinta",
+      "upToDateBody": "Veikia naujausia versija.",
+      "fetchedTitle": "Atnaujinimas atsisiųstas",
+      "fetchedBody": "Paspauskite OK, kad iš naujo paleistumėte programą.",
+      "errorTitle": "Klaida tikrinant atnaujinimą"
+    },
     "images": {
       "headerTitle": "Nuotraukos",
       "outstanding": "{{n}} liko eilėje",
@@ -299,6 +310,11 @@
   },
   "banners": {
     "offline": "Nėra interneto ryšio",
+    "devUpdate": {
+      "message": "Atnaujinimas paruoštas",
+      "restart": "Paleisti",
+      "fetching": "Atsisiunčiama…"
+    },
     "pendingSwipes": {
       "title": "Padėk atpažinti",
       "cta": "Pradėti",

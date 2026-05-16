@@ -9,8 +9,10 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import { useColorScheme } from '@/hooks/use-color-scheme';
 import { useTheme } from '../constants/theme';
+import { GlassIconButton } from '../components/GlassIconButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
+import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
@@ -19,6 +21,7 @@ import { useReceiptQueueRunner } from '../hooks/useReceiptQueueRunner';
 import '../i18n';
 import { useTranslation } from 'react-i18next';
 import { installFetchInterceptor } from '../utils/installFetchInterceptor';
+import { installCrashReporter } from '../utils/installCrashReporter';
 
 // Install the global fetch shim once at module load so every API call
 // — including those that bypass `fetchWithTimeout` — sends the right
@@ -26,6 +29,9 @@ import { installFetchInterceptor } from '../utils/installFetchInterceptor';
 // interceptor is idempotent and reads i18n.language lazily at call
 // time, so swapping languages mid-session works without re-installing.
 installFetchInterceptor();
+// Catch any uncaught JS error and ship it to /api/dev-log so we can
+// diagnose iOS crashes without Xcode. Idempotent.
+installCrashReporter();
 
 /**
  * Copy a content:// or file:// URI into the app cache and return the
@@ -183,6 +189,7 @@ export default function RootLayout() {
     <ThemeProvider value={navTheme}>
       <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
       <ShareHandler />
+      <DevUpdateBanner />
       <OfflineBanner />
       <LevelUpModal />
       <Stack
@@ -191,6 +198,16 @@ export default function RootLayout() {
           headerTintColor: colors.textPrimary,
           headerShadowVisible: false,
           contentStyle: { backgroundColor: colors.pageBackground },
+          // Hide the previous route's title next to the iOS back
+          // chevron. Without this the back button rendered as
+          // "< (tabs)" on every screen pushed from the tab group
+          // because (tabs) is a route group with no display title —
+          // iOS falls back to the literal route name. Keep the
+          // NATIVE back button — overriding it via a custom
+          // headerLeft caused expo-router to mount duplicate
+          // screens on iOS (a phantom view above the real one).
+          headerBackTitle: '',
+          headerBackButtonDisplayMode: 'minimal',
         }}
       >
         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
@@ -208,7 +225,26 @@ export default function RootLayout() {
         <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
         <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess') }} />
         <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
-        <Stack.Screen name="settings" options={{ title: t('settings.title') }} />
+        <Stack.Screen
+          name="settings"
+          options={{
+            title: t('settings.title'),
+            // Custom back chevron — the iOS 26 native back button in
+            // the liquid-glass nav bar is unresponsive on this
+            // screen (confirmed: chevron renders, tap does nothing).
+            // Setting headerLeft on the specific screen entry (not
+            // in global screenOptions) sidesteps the phantom-screen
+            // duplicate-mount bug that hit when headerLeft was set
+            // globally on the root Stack.
+            headerLeft: () => (
+              <GlassIconButton
+                icon="chevron-back"
+                onPress={() => router.canGoBack() && router.back()}
+                size={24}
+              />
+            ),
+          }}
+        />
         <Stack.Screen name="profile/restore-account" options={{ title: t('restore.title') }} />
         <Stack.Screen
           name="profile/audit-log"

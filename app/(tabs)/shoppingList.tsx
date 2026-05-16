@@ -1,7 +1,9 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, Modal, RefreshControl } from 'react-native';
+import { IOSTabHeader } from '../../components/IOSTabHeader';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeBottomTabBarHeight } from '../../hooks/useSafeBottomTabBarHeight';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
@@ -142,6 +144,10 @@ export default function ShoppingListScreen() {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    // Tab bar is position:absolute on iOS now (liquid-glass), so the
+    // FAB needs to sit above it instead of using a static bottom: 24
+    // which gets hidden under the bar.
+    const tabBarHeight = useSafeBottomTabBarHeight();
     const [lists, setLists] = useState<ShoppingList[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
@@ -294,7 +300,9 @@ export default function ShoppingListScreen() {
     const completedLists = lists.filter(l => l.status === 'completed');
 
     if (loading) return (
-        <View style={[styles.container, { padding: 16, gap: 12 }]}>
+        <View style={styles.container}>
+            <IOSTabHeader title={t('tabs.shoppingList')} />
+            <View style={{ padding: 16, gap: 12 }}>
             {Array.from({ length: 5 }).map((_, i) => (
                 <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, gap: 10, borderLeftWidth: 3, borderLeftColor: colors.borderSubtle }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
@@ -308,12 +316,14 @@ export default function ShoppingListScreen() {
                     <SkeletonBox height={6} borderRadius={3} />
                 </View>
             ))}
+            </View>
         </View>
     );
 
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
             <View style={styles.container}>
+                <IOSTabHeader title={t('tabs.shoppingList')} />
                 {pendingDelete && (
                     <TouchableOpacity
                         style={styles.undoToast}
@@ -388,7 +398,7 @@ export default function ShoppingListScreen() {
                 />
 
                 <TouchableOpacity
-                    style={styles.fab}
+                    style={[styles.fab, { bottom: tabBarHeight + 16 }]}
                     onPress={() => setFabMenuOpen(true)}
                     activeOpacity={0.85}
                 >

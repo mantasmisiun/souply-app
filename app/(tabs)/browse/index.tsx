@@ -7,6 +7,8 @@ import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from '
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
 import { useTheme, type AppTheme } from '../../../constants/theme';
+import { IOSTabHeader } from '../../../components/IOSTabHeader';
+import { GlassIconButton } from '../../../components/GlassIconButton';
 
 interface Category {
     id: number;
@@ -175,8 +177,21 @@ export default function BrowseIndex() {
         </View>
     );
 
+    const searchAction = (
+        <GlassIconButton
+            icon="search"
+            onPress={() =>
+                router.push({
+                    pathname: '/search',
+                    params: { mode: 'products', source: 'browse' },
+                })
+            }
+        />
+    );
+
     return (
-        <>
+        <View style={{ flex: 1 }}>
+            <IOSTabHeader title={t('browse.title')} rightAction={searchAction} />
             <FlatList
                 style={styles.container}
                 data={l1Categories}
@@ -208,7 +223,7 @@ export default function BrowseIndex() {
                     />
                 )}
             />
-        </>
+        </View>
     );
 }
 

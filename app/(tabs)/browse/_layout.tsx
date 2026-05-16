@@ -1,13 +1,10 @@
 import { Stack, useRouter } from 'expo-router';
-import { TouchableOpacity } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import { useTranslation } from 'react-i18next';
 import { useTheme } from '../../../constants/theme';
+import { GlassIconButton } from '../../../components/GlassIconButton';
 
 export default function BrowseLayout() {
     const router = useRouter();
     const colors = useTheme();
-    const { t } = useTranslation();
 
     // Both L1 (index) and L2 ([categoryId]) get the same magnifying-
     // glass icon in the right side of the nav bar — tap pushes the
@@ -15,17 +12,15 @@ export default function BrowseLayout() {
     // Single shared definition so the two screens stay in sync if
     // the destination route or params ever change.
     const searchHeaderRight = () => (
-        <TouchableOpacity
+        <GlassIconButton
+            icon="search"
             onPress={() =>
                 router.push({
                     pathname: '/search',
                     params: { mode: 'products', source: 'browse' },
                 })
             }
-            style={{ width: 44, height: 44, alignItems: 'center', justifyContent: 'center' }}
-        >
-            <Ionicons name="search" size={24} color={colors.primary} />
-        </TouchableOpacity>
+        />
     );
 
     return (
@@ -35,13 +30,24 @@ export default function BrowseLayout() {
                 headerTintColor: colors.textPrimary,
                 headerShadowVisible: false,
                 contentStyle: { backgroundColor: colors.pageBackground },
+                // Hide the previous route's title next to the iOS back
+                // chevron. Without this the back button rendered as
+                // "< Naršyti" on Nuolaidos and other pushed screens.
+                // Keep the NATIVE back button — overriding it via a
+                // custom headerLeft in a nested stack causes expo-
+                // router to mount the screen twice on iOS, creating a
+                // phantom duplicate Naršyti above the real one.
+                headerBackTitle: '',
+                headerBackButtonDisplayMode: 'minimal',
             }}
         >
             <Stack.Screen
                 name="index"
                 options={{
-                    title: t('browse.title'),
-                    headerRight: searchHeaderRight,
+                    // index renders its own IOSTabHeader so all five tabs
+                    // share the same custom top bar. [categoryId] keeps
+                    // the native Stack header to get the back chevron.
+                    headerShown: false,
                 }}
             />
             <Stack.Screen
