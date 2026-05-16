@@ -2,22 +2,20 @@ import { useCallback, useEffect, useState } from 'react';
 import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, AppState } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
-import Constants from 'expo-constants';
 import * as Updates from 'expo-updates';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, type AppTheme } from '../constants/theme';
 
 /**
- * DEV-only thin top banner that polls for OTA updates and prompts the
- * admin to restart when one's been downloaded. Mounted at the root
- * layout so it covers every screen — solves the "did the OTA land
- * yet?" guessing game during testing.
+ * Thin top banner that polls for OTA updates and prompts the user to
+ * restart when one's been downloaded. Mounted at the root layout so it
+ * covers every screen. Works for both dev (channel: dev) and production
+ * (channel: production) EAS builds — channel is selected at build time
+ * via app.config.js, the banner just reacts to whatever expo-updates
+ * resolves for the installed build.
  *
- * Gate:
- *   - Souply (DEV) EAS-built variant only (matched via expoConfig.name).
- *   - Metro builds (`__DEV__ = true`) are excluded — OTAs don't apply
- *     when Metro is serving the bundle, so polling would always 4xx.
- *   - Production users never see this.
+ * Gate: only excludes Metro builds (`__DEV__ = true`) — OTAs don't
+ * apply when Metro is serving the bundle, so polling would always 4xx.
  *
  * Lifecycle:
  *   1. On mount + on every app-foreground: `checkForUpdateAsync`.
@@ -31,8 +29,7 @@ import { useTheme, type AppTheme } from '../constants/theme';
  */
 
 const POLL_INTERVAL_MS = 60_000;
-const SHOW_UPDATE_BANNER =
-    !__DEV__ && Constants.expoConfig?.name === 'Souply (DEV)';
+const SHOW_UPDATE_BANNER = !__DEV__;
 
 export function DevUpdateBanner() {
     const { t } = useTranslation();

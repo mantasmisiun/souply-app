@@ -280,6 +280,7 @@ async function ensurePortraitOrientation(uri: string): Promise<string> {
  * see the matched product image instead.
  */
 function BandCropImage({ pages, region, cardWidth }: RegionPreviewProps) {
+  const themeColors = useTheme();
   const [croppedUri, setCroppedUri] = useState<string | null>(null);
   const [cropError, setCropError] = useState<string | null>(null);
 
@@ -390,7 +391,7 @@ function BandCropImage({ pages, region, cardWidth }: RegionPreviewProps) {
         />
       )}
       {cropError && (
-        <Text style={{ fontSize: 10, color: "#c00", padding: 2 }} numberOfLines={5}>
+        <Text style={{ fontSize: 10, color: themeColors.error, padding: 2 }} numberOfLines={5}>
           crop failed: {cropError}
         </Text>
       )}

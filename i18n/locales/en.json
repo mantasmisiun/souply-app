@@ -60,6 +60,13 @@
       "section": "Language",
       "label": "Choose language"
     },
+    "appearance": {
+      "section": "Appearance",
+      "label": "Theme",
+      "system": "System default",
+      "light": "Light",
+      "dark": "Dark"
+    },
     "notifications": {
       "section": "Notifications",
       "levelUp": {
@@ -778,7 +785,11 @@
     "devReceiptBatch": "Receipt batch test",
     "kitaTotal": "{{total}} total",
     "kitaShowAll_one": "Show all ({{count}} category)",
-    "kitaShowAll_other": "Show all ({{count}} categories)"
+    "kitaShowAll_other": "Show all ({{count}} categories)",
+    "kitosLabel": "Other",
+    "kitosShowMore": "Show more",
+    "kitosShowLess": "Show less",
+    "topN": "Top {{n}}"
   },
   "receiptPhoto": {
     "title": "Recognised data",

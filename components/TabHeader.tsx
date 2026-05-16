@@ -1,4 +1,4 @@
-import { Platform, View, Text, StyleSheet, type ViewStyle, type StyleProp } from 'react-native';
+import { View, Text, StyleSheet, type ViewStyle, type StyleProp } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '../constants/theme';
 import type { ReactNode } from 'react';
@@ -10,16 +10,15 @@ interface Props {
 }
 
 /**
- * iOS-only large-title header for tabs hosted by `NativeTabs`. NativeTabs
- * renders no UINavigationController, so each tab screen is otherwise
- * missing the nav bar that iOS users expect (title + right actions). On
- * Android the JS Tabs navigator provides its own header — this component
- * returns null there.
+ * Cross-platform tab top bar. NativeTabs on iOS and JS Tabs on Android
+ * both leave the per-tab header up to the screen, so we render a single
+ * 44pt-tall (+ safe-area) bar with a centered 17pt semibold title and an
+ * optional right-side action. Used by all five tab screens to keep the
+ * top of every tab visually identical.
  */
-export function IOSTabHeader({ title, rightAction, style }: Props) {
+export function TabHeader({ title, rightAction, style }: Props) {
     const colors = useTheme();
     const insets = useSafeAreaInsets();
-    if (Platform.OS !== 'ios') return null;
     return (
         <View
             style={[

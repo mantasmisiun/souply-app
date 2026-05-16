@@ -89,16 +89,17 @@ export default function TabLayout() {
                     backgroundColor: colors.cardBackground,
                     borderTopColor: colors.borderSubtle,
                 },
-                headerStyle: { backgroundColor: colors.pageBackground },
-                headerTintColor: colors.textPrimary,
-                headerShadowVisible: false,
+                // Every tab screen renders its own <TabHeader/> for visual
+                // parity with the iOS NativeTabs path (which never gets a
+                // native nav bar). Disable the JS Tabs header globally so
+                // we don't stack two bars on Android.
+                headerShown: false,
             }}
         >
             <Tabs.Screen
                 name="browse"
                 options={{
                     title: t('tabs.browse'),
-                    headerShown: false,
                     tabBarIcon: ({ focused, color, size }) => (
                         <Ionicons name={focused ? 'search' : 'search-outline'} size={size} color={color} />
                     ),
@@ -132,7 +133,6 @@ export default function TabLayout() {
                 name="receipts"
                 options={{
                     title: t('tabs.receipts'),
-                    headerStyle: { backgroundColor: colors.cardBackground },
                     tabBarIcon: ({ focused, color, size }) => (
                         <View>
                             <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />

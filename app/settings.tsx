@@ -8,7 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useTheme, type AppTheme } from '../constants/theme';
-import { useSettingsStore, type AppLanguage } from '../state/settingsStore';
+import { useSettingsStore, type AppLanguage, type ThemeMode } from '../state/settingsStore';
 import { getUserId, resetUserId } from '../config/user';
 import { API_BASE_URL } from '../config/api';
 import { GlassButton } from '../components/GlassButton';
@@ -22,6 +22,8 @@ const LANGUAGE_OPTIONS: { code: AppLanguage; label: string }[] = [
     { code: 'en', label: 'English' },
 ];
 
+const THEME_MODES: ThemeMode[] = ['system', 'light', 'dark'];
+
 export default function SettingsScreen() {
     const router = useRouter();
     const { t } = useTranslation();
@@ -34,14 +36,18 @@ export default function SettingsScreen() {
     const setShowLevelUpModal = useSettingsStore((s) => s.setShowLevelUpModal);
     const showNepriskirtaExplainer = useSettingsStore((s) => s.showNepriskirtaExplainer);
     const setShowNepriskirtaExplainer = useSettingsStore((s) => s.setShowNepriskirtaExplainer);
+    const themeMode = useSettingsStore((s) => s.themeMode);
+    const setThemeMode = useSettingsStore((s) => s.setThemeMode);
 
     const [langPickerOpen, setLangPickerOpen] = useState(false);
+    const [themePickerOpen, setThemePickerOpen] = useState(false);
     const [deleteStage, setDeleteStage] = useState<0 | 1 | 2 | 'goodbye'>(0);
     const [deleteInput, setDeleteInput] = useState('');
     const [deleting, setDeleting] = useState(false);
 
     const currentLangLabel = LANGUAGE_OPTIONS.find((l) => l.code === language)?.label
         ?? LANGUAGE_OPTIONS[0].label;
+    const currentThemeLabel = t(`settings.appearance.${themeMode}`);
 
     const handleDelete = async () => {
         setDeleting(true);
@@ -82,6 +88,21 @@ export default function SettingsScreen() {
                     <View style={styles.rowMain}>
                         <Text style={styles.rowLabel}>{t('settings.language.label')}</Text>
                         <Text style={styles.rowValue}>{currentLangLabel}</Text>
+                    </View>
+                    <Ionicons name="chevron-down" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
+            </Section>
+
+            {/* ── Appearance ────────────────────────────────────────────── */}
+            <Section title={t('settings.appearance.section')} styles={styles}>
+                <TouchableOpacity
+                    style={styles.row}
+                    onPress={() => setThemePickerOpen(true)}
+                    activeOpacity={0.7}
+                >
+                    <View style={styles.rowMain}>
+                        <Text style={styles.rowLabel}>{t('settings.appearance.label')}</Text>
+                        <Text style={styles.rowValue}>{currentThemeLabel}</Text>
                     </View>
                     <Ionicons name="chevron-down" size={18} color={colors.textMuted} />
                 </TouchableOpacity>
@@ -192,6 +213,46 @@ export default function SettingsScreen() {
                                 >
                                     <Text style={[styles.langLabel, selected && styles.langLabelSelected]}>
                                         {opt.label}
+                                    </Text>
+                                    {selected ? (
+                                        <Ionicons name="checkmark" size={20} color={colors.primary} />
+                                    ) : null}
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
+            {/* ── Theme picker modal ───────────────────────────────────── */}
+            <Modal
+                visible={themePickerOpen}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setThemePickerOpen(false)}
+            >
+                <Pressable
+                    style={styles.modalBackdrop}
+                    onPress={() => setThemePickerOpen(false)}
+                >
+                    <Pressable
+                        style={styles.modalCard}
+                        onPress={(e) => e.stopPropagation()}
+                    >
+                        <Text style={styles.modalTitle}>{t('settings.appearance.label')}</Text>
+                        {THEME_MODES.map((mode) => {
+                            const selected = mode === themeMode;
+                            return (
+                                <TouchableOpacity
+                                    key={mode}
+                                    style={styles.langOption}
+                                    onPress={async () => {
+                                        await setThemeMode(mode);
+                                        setThemePickerOpen(false);
+                                    }}
+                                >
+                                    <Text style={[styles.langLabel, selected && styles.langLabelSelected]}>
+                                        {t(`settings.appearance.${mode}`)}
                                     </Text>
                                     {selected ? (
                                         <Ionicons name="checkmark" size={20} color={colors.primary} />

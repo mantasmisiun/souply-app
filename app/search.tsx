@@ -1,7 +1,7 @@
 import { Ionicons } from "@expo/vector-icons";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
 import { GlassIconButton } from "../components/GlassIconButton";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
     ActivityIndicator,
@@ -23,6 +23,7 @@ import CreateStoreProductModal, {
   CreatedStoreProductPayload,
 } from "../components/receipt/CreateStoreProductModal";
 import { useTheme, type AppTheme } from "../constants/theme";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 // Pick the first URL from the API's imageUrls (string | array | null) for
 // places that only support a single imageUrl field (e.g. pendingPick).
@@ -96,6 +97,7 @@ export default function SearchScreen() {
         source?: string;
     }>();
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const { setPendingPick } = useReceiptPickerState();
     const { draftBasketId, setDraftBasketId } = useBasketState();
     const [basketQuantities, setBasketQuantities] = useState<Record<number, number>>({});
@@ -114,6 +116,12 @@ export default function SearchScreen() {
     const [query, setQuery] = useState("");
     const [searching, setSearching] = useState(false);
     const [inputKey, setInputKey] = useState(0);
+    const searchInputRef = useRef<TextInput>(null);
+    const clearQuery = useCallback(() => {
+        searchInputRef.current?.clear();
+        setQuery("");
+        searchInputRef.current?.focus();
+    }, []);
     const [productResults, setProductResults] = useState<ProductRow[]>([]);
     const source = typeof params.source === 'string' ? params.source : '';
     const isReceiptSource = source === 'receipt-index' || source === 'receipt-category';
@@ -129,9 +137,9 @@ export default function SearchScreen() {
     Number.isFinite(chainId) &&
     chainId > 0;
 
-  const closeAndBack = () => {
+  const closeAndBack = useCallback(() => {
     router.back();
-  };
+  }, [router]);
 
   const closeAfterReceiptPick = () => {
     if (source === "receipt-category") {
@@ -396,32 +404,31 @@ export default function SearchScreen() {
     );
   };
 
+  // Render the search bar in-screen instead of via navigation.setOptions.
+  // On Android, calling setOptions for headerRight rebuilds the entire
+  // header — the TextInput inside headerTitle remounts and the keyboard
+  // dismisses. Keeping the input inside the screen tree avoids that.
   return (
     <>
-      <Stack.Screen
-        options={{
-          title: "",
-          headerLeft: () => (
-            <GlassIconButton icon="chevron-back" onPress={closeAndBack} size={24} />
-          ),
-          headerTitle: () => (
-            <TextInput
-              key={inputKey}
-              autoFocus
-              placeholder={t('search.searchPlaceholder')}
-              placeholderTextColor={colors.textMuted}
-              defaultValue={query}
-              onChangeText={setQuery}
-              style={styles.searchInput}
-              autoCorrect={false}
-              autoCapitalize="none"
-            />
-          ),
-          headerRight: () => (
-            <GlassIconButton icon="close" onPress={closeAndBack} size={22} />
-          ),
-        }}
-      />
+      <Stack.Screen options={{ headerShown: false }} />
+      <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
+        <GlassIconButton icon="chevron-back" onPress={closeAndBack} size={24} />
+        <TextInput
+          ref={searchInputRef}
+          key={inputKey}
+          autoFocus
+          placeholder={t('search.searchPlaceholder')}
+          placeholderTextColor={colors.textMuted}
+          defaultValue={query}
+          onChangeText={setQuery}
+          style={[styles.searchInput, styles.topBarInput]}
+          autoCorrect={false}
+          autoCapitalize="none"
+        />
+        {query.length > 0 ? (
+          <GlassIconButton icon="close" onPress={clearQuery} size={22} />
+        ) : null}
+      </View>
       <View style={styles.container}>
         {searching ? (
           <ActivityIndicator
@@ -556,6 +563,19 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: c.pageBackground },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   searchInput: { fontSize: 16, flex: 1, color: c.textPrimary },
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingBottom: 8,
+    backgroundColor: c.pageBackground,
+  },
+  topBarInput: {
+    flex: 1,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+  },
   list: { padding: 12 },
   row: { gap: 12, marginBottom: 12 },
   productCard: {

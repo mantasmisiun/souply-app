@@ -834,7 +834,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     helpBackdrop: {
         flex: 1,
-        backgroundColor: 'rgba(0,0,0,0.45)',
+        backgroundColor: c.overlayBackdrop,
         alignItems: 'center',
         justifyContent: 'center',
         padding: 24,

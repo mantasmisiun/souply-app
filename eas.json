@@ -21,6 +21,14 @@
         "APP_VARIANT": "dev"
       }
     },
+    "android-dev": {
+      "distribution": "internal",
+      "channel": "dev",
+      "android": { "buildType": "apk" },
+      "env": {
+        "APP_VARIANT": "dev"
+      }
+    },
     "production": {
       "autoIncrement": true,
       "channel": "production"

@@ -18,6 +18,13 @@
       "section": "Kalba",
       "label": "Pasirinkite kalbą"
     },
+    "appearance": {
+      "section": "Išvaizda",
+      "label": "Tema",
+      "system": "Pagal sistemą",
+      "light": "Šviesi",
+      "dark": "Tamsi"
+    },
     "notifications": {
       "section": "Pranešimai",
       "levelUp": {
@@ -742,7 +749,11 @@
     "kitaTotal": "{{total}} iš viso",
     "kitaShowAll_one": "Rodyti visas ({{count}} kategoriją)",
     "kitaShowAll_few": "Rodyti visas ({{count}} kategorijas)",
-    "kitaShowAll_other": "Rodyti visas ({{count}} kategorijų)"
+    "kitaShowAll_other": "Rodyti visas ({{count}} kategorijų)",
+    "kitosLabel": "Kitos",
+    "kitosShowMore": "Žr. daugiau",
+    "kitosShowLess": "Žr. mažiau",
+    "topN": "Top {{n}}"
   },
   "receiptPhoto": {
     "title": "Atpažinti duomenys",

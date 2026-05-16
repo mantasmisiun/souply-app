@@ -1,4 +1,5 @@
 import { Stack, useRouter } from 'expo-router';
+import { useRef } from 'react';
 import { useTheme } from '../../../constants/theme';
 import { GlassIconButton } from '../../../components/GlassIconButton';
 
@@ -6,21 +7,25 @@ export default function BrowseLayout() {
     const router = useRouter();
     const colors = useTheme();
 
-    // Both L1 (index) and L2 ([categoryId]) get the same magnifying-
-    // glass icon in the right side of the nav bar — tap pushes the
-    // dedicated /search screen with the products mode preselected.
-    // Single shared definition so the two screens stay in sync if
-    // the destination route or params ever change.
+    // Tap-debounce so a quick double-tap on the search icon doesn't push
+    // /search twice onto the stack. The transition animation makes the
+    // button visible (and tappable) for the first ~300ms after press.
+    const lastSearchPushAt = useRef(0);
+    const pushSearch = () => {
+        const now = Date.now();
+        if (now - lastSearchPushAt.current < 600) return;
+        lastSearchPushAt.current = now;
+        router.push({
+            pathname: '/search',
+            params: { mode: 'products', source: 'browse' },
+        });
+    };
+
+    // [categoryId] uses the native Stack header so the back chevron + L2
+    // title come for free. The L1 index screen renders its own TabHeader
+    // (matching the other four tabs), so headerShown is false there.
     const searchHeaderRight = () => (
-        <GlassIconButton
-            icon="search"
-            onPress={() =>
-                router.push({
-                    pathname: '/search',
-                    params: { mode: 'products', source: 'browse' },
-                })
-            }
-        />
+        <GlassIconButton icon="search" onPress={pushSearch} />
     );
 
     return (
@@ -41,15 +46,7 @@ export default function BrowseLayout() {
                 headerBackButtonDisplayMode: 'minimal',
             }}
         >
-            <Stack.Screen
-                name="index"
-                options={{
-                    // index renders its own IOSTabHeader so all five tabs
-                    // share the same custom top bar. [categoryId] keeps
-                    // the native Stack header to get the back chevron.
-                    headerShown: false,
-                }}
-            />
+            <Stack.Screen name="index" options={{ headerShown: false }} />
             <Stack.Screen
                 name="[categoryId]"
                 options={({ route }: any) => ({

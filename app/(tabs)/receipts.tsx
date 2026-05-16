@@ -21,7 +21,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
-import { IOSTabHeader } from "../../components/IOSTabHeader";
+import { TabHeader } from "../../components/TabHeader";
 import { API_BASE_URL } from "../../config/api";
 import { getUserId } from "../../config/user";
 import { useTheme, type AppTheme } from "../../constants/theme";
@@ -658,7 +658,7 @@ export default function ReceiptsScreen() {
 
   return (
     <View style={styles.container}>
-      <IOSTabHeader title={t('tabs.receipts')} />
+      <TabHeader title={t('tabs.receipts')} />
       {/* Chain filter chips — own section under the navbar, white
           background continuous with the (now-white) navbar above.
           Hidden when the user has no receipts yet (nothing to filter)

@@ -17,10 +17,12 @@ import i18n from '../i18n';
  */
 
 export type AppLanguage = 'lt' | 'en';
+export type ThemeMode = 'light' | 'dark' | 'system';
 
 const KEY_LANGUAGE = 'settings_language';
 const KEY_SHOW_LEVELUP = 'settings_show_levelup_modal';
 const KEY_SHOW_NEPRISKIRTA_EXPLAINER = 'settings_show_nepriskirta_explainer';
+const KEY_THEME_MODE = 'settings_theme_mode';
 
 interface SettingsState {
     /** Null = not yet hydrated. Once hydrated, always 'lt' or 'en'. */
@@ -29,12 +31,20 @@ interface SettingsState {
     showLevelUpModal: boolean;
     /** Show the Neatpažinta explainer modal on tap. */
     showNepriskirtaExplainer: boolean;
+    /**
+     * Theme preference. Default 'system' — follows the OS appearance.
+     * Read synchronously by `useTheme` on every render, so initial render
+     * uses 'system' until `hydrate()` resolves and applies the user's
+     * persisted choice.
+     */
+    themeMode: ThemeMode;
     /** Whether the store has loaded from AsyncStorage. */
     hydrated: boolean;
     hydrate: () => Promise<void>;
     setLanguage: (lang: AppLanguage) => Promise<void>;
     setShowLevelUpModal: (value: boolean) => Promise<void>;
     setShowNepriskirtaExplainer: (value: boolean) => Promise<void>;
+    setThemeMode: (mode: ThemeMode) => Promise<void>;
 }
 
 /**
@@ -59,13 +69,15 @@ export const useSettingsStore = create<SettingsState>((set, _get) => ({
     language: null,
     showLevelUpModal: true,
     showNepriskirtaExplainer: true,
+    themeMode: 'system',
     hydrated: false,
 
     hydrate: async () => {
-        const [langRaw, lvlRaw, nepRaw] = await Promise.all([
+        const [langRaw, lvlRaw, nepRaw, themeRaw] = await Promise.all([
             AsyncStorage.getItem(KEY_LANGUAGE),
             AsyncStorage.getItem(KEY_SHOW_LEVELUP),
             AsyncStorage.getItem(KEY_SHOW_NEPRISKIRTA_EXPLAINER),
+            AsyncStorage.getItem(KEY_THEME_MODE),
         ]);
 
         let language: AppLanguage;
@@ -81,6 +93,9 @@ export const useSettingsStore = create<SettingsState>((set, _get) => ({
 
         const showLevelUpModal = lvlRaw === null ? true : lvlRaw === '1';
         const showNepriskirtaExplainer = nepRaw === null ? true : nepRaw === '1';
+        const themeMode: ThemeMode = (themeRaw === 'light' || themeRaw === 'dark' || themeRaw === 'system')
+            ? themeRaw
+            : 'system';
 
         // Sync into i18next before flipping the hydrated flag so the first
         // render with `hydrated=true` already has the right translations.
@@ -88,7 +103,7 @@ export const useSettingsStore = create<SettingsState>((set, _get) => ({
             await i18n.changeLanguage(language);
         }
 
-        set({ language, showLevelUpModal, showNepriskirtaExplainer, hydrated: true });
+        set({ language, showLevelUpModal, showNepriskirtaExplainer, themeMode, hydrated: true });
     },
 
     setLanguage: async (lang: AppLanguage) => {
@@ -105,5 +120,10 @@ export const useSettingsStore = create<SettingsState>((set, _get) => ({
     setShowNepriskirtaExplainer: async (value: boolean) => {
         await AsyncStorage.setItem(KEY_SHOW_NEPRISKIRTA_EXPLAINER, value ? '1' : '0');
         set({ showNepriskirtaExplainer: value });
+    },
+
+    setThemeMode: async (mode: ThemeMode) => {
+        await AsyncStorage.setItem(KEY_THEME_MODE, mode);
+        set({ themeMode: mode });
     },
 }));

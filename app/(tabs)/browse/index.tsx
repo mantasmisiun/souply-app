@@ -7,7 +7,7 @@ import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from '
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
 import { useTheme, type AppTheme } from '../../../constants/theme';
-import { IOSTabHeader } from '../../../components/IOSTabHeader';
+import { TabHeader } from '../../../components/TabHeader';
 import { GlassIconButton } from '../../../components/GlassIconButton';
 
 interface Category {
@@ -165,6 +165,19 @@ export default function BrowseIndex() {
         setExpandedL1(prev => prev === id ? null : id);
     }, []);
 
+    // Tap-debounce so a quick double-tap doesn't push /search twice.
+    // MUST be declared before any early return — rules of hooks.
+    const lastSearchPushAt = useRef(0);
+    const pushSearch = () => {
+        const now = Date.now();
+        if (now - lastSearchPushAt.current < 600) return;
+        lastSearchPushAt.current = now;
+        router.push({
+            pathname: '/search',
+            params: { mode: 'products', source: 'browse' },
+        });
+    };
+
     if (loading) return (
         <View style={[styles.container, { padding: 16, gap: 10 }]}>
             <SkeletonBox height={70} borderRadius={16} />
@@ -178,20 +191,12 @@ export default function BrowseIndex() {
     );
 
     const searchAction = (
-        <GlassIconButton
-            icon="search"
-            onPress={() =>
-                router.push({
-                    pathname: '/search',
-                    params: { mode: 'products', source: 'browse' },
-                })
-            }
-        />
+        <GlassIconButton icon="search" onPress={pushSearch} />
     );
 
     return (
         <View style={{ flex: 1 }}>
-            <IOSTabHeader title={t('browse.title')} rightAction={searchAction} />
+            <TabHeader title={t('browse.title')} rightAction={searchAction} />
             <FlatList
                 style={styles.container}
                 data={l1Categories}

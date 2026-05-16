@@ -1,5 +1,5 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, Modal, RefreshControl } from 'react-native';
-import { IOSTabHeader } from '../../components/IOSTabHeader';
+import { TabHeader } from '../../components/TabHeader';
 import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -301,7 +301,7 @@ export default function ShoppingListScreen() {
 
     if (loading) return (
         <View style={styles.container}>
-            <IOSTabHeader title={t('tabs.shoppingList')} />
+            <TabHeader title={t('tabs.shoppingList')} />
             <View style={{ padding: 16, gap: 12 }}>
             {Array.from({ length: 5 }).map((_, i) => (
                 <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, gap: 10, borderLeftWidth: 3, borderLeftColor: colors.borderSubtle }}>
@@ -323,7 +323,7 @@ export default function ShoppingListScreen() {
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
             <View style={styles.container}>
-                <IOSTabHeader title={t('tabs.shoppingList')} />
+                <TabHeader title={t('tabs.shoppingList')} />
                 {pendingDelete && (
                     <TouchableOpacity
                         style={styles.undoToast}

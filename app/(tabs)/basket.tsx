@@ -1,5 +1,5 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, RefreshControl } from 'react-native';
-import { IOSTabHeader } from '../../components/IOSTabHeader';
+import { TabHeader } from '../../components/TabHeader';
 import { useMemo, useRef, useState, useCallback } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -116,7 +116,7 @@ export default function BasketScreen() {
 
     if (loading) return (
         <View style={styles.container}>
-            <IOSTabHeader title={t('tabs.basket')} />
+            <TabHeader title={t('tabs.basket')} />
             <View style={{ padding: 16, gap: 12 }}>
             {Array.from({ length: 5 }).map((_, i) => (
                 <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, borderLeftWidth: 3, borderLeftColor: colors.borderSubtle }}>
@@ -136,7 +136,7 @@ export default function BasketScreen() {
 
     return (
         <View style={styles.container}>
-            <IOSTabHeader title={t('tabs.basket')} />
+            <TabHeader title={t('tabs.basket')} />
             {refreshing && (
                 <View style={styles.refreshingBanner}>
                     <ActivityIndicator size="small" color={colors.primary} />

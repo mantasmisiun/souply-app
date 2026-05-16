@@ -13,12 +13,14 @@
  *
  * with `makeStyles(c: AppTheme) => StyleSheet.create({...})` at file bottom.
  *
- * Dark theme is stubbed to mirror light for now; fill in its values when
- * dark-mode support is wanted. Both themes must share the same keys — the
- * `AppTheme` type enforces that via `typeof lightTheme`.
+ * `useTheme` resolves the active palette by reading the user preference from
+ * `useSettingsStore` (light/dark/system) and falling back to the system
+ * scheme when the user hasn't overridden. Both themes must share the same
+ * keys — the `AppTheme` type enforces that via `typeof lightTheme`.
  */
 
 import { Platform, useColorScheme } from 'react-native';
+import { useSettingsStore, type ThemeMode } from '../state/settingsStore';
 
 // ---------- Palette ----------
 // The four brand colours. Modify these to reskin the app end-to-end.
@@ -32,26 +34,26 @@ export const palette = {
 // ---------- Light theme ----------
 const lightTheme = {
   // Surfaces
-  pageBackground:  palette.cream,
+  pageBackground:  palette.cream as string,
   cardBackground:  '#FFFFFF',
   surfaceMuted:    '#F3F4F6',
   surfaceSubtle:   '#FAFAFA',
   overlayBackdrop: 'rgba(17, 24, 39, 0.45)',
 
   // Brand / primary (beet — signature šaltibarščiai pink)
-  primary:        palette.beet,
-  primaryShadow:  palette.beet,
+  primary:        palette.beet as string,
+  primaryShadow:  palette.beet as string,
   primaryMuted:   '#FDE7ED',
   primaryStrong:  '#C95073',
   onPrimary:      '#FFFFFF',
 
   // Secondary (teal — completed / verified)
-  success:        palette.teal,
+  success:        palette.teal as string,
   successMuted:   '#D8ECE9',
   onSuccess:      '#FFFFFF',
 
   // Soft accent (blush)
-  softAccent:     palette.blush,
+  softAccent:     palette.blush as string,
   softAccentWash: '#FDF1F4',
 
   // Text
@@ -74,20 +76,86 @@ const lightTheme = {
   errorStrong:    '#991B1B',
   info:           '#1565C0',
   infoMuted:      '#E3F2FD',
-} as const;
+};
 
-// ---------- Dark theme (stub — copy of light for now) ----------
-// TODO: populate with real dark values when dark-mode is wired in.
+// ---------- Dark theme ----------
+// Surfaces follow iOS dark-mode conventions (near-black page bg, elevated
+// cards). Brand colours stay recognisable but are lifted slightly for
+// contrast against dark surfaces. Status colours use lighter shades that
+// remain legible on dark.
 const darkTheme: typeof lightTheme = {
-  ...lightTheme,
+  // Surfaces
+  pageBackground:  '#121214',
+  cardBackground:  '#1C1C1E',
+  surfaceMuted:    '#2A2A2C',
+  surfaceSubtle:   '#1A1A1C',
+  overlayBackdrop: 'rgba(0, 0, 0, 0.6)',
+
+  // Brand / primary — beet works on dark; muted/strong remapped for dark surfaces
+  primary:        palette.beet,
+  primaryShadow:  '#000000',
+  primaryMuted:   '#3A1F26',
+  primaryStrong:  '#FB9AB1',
+  onPrimary:      '#FFFFFF',
+
+  // Success
+  success:        '#7CB8B0',
+  successMuted:   '#1F3835',
+  onSuccess:      '#0F1F1D',
+
+  // Soft accent
+  softAccent:     '#5C3340',
+  softAccentWash: '#2A1A1F',
+
+  // Text
+  textPrimary:    '#F2F2F7',
+  textSecondary:  '#A0A0A6',
+  textMuted:      '#6C6C70',
+  textInverse:    '#0F0F10',
+
+  // Borders / dividers
+  border:         '#3A3A3C',
+  borderSubtle:   '#2A2A2C',
+  borderMuted:    '#222224',
+
+  // Status
+  warning:        '#F59E0B',
+  warningMuted:   '#3A2A0F',
+  onWarning:      '#FED7AA',
+  error:          '#F87171',
+  errorMuted:     '#3A1212',
+  errorStrong:    '#FCA5A5',
+  info:           '#60A5FA',
+  infoMuted:      '#1E2F4D',
 };
 
 export type AppTheme = typeof lightTheme;
+export type ResolvedScheme = 'light' | 'dark';
+export type { ThemeMode };
+
+/**
+ * Resolve the active scheme from the user's preference + the system
+ * scheme. Exported so non-React contexts (e.g., crash reporters, status
+ * bar setup) can resolve the same way.
+ */
+export function resolveScheme(mode: ThemeMode, systemScheme: 'light' | 'dark' | null | undefined): ResolvedScheme {
+  if (mode === 'light' || mode === 'dark') return mode;
+  return systemScheme === 'dark' ? 'dark' : 'light';
+}
 
 // ---------- Hook ----------
 export function useTheme(): AppTheme {
-  const scheme = useColorScheme();
+  const systemScheme = useColorScheme();
+  const themeMode = useSettingsStore((s) => s.themeMode);
+  const scheme = resolveScheme(themeMode, systemScheme);
   return scheme === 'dark' ? darkTheme : lightTheme;
+}
+
+/** Same as useTheme but returns the resolved scheme name instead of the palette. */
+export function useResolvedScheme(): ResolvedScheme {
+  const systemScheme = useColorScheme();
+  const themeMode = useSettingsStore((s) => s.themeMode);
+  return resolveScheme(themeMode, systemScheme);
 }
 
 // ---------- Legacy export ----------

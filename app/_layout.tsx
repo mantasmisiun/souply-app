@@ -7,8 +7,7 @@ import { Linking, View } from 'react-native';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import * as FileSystem from 'expo-file-system/legacy';
 
-import { useColorScheme } from '@/hooks/use-color-scheme';
-import { useTheme } from '../constants/theme';
+import { useTheme, useResolvedScheme } from '../constants/theme';
 import { GlassIconButton } from '../components/GlassIconButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
@@ -133,7 +132,7 @@ export const unstable_settings = {
 };
 
 export default function RootLayout() {
-  const colorScheme = useColorScheme();
+  const colorScheme = useResolvedScheme();
   const colors = useTheme();
   const { t } = useTranslation();
   // Subscribe to NetInfo once, at the top of the tree. Downstream

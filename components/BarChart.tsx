@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { TouchableOpacity, View, Text, StyleSheet } from 'react-native';
 import Svg, { Line, Path as SvgPath } from 'react-native-svg';
 import { formatEuro } from '../utils/formatCurrency';
+import { useTheme, useResolvedScheme } from '../constants/theme';
 
 export interface BarSlice {
     label: string;
@@ -38,9 +39,13 @@ function roundedTopPath(x: number, barTop: number, barBottom: number, w: number)
 }
 
 export function BarChart({ data, color, height = 140 }: Props) {
+    const themeColors = useTheme();
+    const scheme = useResolvedScheme();
+    // Non-current bars at 65% on a dark background mix to a muddy pink;
+    // bump opacity in dark mode so the tinted bars stay readable.
+    const inactiveBarOpacity = scheme === 'dark' ? 0.85 : 0.65;
     const [windowStart, setWindowStart] = useState(() => Math.max(0, data.length - PAGE_SIZE));
     const [containerWidth, setContainerWidth] = useState(0);
-    const [containerHeight, setContainerHeight] = useState(0);
 
     useEffect(() => {
         setWindowStart(Math.max(0, data.length - PAGE_SIZE));
@@ -60,11 +65,9 @@ export function BarChart({ data, color, height = 140 }: Props) {
         : 30;
     const totalWidth = PAGE_SIZE * (barWidth + BAR_GAP) - BAR_GAP;
 
-    // Derive bar area height from measured container, falling back to the `height` prop.
-    // Subtract CALLOUT_H (value labels above bars), label row (~30px), and nav row (~36px if shown).
-    const effectiveBarHeight = containerHeight > 80
-        ? Math.max(containerHeight - CALLOUT_H - 30 - (hasNav ? 36 : 0), height)
-        : height;
+    // Self-size to the `height` prop; the carousel measures the resulting
+    // container height and animates the card to match it.
+    const effectiveBarHeight = height;
 
     const svgHeight = CALLOUT_H + effectiveBarHeight;
     const barBottom = CALLOUT_H + effectiveBarHeight;
@@ -74,7 +77,6 @@ export function BarChart({ data, color, height = 140 }: Props) {
             style={styles.container}
             onLayout={e => {
                 setContainerWidth(e.nativeEvent.layout.width);
-                setContainerHeight(e.nativeEvent.layout.height);
             }}
         >
             {hasNav && (
@@ -85,7 +87,7 @@ export function BarChart({ data, color, height = 140 }: Props) {
                         style={styles.navBtn}
                         hitSlop={{ top: 8, bottom: 8, left: 12, right: 12 }}
                     >
-                        <Text style={[styles.navArrow, !canBack && styles.navArrowDisabled]}>‹</Text>
+                        <Text style={[styles.navArrow, { color: themeColors.textSecondary }, !canBack && styles.navArrowDisabled]}>‹</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                         onPress={() => setWindowStart(w => Math.min(data.length - PAGE_SIZE, w + 1))}
@@ -93,7 +95,7 @@ export function BarChart({ data, color, height = 140 }: Props) {
                         style={styles.navBtn}
                         hitSlop={{ top: 8, bottom: 8, left: 12, right: 12 }}
                     >
-                        <Text style={[styles.navArrow, !canForward && styles.navArrowDisabled]}>›</Text>
+                        <Text style={[styles.navArrow, { color: themeColors.textSecondary }, !canForward && styles.navArrowDisabled]}>›</Text>
                     </TouchableOpacity>
                 </View>
             )}
@@ -109,7 +111,7 @@ export function BarChart({ data, color, height = 140 }: Props) {
                                     <Line
                                         key={f}
                                         x1={0} y1={y} x2={totalWidth} y2={y}
-                                        stroke="#E5E7EB"
+                                        stroke={themeColors.borderSubtle}
                                         strokeWidth={1}
                                     />
                                 );
@@ -126,7 +128,7 @@ export function BarChart({ data, color, height = 140 }: Props) {
                                         key={i}
                                         d={path}
                                         fill={color}
-                                        opacity={isCurrent ? 1 : 0.65}
+                                        opacity={isCurrent ? 1 : inactiveBarOpacity}
                                     />
                                 );
                             })}
@@ -152,7 +154,7 @@ export function BarChart({ data, color, height = 140 }: Props) {
                                             top: barTop - fontSize - 6,
                                             fontSize,
                                             fontWeight: isCurrent ? '600' : '400',
-                                            color: isCurrent ? color : '#9CA3AF',
+                                            color: isCurrent ? color : themeColors.textSecondary,
                                             textAlign: 'center',
                                         }}
                                     >
@@ -172,7 +174,7 @@ export function BarChart({ data, color, height = 140 }: Props) {
                                     key={i}
                                     style={[
                                         styles.label,
-                                        { width: barWidth + BAR_GAP },
+                                        { color: themeColors.textMuted, width: barWidth + BAR_GAP },
                                         isCurrent && { color, fontWeight: '700' },
                                     ]}
                                 >
@@ -188,7 +190,7 @@ export function BarChart({ data, color, height = 140 }: Props) {
 }
 
 const styles = StyleSheet.create({
-    container: { alignSelf: 'stretch', flex: 1 },
+    container: { alignSelf: 'stretch' },
     navRow: {
         flexDirection: 'row',
         justifyContent: 'space-between',
@@ -196,8 +198,8 @@ const styles = StyleSheet.create({
         marginBottom: 4,
     },
     navBtn: { padding: 4 },
-    navArrow: { fontSize: 22, color: '#6B7280', fontWeight: '500' },
+    navArrow: { fontSize: 22, fontWeight: '500' },
     navArrowDisabled: { opacity: 0.3 },
     labels: { flexDirection: 'row', marginTop: 6, alignSelf: 'center' },
-    label: { fontSize: 11, color: '#6B7280', textAlign: 'center' },
+    label: { fontSize: 11, textAlign: 'center' },
 });
