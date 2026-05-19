@@ -406,6 +406,16 @@
     "createNew": "Create new basket",
     "createNewSub": "Start from empty"
   },
+  "discounts": {
+    "freshNow": "Updated just now",
+    "freshMinutes_one": "Updated {{count}} min ago",
+    "freshMinutes_other": "Updated {{count}} min ago",
+    "freshHours_one": "Updated {{count}} hour ago",
+    "freshHours_other": "Updated {{count}} hours ago",
+    "loadFailed": "Couldn't load discounts",
+    "loadFailedWithCache": "Showing saved data — couldn't refresh",
+    "retry": "Try again"
+  },
   "browse": {
     "addToBasket": "Add",
     "title": "Browse",

@@ -21,6 +21,10 @@ import '../i18n';
 import { useTranslation } from 'react-i18next';
 import { installFetchInterceptor } from '../utils/installFetchInterceptor';
 import { installCrashReporter } from '../utils/installCrashReporter';
+import { QueryClient } from '@tanstack/react-query';
+import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
+import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Install the global fetch shim once at module load so every API call
 // — including those that bypass `fetchWithTimeout` — sends the right
@@ -31,6 +35,24 @@ installFetchInterceptor();
 // Catch any uncaught JS error and ship it to /api/dev-log so we can
 // diagnose iOS crashes without Xcode. Idempotent.
 installCrashReporter();
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      staleTime: 30 * 60 * 1000,
+      gcTime: 24 * 60 * 60 * 1000,
+      retry: 3,
+      retryDelay: attempt => Math.min(1000 * 2 ** attempt, 30_000),
+      refetchOnWindowFocus: false,
+    },
+  },
+});
+
+const queryPersister = createAsyncStoragePersister({
+  storage: AsyncStorage,
+  key: 'souply-query-cache-v1',
+  throttleTime: 1000,
+});
 
 /**
  * Copy a content:// or file:// URI into the app cache and return the
@@ -183,6 +205,14 @@ export default function RootLayout() {
   };
 
   return (
+    <PersistQueryClientProvider
+      client={queryClient}
+      persistOptions={{
+        persister: queryPersister,
+        maxAge: 24 * 60 * 60 * 1000,
+        buster: 'v1',
+      }}
+    >
     <ShareIntentProvider>
     <DisplayPreferenceProvider>
     <ThemeProvider value={navTheme}>
@@ -260,5 +290,6 @@ export default function RootLayout() {
     </ThemeProvider>
     </DisplayPreferenceProvider>
     </ShareIntentProvider>
+    </PersistQueryClientProvider>
   );
 }

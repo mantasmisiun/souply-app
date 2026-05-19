@@ -367,6 +367,17 @@
     "createNew": "Kurti naują krepšelį",
     "createNewSub": "Pradėti nuo tuščio"
   },
+  "discounts": {
+    "freshNow": "Atnaujinta dabar",
+    "freshMinutes_one": "Atnaujinta prieš {{count}} min.",
+    "freshMinutes_few": "Atnaujinta prieš {{count}} min.",
+    "freshMinutes_other": "Atnaujinta prieš {{count}} min.",
+    "freshHours_one": "Atnaujinta prieš {{count}} val.",
+    "freshHours_other": "Atnaujinta prieš {{count}} val.",
+    "loadFailed": "Nepavyko įkelti nuolaidų",
+    "loadFailedWithCache": "Rodomi išsaugoti duomenys — nepavyko atnaujinti",
+    "retry": "Bandyti dar kartą"
+  },
   "browse": {
     "addToBasket": "Į krepšelį",
     "title": "Naršyti",

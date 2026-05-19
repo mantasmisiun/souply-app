@@ -23,6 +23,8 @@ import { ScalePressable } from '../../../components/ScalePressable';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { ChainLogoStrip } from '../../../components/ChainLogoStrip';
 import { useTranslation } from 'react-i18next';
+import { useQuery } from '@tanstack/react-query';
+import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '../../../utils/fetchWithTimeout';
 
 interface L2Category {
     id: number;
@@ -30,6 +32,13 @@ interface L2Category {
     parentCategoryId: number;
     l1Id: number;
     l1Name: string;
+}
+
+function formatFreshness(ts: number, t: (k: string, v?: any) => string): string {
+    const minutes = Math.max(0, Math.floor((Date.now() - ts) / 60000));
+    if (minutes < 1) return t('discounts.freshNow');
+    if (minutes < 60) return t('discounts.freshMinutes', { count: minutes });
+    return t('discounts.freshHours', { count: Math.floor(minutes / 60) });
 }
 
 interface DiscountedProduct {
@@ -118,14 +127,48 @@ export default function DiscountsScreen() {
     const navigation = useNavigation();
     const router = useRouter();
 
-    const [l2Categories, setL2Categories] = useState<L2Category[]>([]);
     const [selectedL2, setSelectedL2] = useState<number | null>(null);
     const [search, setSearch] = useState('');
-    const [allProducts, setAllProducts] = useState<DiscountedProduct[]>([]);
-    const [initialLoading, setInitialLoading] = useState(true);
-    const [refreshing, setRefreshing] = useState(false);
     const [addingIds, setAddingIds] = useState<Set<number>>(() => new Set());
     const toastRef = useRef<ToastHandle>(null);
+
+    // L2 categories — small, never changes during a session. Cached
+    // alongside the discounts payload so the bubble row paints from
+    // disk on cold start.
+    const { data: l2Categories = [] } = useQuery<L2Category[]>({
+        queryKey: ['l2-categories'],
+        queryFn: async () => {
+            const res = await fetchWithTimeout(`${API_BASE_URL}/api/categories/l2`);
+            const data = await res.json();
+            return Array.isArray(data) ? data : [];
+        },
+        staleTime: 24 * 60 * 60 * 1000,
+    });
+
+    // Discounts — React Query handles stale-while-revalidate, persistence
+    // (via PersistQueryClientProvider in _layout.tsx), retry/backoff, and
+    // request dedup. ETag/304 wiring is server-side only for now; client
+    // doesn't read or echo back If-None-Match yet.
+    const {
+        data: allProducts = [],
+        isLoading,
+        isFetching,
+        isError,
+        refetch,
+        dataUpdatedAt,
+    } = useQuery<DiscountedProduct[]>({
+        queryKey: ['discounts'],
+        queryFn: async () => {
+            const res = await fetchWithTimeout(
+                `${API_BASE_URL}/api/products/discounted`,
+                { timeoutMs: TIMEOUT_HEAVY_MS },
+            );
+            const data = await res.json();
+            return Array.isArray(data) ? data : [];
+        },
+        staleTime: 30 * 60 * 1000,
+    });
+    const refreshing = isFetching && !isLoading;
 
     const activeL2Ids = useMemo(
         () => new Set(allProducts.map(p => p.l2CategoryId).filter(id => id != null)),
@@ -160,44 +203,11 @@ export default function DiscountsScreen() {
         product: DiscountedProduct | null;
     }>({ visible: false, product: null });
 
+    // Stale `discounts_cache_v2` data lived in AsyncStorage from before the
+    // React Query rollout. Drop it once so the old bytes don't sit forever
+    // on devices that have upgraded.
     useEffect(() => {
-        fetch(`${API_BASE_URL}/api/categories/l2`)
-            .then(r => r.json())
-            .then(data => setL2Categories(Array.isArray(data) ? data : []));
-    }, []);
-
-    const CACHE_KEY = 'discounts_cache_v2';
-
-    const fetchAll = useCallback(async (background = false) => {
-        if (!background) setRefreshing(true);
-        try {
-            const res = await fetch(`${API_BASE_URL}/api/products/discounted`);
-            const data = await res.json();
-            const fresh = Array.isArray(data) ? data : [];
-            setAllProducts(fresh);
-            AsyncStorage.setItem(CACHE_KEY, JSON.stringify(fresh)).catch(() => {});
-        } finally {
-            if (!background) setRefreshing(false);
-        }
-    }, []);
-
-    // On mount: show cached data instantly, refresh in background
-    useEffect(() => {
-        AsyncStorage.getItem(CACHE_KEY).then(raw => {
-            if (raw) {
-                try {
-                    const cached = JSON.parse(raw);
-                    if (Array.isArray(cached) && cached.length > 0) {
-                        setAllProducts(cached);
-                        setInitialLoading(false);
-                        fetchAll(true);
-                        return;
-                    }
-                } catch {}
-            }
-            fetchAll(false).finally(() => setInitialLoading(false));
-        }).catch(() => fetchAll(false).finally(() => setInitialLoading(false)));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+        AsyncStorage.removeItem('discounts_cache_v2').catch(() => {});
     }, []);
 
     useFocusEffect(useCallback(() => {
@@ -426,8 +436,22 @@ export default function DiscountsScreen() {
                         ) : null}
                     </View>
 
+                    {isError && allProducts.length > 0 && (
+                        <TouchableOpacity style={styles.errorBanner} onPress={() => refetch()} activeOpacity={0.7}>
+                            <Ionicons name="warning-outline" size={16} color={colors.onPrimary} style={{ marginRight: 6 }} />
+                            <Text style={styles.errorBannerText} numberOfLines={2}>
+                                {t('discounts.loadFailedWithCache')}
+                            </Text>
+                            <Text style={styles.errorBannerRetry}>{t('discounts.retry')}</Text>
+                        </TouchableOpacity>
+                    )}
+
+                    {dataUpdatedAt > 0 && allProducts.length > 0 && (
+                        <Text style={styles.freshness}>{formatFreshness(dataUpdatedAt, t)}</Text>
+                    )}
+
                     <View style={{ flex: 1 }}>
-                        {initialLoading ? (
+                        {isLoading ? (
                             <View style={{ flex: 1, padding: 12, gap: 12 }}>
                                 {Array.from({ length: 6 }).map((_, i) => (
                                     <View key={i} style={{ flexDirection: 'row', gap: 12 }}>
@@ -442,6 +466,14 @@ export default function DiscountsScreen() {
                                     </View>
                                 ))}
                             </View>
+                        ) : isError && allProducts.length === 0 ? (
+                            <View style={styles.coldError}>
+                                <Ionicons name="cloud-offline-outline" size={48} color={colors.textMuted} />
+                                <Text style={styles.coldErrorTitle}>{t('discounts.loadFailed')}</Text>
+                                <ScalePressable style={styles.coldErrorButton} onPress={() => refetch()}>
+                                    <Text style={styles.coldErrorButtonText}>{t('discounts.retry')}</Text>
+                                </ScalePressable>
+                            </View>
                         ) : (
                             <FlatList
                                 data={products}
@@ -452,7 +484,7 @@ export default function DiscountsScreen() {
                                 refreshControl={
                                     <RefreshControl
                                         refreshing={refreshing}
-                                        onRefresh={() => fetchAll(false)}
+                                        onRefresh={() => refetch()}
                                         colors={[colors.primary]}
                                         tintColor={colors.primary}
                                     />
@@ -642,6 +674,41 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     addButtonText: { color: c.onPrimary, fontSize: 13, fontWeight: '600' },
     emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: c.textSecondary },
+    freshness: {
+        fontSize: 11,
+        color: c.textMuted,
+        textAlign: 'center',
+        paddingTop: 4,
+        paddingBottom: 2,
+    },
+    errorBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: c.primary,
+        marginHorizontal: 16,
+        marginTop: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: 8,
+    },
+    errorBannerText: { flex: 1, fontSize: 13, color: c.onPrimary },
+    errorBannerRetry: { fontSize: 13, fontWeight: '700', color: c.onPrimary, marginLeft: 8 },
+    coldError: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 12,
+        padding: 24,
+    },
+    coldErrorTitle: { fontSize: 16, color: c.textPrimary, textAlign: 'center' },
+    coldErrorButton: {
+        backgroundColor: c.primary,
+        paddingHorizontal: 24,
+        paddingVertical: 12,
+        borderRadius: 10,
+        marginTop: 4,
+    },
+    coldErrorButtonText: { color: c.onPrimary, fontSize: 14, fontWeight: '600' },
     quantityControl: {
         width: '100%',
         flexDirection: 'row',
