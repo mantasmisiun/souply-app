@@ -30,6 +30,7 @@ import {
 // shaped line. Android emits one OCR line per row already, so the
 // option stays off and the existing pipeline is bit-for-bit identical.
 const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
+import { GlassIconButton } from "../components/GlassIconButton";
 import ReceiptComparisonSection from "../components/receipt/ReceiptComparisonSection";
 import ReceiptCategoryBreakdown from "../components/receipt/ReceiptCategoryBreakdown";
 import ReceiptPhotoView from "../components/receipt/ReceiptPhotoView";
@@ -3042,6 +3043,17 @@ export default function ProcessReceiptScreen() {
     <>
       <Stack.Screen
         options={{
+          // iOS 26 liquid-glass nav bar renders the native back chevron
+          // but the tap target is dead. Override with our own chevron so
+          // users can actually go back. Same workaround used on the
+          // settings screen (see app/_layout.tsx).
+          headerLeft: () => (
+            <GlassIconButton
+              icon="chevron-back"
+              onPress={() => router.canGoBack() && router.back()}
+              size={24}
+            />
+          ),
           headerTitle: () => {
             if (isPreviewMode) {
               return (
