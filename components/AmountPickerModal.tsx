@@ -146,22 +146,6 @@ export default function AmountPickerModal({
                         </TouchableOpacity>
                     </View>
 
-                    {(() => {
-                        // Preview the step-snap target when the user has typed
-                        // something that doesn't fall on a valid pack multiple.
-                        // Communicates "you'll actually get N" before they tap
-                        // Add, so the round-up isn't a surprise.
-                        const raw = parseInput();
-                        const snapped = Math.max(step, Math.ceil(raw / step) * step);
-                        const diff = Math.abs(snapped - raw);
-                        if (diff < 1e-6) return null;
-                        return (
-                            <Text style={styles.roundUpHint}>
-                                {t('amountPicker.willGet', { amount: formatValue(snapped), unit: displayUnit })}
-                            </Text>
-                        );
-                    })()}
-
                     <Text style={styles.hint}>
                         {isWeighable ? t('amountPicker.hintWeighable') : t('amountPicker.hintPackages')}
                     </Text>
@@ -173,12 +157,12 @@ export default function AmountPickerModal({
                         <TouchableOpacity
                             style={styles.confirmButton}
                             onPress={() => {
-                                const value = parseInput();
-                                // Snap to the nearest step multiple ≥ value so the
-                                // server doesn't round up surprisingly (avoids the
-                                // user typing "1.3" and getting charged for 1.5).
-                                const snapped = Math.max(step, Math.ceil(value / step) * step);
-                                onConfirm(Math.round(snapped * 1000) / 1000);
+                                // Pass the user's exact requested quantity. The
+                                // basket calc service picks the cheapest pack
+                                // combination across all SPs to satisfy it —
+                                // pre-snapping here would mislead the user
+                                // about which pack actually gets picked.
+                                onConfirm(Math.round(parseInput() * 1000) / 1000);
                             }}
                         >
                             <Text style={styles.confirmText}>{t('amountPicker.add')}</Text>
@@ -265,17 +249,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         color: c.textMuted,
         textAlign: 'center',
         marginBottom: 20,
-    },
-    // Preview shown when the typed value rounds up to the next pack —
-    // primary tint so it reads as "this is what you'll get" rather than
-    // a passive hint.
-    roundUpHint: {
-        fontSize: 12,
-        fontWeight: '600',
-        color: c.primary,
-        textAlign: 'center',
-        marginTop: 4,
-        marginBottom: 4,
     },
     actions: {
         flexDirection: 'row',

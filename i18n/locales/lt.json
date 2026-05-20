@@ -355,7 +355,6 @@
     "label": "Kiek jums reikia?",
     "hintWeighable": "Kiekis bus pasvertas parduotuvėje",
     "hintPackages": "Kiekis bus suapvalintas pagal pakuotės dydį",
-    "willGet": "→ Gausite {{amount}} {{unit}}",
     "add": "Pridėti"
   },
   "comparedBasketChoice": {

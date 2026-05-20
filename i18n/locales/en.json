@@ -395,7 +395,6 @@
     "label": "How much do you need?",
     "hintWeighable": "Amount will be weighed at the store",
     "hintPackages": "Amount will be rounded to package size",
-    "willGet": "→ You'll get {{amount}} {{unit}}",
     "add": "Add"
   },
   "comparedBasketChoice": {
