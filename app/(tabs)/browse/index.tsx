@@ -134,31 +134,42 @@ export default function BrowseIndex() {
     // Re-fetch on language change. Two reasons:
     //  - First launch: i18n boots at 'lt' (see i18n/index.ts) and only flips
     //    to the persisted language once settingsStore.hydrate() resolves.
-    //    Without this dep, the L1 fetch on mount races hydration and bakes
-    //    LT names into state for the whole tab-screen lifetime (React
-    //    Navigation keeps tab screens mounted).
+    //    The effect re-fires when language flips, AND we abort the in-flight
+    //    'lt' fetch on cleanup so its late-arriving response can't overwrite
+    //    the 'en' data with stale LT names.
     //  - User toggles language in settings: cached L1/L2 would otherwise
     //    stay in the previous language until the app restarts.
     useEffect(() => {
-        fetch(`${API_BASE_URL}/api/categories`)
+        let cancelled = false;
+        const ctrl = new AbortController();
+        fetch(`${API_BASE_URL}/api/categories`, { signal: ctrl.signal })
             .then(r => r.json())
             .then((data: Category[]) => {
+                if (cancelled) return;
                 const cats = Array.isArray(data) ? data : [];
                 setL1Categories(cats);
-                Promise.all(
+                return Promise.all(
                     cats.map(cat =>
-                        fetch(`${API_BASE_URL}/api/categories/${cat.id}/subcategories`)
+                        fetch(`${API_BASE_URL}/api/categories/${cat.id}/subcategories`, { signal: ctrl.signal })
                             .then(r => r.json())
                             .then(sub => ({ id: cat.id, sub: Array.isArray(sub) ? sub : [] as Category[] }))
-                            .catch(() => ({ id: cat.id, sub: [] as Category[] }))
+                            .catch((err: any) => {
+                                if (err?.name === 'AbortError') throw err;
+                                return { id: cat.id, sub: [] as Category[] };
+                            })
                     )
                 ).then(results => {
+                    if (cancelled) return;
                     const map: Record<number, Category[]> = {};
                     results.forEach(({ id, sub }) => { map[id] = sub; });
                     setL2Map(map);
                 });
             })
-            .finally(() => setLoading(false));
+            .catch((err: any) => {
+                if (err?.name !== 'AbortError') console.warn('[browse] L1 fetch failed:', err);
+            })
+            .finally(() => { if (!cancelled) setLoading(false); });
+        return () => { cancelled = true; ctrl.abort(); };
     }, [i18n.language]);
 
     const toggleL1 = useCallback((id: number) => {
@@ -205,7 +216,7 @@ export default function BrowseIndex() {
                 ListHeaderComponent={
                     <TouchableOpacity
                         style={styles.discountsCard}
-                        onPress={() => router.push('/browse/discounts' as any)}
+                        onPress={() => router.push('/discounts' as any)}
                         activeOpacity={0.8}
                     >
                         <Text style={styles.discountsIcon}>🔥</Text>
