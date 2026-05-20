@@ -1,30 +1,30 @@
 import {
     View, FlatList, ScrollView, TouchableOpacity, Text, TextInput,
-    StyleSheet, ActivityIndicator, RefreshControl
+    StyleSheet, ActivityIndicator, RefreshControl, Keyboard
 } from 'react-native';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
-import { useRouter, Stack, useFocusEffect, useNavigation } from 'expo-router';
+import { useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { API_BASE_URL } from '../../../config/api';
-import { useBasketState } from '../../../state/basketState';
-import { addProductToBasket } from '../../../utils/basketUtils';
-import { resolveCanonicalStep } from '../../../utils/canonicalStep';
-import { ProductImage } from '../../../components/ProductImage';
-import { useTheme, type AppTheme } from '../../../constants/theme';
-import { getUserId } from '../../../config/user';
+import { API_BASE_URL } from '../config/api';
+import { useBasketState } from '../state/basketState';
+import { addProductToBasket } from '../utils/basketUtils';
+import { resolveCanonicalStep } from '../utils/canonicalStep';
+import { ProductImage } from '../components/ProductImage';
+import { useTheme, type AppTheme } from '../constants/theme';
+import { getUserId } from '../config/user';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../../components/ComparedBasketChoiceModal';
-import AmountPickerModal from '../../../components/AmountPickerModal';
-import { Toast, type ToastHandle } from '../../../components/Toast';
-import { ScalePressable } from '../../../components/ScalePressable';
-import { SkeletonBox } from '../../../components/SkeletonBox';
-import { ChainLogoStrip } from '../../../components/ChainLogoStrip';
+import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../components/ComparedBasketChoiceModal';
+import AmountPickerModal from '../components/AmountPickerModal';
+import { Toast, type ToastHandle } from '../components/Toast';
+import { ScalePressable } from '../components/ScalePressable';
+import { SkeletonBox } from '../components/SkeletonBox';
+import { ChainLogoStrip } from '../components/ChainLogoStrip';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '../../../utils/fetchWithTimeout';
+import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '../utils/fetchWithTimeout';
 
 interface L2Category {
     id: number;
@@ -124,7 +124,6 @@ export default function DiscountsScreen() {
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
-    const navigation = useNavigation();
     const router = useRouter();
 
     const [selectedL2, setSelectedL2] = useState<number | null>(null);
@@ -211,7 +210,6 @@ export default function DiscountsScreen() {
     }, []);
 
     useFocusEffect(useCallback(() => {
-        navigation.getParent()?.setOptions({ tabBarStyle: { display: 'none' } });
         const loadBasket = async () => {
             if (!draftBasketId) await useBasketState.getState().initDraftBasket();
             const { draftBasketId: draft, sessionBasketId: session } = useBasketState.getState();
@@ -235,8 +233,7 @@ export default function DiscountsScreen() {
             } catch {}
         };
         loadBasket();
-        return () => { navigation.getParent()?.setOptions({ tabBarStyle: undefined }); };
-    }, [navigation, draftBasketId]));
+    }, [draftBasketId]));
 
     useEffect(() => {
         if (draftBasketId) { setLatestCompared(null); return; }
@@ -425,7 +422,7 @@ export default function DiscountsScreen() {
                             value={search}
                             onChangeText={setSearch}
                             returnKeyType="search"
-                            clearButtonMode="while-editing"
+                            onSubmitEditing={() => Keyboard.dismiss()}
                         />
                         {refreshing ? (
                             <ActivityIndicator size="small" color={colors.primary} />
@@ -481,6 +478,7 @@ export default function DiscountsScreen() {
                                 contentContainerStyle={styles.list}
                                 numColumns={2}
                                 columnWrapperStyle={styles.row}
+                                keyboardDismissMode="on-drag"
                                 refreshControl={
                                     <RefreshControl
                                         refreshing={refreshing}

@@ -1,27 +1,28 @@
 import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, Switch, Modal } from 'react-native';
-import { SkeletonBox } from '../../../components/SkeletonBox';
-import { ChainLogoStrip } from '../../../components/ChainLogoStrip';
+import { SkeletonBox } from '../../components/SkeletonBox';
+import { ChainLogoStrip } from '../../components/ChainLogoStrip';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
-import { useLocalSearchParams, useRouter, Stack, useFocusEffect, useNavigation } from 'expo-router';
+import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { API_BASE_URL } from '../../../config/api';
-import { useBasketState } from '../../../state/basketState';
-import { addProductToBasket } from '../../../utils/basketUtils';
-import AmountPickerModal from '../../../components/AmountPickerModal';
-import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../../components/ComparedBasketChoiceModal';
-import { ProductImage } from '../../../components/ProductImage';
-import { useTheme, type AppTheme } from '../../../constants/theme';
-import { useDisplayMode } from '../../../contexts/DisplayPreferenceContext';
-import { getUserId } from '../../../config/user';
+import { API_BASE_URL } from '../../config/api';
+import { useBasketState } from '../../state/basketState';
+import { addProductToBasket } from '../../utils/basketUtils';
+import AmountPickerModal from '../../components/AmountPickerModal';
+import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../components/ComparedBasketChoiceModal';
+import { ProductImage } from '../../components/ProductImage';
+import { useTheme, type AppTheme } from '../../constants/theme';
+import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
+import { getUserId } from '../../config/user';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Haptics from 'expo-haptics';
-import { Toast, type ToastHandle } from '../../../components/Toast';
+import { Toast, type ToastHandle } from '../../components/Toast';
 import { useTranslation } from 'react-i18next';
-import { ScalePressable } from '../../../components/ScalePressable';
-import { GlassButton } from '../../../components/GlassButton';
-import { resolveCanonicalStep } from '../../../utils/canonicalStep';
+import { ScalePressable } from '../../components/ScalePressable';
+import { GlassButton } from '../../components/GlassButton';
+import { GlassIconButton } from '../../components/GlassIconButton';
+import { resolveCanonicalStep } from '../../utils/canonicalStep';
 
 interface Category {
     id: number;
@@ -113,7 +114,6 @@ export default function CategoryScreen() {
     const { t, i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
-    const navigation = useNavigation();
     const { categoryId, name } = useLocalSearchParams<{ categoryId: string; name: string }>();
     const [l3Categories, setL3Categories] = useState<Category[]>([]);
     const [products, setProducts] = useState<Product[]>([]);
@@ -254,7 +254,6 @@ export default function CategoryScreen() {
     // Also refreshes basket quantities on every focus so that deletions made
     // on the basket screen are reflected here immediately on return.
     useFocusEffect(useCallback(() => {
-        navigation.getParent()?.setOptions({ tabBarStyle: { display: 'none' } });
         const currentDraftId = useBasketState.getState().draftBasketId;
         if (currentDraftId) {
             fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`)
@@ -273,10 +272,7 @@ export default function CategoryScreen() {
             setBasketQuantities({});
             setBasketItemCount(0);
         }
-        return () => {
-            navigation.getParent()?.setOptions({ tabBarStyle: undefined });
-        };
-    }, [navigation]));
+    }, []));
 
     // True when the user has any item in their current draft basket.
     // basketQuantities can hold 0 values after a quantity decrement, so we
@@ -628,6 +624,15 @@ export default function CategoryScreen() {
                     title: decodeURIComponent(name || ''),
                     headerStyle: { backgroundColor: colors.cardBackground },
                     headerShadowVisible: false,
+                    headerRight: () => (
+                        <GlassIconButton
+                            icon="search"
+                            onPress={() => router.push({
+                                pathname: '/search',
+                                params: { mode: 'products', source: 'browse' },
+                            } as any)}
+                        />
+                    ),
                 }}
             />
             <View style={{ flex: 1 }}>

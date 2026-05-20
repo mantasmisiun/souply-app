@@ -243,6 +243,12 @@ export default function RootLayout() {
         <Stack.Screen name="(admin)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
         <Stack.Screen name="product" options={{ headerShown: false }} />
+        {/* discounts + browse/[categoryId] live at the root so the iOS
+            NativeTabs tab bar hides on push (it stays visible when a
+            screen is inside a tab's nested stack). Each screen sets its
+            own <Stack.Screen options/> inline. */}
+        <Stack.Screen name="discounts" />
+        <Stack.Screen name="browse/[categoryId]" />
         <Stack.Screen name="basket/[id]" options={{ title: t('screens.basket') }} />
         {/* basket/results/[id] intentionally configures its own <Stack.Screen>
             options from inside the screen — registering a default here
