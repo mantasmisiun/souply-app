@@ -430,6 +430,7 @@ export interface AdminUncategorisedRow {
     bestImageUrl: string | null;
     recentPurchaseCount: number;
     chainCoverage: string;
+    chainLogos: { chainId: number; logoUrl: string | null }[];
     spCount: number;
     hasPendingFlags: boolean;
     baseProductLinkCount: number;
@@ -439,6 +440,19 @@ export interface UncategorisedBatchResponse {
     rows: AdminUncategorisedRow[];
     leaseCount: number;
     resumed?: boolean;
+}
+
+export interface AdminCategorySuggestion {
+    categoryId: number;
+    categoryName: string;
+    hits: number;
+}
+
+export async function getAdminCategorySuggestions(productId: number): Promise<AdminCategorySuggestion[]> {
+    const res = await adminFetch(`/api/admin/uncategorised/${productId}/category-suggestions`);
+    if (!res.ok) throw new Error(`category suggestions ${res.status}`);
+    const data = await res.json();
+    return data.suggestions ?? [];
 }
 
 export async function getAdminUncategorisedQueue(): Promise<UncategorisedBatchResponse> {
@@ -510,4 +524,56 @@ export async function fetchFlaggedReceiptCrop(
     if (!res.ok) throw new Error(`flag crop ${res.status}`);
     const blob = await res.blob();
     return { blob, status: res.status };
+}
+
+// ── Receipt split (Uncategorised tab) ───────────────────────────────
+
+export interface SourceReceiptInfo {
+    priceId: number;
+    receiptId: number;
+    lineIdx: number;
+    storeProductId: number;
+    storeId: number;
+    chainId: number;
+    price: number;
+    promoPrice: number | null;
+    amount: number | null;
+    unit: string | null;
+    date: string;
+    ocrName: string | null;
+}
+
+export interface SplitItem {
+    name: string;
+    price: number;
+    promoPrice: number | null;
+    amount: number | null;
+    unit: string | null;
+}
+
+export interface SplitPayload {
+    priceId: number;
+    top: SplitItem;
+    bottom: SplitItem;
+}
+
+export async function getAdminUncategorisedSourceReceipt(
+    productId: number,
+): Promise<SourceReceiptInfo | null> {
+    const res = await adminFetch(`/api/admin/uncategorised/${productId}/source-receipt`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`source-receipt ${res.status}`);
+    return res.json();
+}
+
+export async function applyAdminReceiptSplit(
+    productId: number,
+    payload: SplitPayload,
+): Promise<{ newProductId: number; newIsNew: boolean }> {
+    const res = await adminFetch(`/api/admin/uncategorised/${productId}/split`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`split ${res.status}`);
+    return res.json();
 }

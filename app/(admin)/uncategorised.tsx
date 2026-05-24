@@ -3,10 +3,11 @@ import {
     Image, TextInput, Alert,
 } from 'react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { ChainLogoStrip } from '../../components/ChainLogoStrip';
 import {
     claimAdminUncategorisedBatch,
     getAdminUncategorisedQueue,
@@ -14,9 +15,27 @@ import {
     deleteAdminUncategorised,
     skipAdminUncategorised,
     searchAdminCategories,
+    getAdminUncategorisedSourceReceipt,
+    getAdminCategorySuggestions,
+    fetchFlaggedReceiptCrop,
     type AdminUncategorisedRow,
     type AdminCategorySearchRow,
+    type AdminCategorySuggestion,
+    type SourceReceiptInfo,
 } from '../../services/adminClient';
+
+function blobToDataUri(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const r = reader.result;
+            if (typeof r === 'string') resolve(r);
+            else reject(new Error('FileReader returned non-string'));
+        };
+        reader.onerror = () => reject(reader.error ?? new Error('FileReader error'));
+        reader.readAsDataURL(blob);
+    });
+}
 
 /**
  * Uncategorised (Nepriskirti) admin tab — Tab 4.
@@ -36,6 +55,8 @@ export default function AdminUncategorisedScreen() {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    const router = useRouter();
+    const navigation = useNavigation();
 
     const [rows, setRows] = useState<AdminUncategorisedRow[]>([]);
     const [loading, setLoading] = useState(true);
@@ -43,20 +64,74 @@ export default function AdminUncategorisedScreen() {
 
     // Editable form state — re-seeded when the top card changes.
     const [nameInput, setNameInput] = useState('');
+    const [nameSource, setNameSource] = useState<'matched' | 'ocr' | null>('matched');
     const [categoryInput, setCategoryInput] = useState('');
     const [categoryPickedId, setCategoryPickedId] = useState<number | null>(null);
     const [categorySuggestions, setCategorySuggestions] = useState<AdminCategorySearchRow[]>([]);
     const [categorySearchOpen, setCategorySearchOpen] = useState(false);
+    const [categoryHints, setCategoryHints] = useState<AdminCategorySuggestion[]>([]);
+
+    // Receipt crop — loaded lazily per card. null = no receipt source.
+    const [sourceReceipt, setSourceReceipt] = useState<SourceReceiptInfo | null>(null);
+    const [cropUri, setCropUri] = useState<string | null>(null);
+    const [cropLoading, setCropLoading] = useState(false);
+    const [cropAspectRatio, setCropAspectRatio] = useState<number | null>(null);
 
     const currentCard = rows[0] ?? null;
 
     useEffect(() => {
         if (!currentCard) return;
         setNameInput(currentCard.productName);
+        setNameSource('matched');
         setCategoryInput('');
         setCategoryPickedId(null);
         setCategorySuggestions([]);
         setCategorySearchOpen(false);
+        setCategoryHints([]);
+    }, [currentCard?.productId]);
+
+    // Load source receipt + crop thumbnail lazily for each card.
+    useEffect(() => {
+        if (!currentCard) {
+            setSourceReceipt(null);
+            setCropUri(null);
+            return;
+        }
+        let cancelled = false;
+        setCropLoading(true);
+        setSourceReceipt(null);
+        setCropUri(null);
+        setCropAspectRatio(null);
+
+        // Fire crop + category hints in parallel.
+        (async () => {
+            try {
+                const info = await getAdminUncategorisedSourceReceipt(currentCard.productId);
+                if (cancelled) return;
+                setSourceReceipt(info);
+                if (!info) { setCropLoading(false); return; }
+                const cropRes = await fetchFlaggedReceiptCrop(info.receiptId, info.lineIdx);
+                if (cancelled) return;
+                if (cropRes) {
+                    const uri = await blobToDataUri(cropRes.blob);
+                    if (!cancelled) setCropUri(uri);
+                }
+            } catch (e) {
+                console.warn('[admin/uncategorised] source receipt load failed', e);
+            } finally {
+                if (!cancelled) setCropLoading(false);
+            }
+        })();
+
+        (async () => {
+            try {
+                const hints = await getAdminCategorySuggestions(currentCard.productId);
+                if (!cancelled) setCategoryHints(hints);
+            } catch {
+                // Non-critical — hints are a convenience, not required.
+            }
+        })();
+        return () => { cancelled = true; };
     }, [currentCard?.productId]);
 
     // Debounced category search — same pattern as the Flags tab.
@@ -103,6 +178,24 @@ export default function AdminUncategorisedScreen() {
     const advance = useCallback(() => {
         setRows(prev => prev.slice(1));
     }, []);
+
+    const onMultipleProducts = useCallback(() => {
+        if (!currentCard || !sourceReceipt) return;
+        router.push({
+            pathname: '/admin/receipt-split' as any,
+            params: {
+                productId: String(currentCard.productId),
+                priceId: String(sourceReceipt.priceId),
+                receiptId: String(sourceReceipt.receiptId),
+                lineIdx: String(sourceReceipt.lineIdx),
+                productName: currentCard.productName,
+                price: String(sourceReceipt.price),
+                promoPrice: sourceReceipt.promoPrice != null ? String(sourceReceipt.promoPrice) : '',
+                amount: sourceReceipt.amount != null ? String(sourceReceipt.amount) : '',
+                unit: sourceReceipt.unit ?? '',
+            },
+        });
+    }, [currentCard, sourceReceipt, router]);
 
     const onConfirm = useCallback(async () => {
         if (!currentCard || actioning || categoryPickedId === null) return;
@@ -175,6 +268,33 @@ export default function AdminUncategorisedScreen() {
         }
     }, [currentCard, actioning, advance, t]);
 
+    // Push skip button into the native header right slot.
+    useEffect(() => {
+        if (!currentCard) {
+            navigation.setOptions({ headerRight: undefined });
+            return;
+        }
+        navigation.setOptions({
+            headerRight: () => (
+                <TouchableOpacity
+                    onPress={onSkip}
+                    disabled={actioning}
+                    style={{ paddingRight: 4, flexDirection: 'row', alignItems: 'center', gap: 5 }}
+                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                >
+                    <Ionicons
+                        name="play-skip-forward"
+                        size={17}
+                        color={actioning ? colors.textMuted : colors.textSecondary}
+                    />
+                    <Text style={{ fontSize: 13, color: actioning ? colors.textMuted : colors.textSecondary, fontWeight: '600' }}>
+                        {t('admin.uncategorised.skip')}
+                    </Text>
+                </TouchableOpacity>
+            ),
+        });
+    }, [navigation, onSkip, actioning, currentCard, colors, t]);
+
     if (loading) {
         return (
             <View style={styles.centered}>
@@ -196,34 +316,40 @@ export default function AdminUncategorisedScreen() {
     }
 
     const done = BATCH_SIZE - rows.length;
+    const progress = done / BATCH_SIZE;
     const canConfirm = categoryPickedId !== null && !actioning;
 
     return (
         <View style={styles.page}>
-            <View style={styles.header}>
-                <Text style={styles.progressText}>
-                    {t('admin.uncategorised.leaseProgress', { done, total: BATCH_SIZE })}
-                </Text>
-                <TouchableOpacity
-                    style={styles.headerSkip}
-                    onPress={onSkip}
-                    disabled={actioning}
-                    hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                >
-                    <Ionicons name="play-skip-forward" size={18} color={colors.textSecondary} />
-                    <Text style={styles.headerSkipText}>{t('admin.uncategorised.skip')}</Text>
-                </TouchableOpacity>
+            {/* Thin progress bar glowing from the nav bar bottom */}
+            <View style={styles.progressBarTrack}>
+                <View style={[styles.progressBarFill, { width: `${progress * 100}%` }]} />
             </View>
 
             <ScrollView contentContainerStyle={styles.cardScroll}>
                 <View style={styles.card}>
+                    {/* Chain logo — receipt's chain, pinned to card top-left */}
+                    {(() => {
+                        const logo = sourceReceipt
+                            ? currentCard.chainLogos.find(l => l.chainId === sourceReceipt.chainId)
+                            : currentCard.chainLogos[0];
+                        return logo ? (
+                            <ChainLogoStrip
+                                chainLogos={[logo]}
+                                style={styles.chainLogoStrip}
+                            />
+                        ) : null;
+                    })()}
+
                     {/* Header row */}
                     <View style={styles.cardHeader}>
-                        {currentCard.bestImageUrl
-                            ? <Image source={{ uri: currentCard.bestImageUrl }} style={styles.cardThumb} resizeMode="cover" />
-                            : <View style={[styles.cardThumb, styles.cardThumbPlaceholder]}>
-                                  <Ionicons name="image-outline" size={24} color={colors.textMuted} />
-                              </View>}
+                        <View style={styles.cardThumbWrap}>
+                            {currentCard.bestImageUrl
+                                ? <Image source={{ uri: currentCard.bestImageUrl }} style={styles.cardThumb} resizeMode="cover" />
+                                : <View style={[styles.cardThumb, styles.cardThumbPlaceholder]}>
+                                      <Ionicons name="image-outline" size={24} color={colors.textMuted} />
+                                  </View>}
+                        </View>
                         <View style={styles.cardHeaderText}>
                             <Text style={styles.cardName} numberOfLines={2}>{currentCard.productName}</Text>
                             <View style={styles.unsortedBadgeRow}>
@@ -234,33 +360,89 @@ export default function AdminUncategorisedScreen() {
                         </View>
                     </View>
 
-                    {/* Coverage banner — gives admin context before action */}
-                    <View style={styles.coverageBanner}>
-                        <Text style={styles.coverageLine}>
-                            {t('admin.uncategorised.coverageLine', {
-                                purchases: currentCard.recentPurchaseCount,
-                                chains: currentCard.chainCoverage || '—',
-                                sps: currentCard.spCount,
-                            })}
-                        </Text>
-                        {currentCard.hasPendingFlags && (
-                            <Text style={styles.warningLine}>
-                                <Ionicons name="warning" size={12} color={colors.warning} /> {t('admin.uncategorised.hasPendingFlags')}
-                            </Text>
-                        )}
-                        {currentCard.baseProductLinkCount > 0 && (
-                            <Text style={styles.warningLine}>
-                                <Ionicons name="link" size={12} color={colors.warning} /> {t('admin.uncategorised.hasBplLinks', { count: currentCard.baseProductLinkCount })}
-                            </Text>
-                        )}
-                    </View>
+                    {/* Warnings only — purchase count and variant count removed */}
+                    {(currentCard.hasPendingFlags || currentCard.baseProductLinkCount > 0) && (
+                        <View style={styles.warningBanner}>
+                            {currentCard.hasPendingFlags && (
+                                <View style={styles.warningChip}>
+                                    <Ionicons name="warning" size={12} color={colors.warning} />
+                                    <Text style={styles.warningChipText}>{t('admin.uncategorised.hasPendingFlags')}</Text>
+                                </View>
+                            )}
+                            {currentCard.baseProductLinkCount > 0 && (
+                                <View style={styles.warningChip}>
+                                    <Ionicons name="link" size={12} color={colors.warning} />
+                                    <Text style={styles.warningChipText}>{t('admin.uncategorised.hasBplLinks', { count: currentCard.baseProductLinkCount })}</Text>
+                                </View>
+                            )}
+                        </View>
+                    )}
 
-                    {/* Name (optional edit) */}
+                    {/* Receipt crop — shown when a receipt source exists */}
+                    {(cropLoading || cropUri) && (
+                        <View style={styles.cropSection}>
+                            <Text style={styles.cropLabel}>{t('admin.uncategorised.sectionReceipt')}</Text>
+                            {cropLoading && !cropUri
+                                ? <ActivityIndicator color={colors.primary} style={styles.cropLoader} />
+                                : cropUri
+                                    ? <Image
+                                          source={{ uri: cropUri }}
+                                          style={cropAspectRatio
+                                              ? { width: '100%', aspectRatio: cropAspectRatio, borderRadius: 8, maxHeight: 200 }
+                                              : styles.cropImage}
+                                          resizeMode="cover"
+                                          onLoad={(e) => setCropAspectRatio(
+                                              e.nativeEvent.source.width / e.nativeEvent.source.height,
+                                          )}
+                                      />
+                                    : null}
+                            {sourceReceipt && (
+                                <View style={styles.splitBtnRow}>
+                                    <TouchableOpacity
+                                        style={styles.splitBtn}
+                                        onPress={onMultipleProducts}
+                                        disabled={actioning}
+                                    >
+                                        <Ionicons name="git-branch-outline" size={13} color={colors.primary} />
+                                        <Text style={styles.splitBtnText}>{t('admin.uncategorised.splitAction')}</Text>
+                                    </TouchableOpacity>
+                                </View>
+                            )}
+                        </View>
+                    )}
+
+                    {/* Name (optional edit) with OCR ↔ Matched source toggle */}
                     <Section title={t('admin.uncategorised.sectionName')} styles={styles}>
+                        {sourceReceipt?.ocrName != null && (
+                            <View style={styles.nameSourceRow}>
+                                <TouchableOpacity
+                                    style={[styles.nameSourceBtn, nameSource === 'matched' && styles.nameSourceBtnActive]}
+                                    onPress={() => {
+                                        setNameSource('matched');
+                                        setNameInput(currentCard.productName);
+                                    }}
+                                >
+                                    <Text style={[styles.nameSourceBtnText, nameSource === 'matched' && styles.nameSourceBtnTextActive]}>
+                                        {t('admin.uncategorised.nameSourceMatched')}
+                                    </Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={[styles.nameSourceBtn, nameSource === 'ocr' && styles.nameSourceBtnActive]}
+                                    onPress={() => {
+                                        setNameSource('ocr');
+                                        setNameInput(sourceReceipt.ocrName!);
+                                    }}
+                                >
+                                    <Text style={[styles.nameSourceBtnText, nameSource === 'ocr' && styles.nameSourceBtnTextActive]}>
+                                        {t('admin.uncategorised.nameSourceOcr')}
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                        )}
                         <TextInput
                             style={styles.textInput}
                             value={nameInput}
-                            onChangeText={setNameInput}
+                            onChangeText={(v) => { setNameInput(v); setNameSource(null); }}
                         />
                     </Section>
 
@@ -270,6 +452,35 @@ export default function AdminUncategorisedScreen() {
                         styles={styles}
                         required
                     >
+                        {/* Quick-pick hints — scrollable chips from name-based matching */}
+                        {categoryHints.length > 0 && (
+                            <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                style={styles.hintsScroll}
+                                contentContainerStyle={styles.hintsContent}
+                            >
+                                {categoryHints.map((h) => {
+                                    const active = categoryPickedId === h.categoryId;
+                                    return (
+                                        <TouchableOpacity
+                                            key={h.categoryId}
+                                            style={[styles.hintChip, active && styles.hintChipActive]}
+                                            onPress={() => {
+                                                setCategoryInput(h.categoryName);
+                                                setCategoryPickedId(h.categoryId);
+                                                setCategorySearchOpen(false);
+                                                setCategorySuggestions([]);
+                                            }}
+                                        >
+                                            <Text style={[styles.hintChipText, active && styles.hintChipTextActive]} numberOfLines={1}>
+                                                {h.categoryName}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </ScrollView>
+                        )}
                         <View style={styles.typeaheadRow}>
                             <TextInput
                                 style={[styles.textInput, styles.typeaheadInput]}
@@ -329,14 +540,6 @@ export default function AdminUncategorisedScreen() {
                         ? <ActivityIndicator color={colors.onPrimary} />
                         : <Text style={styles.primaryBtnText}>{t('admin.uncategorised.confirm')}</Text>}
                 </TouchableOpacity>
-                <TouchableOpacity
-                    style={styles.deleteBtn}
-                    onPress={onDelete}
-                    disabled={actioning}
-                >
-                    <Ionicons name="trash-outline" size={16} color={colors.error} />
-                    <Text style={styles.deleteBtnText}>{t('admin.uncategorised.delete')}</Text>
-                </TouchableOpacity>
             </View>
         </View>
     );
@@ -372,29 +575,46 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     claimBtn: { backgroundColor: c.primary, paddingVertical: 12, paddingHorizontal: 32, borderRadius: 12, marginTop: 12 },
     claimBtnText: { color: c.onPrimary, fontSize: 15, fontWeight: '700' },
 
-    header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, paddingBottom: 8 },
-    progressText: { fontSize: 14, fontWeight: '700', color: c.textPrimary },
-    headerSkip: {
-        flexDirection: 'row', alignItems: 'center', gap: 4,
-        paddingVertical: 6, paddingHorizontal: 10,
-        borderRadius: 8, backgroundColor: c.surfaceMuted,
+    progressBarTrack: {
+        height: 4,
+        backgroundColor: c.borderSubtle,
     },
-    headerSkipText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
+    progressBarFill: {
+        height: 4,
+        backgroundColor: c.primary,
+        shadowColor: c.primary,
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.65,
+        shadowRadius: 8,
+        elevation: 4,
+    },
 
     cardScroll: { padding: 12, paddingBottom: 24 },
     card: { backgroundColor: c.cardBackground, borderRadius: 16, padding: 16, gap: 12 },
     cardHeader: { flexDirection: 'row', gap: 12, alignItems: 'center' },
+    cardThumbWrap: { width: 56, height: 56, position: 'relative' },
     cardThumb: { width: 56, height: 56, borderRadius: 10, backgroundColor: c.surfaceMuted },
     cardThumbPlaceholder: { alignItems: 'center', justifyContent: 'center' },
     cardHeaderText: { flex: 1 },
+    chainLogoStrip: {
+        position: 'absolute', top: 12, left: 12, zIndex: 1,
+        backgroundColor: 'transparent',
+        paddingHorizontal: 0, paddingVertical: 0,
+        shadowOpacity: 0, elevation: 0,
+    },
     cardName: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
     unsortedBadgeRow: { flexDirection: 'row', marginTop: 4 },
     unsortedBadge: { backgroundColor: c.warning + '22', borderColor: c.warning, borderWidth: 1, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8 },
     unsortedBadgeText: { color: c.warning, fontSize: 11, fontWeight: '700' },
 
-    coverageBanner: { backgroundColor: c.pageBackground, borderRadius: 10, padding: 10, gap: 4 },
-    coverageLine: { fontSize: 12, color: c.textSecondary },
-    warningLine: { fontSize: 11, color: c.warning, marginTop: 2 },
+    warningBanner: { flexDirection: 'row', flexWrap: 'wrap', gap: 6 },
+    warningChip: {
+        flexDirection: 'row', alignItems: 'center', gap: 4,
+        paddingHorizontal: 8, paddingVertical: 4,
+        borderRadius: 8, backgroundColor: c.warning + '18',
+        borderWidth: 1, borderColor: c.warning + '50',
+    },
+    warningChipText: { fontSize: 11, color: c.warning, fontWeight: '600' },
 
     section: {
         marginTop: 4,
@@ -446,20 +666,70 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     suggestionText: { fontSize: 14, color: c.textPrimary },
     suggestionMeta: { fontSize: 11, color: c.textMuted, marginTop: 2 },
 
+    cropSection: {
+        backgroundColor: c.pageBackground,
+        borderRadius: 10,
+        padding: 10,
+        gap: 8,
+    },
+    cropLabel: { fontSize: 11, fontWeight: '700', color: c.textMuted, textTransform: 'uppercase' },
+    cropLoader: { alignSelf: 'center', marginVertical: 8 },
+    cropImage: { width: '100%', height: 80, borderRadius: 8 },
+    splitBtnRow: { flexDirection: 'row' },
+    splitBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 5,
+        paddingHorizontal: 12,
+        paddingVertical: 5,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: c.primary,
+        backgroundColor: c.primary + '18',
+    },
+    splitBtnText: { color: c.primary, fontSize: 12, fontWeight: '600' },
+
+    nameSourceRow: {
+        flexDirection: 'row',
+        gap: 6,
+    },
+    nameSourceBtn: {
+        paddingHorizontal: 12,
+        paddingVertical: 5,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: c.borderSubtle,
+        backgroundColor: c.pageBackground,
+    },
+    nameSourceBtnActive: {
+        borderColor: c.primary,
+        backgroundColor: c.primary + '18',
+    },
+    nameSourceBtnText: { fontSize: 12, fontWeight: '600', color: c.textSecondary },
+    nameSourceBtnTextActive: { color: c.primary },
+
+    hintsScroll: { marginBottom: 2 },
+    hintsContent: { gap: 6, paddingRight: 4 },
+    hintChip: {
+        paddingHorizontal: 12,
+        paddingVertical: 5,
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: c.borderSubtle,
+        backgroundColor: c.pageBackground,
+    },
+    hintChipActive: {
+        borderColor: c.primary,
+        backgroundColor: c.primary + '18',
+    },
+    hintChipText: { fontSize: 12, fontWeight: '600', color: c.textSecondary },
+    hintChipTextActive: { color: c.primary },
+
     footer: {
         padding: 12, backgroundColor: c.cardBackground,
         borderTopWidth: 1, borderTopColor: c.borderSubtle,
-        gap: 8,
     },
     primaryBtn: { backgroundColor: c.primary, paddingVertical: 14, borderRadius: 12, alignItems: 'center' },
     primaryBtnDisabled: { backgroundColor: c.surfaceMuted },
     primaryBtnText: { color: c.onPrimary, fontSize: 16, fontWeight: '700' },
-    deleteBtn: {
-        flexDirection: 'row',
-        alignSelf: 'center',
-        alignItems: 'center',
-        gap: 6,
-        paddingVertical: 8,
-    },
-    deleteBtnText: { color: c.error, fontSize: 13, fontWeight: '600' },
 });
