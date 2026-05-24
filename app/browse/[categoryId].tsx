@@ -23,6 +23,7 @@ import { ScalePressable } from '../../components/ScalePressable';
 import { GlassButton } from '../../components/GlassButton';
 import { GlassIconButton } from '../../components/GlassIconButton';
 import { resolveCanonicalStep } from '../../utils/canonicalStep';
+import { QuantityControl } from '../../components/QuantityControl';
 
 interface Category {
     id: number;
@@ -54,14 +55,13 @@ interface CardCallbacks {
 }
 
 const BrowseProductCard = memo(({
-    item, quantity, isAdding, styles, colors,
+    item, quantity, isAdding, styles,
     onNavigate, onAdd, onDecrement, onIncrement,
 }: CardCallbacks & {
     item: Product;
     quantity: number;
     isAdding: boolean;
     styles: ReturnType<typeof makeStyles>;
-    colors: AppTheme;
 }) => {
     const { t } = useTranslation();
     // minAmount/maxAmount come from the server normalised into grams
@@ -95,15 +95,12 @@ const BrowseProductCard = memo(({
                     <Text style={styles.addButtonText}>{t('browse.addToBasket')}</Text>
                 </ScalePressable>
             ) : (
-                <View style={styles.quantityControl}>
-                    <TouchableOpacity style={styles.qtyButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onDecrement(item, quantity); }}>
-                        <Ionicons name="remove" size={16} color={colors.primary} />
-                    </TouchableOpacity>
-                    <Text style={styles.qtyText}>{Number.isInteger(quantity) ? quantity : quantity.toFixed(1)}</Text>
-                    <TouchableOpacity style={styles.qtyButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onIncrement(item, quantity); }}>
-                        <Ionicons name="add" size={16} color={colors.primary} />
-                    </TouchableOpacity>
-                </View>
+                <QuantityControl
+                    quantity={quantity}
+                    onDecrement={() => onDecrement(item, quantity)}
+                    onIncrement={() => onIncrement(item, quantity)}
+                    style={{ width: '100%' }}
+                />
             )}
         </View>
     );
@@ -572,14 +569,13 @@ export default function CategoryScreen() {
                 quantity={quantity}
                 isAdding={addingIds.has(item.id)}
                 styles={styles}
-                colors={colors}
                 onNavigate={onNavigate}
                 onAdd={onAdd}
                 onDecrement={onDecrement}
                 onIncrement={onIncrement}
             />
         );
-    }, [basketQuantities, mergedIntoMe, addingIds, styles, colors, onNavigate, onAdd, onDecrement, onIncrement]);
+    }, [basketQuantities, mergedIntoMe, addingIds, styles, onNavigate, onAdd, onDecrement, onIncrement]);
 
     if (loading) return (
         <>
@@ -1049,27 +1045,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         width: 36, height: 36, borderRadius: 8,
         backgroundColor: c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
-    },
-    quantityControl: {
-        width: '100%',
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        borderWidth: 1,
-        borderColor: c.primary,
-        borderRadius: 8,
-        paddingVertical: 6,
-        paddingHorizontal: 10,
-    },
-    qtyButton: {
-        padding: 2,
-    },
-    qtyText: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: c.primary,
-        minWidth: 20,
-        textAlign: 'center',
     },
     amountText: {
         fontSize: 12,

@@ -25,6 +25,7 @@ import { TabHeader } from "../../components/TabHeader";
 import { API_BASE_URL } from "../../config/api";
 import { getUserId } from "../../config/user";
 import { useTheme, type AppTheme } from "../../constants/theme";
+import { chainBrandName } from "../../utils/chainBrandName";
 import { SkeletonBox } from "../../components/SkeletonBox";
 import { PendingSwipesBanner } from "../../components/PendingSwipesBanner";
 import { DEV_MODE } from "../../constants/flags";
@@ -85,19 +86,6 @@ const safeJsonParse = (raw: string): any => {
  * through to the raw name when an entry isn't in the table — safer
  * than silently dropping unfamiliar chains.
  */
-const CHAIN_BRAND_NAMES: Array<{ match: RegExp; brand: string }> = [
-  { match: /maxima/i, brand: 'Maxima' },
-  { match: /rimi/i,   brand: 'Rimi'   },
-  { match: /\biki\b/i, brand: 'Iki'   },
-  { match: /norf/i,   brand: 'Norfa'  },
-  { match: /lidl/i,   brand: 'Lidl'   },
-];
-function chainBrandName(chainName: string): string {
-  for (const entry of CHAIN_BRAND_NAMES) {
-    if (entry.match.test(chainName)) return entry.brand;
-  }
-  return chainName;
-}
 
 function queueStatusLabel(item: QueueItem, t: TFunction): string {
   if (item.status === "pending") return t('receipts.status.pending');

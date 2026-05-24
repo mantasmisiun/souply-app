@@ -1,8 +1,8 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Image, TextInput, Modal, Dimensions } from 'react-native';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Modal, Dimensions, ActivityIndicator } from 'react-native';
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { ProductImage } from '../../components/ProductImage';
-import React, { useEffect, useState, useMemo, useRef } from 'react';
-import { useLocalSearchParams, Stack } from 'expo-router';
+import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import { useLocalSearchParams, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
 import Svg, { Line, Circle, Polygon, Text as SvgText } from 'react-native-svg';
@@ -10,6 +10,16 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import { useTranslation } from 'react-i18next';
 import { formatDate, formatEuro } from '../../utils/formatCurrency';
+import { ChainFilterBar } from '../../components/ChainFilterBar';
+import { ChainLogoStrip } from '../../components/ChainLogoStrip';
+import { getChainMiniLogoUrl } from '../../utils/chainBrandName';
+import { addProductToBasket } from '../../utils/basketUtils';
+import { useBasketState } from '../../state/basketState';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import * as Haptics from 'expo-haptics';
+import AmountPickerModal from '../../components/AmountPickerModal';
+import { QuantityControl } from '../../components/QuantityControl';
+import { resolveCanonicalStep, resolveDisplayUnit } from '../../utils/canonicalStep';
 
 type Styles = ReturnType<typeof makeStyles>;
 
@@ -35,13 +45,6 @@ interface PricePoint {
     isFallback: number;
 }
 
-interface Store {
-    id: number;
-    chainId: number;
-    name: string;
-    address: string;
-}
-
 interface Chain {
     id: number;
     name: string;
@@ -53,12 +56,13 @@ interface Product {
     name: string;
     imageUrls: (string | null | undefined)[] | string | null;
     categoryId: number;
-}
-
-interface Category {
-    id: number;
-    name: string;
-    parentCategoryId: number | null;
+    minAmount: number | null;
+    maxAmount: number | null;
+    unit: string | null;
+    hasWeighable: boolean;
+    canonicalUnit: string | null;
+    canonicalStep: number | null;
+    canonicalFamily: 'fluid' | 'count' | null;
 }
 
 const MINI_CHART_WIDTH = 140;
@@ -731,14 +735,16 @@ export default function ProductDetailScreen() {
     const [allChains, setAllChains] = useState<Chain[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedChainId, setSelectedChainId] = useState<number | null>(null);
-    const [stores, setStores] = useState<Store[]>([]);
-    const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
-    const [showStorePicker, setShowStorePicker] = useState(false);
-    const [storeSearch, setStoreSearch] = useState('');
     const [priceCache, setPriceCache] = useState<{ [key: string]: PricePoint[] }>({});
-    const [categories, setCategories] = useState<Category[]>([]);
     const [chartModalSp, setChartModalSp] = useState<StoreProduct | null>(null);
+    const [isAdding, setIsAdding] = useState(false);
+    const [basketQuantity, setBasketQuantity] = useState(0);
+    const [amountModalVisible, setAmountModalVisible] = useState(false);
     const { mode, ready: prefReady } = useDisplayMode();
+    const { draftBasketId, setDraftBasketId } = useBasketState();
+    const { bottom: bottomInset } = useSafeAreaInsets();
+    const draftBasketIdRef = useRef(draftBasketId);
+    useEffect(() => { draftBasketIdRef.current = draftBasketId; }, [draftBasketId]);
 
     useEffect(() => {
         fetch(`${API_BASE_URL}/api/chains`)
@@ -759,7 +765,8 @@ export default function ProductDetailScreen() {
         });
         return [1, 2, 3, 4, 5].flatMap(id => {
             const c = chainMap.get(id);
-            return c ? [c] : [];
+            const hasProducts = storeProducts.some(sp => sp.chainId === id);
+            return c && hasProducts ? [c] : [];
         });
     }, [allChains, storeProducts]);
 
@@ -767,16 +774,6 @@ export default function ProductDetailScreen() {
         if (!selectedChainId) return storeProducts;
         return storeProducts.filter(sp => sp.chainId === selectedChainId);
     }, [storeProducts, selectedChainId]);
-
-    const hasProductsInChain = (chainId: number) => {
-        return storeProducts.some(sp => sp.chainId === chainId);
-    };
-
-    const filteredStores = useMemo(() => {
-        if (!storeSearch) return stores;
-        const q = storeSearch.toLowerCase();
-        return stores.filter(s => s.name.toLowerCase().includes(q) || s.address.toLowerCase().includes(q));
-    }, [stores, storeSearch]);
 
     // Fetch product and store products
     useEffect(() => {
@@ -796,25 +793,6 @@ export default function ProductDetailScreen() {
                 const spData = await spRes.json();
                 setProduct(prodData);
                 setStoreProducts(Array.isArray(spData) ? spData : []);
-
-                // Auto-select first chain that has products
-                const firstChain = spData.find((sp: StoreProduct) => sp.chainId);
-                if (firstChain) {
-                    setSelectedChainId(firstChain.chainId);
-                }
-
-                // Fetch category breadcrumb
-                if (prodData.categoryId) {
-                    const catRes = await fetch(`${API_BASE_URL}/api/categories/${prodData.categoryId}`);
-                    const catData = await catRes.json();
-                    if (catData.parentCategoryId) {
-                        const parentRes = await fetch(`${API_BASE_URL}/api/categories/${catData.parentCategoryId}`);
-                        const parentData = await parentRes.json();
-                        setCategories([parentData, catData]);
-                    } else {
-                        setCategories([catData]);
-                    }
-                }
             } finally {
                 setLoading(false);
             }
@@ -822,36 +800,14 @@ export default function ProductDetailScreen() {
         fetchData();
     }, [id, mode, prefReady]);
 
-    // Fetch stores when chain changes
-    useEffect(() => {
-        if (!selectedChainId) return;
-        const fetchStores = async () => {
-            try {
-                const res = await fetch(`${API_BASE_URL}/api/stores/chain/${selectedChainId}`);
-                const data = await res.json();
-                setStores(Array.isArray(data) ? data : []);
-                setSelectedStoreId(null);
-                setShowStorePicker(false);
-            } catch {}
-        };
-        fetchStores();
-    }, [selectedChainId]);
-
     // Fetch price history for visible store products
     useEffect(() => {
         const fetchPrices = async () => {
             for (const sp of filteredStoreProducts) {
-                const cacheKey = selectedStoreId
-                    ? `${sp.id}-${selectedStoreId}`
-                    : `${sp.id}-all`;
-
+                const cacheKey = `${sp.id}-all`;
                 if (priceCache[cacheKey]) continue;
-
                 try {
-                    const url = selectedStoreId
-                        ? `${API_BASE_URL}/api/prices/store-product/${sp.id}/store/${selectedStoreId}/history`
-                        : `${API_BASE_URL}/api/prices/store-product/${sp.id}/history`;
-                    const res = await fetch(url);
+                    const res = await fetch(`${API_BASE_URL}/api/prices/store-product/${sp.id}/history`);
                     const data = await res.json();
                     setPriceCache(prev => ({ ...prev, [cacheKey]: Array.isArray(data) ? data : [] }));
                 } catch {
@@ -860,38 +816,109 @@ export default function ProductDetailScreen() {
             }
         };
         if (filteredStoreProducts.length > 0) fetchPrices();
-    }, [filteredStoreProducts, selectedStoreId]);
+    }, [filteredStoreProducts]);
 
-    const getPricesForSp = (spId: number): PricePoint[] => {
-        const cacheKey = selectedStoreId ? `${spId}-${selectedStoreId}` : `${spId}-all`;
-        return priceCache[cacheKey] || [];
-    };
+    const getPricesForSp = (spId: number): PricePoint[] => priceCache[`${spId}-all`] || [];
+
+    const BAR_HEIGHT = 64;
+
+    const fetchBasketQty = useCallback(() => {
+        const bid = useBasketState.getState().draftBasketId;
+        if (!bid) { setBasketQuantity(0); return; }
+        fetch(`${API_BASE_URL}/api/baskets/${bid}/items`)
+            .then(r => r.json())
+            .then((items: any[]) => {
+                if (!Array.isArray(items)) return;
+                const found = items.find((i: any) => i.productId === Number(id));
+                setBasketQuantity(found ? parseFloat(found.quantity) : 0);
+            })
+            .catch(() => {});
+    }, [id]);
+
+    useFocusEffect(useCallback(() => { fetchBasketQty(); }, [fetchBasketQty]));
+
+    const handleAdd = useCallback(() => {
+        if (!product || isAdding) return;
+        const hasRange = product.minAmount !== null && product.maxAmount !== null
+            && product.minAmount !== product.maxAmount;
+        if (hasRange || !!product.hasWeighable) {
+            setAmountModalVisible(true);
+            return;
+        }
+        const qty = resolveCanonicalStep(product);
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+        setIsAdding(true);
+        addProductToBasket(product.id, draftBasketId, setDraftBasketId, qty, mode)
+            .then(result => { if (result.success) setBasketQuantity(qty); })
+            .finally(() => setIsAdding(false));
+    }, [product, isAdding, draftBasketId, mode]);
+
+    const handleDecrement = useCallback(() => {
+        if (!product) return;
+        const step = resolveCanonicalStep(product);
+        const newQty = Math.round((basketQuantity - step) / step) * step;
+        const bid = draftBasketIdRef.current;
+        if (newQty <= 0) {
+            setBasketQuantity(0);
+            if (!bid) return;
+            fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (all: any[]) => {
+                const found = Array.isArray(all) ? all.find((i: any) => i.productId === product.id) : null;
+                if (found) await fetch(`${API_BASE_URL}/api/basket-items/${found.id}`, { method: 'DELETE' });
+                const remaining = Array.isArray(all) ? all.filter((i: any) => i.id !== found?.id) : [];
+                if (remaining.length === 0) {
+                    await fetch(`${API_BASE_URL}/api/baskets/${bid}`, { method: 'DELETE' });
+                    setDraftBasketId(null);
+                }
+            }).catch(() => {});
+        } else {
+            setBasketQuantity(newQty);
+            if (!bid) return;
+            fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (all: any[]) => {
+                const found = Array.isArray(all) ? all.find((i: any) => i.productId === product.id) : null;
+                if (found) await fetch(`${API_BASE_URL}/api/basket-items/${found.id}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ quantity: newQty }),
+                });
+            }).catch(() => {});
+        }
+    }, [product, basketQuantity, setDraftBasketId]);
+
+    const handleIncrement = useCallback(() => {
+        if (!product) return;
+        const step = resolveCanonicalStep(product);
+        const newQty = Math.round((basketQuantity + step) / step) * step;
+        const bid = draftBasketIdRef.current;
+        setBasketQuantity(newQty);
+        if (!bid) return;
+        fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (all: any[]) => {
+            const found = Array.isArray(all) ? all.find((i: any) => i.productId === product.id) : null;
+            if (found) await fetch(`${API_BASE_URL}/api/basket-items/${found.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quantity: newQty }),
+            });
+        }).catch(() => {});
+    }, [product, basketQuantity]);
 
     if (loading) return (
-        <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, gap: 16 }}>
-            <View style={{ alignItems: 'center', gap: 12, paddingVertical: 8 }}>
-                <SkeletonBox width={160} height={160} borderRadius={12} />
-                <SkeletonBox width={220} height={18} borderRadius={8} />
-                <SkeletonBox width={140} height={13} borderRadius={6} />
-            </View>
+        <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, gap: 10 }}>
             <View style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, gap: 10 }}>
-                <SkeletonBox width={120} height={13} borderRadius={6} />
                 {Array.from({ length: 4 }).map((_, i) => (
                     <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
-                        <SkeletonBox width={32} height={32} borderRadius={16} />
+                        <SkeletonBox width={52} height={52} borderRadius={8} />
                         <View style={{ flex: 1, gap: 6 }}>
                             <SkeletonBox width={140} height={12} borderRadius={5} />
                             <SkeletonBox width={80} height={11} borderRadius={5} />
+                            <SkeletonBox width={60} height={13} borderRadius={5} />
                         </View>
-                        <SkeletonBox width={60} height={16} borderRadius={5} />
+                        <SkeletonBox width={MINI_CHART_WIDTH} height={MINI_CHART_HEIGHT} borderRadius={6} />
                     </View>
                 ))}
             </View>
         </ScrollView>
     );
     if (!product) return <Text style={styles.centered}>Produktas nerastas</Text>;
-
-    const breadcrumb = categories.map(c => c.name).join(' → ');
 
     return (
         <>
@@ -901,134 +928,14 @@ export default function ProductDetailScreen() {
                 headerStyle: { backgroundColor: colors.cardBackground },
                 headerShadowVisible: false,
             }} />
-                <ScrollView style={styles.container} stickyHeaderIndices={[1]}>
-                {/* Header */}
-                <View style={styles.header}>
-                    <View style={styles.headerImageContainer}>
-                        <ProductImage
-                            uris={product.imageUrls}
-                            imageStyle={styles.headerImage}
-                            placeholderStyle={styles.headerImagePlaceholder}
-                            emojiStyle={styles.headerImageEmoji}
-                        />
-                    </View>
-                    <Text style={styles.productName}>{product.name}</Text>
-                    {breadcrumb ? <Text style={styles.breadcrumb}>{breadcrumb}</Text> : null}
-                    {filteredStoreProducts.length > 0 && (
-                        <Text style={styles.amountRange}>
-                            {(() => {
-                                const amounts = storeProducts.map(sp => parseFloat(sp.amount));
-                                const units = storeProducts.map(sp => sp.unit);
-                                const min = Math.min(...amounts);
-                                const max = Math.max(...amounts);
-                                const formatAmt = (val: number) => {
-                                    const unit = units[0] || 'g';
-                                    if (unit === 'g' && val >= 1000) return `${val / 1000} kg`;
-                                    return `${val} ${unit}`;
-                                };
-                                return min === max ? formatAmt(min) : `${formatAmt(min)} – ${formatAmt(max)}`;
-                            })()}
-                        </Text>
-                    )}
-                </View>
-
-                {/* Chain tabs */}
-                <View style={styles.tabsWrapper}>
-                    <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={styles.tabsContainer}
-                    >
-                        {chains.map(chain => {
-                            const hasProducts = hasProductsInChain(chain.id);
-                            const isSelected = selectedChainId === chain.id;
-                            return (
-                                <TouchableOpacity
-                                    key={chain.id}
-                                    style={[
-                                        styles.chainTab,
-                                        isSelected && styles.chainTabActive,
-                                        !hasProducts && styles.chainTabDisabled,
-                                    ]}
-                                    onPress={() => {
-                                        if (hasProducts) setSelectedChainId(chain.id);
-                                    }}
-                                    disabled={!hasProducts}
-                                >
-                                    <Image
-                                        source={{ uri: chain.logoUrl }}
-                                        style={[styles.chainLogo, !hasProducts && styles.chainLogoDisabled]}
-                                        resizeMode="contain"
-                                    />
-                                    {!hasProducts && (
-                                        <View style={styles.unavailableBadge}>
-                                            <Text style={styles.unavailableText}>—</Text>
-                                        </View>
-                                    )}
-                                </TouchableOpacity>
-                            );
-                        })}
-                    </ScrollView>
-                </View>
-
-                {/* Store dropdown */}
-                <View style={styles.dropdownSection}>
-                    <TouchableOpacity
-                        style={styles.dropdown}
-                        onPress={() => setShowStorePicker(!showStorePicker)}
-                    >
-                        <Ionicons name="storefront-outline" size={18} color={colors.textPrimary} />
-                        <Text style={styles.dropdownText} numberOfLines={1}>
-                            {selectedStoreId
-                                ? stores.find(s => s.id === selectedStoreId)?.name || t('product.fallbackStore')
-                                : t('product.allStores')}
-                        </Text>
-                        <Ionicons name={showStorePicker ? 'chevron-up' : 'chevron-down'} size={18} color={colors.textSecondary} />
-                    </TouchableOpacity>
-
-                    {showStorePicker && (
-                        <View style={styles.storePickerContainer}>
-                            <View style={styles.searchInputContainer}>
-                                <Ionicons name="search" size={16} color={colors.textMuted} />
-                                <TextInput
-                                    style={styles.searchTextInput}
-                                    placeholder={t('product.searchStorePlaceholder')}
-                                    placeholderTextColor={colors.textMuted}
-                                    value={storeSearch}
-                                    onChangeText={setStoreSearch}
-                                    autoFocus
-                                />
-                                {storeSearch.length > 0 && (
-                                    <TouchableOpacity onPress={() => setStoreSearch('')}>
-                                        <Ionicons name="close-circle" size={16} color={colors.textMuted} />
-                                    </TouchableOpacity>
-                                )}
-                            </View>
-                            <TouchableOpacity
-                                style={[styles.storeOption, !selectedStoreId && styles.storeOptionActive]}
-                                onPress={() => { setSelectedStoreId(null); setShowStorePicker(false); }}
-                            >
-                                <Text style={[styles.storeOptionText, !selectedStoreId && styles.storeOptionTextActive]}>
-                                    {t('product.allStores')}
-                                </Text>
-                            </TouchableOpacity>
-                            <ScrollView style={styles.storeList} nestedScrollEnabled={true}>
-                                {filteredStores.map(item => (
-                                    <TouchableOpacity
-                                        key={item.id}
-                                        style={[styles.storeOption, selectedStoreId === item.id && styles.storeOptionActive]}
-                                        onPress={() => { setSelectedStoreId(item.id); setShowStorePicker(false); }}
-                                    >
-                                        <Text style={[styles.storeOptionText, selectedStoreId === item.id && styles.storeOptionTextActive]}>
-                                            {item.name}
-                                        </Text>
-                                        <Text style={styles.storeAddress} numberOfLines={1}>{item.address}</Text>
-                                    </TouchableOpacity>
-                                ))}
-                            </ScrollView>
-                        </View>
-                    )}
-                </View>
+            <ScrollView style={styles.container} stickyHeaderIndices={[0]} contentContainerStyle={{ paddingBottom: BAR_HEIGHT + 16 }}>
+                {/* Chain filter */}
+                <ChainFilterBar
+                    chains={chains}
+                    selectedId={selectedChainId}
+                    onSelect={setSelectedChainId}
+                    allLabel={t('product.allStores')}
+                />
 
                 {/* StoreProduct list */}
                 {filteredStoreProducts.length === 0 ? (
@@ -1043,9 +950,11 @@ export default function ProductDetailScreen() {
                             ? prices[prices.length - 1]
                             : null;
                         const amt = parseFloat(sp.amount);
-                        const amountStr = sp.unit === 'g' && amt >= 1000
-                            ? `${amt / 1000} kg`
-                            : `${amt} ${sp.unit}`;
+                        const amountStr = !isNaN(amt) && sp.unit
+                            ? sp.unit === 'g' && amt >= 1000
+                                ? `${amt / 1000} kg`
+                                : `${amt} ${sp.unit}`
+                            : null;
 
                         return (
                             <View key={sp.id} style={styles.spCard}>
@@ -1059,7 +968,7 @@ export default function ProductDetailScreen() {
 
                                     <View style={styles.spInfo}>
                                         <Text style={styles.spName} numberOfLines={2}>{sp.storeProductName}</Text>
-                                        <Text style={styles.spAmount}>{amountStr}</Text>
+                                        {amountStr ? <Text style={styles.spAmount}>{amountStr}</Text> : null}
                                         {latestPrice && (
                                             <View style={styles.priceRow}>
                                                 <Text style={[
@@ -1085,12 +994,62 @@ export default function ProductDetailScreen() {
                                         onTap={() => setChartModalSp(sp)}
                                     />
                                 </View>
+                                <ChainLogoStrip
+                                    chainLogos={[{ chainId: sp.chainId, logoUrl: getChainMiniLogoUrl(sp.chainId, sp.logoUrl) }]}
+                                    style={{ position: 'absolute', top: 12, left: 12, transform: [{ scale: 0.7 }], transformOrigin: 'top left', backgroundColor: 'transparent', paddingHorizontal: 0, paddingVertical: 0, shadowOpacity: 0, elevation: 0 }}
+                                />
                             </View>
                         );
                     })
                 )}
                 <View style={{ height: 40 }} />
             </ScrollView>
+
+            {/* Sticky bottom add-to-basket bar */}
+            <View style={[styles.addBar, { paddingBottom: bottomInset || 12 }]}>
+                {basketQuantity > 0 ? (
+                    <QuantityControl
+                        quantity={basketQuantity}
+                        onDecrement={handleDecrement}
+                        onIncrement={handleIncrement}
+                        unit={resolveDisplayUnit(product)}
+                        size="large"
+                        style={{ width: '100%' }}
+                    />
+                ) : (
+                    <TouchableOpacity
+                        style={[styles.addButton, isAdding && styles.addButtonDone]}
+                        onPress={handleAdd}
+                        disabled={isAdding}
+                        activeOpacity={0.8}
+                    >
+                        {isAdding
+                            ? <ActivityIndicator size="small" color="#fff" />
+                            : <Ionicons name="cart-outline" size={20} color="#fff" />}
+                        <Text style={styles.addButtonText}>{t('product.addToBasket')}</Text>
+                    </TouchableOpacity>
+                )}
+            </View>
+
+            <AmountPickerModal
+                visible={amountModalVisible}
+                productName={product.name}
+                canonicalUnit={product.canonicalUnit}
+                canonicalStep={product.canonicalStep}
+                canonicalFamily={product.canonicalFamily}
+                minAmount={product.minAmount ?? 0}
+                maxAmount={product.maxAmount ?? 0}
+                unit={product.unit ?? 'g'}
+                isWeighable={!!product.hasWeighable}
+                onCancel={() => setAmountModalVisible(false)}
+                onConfirm={async (amount) => {
+                    setAmountModalVisible(false);
+                    setIsAdding(true);
+                    const result = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, amount, mode);
+                    setIsAdding(false);
+                    if (result.success) setBasketQuantity(amount);
+                }}
+            />
 
             <Modal
                 visible={chartModalSp !== null}
@@ -1136,162 +1095,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-    // Header
-    header: {
-        backgroundColor: c.cardBackground,
-        alignItems: 'center',
-        paddingVertical: 24,
-        paddingHorizontal: 16,
-        borderBottomWidth: 0.5,
-        borderBottomColor: c.border,
-    },
-    headerImageContainer: {
-        width: 160,
-        height: 160,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginBottom: 16,
-    },
-    headerImage: { width: '100%', height: '100%' },
-    productName: {
-        fontSize: 20,
-        fontWeight: '700',
-        color: c.textPrimary,
-        textAlign: 'center',
-        marginBottom: 4,
-    },
-    breadcrumb: {
-        fontSize: 12,
-        color: c.textMuted,
-        textAlign: 'center',
-        marginBottom: 4,
-    },
-    amountRange: {
-        fontSize: 14,
-        color: c.textSecondary,
-        marginTop: 4,
-    },
-
-    // Chain tabs
-    tabsWrapper: {
-        backgroundColor: c.cardBackground,
-        borderBottomWidth: 0.5,
-        borderBottomColor: c.border,
-        zIndex: 10,
-    },
-    tabsContainer: {
-        paddingHorizontal: 16,
-        paddingVertical: 12,
-        gap: 12,
-    },
-    chainTab: {
-        width: 64,
-        height: 44,
-        borderRadius: 10,
-        borderWidth: 1.5,
-        borderColor: c.border,
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: c.cardBackground,
-        position: 'relative',
-    },
-    chainTabActive: {
-        borderColor: c.primary,
-        backgroundColor: c.primaryMuted,
-    },
-    chainTabDisabled: {
-        opacity: 0.4,
-        backgroundColor: c.surfaceSubtle,
-    },
-    chainLogo: {
-        width: 48,
-        height: 28,
-    },
-    chainLogoDisabled: {
-        opacity: 0.5,
-    },
-    unavailableBadge: {
-        position: 'absolute',
-        top: -6,
-        right: -6,
-        backgroundColor: c.error,
-        borderRadius: 8,
-        width: 16,
-        height: 16,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    unavailableText: {
-        color: c.textInverse,
-        fontSize: 10,
-        fontWeight: '700',
-    },
-
-    // Dropdown
-    dropdownSection: {
-        paddingHorizontal: 16,
-        paddingTop: 12,
-    },
-    dropdown: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: c.cardBackground,
-        borderRadius: 10,
-        paddingHorizontal: 14,
-        paddingVertical: 11,
-        gap: 8,
-        borderWidth: 1,
-        borderColor: c.border,
-    },
-    dropdownText: {
-        flex: 1,
-        fontSize: 14,
-        color: c.textPrimary,
-    },
-    storePickerContainer: {
-        backgroundColor: c.cardBackground,
-        borderRadius: 10,
-        marginTop: 8,
-        borderWidth: 1,
-        borderColor: c.border,
-        maxHeight: 260,
-        overflow: 'hidden',
-    },
-    searchInputContainer: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 12,
-        paddingVertical: 10,
-        gap: 8,
-        borderBottomWidth: 0.5,
-        borderBottomColor: c.border,
-    },
-    searchInput: { flex: 1 },
-    searchPlaceholder: { fontSize: 13, color: c.textMuted },
-    storeList: { maxHeight: 200 },
-    storeOption: {
-        paddingHorizontal: 14,
-        paddingVertical: 10,
-        borderBottomWidth: 0.5,
-        borderBottomColor: c.borderSubtle,
-    },
-    storeOptionActive: {
-        backgroundColor: c.primaryMuted,
-    },
-    storeOptionText: {
-        fontSize: 13,
-        color: c.textPrimary,
-    },
-    storeOptionTextActive: {
-        color: c.primary,
-        fontWeight: '600',
-    },
-    storeAddress: {
-        fontSize: 11,
-        color: c.textMuted,
-        marginTop: 2,
-    },
-
     // StoreProduct cards
     spCard: {
         flexDirection: 'row',
@@ -1326,18 +1129,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     spImageEmoji: {
         fontSize: 28,
-        opacity: 0.4,
-    },
-    headerImagePlaceholder: {
-        width: 120,
-        height: 120,
-        borderRadius: 12,
-        backgroundColor: c.surfaceMuted,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    headerImageEmoji: {
-        fontSize: 56,
         opacity: 0.4,
     },
     spInfo: {
@@ -1517,12 +1308,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         color: c.textMuted,
         textAlign: 'center',
     },
-    searchTextInput: {
-        flex: 1,
-        fontSize: 13,
-        color: c.textPrimary,
-        paddingVertical: 0,
-    },
 
     // Range pills
     rangePills: {
@@ -1572,5 +1357,35 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     chartDisplayDate: {
         fontSize: 12,
         color: c.textMuted,
+    },
+
+    // Bottom add-to-basket bar
+    addBar: {
+        position: 'absolute',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        backgroundColor: c.cardBackground,
+        borderTopWidth: 0.5,
+        borderTopColor: c.border,
+        paddingHorizontal: 16,
+        paddingTop: 10,
+    },
+    addButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: c.primary,
+        borderRadius: 12,
+        paddingVertical: 14,
+    },
+    addButtonDone: {
+        opacity: 0.75,
+    },
+    addButtonText: {
+        fontSize: 15,
+        fontWeight: '700',
+        color: '#fff',
     },
 });

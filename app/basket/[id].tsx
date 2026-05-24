@@ -53,6 +53,14 @@ export default function BasketDetailScreen() {
     const [basketName, setBasketName] = useState('');
     const [editingName, setEditingName] = useState(false);
     const nameInputRef = useRef<any>(null);
+    const nameTextRef = useRef(basketName);
+    useEffect(() => {
+        if (editingName) {
+            nameTextRef.current = basketName;
+            const t = setTimeout(() => nameInputRef.current?.focus(), 50);
+            return () => clearTimeout(t);
+        }
+    }, [editingName]);
 
     // Inline calc state. `calcing` drives the bottom-bar progress UI;
     // `calcError` shows a retry banner above it if the POST fails.
@@ -348,14 +356,13 @@ export default function BasketDetailScreen() {
                     ? () => (
                         <TextInput
                             ref={nameInputRef}
-                            value={basketName}
-                            onChangeText={setBasketName}
+                            defaultValue={basketName}
+                            onChangeText={text => { nameTextRef.current = text; }}
                             onEndEditing={e => saveBasketName(e.nativeEvent.text)}
                             onSubmitEditing={e => saveBasketName(e.nativeEvent.text)}
-                            onBlur={() => saveBasketName(basketName)}
+                            onBlur={() => saveBasketName(nameTextRef.current)}
                             placeholder={fallbackTitle}
                             placeholderTextColor={colors.textMuted}
-                            autoFocus
                             style={{
                                 fontSize: 17,
                                 fontWeight: '600',

@@ -717,7 +717,10 @@
     "searchStorePlaceholder": "Ieškoti parduotuvės...",
     "notAvailable": "Šioje parduotuvių tinkle produktas nepasiekiamas",
     "priceHistory": "Kainų istorija",
-    "priceHistoryEmpty": "Kainų istorija dar nesukaupta"
+    "priceHistoryEmpty": "Kainų istorija dar nesukaupta",
+    "addToBasket": "Į krepšelį",
+    "addedToBasket": "Pridėta!",
+    "alreadyInBasket": "Jau krepšelyje"
   },
   "shoppingListTab": {
     "delete": "Ištrinti",

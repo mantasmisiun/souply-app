@@ -754,7 +754,10 @@
     "searchStorePlaceholder": "Search store...",
     "notAvailable": "This product isn't available at this chain",
     "priceHistory": "Price history",
-    "priceHistoryEmpty": "Price history not yet collected"
+    "priceHistoryEmpty": "Price history not yet collected",
+    "addToBasket": "Add to basket",
+    "addedToBasket": "Added!",
+    "alreadyInBasket": "Already in basket"
   },
   "shoppingListTab": {
     "delete": "Delete",
