@@ -56,7 +56,7 @@ export default function AmountPickerModal({
     onCancel,
 }: AmountPickerModalProps) {
     const colors = useTheme();
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
 
     // Resolve effective unit + step. New canonical fields win; legacy
@@ -69,6 +69,15 @@ export default function AmountPickerModal({
     // Fractional steps (kg / l with pack sizes like 0.5) want decimal
     // formatting; whole-number steps (vnt / pak) want integers.
     const isFractional = step < 1 || canonicalFamily === 'fluid';
+
+    // Convert raw minAmount/maxAmount (stored in g/ml) to canonical unit scale.
+    const needsScale = (unit === 'g' || unit === 'ml') && (displayUnit === 'kg' || displayUnit === 'l');
+    const scale = needsScale ? 1000 : 1;
+    const displayMin = minAmount / scale;
+    const displayMax = maxAmount / scale;
+
+    const fmtAmount = (n: number) =>
+        new Intl.NumberFormat(i18n.language, { maximumFractionDigits: 3 }).format(n);
 
     const formatValue = (n: number): string => {
         if (!isFractional) return String(Math.round(n));
@@ -118,9 +127,9 @@ export default function AmountPickerModal({
                     <Text style={styles.subtitle}>
                         {isWeighable
                             ? t('amountPicker.weighable')
-                            : (minAmount === maxAmount
-                                ? t('amountPicker.packages', { count: 1, value: minAmount, unit })
-                                : t('amountPicker.packages', { count: 2, min: minAmount, max: maxAmount, unit }))}
+                            : (displayMin === displayMax
+                                ? t('amountPicker.packages', { count: 1, value: fmtAmount(displayMin), unit: displayUnit })
+                                : t('amountPicker.packages', { count: 2, min: fmtAmount(displayMin), max: fmtAmount(displayMax), unit: displayUnit }))}
                     </Text>
 
                     <Text style={styles.label}>{t('amountPicker.label')}</Text>
