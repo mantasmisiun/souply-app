@@ -99,9 +99,7 @@ git commit -m "Dark theme + Appearance setting
 - useResolvedScheme() exported so StatusBar + nav theme follow user choice.
 - Settings: new Appearance section with picker (LT + EN).
 - Audit pass: convert leaked text/surface/border hex codes in screens to
-  semantic tokens; keep intentional brand/shadow/chart colours.
-
-Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>"
+  semantic tokens; keep intentional brand/shadow/chart colours."
 ```
 
 Then `eas update --branch dev --message "Dark theme + Appearance setting"`

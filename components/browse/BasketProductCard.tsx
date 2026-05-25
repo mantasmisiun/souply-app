@@ -1,26 +1,36 @@
-import { Ionicons } from '@expo/vector-icons';
-import { useMemo } from 'react';
-import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { memo, useMemo } from 'react';
+import { StyleSheet, Text, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
+import * as Haptics from 'expo-haptics';
 import { ProductImage } from '../ProductImage';
+import { ChainLogoStrip } from '../ChainLogoStrip';
+import { ScalePressable } from '../ScalePressable';
+import { QuantityControl } from '../QuantityControl';
 import { useTheme, type AppTheme } from '../../constants/theme';
+
+type ImageUrlList = (string | null | undefined)[] | string | null;
+type ChainLogo = { chainId: number; logoUrl: string | null };
 
 type Props = {
     name: string;
-    imageUrls?: (string | null | undefined)[] | string | null;
+    imageUrls?: ImageUrlList;
+    chainLogos?: ChainLogo[] | string | null;
     amountText?: string;
     quantity: number;
+    isAdding?: boolean;
     onOpen?: () => void;
     onAdd: () => void;
     onDec: () => void;
     onInc: () => void;
 };
 
-export default function BasketProductCard({
+function BasketProductCard({
     name,
     imageUrls,
+    chainLogos,
     amountText,
     quantity,
+    isAdding = false,
     onOpen,
     onAdd,
     onDec,
@@ -32,7 +42,7 @@ export default function BasketProductCard({
 
     return (
         <View style={styles.productCard}>
-            <TouchableOpacity
+            <ScalePressable
                 onPress={onOpen}
                 style={styles.productImageContainer}
                 activeOpacity={onOpen ? 0.7 : 1}
@@ -44,7 +54,10 @@ export default function BasketProductCard({
                     placeholderStyle={styles.productImagePlaceholder}
                     emojiStyle={styles.productImageEmoji}
                 />
-            </TouchableOpacity>
+                {chainLogos && (
+                    <ChainLogoStrip chainLogos={chainLogos} style={{ position: 'absolute', top: 6, left: 6 }} />
+                )}
+            </ScalePressable>
 
             <View style={styles.productInfo}>
                 <Text style={styles.productName} numberOfLines={3}>{name}</Text>
@@ -52,25 +65,29 @@ export default function BasketProductCard({
             </View>
 
             {quantity === 0 ? (
-                <TouchableOpacity style={styles.addButton} onPress={onAdd}>
+                <ScalePressable
+                    style={[styles.addButton, isAdding && { opacity: 0.5 }]}
+                    disabled={isAdding}
+                    onPress={() => {
+                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+                        onAdd();
+                    }}
+                >
                     <Text style={styles.addButtonText}>{t('browse.addToBasket')}</Text>
-                </TouchableOpacity>
+                </ScalePressable>
             ) : (
-                <View style={styles.quantityControl}>
-                    <TouchableOpacity style={styles.qtyButton} onPress={onDec}>
-                        <Ionicons name="remove" size={16} color={colors.primary} />
-                    </TouchableOpacity>
-                    <Text style={styles.qtyText}>
-                        {Number.isInteger(quantity) ? quantity : quantity.toFixed(1)}
-                    </Text>
-                    <TouchableOpacity style={styles.qtyButton} onPress={onInc}>
-                        <Ionicons name="add" size={16} color={colors.primary} />
-                    </TouchableOpacity>
-                </View>
+                <QuantityControl
+                    quantity={quantity}
+                    onDecrement={onDec}
+                    onIncrement={onInc}
+                    style={{ width: '100%' }}
+                />
             )}
         </View>
     );
 }
+
+export default memo(BasketProductCard);
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     productCard: {
@@ -102,10 +119,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.surfaceMuted,
         borderRadius: 8,
     },
-    productImageEmoji: {
-        fontSize: 44,
-        opacity: 0.4,
-    },
+    productImageEmoji: { fontSize: 44, opacity: 0.4 },
     productInfo: { flex: 1, width: '100%', marginBottom: 10 },
     productName: { fontSize: 13, color: c.textPrimary, lineHeight: 18 },
     amountText: { fontSize: 12, color: c.textMuted, marginTop: 2 },
@@ -117,23 +131,4 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         alignItems: 'center',
     },
     addButtonText: { color: c.onPrimary, fontSize: 13, fontWeight: '600' },
-    quantityControl: {
-        width: '100%',
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        borderWidth: 1,
-        borderColor: c.primary,
-        borderRadius: 8,
-        paddingVertical: 6,
-        paddingHorizontal: 10,
-    },
-    qtyButton: { padding: 2 },
-    qtyText: {
-        fontSize: 14,
-        fontWeight: '700',
-        color: c.primary,
-        minWidth: 20,
-        textAlign: 'center',
-    },
 });

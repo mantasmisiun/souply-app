@@ -337,6 +337,15 @@ async function matchProducts(
     let altMatches: unknown[] = [];
     try {
       const params = new URLSearchParams({ chainId: String(chainId), name: matchName });
+      // Send the parser-extracted pack size so the matcher can prefer
+      // SPs at the right amount + unit (e.g. ZEWA EVERYDAY 32 rit. vs
+      // 12 rit.). Without these, name-similarity alone returns the wrong
+      // pack variant at confidence 1.0. Skip when either is missing —
+      // the matcher's name-only scoring handles those lines.
+      if (resolvedAmount !== null && resolvedUnit) {
+        params.set('amount', String(resolvedAmount));
+        params.set('unit', resolvedUnit);
+      }
       const res = await fetchWithTimeout(
         `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
         { timeoutMs: TIMEOUT_FAST_MS, externalSignal: signal },

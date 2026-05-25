@@ -136,6 +136,11 @@ interface ParsedProductSnapshot {
     quantity: number;
     unit: string;
     pricePerUnit: number | null;
+    /** Parser-extracted pack size from the name (e.g. 32/rit for ZEWA,
+     *  990/ml for SOMAT). Surfaced in the results JSON so a reader can
+     *  see at a glance whether `extractPackSize` caught the token. */
+    parsedAmount?: number | null;
+    parsedUnit?: string | null;
 }
 
 interface RowStatus {
@@ -296,7 +301,16 @@ const fetchAltMatches = async (
     const enriched: any[] = [];
     for (const p of products) {
         try {
-            const url = `${API_BASE_URL}/api/store-products/match?chainId=${chainId}&name=${encodeURIComponent(p.name ?? '')}${p.quantity ? `&amount=${p.quantity}` : ''}${p.unit ? `&unit=${encodeURIComponent(p.unit)}` : ''}`;
+            // Prefer the parser-extracted pack size (parsedAmount /
+            // parsedUnit — e.g. 32 / rit for ZEWA, 990 / ml for SOMAT)
+            // over the receipt-line quantity. Pack size is the right
+            // signal for SP variant discrimination; receipt-line
+            // quantity is how much the user bought (often 1 vnt or a
+            // weighed fraction) and produces misleading matcher
+            // penalties when fed in.
+            const matchAmount = p.parsedAmount ?? null;
+            const matchUnit = p.parsedUnit ?? null;
+            const url = `${API_BASE_URL}/api/store-products/match?chainId=${chainId}&name=${encodeURIComponent(p.name ?? '')}${matchAmount !== null && matchUnit ? `&amount=${matchAmount}&unit=${encodeURIComponent(matchUnit)}` : ''}`;
             const res = await fetch(url);
             const body = await res.json().catch(() => ({}));
             const matches = Array.isArray(body?.matches) ? body.matches : [];
@@ -479,6 +493,8 @@ export default function ReceiptBatchScreen() {
                 quantity: p.quantity,
                 unit: p.unit,
                 pricePerUnit: p.pricePerUnit ?? null,
+                parsedAmount: p.parsedAmount ?? null,
+                parsedUnit: p.parsedUnit ?? null,
             })),
         };
 

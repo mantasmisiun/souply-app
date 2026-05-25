@@ -520,6 +520,21 @@ const ProductRow = ({
                 {product && (
                     <View style={styles.productFields}>
                         {/*
+                          Parser-extracted pack size from the name (e.g.
+                          32 rit. for ZEWA, 990 ml for SOMAT, 250 g for
+                          MILLER). Shown above the price line so the
+                          discriminator the matcher uses is immediately
+                          visible — easy to spot regressions where the
+                          token didn't get caught. Renders "—" when
+                          extractPackSize returned null (e.g. a bare
+                          number with no unit suffix lost in OCR).
+                        */}
+                        <Text style={styles.productPackSize}>
+                            {(product as any).parsedAmount != null && (product as any).parsedUnit
+                                ? `${(product as any).parsedAmount} ${(product as any).parsedUnit}`
+                                : '—'}
+                        </Text>
+                        {/*
                           Gross math: <ppu>{/unit} × <qty> <unit> = <price>.
                           For single-pack rows with no X-N line on the
                           receipt the parser leaves pricePerUnit=null;
@@ -802,6 +817,13 @@ const makeStyles = (c: AppTheme) =>
             color: c.textMuted,
         },
         productFields: { marginTop: 6 },
+        productPackSize: {
+            fontSize: 12,
+            fontWeight: '600',
+            color: c.textSecondary,
+            fontFamily: 'monospace',
+            marginBottom: 4,
+        },
         productPriceLine: { fontSize: 13, color: c.textPrimary },
         productPromoLine: { fontSize: 13, color: c.textPrimary, marginTop: 2 },
         productPromoLabel: { color: c.error, fontWeight: '700' },

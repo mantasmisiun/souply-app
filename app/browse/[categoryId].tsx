@@ -1,6 +1,5 @@
 import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, Switch, Modal } from 'react-native';
 import { SkeletonBox } from '../../components/SkeletonBox';
-import { ChainLogoStrip } from '../../components/ChainLogoStrip';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -11,19 +10,17 @@ import { useBasketState } from '../../state/basketState';
 import { addProductToBasket } from '../../utils/basketUtils';
 import AmountPickerModal from '../../components/AmountPickerModal';
 import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../components/ComparedBasketChoiceModal';
-import { ProductImage } from '../../components/ProductImage';
+import BasketProductCard from '../../components/browse/BasketProductCard';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import { getUserId } from '../../config/user';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Haptics from 'expo-haptics';
 import { Toast, type ToastHandle } from '../../components/Toast';
 import { useTranslation } from 'react-i18next';
 import { ScalePressable } from '../../components/ScalePressable';
 import { GlassButton } from '../../components/GlassButton';
 import { GlassIconButton } from '../../components/GlassIconButton';
 import { resolveCanonicalStep } from '../../utils/canonicalStep';
-import { QuantityControl } from '../../components/QuantityControl';
 
 interface Category {
     id: number;
@@ -47,64 +44,7 @@ interface Product {
     canonicalFamily: 'fluid' | 'count' | null;
 }
 
-interface CardCallbacks {
-    onNavigate: (id: number) => void;
-    onAdd: (item: Product) => void;
-    onDecrement: (item: Product, qty: number) => void;
-    onIncrement: (item: Product, qty: number) => void;
-}
 
-const BrowseProductCard = memo(({
-    item, quantity, isAdding, styles,
-    onNavigate, onAdd, onDecrement, onIncrement,
-}: CardCallbacks & {
-    item: Product;
-    quantity: number;
-    isAdding: boolean;
-    styles: ReturnType<typeof makeStyles>;
-}) => {
-    const { t } = useTranslation();
-    // minAmount/maxAmount come from the server normalised into grams
-    // (BROWSE_SELECT uses g/ml as the 1000-base). The canonical-unit
-    // system treats kg ≈ l for fluid items, so for a Product whose
-    // dominant unit is `l` we just re-label the same value: "0.5 l"
-    // instead of "500 g". Without this, milk shows as "1 kg - 2 kg"
-    // even though every SP is in litres.
-    const bigUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
-    const smallUnit = item.canonicalUnit === 'l' ? 'ml' : 'g';
-    const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
-    const amountText = item.minAmount != null && item.maxAmount != null
-        ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
-        : '';
-    return (
-        <View style={styles.productCard}>
-            <TouchableOpacity onPress={() => onNavigate(item.id)} style={styles.productImageContainer} activeOpacity={0.7}>
-                <ProductImage uris={item.imageUrls} imageStyle={styles.productImage} placeholderStyle={styles.productImagePlaceholder} emojiStyle={styles.productImageEmoji} />
-                <ChainLogoStrip chainLogos={item.chainLogos} style={{ position: 'absolute', top: 6, left: 6 }} />
-            </TouchableOpacity>
-            <View style={styles.productInfo}>
-                <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
-                <Text style={styles.amountText}>{amountText}</Text>
-            </View>
-            {quantity === 0 ? (
-                <ScalePressable
-                    style={[styles.addButton, isAdding && { opacity: 0.5 }]}
-                    disabled={isAdding}
-                    onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); onAdd(item); }}
-                >
-                    <Text style={styles.addButtonText}>{t('browse.addToBasket')}</Text>
-                </ScalePressable>
-            ) : (
-                <QuantityControl
-                    quantity={quantity}
-                    onDecrement={() => onDecrement(item, quantity)}
-                    onIncrement={() => onIncrement(item, quantity)}
-                    style={{ width: '100%' }}
-                />
-            )}
-        </View>
-    );
-});
 
 export default function CategoryScreen() {
     const colors = useTheme();
@@ -563,19 +503,27 @@ export default function CategoryScreen() {
         const mergedQty = (mergedIntoMe[item.id] ?? [])
             .reduce((sum, hid) => sum + (basketQuantities[hid] ?? 0), 0);
         const quantity = (basketQuantities[item.id] ?? 0) + mergedQty;
+        const bigUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
+        const smallUnit = item.canonicalUnit === 'l' ? 'ml' : 'g';
+        const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
+        const amountText = item.minAmount != null && item.maxAmount != null
+            ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
+            : '';
         return (
-            <BrowseProductCard
-                item={item}
+            <BasketProductCard
+                name={item.name}
+                imageUrls={item.imageUrls}
+                chainLogos={item.chainLogos}
+                amountText={amountText}
                 quantity={quantity}
                 isAdding={addingIds.has(item.id)}
-                styles={styles}
-                onNavigate={onNavigate}
-                onAdd={onAdd}
-                onDecrement={onDecrement}
-                onIncrement={onIncrement}
+                onOpen={() => onNavigate(item.id)}
+                onAdd={() => onAdd(item)}
+                onDec={() => onDecrement(item, quantity)}
+                onInc={() => onIncrement(item, quantity)}
             />
         );
-    }, [basketQuantities, mergedIntoMe, addingIds, styles, onNavigate, onAdd, onDecrement, onIncrement]);
+    }, [basketQuantities, mergedIntoMe, addingIds, onNavigate, onAdd, onDecrement, onIncrement]);
 
     if (loading) return (
         <>
@@ -952,86 +900,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         gap: 12,
         marginBottom: 12,
     },
-    productCard: {
-        backgroundColor: c.cardBackground,
-        borderRadius: 12,
-        padding: 12,
-        alignItems: 'center',
-        elevation: 1,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05, shadowRadius: 2,
-        flex: 1,
-        maxWidth: '50%',
-    },
-    productImageContainer: {
-        width: '100%',
-        height: 130,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginBottom: 8,
-    },
-    productImage: {
-        width: '100%',
-        height: '100%',
-    },
-    productImagePlaceholder: {
-        width: '100%',
-        height: '100%',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: c.surfaceMuted,
-        borderRadius: 8,
-    },
-    productImageEmoji: {
-        fontSize: 44,
-        opacity: 0.4,
-    },
-    discountBadge: {
-        position: 'absolute',
-        top: 4,
-        right: 4,
-        width: 28,
-        height: 28,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    discountBadgeEmoji: {
-        fontSize: 26,
-        lineHeight: 28,
-    },
-    discountBadgePct: {
-        position: 'absolute',
-        fontSize: 12,
-        fontWeight: '900',
-        color: '#000',
-        top: 12,
-        left: 5,
-        right: 0,
-        textAlign: 'center',
-    },
-    productInfo: {
-        flex: 1,
-        width: '100%',
-        marginBottom: 10,
-    },
-    productName: {
-        fontSize: 13,
-        color: c.textPrimary,
-        lineHeight: 18,
-    },
-    addButton: {
-        width: '100%',
-        backgroundColor: c.primary,
-        borderRadius: 8,
-        paddingVertical: 10,
-        alignItems: 'center',
-    },
-    addButtonText: {
-        color: c.onPrimary,
-        fontSize: 13,
-        fontWeight: '600',
-    },
-    brandText: { fontSize: 12, color: c.textMuted, marginTop: 2 },
     emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: c.textSecondary },
     productRow: {
         flexDirection: 'row',
@@ -1045,11 +913,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         width: 36, height: 36, borderRadius: 8,
         backgroundColor: c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
-    },
-    amountText: {
-        fontSize: 12,
-        color: c.textMuted,
-        marginTop: 2,
     },
     basketBar: {
         flexDirection: 'row',

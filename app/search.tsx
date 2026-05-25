@@ -7,6 +7,7 @@ import {
     ActivityIndicator,
     Alert,
     FlatList,
+    ScrollView,
     StyleSheet,
     Text,
     TextInput,
@@ -50,7 +51,12 @@ interface ProductRow {
   id: number;
   name: string;
   categoryId: number;
+  categoryName?: string | null;
   imageUrls?: ImageUrlList;
+  chainLogos?: { chainId: number; logoUrl: string | null }[] | string | null;
+  minAmount?: number | null;
+  maxAmount?: number | null;
+  canonicalUnit?: string | null;
 }
 
 interface StoreProductRow {
@@ -123,6 +129,7 @@ export default function SearchScreen() {
         searchInputRef.current?.focus();
     }, []);
     const [productResults, setProductResults] = useState<ProductRow[]>([]);
+    const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
     const source = typeof params.source === 'string' ? params.source : '';
     const isReceiptSource = source === 'receipt-index' || source === 'receipt-category';
     const [localResults, setLocalResults] = useState<StoreProductRow[]>([]);
@@ -131,6 +138,27 @@ export default function SearchScreen() {
     isReceiptSource && params.mode === 'store-products'
         ? 'store-products'
         : 'products';
+
+    const categoryChips = useMemo(() => {
+        if (effectiveMode !== 'products' || productResults.length === 0) return [];
+        const counts = new Map<number, { name: string; count: number }>();
+        for (const p of productResults) {
+            const entry = counts.get(p.categoryId);
+            if (entry) entry.count++;
+            else counts.set(p.categoryId, { name: p.categoryName ?? '', count: 1 });
+        }
+        return Array.from(counts.entries())
+            .sort((a, b) => b[1].count - a[1].count)
+            .map(([id, { name, count }]) => ({ id, name, count }))
+            .filter(c => c.name.length > 0 && !c.name.startsWith('Nepriskirt'));
+    }, [productResults, effectiveMode]);
+
+    const filteredProductResults = useMemo(() =>
+        selectedCategoryId === null
+            ? productResults
+            : productResults.filter(p => p.categoryId === selectedCategoryId),
+        [productResults, selectedCategoryId],
+    );
 
     const canCreateInStoreMode =
     effectiveMode === 'store-products' &&
@@ -212,16 +240,23 @@ export default function SearchScreen() {
                 Number.isFinite(Number(p.categoryId)) &&
                 Number(p.categoryId) > 0 &&
                 typeof p.name === "string" &&
-                p.name.trim().length > 0
+                p.name.trim().length > 0 &&
+                !String(p.categoryName ?? '').startsWith('Nepriskirt')
             )
             .map((p: any) => ({
                 id: Number(p.id),
                 categoryId: Number(p.categoryId),
+                categoryName: typeof p.categoryName === 'string' ? p.categoryName : null,
                 name: String(p.name).trim(),
                 imageUrls: p.imageUrls ?? null,
+                chainLogos: p.chainLogos ?? null,
+                minAmount: p.minAmount ?? null,
+                maxAmount: p.maxAmount ?? null,
+                canonicalUnit: p.canonicalUnit ?? null,
             }));
 
         if (!cancelled) {
+                setSelectedCategoryId(null);
                 setProductResults(cleaned);
                 setLocalResults([]);
                 setOtherResults([]);
@@ -429,6 +464,34 @@ export default function SearchScreen() {
           <GlassIconButton icon="close" onPress={clearQuery} size={22} />
         ) : null}
       </View>
+      {effectiveMode === 'products' && categoryChips.length > 1 && (
+          <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={styles.bubblesRow}
+              contentContainerStyle={styles.bubblesContainer}
+          >
+              <TouchableOpacity
+                  style={[styles.bubble, selectedCategoryId === null && styles.bubbleActive]}
+                  onPress={() => setSelectedCategoryId(null)}
+              >
+                  <Text style={[styles.bubbleText, selectedCategoryId === null && styles.bubbleTextActive]}>
+                      {t('browse.allProducts')}
+                  </Text>
+              </TouchableOpacity>
+              {categoryChips.map(chip => (
+                  <TouchableOpacity
+                      key={chip.id}
+                      style={[styles.bubble, selectedCategoryId === chip.id && styles.bubbleActive]}
+                      onPress={() => setSelectedCategoryId(chip.id)}
+                  >
+                      <Text style={[styles.bubbleText, selectedCategoryId === chip.id && styles.bubbleTextActive]}>
+                          {chip.name}
+                      </Text>
+                  </TouchableOpacity>
+              ))}
+          </ScrollView>
+      )}
       <View style={styles.container}>
         {searching ? (
           <ActivityIndicator
@@ -462,7 +525,7 @@ export default function SearchScreen() {
         ) : (
           <FlatList<ProductRow>
             key="products-search-grid"
-            data={productResults}
+            data={filteredProductResults}
             keyExtractor={(item, idx) => `p-${item.id}-${idx}`}
             contentContainerStyle={styles.list}
             numColumns={2}
@@ -474,7 +537,7 @@ export default function SearchScreen() {
             }
             renderItem={({ item }) => {
                 if (!Number.isFinite(item.id) || item.id <= 0 || !Number.isFinite(item.categoryId) || !item.name?.trim()) return null;
-                const quantity = basketQuantities[item.id] ?? 0;
+const quantity = basketQuantities[item.id] ?? 0;
 
                 const syncQty = async (newQty: number) => {
                     setBasketQuantities(prev => ({ ...prev, [item.id]: Math.max(0, newQty) }));
@@ -503,10 +566,18 @@ export default function SearchScreen() {
                     } catch {}
                 };
 
+                const bigUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
+                const smallUnit = item.canonicalUnit === 'l' ? 'ml' : 'g';
+                const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
+                const amountText = item.minAmount != null && item.maxAmount != null
+                    ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
+                    : '';
                 return (
                     <BasketProductCard
                     name={item.name}
                     imageUrls={item.imageUrls}
+                    chainLogos={item.chainLogos}
+                    amountText={amountText}
                     quantity={quantity}
                     onOpen={() => router.push(`/product/${item.id}` as any)}
                     onAdd={async () => {
@@ -569,7 +640,39 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     gap: 8,
     paddingHorizontal: 12,
     paddingBottom: 8,
-    backgroundColor: c.pageBackground,
+    backgroundColor: c.cardBackground,
+  },
+  bubblesRow: {
+    backgroundColor: c.cardBackground,
+    borderBottomWidth: 0.5,
+    borderBottomColor: c.border,
+    flexGrow: 0,
+    flexShrink: 0,
+  },
+  bubblesContainer: {
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
+  },
+  bubble: {
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: c.border,
+    backgroundColor: c.cardBackground,
+  },
+  bubbleActive: {
+    backgroundColor: c.primary,
+    borderColor: c.primary,
+  },
+  bubbleText: {
+    fontSize: 13,
+    color: c.textPrimary,
+  },
+  bubbleTextActive: {
+    color: c.onPrimary,
+    fontWeight: '600',
   },
   topBarInput: {
     flex: 1,
