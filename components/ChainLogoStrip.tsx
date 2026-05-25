@@ -63,16 +63,7 @@ function makeStyles(c: AppTheme) {
         pill: {
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: c.cardBackground,
-            borderRadius: 10,
-            paddingHorizontal: 5,
-            paddingVertical: 4,
             alignSelf: 'flex-start',
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 1 },
-            shadowOpacity: 0.15,
-            shadowRadius: 2,
-            elevation: 3,
         },
         logoRow: {
             flexDirection: 'row',
@@ -81,7 +72,7 @@ function makeStyles(c: AppTheme) {
         logoWrapper: {
             width: WRAPPER_SIZE,
             height: WRAPPER_SIZE,
-            backgroundColor: c.cardBackground,
+            backgroundColor: c.surfaceMuted,
             borderRadius: 4,
             alignItems: 'center',
             justifyContent: 'center',
