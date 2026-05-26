@@ -238,6 +238,32 @@
     },
     "tabCatalog": "Catalog",
     "tabFlags": "Flags",
+    "tabQueue": "Queue",
+    "tabReceipts": "Receipts",
+    "queue": {
+      "chipAll": "All"
+    },
+    "receipts": {
+      "filterAll": "All",
+      "filterFlagged": "Flagged",
+      "filterFixed": "Fixed",
+      "modeReview": "Review",
+      "modeInspect": "Inspect",
+      "lineCount_one": "{{count}} item",
+      "lineCount_other": "{{count}} items",
+      "editName": "Fix name",
+      "editAmount": "Fix amount",
+      "editDate": "Change date",
+      "editQuantity": "Fix quantity (×)",
+      "matchFound": "Match found",
+      "bestMatch": "Best match",
+      "confirmMatch": "Confirm",
+      "denyMatch": "Reject",
+      "unlinkMatch": "Unlink",
+      "unlinkMatchConfirm": "Unlink from product? Line will become uncategorised.",
+      "noMatch": "Unmatched",
+      "empty": "No receipts"
+    },
     "catalog": {
       "allProducts": "All products",
       "noProducts": "No products in this category",

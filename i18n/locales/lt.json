@@ -196,6 +196,33 @@
     },
     "tabCatalog": "Katalogas",
     "tabFlags": "Žymos",
+    "tabQueue": "Eilė",
+    "tabReceipts": "Kvitai",
+    "queue": {
+      "chipAll": "Visi"
+    },
+    "receipts": {
+      "filterAll": "Visi",
+      "filterFlagged": "Pažymėti",
+      "filterFixed": "Taisyti",
+      "modeReview": "Peržiūra",
+      "modeInspect": "Taisymas",
+      "lineCount_one": "{{count}} prekė",
+      "lineCount_few": "{{count}} prekės",
+      "lineCount_other": "{{count}} prekių",
+      "editName": "Taisyti pavadinimą",
+      "editAmount": "Taisyti kiekį",
+      "editDate": "Keisti datą",
+      "editQuantity": "Taisyti kiekį (×)",
+      "matchFound": "Rasta atitiktis",
+      "bestMatch": "Geriausias rezultatas",
+      "confirmMatch": "Patvirtinti",
+      "denyMatch": "Atmesti",
+      "unlinkMatch": "Atsieti",
+      "unlinkMatchConfirm": "Atsieti nuo produkto? Eilutė taps nekategorisota.",
+      "noMatch": "Nesusieta",
+      "empty": "Kvitų nėra"
+    },
     "catalog": {
       "allProducts": "Visos prekės",
       "noProducts": "Nėra prekių šioje kategorijoje",

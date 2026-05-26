@@ -192,7 +192,7 @@ export interface AdminAmountQueueRow {
         unit: CanonicalUnit;
         matched: string;
         isWeighable: boolean;
-    };
+    } | null;
 }
 
 export interface AmountBatchResponse {
@@ -526,6 +526,16 @@ export async function fetchFlaggedReceiptCrop(
     return { blob, status: res.status };
 }
 
+export async function fetchAmountSpReceiptCrop(
+    spId: number,
+): Promise<{ blob: Blob; status: number } | null> {
+    const res = await adminFetch(`/api/admin/amounts/${spId}/receipt-crop`);
+    if (res.status === 404 || res.status === 422) return null;
+    if (!res.ok) throw new Error(`amount crop ${res.status}`);
+    const blob = await res.blob();
+    return { blob, status: res.status };
+}
+
 // ── Receipt split (Uncategorised tab) ───────────────────────────────
 
 export interface SourceReceiptInfo {
@@ -702,5 +712,150 @@ export async function adminMergeProducts(productIds: number[]): Promise<MergeRes
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error ?? `merge ${res.status}`);
     }
+    return res.json();
+}
+
+// ── Receipts tab ─────────────────────────────────────────────────────
+
+export type ReceiptFilter = 'all' | 'flagged' | 'fixed';
+
+export interface AdminReceiptRow {
+    id: string;
+    userId: string;
+    userInitial: string;
+    chainId: number | null;
+    chainLogoUrl: string | null;
+    date: string | null;
+    total: number | null;
+    lineCount: number;
+    hasInspectEdits: boolean;
+    flagged: boolean;
+}
+
+export interface AdminReceiptDetail {
+    id: string;
+    userId: string;
+    userInitial: string;
+    chainId: number | null;
+    chainLogoUrl: string | null;
+    date: string | null;
+    flagged: boolean;
+    adminEditedAt: string | null;
+    parsedData: any;
+}
+
+export interface MatchCandidate {
+    storeProductId: number;
+    storeProductName: string;
+    productName: string;
+    confidence: number;
+}
+
+export async function getAdminReceiptList(
+    page: number,
+    filter: ReceiptFilter,
+    limit = 20,
+): Promise<{ receipts: AdminReceiptRow[]; total: number; page: number }> {
+    const params = new URLSearchParams({ page: String(page), limit: String(limit), filter });
+    const res = await adminFetch(`/api/admin/receipts?${params}`);
+    if (!res.ok) throw new Error(`receipts list ${res.status}`);
+    return res.json();
+}
+
+export async function getAdminReceiptDetail(id: string): Promise<AdminReceiptDetail> {
+    const res = await adminFetch(`/api/admin/receipts/${id}`);
+    if (!res.ok) throw new Error(`receipt ${res.status}`);
+    return res.json();
+}
+
+export async function patchAdminReceiptDate(id: string, date: string): Promise<void> {
+    const res = await adminFetch(`/api/admin/receipts/${id}/date`, {
+        method: 'PATCH',
+        body: JSON.stringify({ date }),
+    });
+    if (!res.ok) throw new Error(`patch date ${res.status}`);
+}
+
+export async function patchAdminProductName(
+    id: string,
+    index: number,
+    name: string,
+): Promise<{ candidates: MatchCandidate[] }> {
+    const res = await adminFetch(`/api/admin/receipts/${id}/products/${index}/name`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name }),
+    });
+    if (!res.ok) throw new Error(`patch name ${res.status}`);
+    return res.json();
+}
+
+export async function postAdminConfirmMatch(
+    id: string,
+    index: number,
+    storeProductId: number,
+): Promise<void> {
+    const res = await adminFetch(`/api/admin/receipts/${id}/products/${index}/confirm-match`, {
+        method: 'POST',
+        body: JSON.stringify({ storeProductId }),
+    });
+    if (!res.ok) throw new Error(`confirm match ${res.status}`);
+}
+
+export async function patchAdminProductUnit(
+    id: string,
+    index: number,
+    unit: string,
+): Promise<void> {
+    const res = await adminFetch(`/api/admin/receipts/${id}/products/${index}/unit`, {
+        method: 'PATCH',
+        body: JSON.stringify({ unit }),
+    });
+    if (!res.ok) throw new Error(`patch unit ${res.status}`);
+}
+
+export async function patchAdminProductAmount(
+    id: string,
+    index: number,
+    amount: number,
+): Promise<void> {
+    const res = await adminFetch(`/api/admin/receipts/${id}/products/${index}/amount`, {
+        method: 'PATCH',
+        body: JSON.stringify({ amount }),
+    });
+    if (!res.ok) throw new Error(`patch amount ${res.status}`);
+}
+
+export async function patchAdminProductQuantity(
+    id: string,
+    index: number,
+    quantity: number,
+): Promise<{ newPricePerUnit: number | null }> {
+    const res = await adminFetch(`/api/admin/receipts/${id}/products/${index}/quantity`, {
+        method: 'PATCH',
+        body: JSON.stringify({ quantity }),
+    });
+    if (!res.ok) throw new Error(`patch quantity ${res.status}`);
+    return res.json();
+}
+
+export async function postAdminDenyMatch(id: string, index: number): Promise<void> {
+    const res = await adminFetch(`/api/admin/receipts/${id}/products/${index}/deny-match`, {
+        method: 'POST',
+    });
+    if (!res.ok) throw new Error(`deny match ${res.status}`);
+}
+
+// ── Queue counts ─────────────────────────────────────────────────────
+
+export interface QueueCounts {
+    flags: number;
+    uncategorised: number;
+    images: number;
+    amounts: number;
+}
+
+export async function getQueueCounts(): Promise<QueueCounts> {
+    const res = await adminFetch('/api/admin/queue/counts');
+    if (!res.ok) throw new Error(`counts ${res.status}`);
     return res.json();
 }

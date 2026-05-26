@@ -43,15 +43,18 @@ export default function AdminTabLayout() {
     //   verifyFailed   — profile arrived, isAdmin=false; reload to /(tabs)
     //   verified       — profile arrived, isAdmin=true; render the tab bar
     const profile = useProfileStore(s => s.profile);
-    const isSuperAdmin = profile?.role === 'superadmin';
     const fetchProfile = useProfileStore(s => s.fetchProfile);
     const [bouncing, setBouncing] = useState(false);
+    // profileFetched gates tab rendering — we need the fresh server value of
+    // `role` before deciding which tabs to show. Using the persisted cache
+    // would read a stale role and render the wrong tab bar permanently.
+    const [profileFetched, setProfileFetched] = useState(false);
 
     useEffect(() => {
-        // Always fetch fresh on admin layout mount — role/isAdmin can change
-        // between sessions and the in-memory cache may not have role yet.
-        fetchProfile();
+        fetchProfile().finally(() => setProfileFetched(true));
     }, []);
+
+    const isSuperAdmin = profile?.role === 'superadmin';
 
     useEffect(() => {
         if (profile && profile.isAdmin === false && !bouncing) {
@@ -68,19 +71,16 @@ export default function AdminTabLayout() {
         }
     }, [profile, bouncing]);
 
-    // Block render until we know `isAdmin === true`. profile===null
-    // (still loading) or profile.isAdmin===false (bouncing) both
-    // render the spinner so a spoofed user never sees the admin shell.
-    const verified = profile?.isAdmin === true;
+    // Block render until fresh profile arrives. profile===null or
+    // !profileFetched both show the spinner so the tab bar is never
+    // drawn with a stale role.
+    const verified = profileFetched && profile?.isAdmin === true;
 
     useEffect(() => {
         if (verified && !initialNavDone.current) {
             initialNavDone.current = true;
-            // Non-superadmins land on flags (catalog tab is hidden for them).
-            // Superadmins: root layout already navigates to /(admin)/catalog
-            // and initialRouteName="catalog" on <Tabs> handles the rest.
             if (!isSuperAdmin) {
-                router.replace('/(admin)/flags');
+                router.replace('/(admin)/queue');
             }
         }
     }, [verified]);
@@ -95,7 +95,7 @@ export default function AdminTabLayout() {
 
     return (
         <Tabs
-            initialRouteName={isSuperAdmin ? 'catalog' : 'flags'}
+            initialRouteName={isSuperAdmin ? 'catalog' : 'queue'}
             screenOptions={{
                 tabBarButton: HapticTab,
                 tabBarActiveTintColor: colors.primary,
@@ -121,45 +121,29 @@ export default function AdminTabLayout() {
                 }}
             />
             <Tabs.Screen
-                name="flags"
+                name="queue"
                 options={{
-                    title: t('admin.tabFlags'),
+                    title: t('admin.tabQueue'),
                     tabBarIcon: ({ focused, color, size }) => (
-                        <Ionicons name={focused ? 'flag' : 'flag-outline'} size={size} color={color} />
+                        <Ionicons name={focused ? 'list' : 'list-outline'} size={size} color={color} />
                     ),
                 }}
             />
             <Tabs.Screen
-                name="uncategorised"
+                name="receipts"
                 options={{
-                    title: t('admin.tabUncategorised'),
+                    title: t('admin.tabReceipts'),
+                    ...(isSuperAdmin ? {} : { tabBarItemStyle: { display: 'none' } }),
                     tabBarIcon: ({ focused, color, size }) => (
-                        <Ionicons name={focused ? 'help-circle' : 'help-circle-outline'} size={size} color={color} />
+                        <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />
                     ),
                 }}
             />
-            <Tabs.Screen
-                name="images"
-                options={{
-                    title: t('admin.tabImages'),
-                    tabBarIcon: ({ focused, color, size }) => (
-                        <Ionicons
-                            name={focused ? 'image' : 'image-outline'}
-                            size={size}
-                            color={color}
-                        />
-                    ),
-                }}
-            />
-            <Tabs.Screen
-                name="amounts"
-                options={{
-                    title: t('admin.tabAmounts'),
-                    tabBarIcon: ({ focused, color, size }) => (
-                        <Ionicons name={focused ? 'scale' : 'scale-outline'} size={size} color={color} />
-                    ),
-                }}
-            />
+            {/* Keep old screens registered so deep-links and existing code don't 404. */}
+            <Tabs.Screen name="flags" options={{ href: null }} />
+            <Tabs.Screen name="uncategorised" options={{ href: null }} />
+            <Tabs.Screen name="images" options={{ href: null }} />
+            <Tabs.Screen name="amounts" options={{ href: null }} />
             <Tabs.Screen
                 name="menu"
                 options={{

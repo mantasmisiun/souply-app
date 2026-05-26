@@ -54,6 +54,7 @@ export default function AdminMenu() {
         // AsyncStorage at boot (now 'user') and lands cleanly in
         // (tabs). ~1.5s but reliable. Same pattern as recovery.
         try {
+            const Updates = await import('expo-updates');
             await Updates.reloadAsync();
         } catch (e) {
             console.warn('[adminMode] reloadAsync failed, falling back to router replace', e);
