@@ -1,4 +1,4 @@
-import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, Switch, Modal } from 'react-native';
+import { View, FlatList, TouchableOpacity, Text, StyleSheet, Switch, Modal } from 'react-native';
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
@@ -11,6 +11,7 @@ import { addProductToBasket } from '../../utils/basketUtils';
 import AmountPickerModal from '../../components/AmountPickerModal';
 import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../components/ComparedBasketChoiceModal';
 import BasketProductCard from '../../components/browse/BasketProductCard';
+import CategoryBubbles from '../../components/browse/CategoryBubbles';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import { getUserId } from '../../config/user';
@@ -598,34 +599,12 @@ export default function CategoryScreen() {
                         disabled={converting}
                     />
                 </View>
-                {l3Categories.length > 0 && (
-                    <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={styles.bubblesContainer}
-                        style={styles.bubblesRow}
-                    >
-                        <TouchableOpacity
-                            style={[styles.bubble, selectedL3 === null && styles.bubbleActive]}
-                            onPress={() => selectL3(null)}
-                        >
-                            <Text style={[styles.bubbleText, selectedL3 === null && styles.bubbleTextActive]}>
-                                {t('browse.allProducts')}
-                            </Text>
-                        </TouchableOpacity>
-                        {l3Categories.map(cat => (
-                            <TouchableOpacity
-                                key={cat.id}
-                                style={[styles.bubble, selectedL3 === cat.id && styles.bubbleActive]}
-                                onPress={() => selectL3(cat.id)}
-                            >
-                                <Text style={[styles.bubbleText, selectedL3 === cat.id && styles.bubbleTextActive]}>
-                                    {cat.name}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </ScrollView>
-                )}
+                <CategoryBubbles
+                    categories={l3Categories}
+                    selectedId={selectedL3}
+                    onSelect={selectL3}
+                    allLabel={t('browse.allProducts')}
+                />
 
                 <View style={{ flex: 1 }}>
                     {loadingProducts ? (

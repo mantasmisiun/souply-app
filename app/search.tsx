@@ -25,6 +25,8 @@ import CreateStoreProductModal, {
 } from "../components/receipt/CreateStoreProductModal";
 import { useTheme, type AppTheme } from "../constants/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import AmountPickerModal from '../components/AmountPickerModal';
+import { resolveCanonicalStep } from '../utils/canonicalStep';
 
 // Pick the first URL from the API's imageUrls (string | array | null) for
 // places that only support a single imageUrl field (e.g. pendingPick).
@@ -56,7 +58,11 @@ interface ProductRow {
   chainLogos?: { chainId: number; logoUrl: string | null }[] | string | null;
   minAmount?: number | null;
   maxAmount?: number | null;
+  unit?: string | null;
   canonicalUnit?: string | null;
+  canonicalStep?: number | null;
+  canonicalFamily?: 'fluid' | 'count' | null;
+  hasWeighable?: number | boolean;
 }
 
 interface StoreProductRow {
@@ -119,6 +125,7 @@ export default function SearchScreen() {
         typeof params.ocrName === "string" ? params.ocrName : "",
     ).trim();
     const [createModalVisible, setCreateModalVisible] = useState(false);
+    const [amountModal, setAmountModal] = useState<{ visible: boolean; product: ProductRow | null }>({ visible: false, product: null });
     const [query, setQuery] = useState("");
     const [searching, setSearching] = useState(false);
     const [inputKey, setInputKey] = useState(0);
@@ -580,20 +587,17 @@ const quantity = basketQuantities[item.id] ?? 0;
                     amountText={amountText}
                     quantity={quantity}
                     onOpen={() => router.push(`/product/${item.id}` as any)}
-                    onAdd={async () => {
-                        // Optimistic flip to 1: paints the quantity control in
-                        // place of the add button immediately, so a rapid
-                        // re-tap hits the qty control instead of re-adding.
-                        // Rolls back on failure.
-                        setBasketQuantities(prev => ({ ...prev, [item.id]: 1 }));
-                        const result = await addProductToBasket(item.id, draftBasketId, setDraftBasketId);
-                        if (!result.success) {
-                            setBasketQuantities(prev => {
-                                const next = { ...prev };
-                                delete next[item.id];
-                                return next;
-                            });
+                    onAdd={() => {
+                        const hasRange = item.minAmount != null && item.maxAmount != null && item.minAmount !== item.maxAmount;
+                        if (hasRange || !!item.hasWeighable) {
+                            setAmountModal({ visible: true, product: item });
+                            return;
                         }
+                        const qty = resolveCanonicalStep(item);
+                        setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
+                        addProductToBasket(item.id, draftBasketId, setDraftBasketId, qty).then(result => {
+                            if (!result.success) setBasketQuantities(prev => { const next = { ...prev }; delete next[item.id]; return next; });
+                        });
                     }}
                     onDec={() => syncQty(Number((quantity - 1).toFixed(1)))}
                     onInc={() => syncQty(Number((quantity + 1).toFixed(1)))}
@@ -603,6 +607,25 @@ const quantity = basketQuantities[item.id] ?? 0;
           />
         )}
       </View>
+      <AmountPickerModal
+        visible={amountModal.visible}
+        productName={amountModal.product?.name ?? ''}
+        canonicalUnit={amountModal.product?.canonicalUnit}
+        canonicalStep={amountModal.product?.canonicalStep}
+        canonicalFamily={amountModal.product?.canonicalFamily}
+        minAmount={amountModal.product?.minAmount ?? 0}
+        maxAmount={amountModal.product?.maxAmount ?? 0}
+        unit={amountModal.product?.unit ?? 'g'}
+        isWeighable={!!amountModal.product?.hasWeighable}
+        onCancel={() => setAmountModal({ visible: false, product: null })}
+        onConfirm={async (amount) => {
+          const product = amountModal.product!;
+          setAmountModal({ visible: false, product: null });
+          setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
+          const result = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, amount);
+          if (!result.success) setBasketQuantities(prev => { const next = { ...prev }; delete next[product.id]; return next; });
+        }}
+      />
       <CreateStoreProductModal
         visible={createModalVisible}
         onClose={() => setCreateModalVisible(false)}

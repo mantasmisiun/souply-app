@@ -182,7 +182,7 @@ export default function RootLayout() {
       const { useAdminModeStore } = await import('../state/adminModeStore');
       await useAdminModeStore.getState().hydrate();
       if (useAdminModeStore.getState().mode === 'admin') {
-        router.replace('/(admin)/flags' as any);
+        router.replace('/(admin)/catalog' as any);
       }
     })().catch((e) => console.warn('[adminMode] hydrate failed', e));
     // Intentionally one-shot — once on boot.
@@ -249,6 +249,7 @@ export default function RootLayout() {
             own <Stack.Screen options/> inline. */}
         <Stack.Screen name="discounts" />
         <Stack.Screen name="browse/[categoryId]" />
+        <Stack.Screen name="admin/catalog/[categoryId]" options={{ headerShown: false }} />
         <Stack.Screen name="basket/[id]" options={{ title: t('screens.basket') }} />
         {/* basket/results/[id] intentionally configures its own <Stack.Screen>
             options from inside the screen — registering a default here

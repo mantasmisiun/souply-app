@@ -70,6 +70,26 @@ export function formatKm(km: number, locale?: string): string {
 }
 
 /**
+ * Format a store-product amount + unit into a display string.
+ * Converts g→kg and ml→l when the value crosses the threshold.
+ * Appends "(sveriamas)" when isWeighable is true.
+ */
+export function formatAmountStr(
+    amount: number | string | null | undefined,
+    unit: string | null | undefined,
+    isWeighable?: boolean,
+): string | null {
+    const num = typeof amount === 'string' ? parseFloat(amount) : (amount ?? null);
+    if (num == null || isNaN(num) || !unit) return null;
+    let str: string;
+    if (unit === 'g' && num >= 1000) str = `${num / 1000} kg`;
+    else if (unit === 'ml' && num >= 1000) str = `${num / 1000} l`;
+    else str = `${num} ${unit}`;
+    if (isWeighable) str += ' (sveriamas)';
+    return str;
+}
+
+/**
  * Format a Date (or anything `new Date()` accepts) using the current
  * UI locale. Defaults to short numeric date (e.g. "2026-05-14" in lt-LT,
  * "14/05/2026" in en-GB). Pass `options` to override.

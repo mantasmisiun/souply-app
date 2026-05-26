@@ -1,6 +1,6 @@
-import { Tabs } from 'expo-router';
+import { Tabs, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
@@ -27,6 +27,8 @@ export default function AdminTabLayout() {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    const router = useRouter();
+    const initialNavDone = useRef(false);
 
     // ── Cosmetic hardening ──────────────────────────────────────────
     // If a user spoofs the AsyncStorage `admin_mode` flag they can
@@ -41,15 +43,15 @@ export default function AdminTabLayout() {
     //   verifyFailed   — profile arrived, isAdmin=false; reload to /(tabs)
     //   verified       — profile arrived, isAdmin=true; render the tab bar
     const profile = useProfileStore(s => s.profile);
+    const isSuperAdmin = profile?.role === 'superadmin';
     const fetchProfile = useProfileStore(s => s.fetchProfile);
     const [bouncing, setBouncing] = useState(false);
 
     useEffect(() => {
-        // Trigger a profile fetch in case the user landed here without
-        // mounting (tabs) first (e.g. boot-effect routing). No-op when
-        // already in flight; uses the store's existing in-flight guard.
-        if (!profile) fetchProfile();
-    }, [profile, fetchProfile]);
+        // Always fetch fresh on admin layout mount — role/isAdmin can change
+        // between sessions and the in-memory cache may not have role yet.
+        fetchProfile();
+    }, []);
 
     useEffect(() => {
         if (profile && profile.isAdmin === false && !bouncing) {
@@ -70,6 +72,19 @@ export default function AdminTabLayout() {
     // (still loading) or profile.isAdmin===false (bouncing) both
     // render the spinner so a spoofed user never sees the admin shell.
     const verified = profile?.isAdmin === true;
+
+    useEffect(() => {
+        if (verified && !initialNavDone.current) {
+            initialNavDone.current = true;
+            // Non-superadmins land on flags (catalog tab is hidden for them).
+            // Superadmins: root layout already navigates to /(admin)/catalog
+            // and initialRouteName="catalog" on <Tabs> handles the rest.
+            if (!isSuperAdmin) {
+                router.replace('/(admin)/flags');
+            }
+        }
+    }, [verified]);
+
     if (!verified) {
         return (
             <View style={styles.verifying}>
@@ -80,7 +95,7 @@ export default function AdminTabLayout() {
 
     return (
         <Tabs
-            initialRouteName="flags"
+            initialRouteName={isSuperAdmin ? 'catalog' : 'flags'}
             screenOptions={{
                 tabBarButton: HapticTab,
                 tabBarActiveTintColor: colors.primary,
@@ -94,6 +109,17 @@ export default function AdminTabLayout() {
                 headerShadowVisible: false,
             }}
         >
+            <Tabs.Screen
+                name="catalog"
+                options={{
+                    title: t('admin.tabCatalog'),
+                    headerShown: false,
+                    ...(isSuperAdmin ? {} : { tabBarItemStyle: { display: 'none' } }),
+                    tabBarIcon: ({ focused, color, size }) => (
+                        <Ionicons name={focused ? 'layers' : 'layers-outline'} size={size} color={color} />
+                    ),
+                }}
+            />
             <Tabs.Screen
                 name="flags"
                 options={{
@@ -138,6 +164,7 @@ export default function AdminTabLayout() {
                 name="menu"
                 options={{
                     title: t('tabs.profilis'),
+                    headerShown: false,
                     tabBarIcon: ({ focused, color, size }) => (
                         <Ionicons name={focused ? 'person' : 'person-outline'} size={size} color={color} />
                     ),

@@ -577,3 +577,130 @@ export async function applyAdminReceiptSplit(
     if (!res.ok) throw new Error(`split ${res.status}`);
     return res.json();
 }
+
+export interface MergeResult {
+    winnerId: number;
+    winnerName: string;
+    loserIds: number[];
+    loserNames: string[];
+}
+
+export async function adminMoveProducts(
+    productIds: number[],
+    categoryId: number,
+): Promise<{ movedCount: number }> {
+    const res = await adminFetch('/api/admin/products/move', {
+        method: 'POST',
+        body: JSON.stringify({ productIds, categoryId }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `move ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function adminRenameProduct(productId: number, name: string): Promise<void> {
+    const res = await adminFetch(`/api/admin/products/${productId}/name`, {
+        method: 'PATCH',
+        body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `rename ${res.status}`);
+    }
+}
+
+// ── Catalog: product detail + SP management ─────────────────────────
+
+export interface AdminSpDetail {
+    id: number;
+    storeProductName: string | null;
+    chainId: number;
+    chainName: string;
+    logoUrl: string | null;
+    imageUrl: string | null;
+    amount: string | null;
+    unit: string | null;
+    isWeighable: boolean;
+    latestPrice: { price: number; promoPrice: number | null; date: string } | null;
+    priceHistory: { price: number; promoPrice: number | null; date: string }[];
+    imageCandidates: AdminImageCandidate[];
+}
+
+export interface AdminProductDetail {
+    product: {
+        id: number;
+        name: string;
+        categoryId: number | null;
+        categoryPath: string | null;
+    };
+    storeProducts: AdminSpDetail[];
+}
+
+export async function getAdminProductDetail(productId: number): Promise<AdminProductDetail> {
+    const res = await adminFetch(`/api/admin/products/${productId}`);
+    if (!res.ok) throw new Error(`product detail ${res.status}`);
+    return res.json();
+}
+
+export async function deleteAdminStoreProduct(
+    spId: number,
+): Promise<{ spId: number; productDeleted: boolean; productId: number }> {
+    const res = await adminFetch(`/api/admin/store-products/${spId}`, { method: 'DELETE' });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `sp delete ${res.status}`);
+    }
+    return res.json();
+}
+
+export interface EditSpPayload {
+    storeProductName?: string;
+    amount?: number | null;
+    unit?: string | null;
+    isWeighable?: boolean;
+    imageUrl?: string | null;
+}
+
+export async function editAdminStoreProduct(spId: number, payload: EditSpPayload): Promise<void> {
+    const res = await adminFetch(`/api/admin/store-products/${spId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `sp edit ${res.status}`);
+    }
+}
+
+export type MoveSpPayload =
+    | { mode: 'existing'; productId: number }
+    | { mode: 'new'; name: string; categoryId: number };
+
+export async function moveAdminStoreProduct(
+    spId: number,
+    payload: MoveSpPayload,
+): Promise<{ spId: number; targetProductId: number; targetProductName: string; oldProductDeleted: boolean; oldProductId: number }> {
+    const res = await adminFetch(`/api/admin/store-products/${spId}/move`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `sp move ${res.status}`);
+    }
+    return res.json();
+}
+
+export async function adminMergeProducts(productIds: number[]): Promise<MergeResult> {
+    const res = await adminFetch('/api/admin/products/merge', {
+        method: 'POST',
+        body: JSON.stringify({ productIds }),
+    });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error ?? `merge ${res.status}`);
+    }
+    return res.json();
+}

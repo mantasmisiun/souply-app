@@ -5,11 +5,11 @@ import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { useLocalSearchParams, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
-import Svg, { Line, Circle, Polygon, Text as SvgText } from 'react-native-svg';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import MiniPriceChart, { PriceChartSvg, type PricePoint, type RangeKey, preparePriceData, filterByRange } from '../../components/MiniPriceChart';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import { useTranslation } from 'react-i18next';
-import { formatDate, formatEuro } from '../../utils/formatCurrency';
+import { formatDate, formatEuro, formatAmountStr } from '../../utils/formatCurrency';
 import { ChainFilterBar } from '../../components/ChainFilterBar';
 import { ChainLogoStrip } from '../../components/ChainLogoStrip';
 import { getChainMiniLogoUrl } from '../../utils/chainBrandName';
@@ -20,8 +20,6 @@ import * as Haptics from 'expo-haptics';
 import AmountPickerModal from '../../components/AmountPickerModal';
 import { QuantityControl } from '../../components/QuantityControl';
 import { resolveCanonicalStep, resolveDisplayUnit } from '../../utils/canonicalStep';
-
-type Styles = ReturnType<typeof makeStyles>;
 
 interface StoreProduct {
     id: number;
@@ -35,14 +33,6 @@ interface StoreProduct {
     chainName: string;
     logoUrl: string;
     imageUrl: string | null;
-}
-
-interface PricePoint {
-    price: number;
-    promoPrice: number | null;
-    date: string;
-    storeName?: string;
-    isFallback: number;
 }
 
 interface Chain {
@@ -67,7 +57,6 @@ interface Product {
 
 const MINI_CHART_WIDTH = 140;
 const MINI_CHART_HEIGHT = 64;
-const MINI_CHART_MAX_POINTS = 6;
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const MODAL_CHART_HEIGHT = 260;
@@ -76,481 +65,11 @@ const MODAL_CHART_HEIGHT = 260;
 // SVG width horizontally, and the parent ScrollView handles the overflow.
 const MODAL_CHART_MIN_WIDTH = SCREEN_WIDTH - 80;
 
-/**
- * Normalize/filter prices into a rendering-ready sequence:
- *   - Prefer non-fallback rows when ANY exist; otherwise use fallbacks
- *     (so freshly-scraped SPs that have never had a real receipt still
- *     show something instead of the empty state).
- *   - Sort ascending by date (left = old, right = new).
- *   - Optionally cap to the last N points (mini chart).
- */
-function preparePriceData(prices: PricePoint[], maxPoints?: number): PricePoint[] {
-    if (!prices.length) return [];
-    const nonFallback = prices.filter(p => !p.isFallback);
-    const base = nonFallback.length > 0 ? nonFallback : prices;
-    const sorted = [...base].sort(
-        (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
-    );
-    if (maxPoints && sorted.length > maxPoints) return sorted.slice(-maxPoints);
-    return sorted;
-}
-
-type RangeKey = '1M' | '3M' | '6M' | 'all';
-
-function filterByRange(data: PricePoint[], key: RangeKey): PricePoint[] {
-    if (key === 'all') return data;
-    const months = key === '1M' ? 1 : key === '3M' ? 3 : 6;
-    const cutoff = new Date();
-    cutoff.setMonth(cutoff.getMonth() - months);
-    return data.filter(p => new Date(p.date) >= cutoff);
-}
-
 const shortDate = (d: string) =>
     formatDate(d, { month: 'short', day: 'numeric' });
 
-/**
- * Dual-series price chart. Regular price line in muted gray, promo price
- * line in primary (pink), with the area between them filled at low opacity
- * to signal the discount band. Points without a promoPrice render only on
- * the regular line, so the fill polygon "pinches" at those x-positions —
- * visually taking the user's hint that "we don't know exactly when the
- * discount started/ended, just draw back to neighbouring points without
- * discount".
- *
- * Edge case: a single data point that has BOTH price and promoPrice
- * renders as two dots vertically connected by a thin primary-color line
- * (the degenerate fill polygon). Dashed extensions run from each series'
- * last point to the right edge.
- *
- * API:
- *   - data: sorted-asc, already-filtered PricePoint[]
- *   - width/height: SVG canvas size
- *   - Returns just the SVG; the caller decides how to position price
- *     labels / tap targets around it.
- */
-// Modal chart uses wider left padding to fit Y-axis price labels ("9,99 €").
-// Must be kept in sync with the padding used in ModalChart's hit-test math.
+// Must stay in sync with MODAL_CHART_PADDING in MiniPriceChart.tsx for hit-test math.
 const MODAL_CHART_PADDING = { top: 14, bottom: 18, left: 46, right: 10 };
-
-// Mini chart: compact padding (no labels/dates) + MINI_TAIL px reserved on
-// the right so dashed extension ticks are visible beyond the last data point.
-const MINI_CHART_PAD = { top: 8, bottom: 8, left: 8, right: 8 };
-const MINI_TAIL = 18;
-
-const SCALE_PAD_RATIO = 0.12;
-
-function PriceChartSvg({
-    data,
-    width,
-    height,
-    colors,
-    activePtIndex = null,
-    isModal = false,
-}: {
-    data: PricePoint[];
-    width: number;
-    height: number;
-    colors: AppTheme;
-    activePtIndex?: number | null;
-    isModal?: boolean;
-}) {
-    if (!data.length) return null;
-
-    const padding = isModal ? MODAL_CHART_PADDING : MINI_CHART_PAD;
-    const chartW = width - padding.left - padding.right;
-    const chartH = height - padding.top - padding.bottom;
-
-    // Y-axis min/max covers BOTH series combined so they share a scale.
-    const allPriceValues: number[] = [];
-    for (const d of data) {
-        if (d.price !== null && d.price !== undefined) allPriceValues.push(Number(d.price));
-        if (d.promoPrice !== null && d.promoPrice !== undefined) allPriceValues.push(Number(d.promoPrice));
-    }
-    const minPrice = Math.min(...allPriceValues);
-    const maxPrice = Math.max(...allPriceValues);
-    const range = maxPrice - minPrice;
-
-    // Add 12% breathing room above and below so dots never sit flush
-    // against the chart edges. Must match the same math in computeLastPointYs.
-    const paddedMin = range === 0 ? minPrice : minPrice - range * SCALE_PAD_RATIO;
-    const paddedRange = range === 0 ? 1 : range * (1 + 2 * SCALE_PAD_RATIO);
-    const ypos = (v: number) => {
-        if (range === 0) return padding.top + chartH / 2;
-        return padding.top + chartH - ((v - paddedMin) / paddedRange) * chartH;
-    };
-
-    const points = data.map((d, i) => {
-        const tail = isModal ? 0 : MINI_TAIL;
-        const x = data.length === 1
-            ? padding.left + (chartW - tail) / 2
-            : padding.left + (i / (data.length - 1)) * (chartW - tail);
-        const priceY = ypos(Number(d.price));
-        const promoY = d.promoPrice !== null && d.promoPrice !== undefined
-            ? ypos(Number(d.promoPrice))
-            : null;
-        return { x, priceY, promoY, date: d.date };
-    });
-
-    // Build fill polygon with explicit corner vertices at every promo
-    // transition so the polygon makes right-angle turns instead of diagonal
-    // interpolations:
-    //   • promo start → insert (x, priceY) corner before (x, promoY) so the
-    //     fill drops cleanly from the regular-price line (no phantom triangle)
-    //   • promo end   → insert (nextX, prevPromoY) corner before (nextX, priceY)
-    //     so the fill extends horizontally to the next scrape date (fills the
-    //     rectangle bounded by the extension line + closing vertical)
-    const hasAnyPromo = points.some(p => p.promoY !== null);
-    const topEdge = points.map(p => `${p.x},${p.priceY}`);
-    const bottomFwd: string[] = [];
-    for (let i = 0; i < points.length; i++) {
-        const p = points[i];
-        const prev = i > 0 ? points[i - 1] : null;
-        if (p.promoY !== null) {
-            if (prev === null || prev.promoY === null)
-                bottomFwd.push(`${p.x},${p.priceY}`); // corner: open at regular price
-            bottomFwd.push(`${p.x},${p.promoY}`);
-        } else {
-            if (prev !== null && prev.promoY !== null)
-                bottomFwd.push(`${p.x},${prev.promoY}`); // corner: extend at prev promo level
-            bottomFwd.push(`${p.x},${p.priceY}`);
-        }
-    }
-    const fillPolygonPoints = [...topEdge, ...bottomFwd.reverse()].join(' ');
-
-    const last = points[points.length - 1];
-    const lastIdx = points.length - 1;
-
-    // Modal-specific: compute x-axis date tick indices (up to 4)
-    const modalTickIndices: number[] = [];
-    if (isModal) {
-        if (data.length <= 4) {
-            for (let i = 0; i < data.length; i++) modalTickIndices.push(i);
-        } else if (data.length <= 8) {
-            const mid = Math.round((data.length - 1) / 2);
-            modalTickIndices.push(0, mid, data.length - 1);
-        } else {
-            const t1 = Math.round((data.length - 1) / 3);
-            const t2 = Math.round(((data.length - 1) * 2) / 3);
-            modalTickIndices.push(0, t1, t2, data.length - 1);
-        }
-    }
-
-    return (
-        <Svg width={width} height={height}>
-            {/* Discount fill — modal only; mini uses vertical bars instead */}
-            {isModal && hasAnyPromo && (
-                <Polygon
-                    points={fillPolygonPoints}
-                    fill={colors.primary}
-                    fillOpacity={0.18}
-                    stroke="none"
-                />
-            )}
-
-            {/* Single-point dual-price vertical connector (degenerate fill) — modal only */}
-            {isModal && points.length === 1 && points[0].promoY !== null && (
-                <Line
-                    x1={points[0].x}
-                    y1={points[0].priceY}
-                    x2={points[0].x}
-                    y2={points[0].promoY!}
-                    stroke={colors.primary}
-                    strokeOpacity={0.5}
-                    strokeWidth={1.5}
-                />
-            )}
-
-            {/* Mini chart single-point: lines extend right from the data point only */}
-            {!isModal && points.length === 1 && (
-                <>
-                    <Line
-                        x1={points[0].x} y1={points[0].priceY}
-                        x2={width - padding.right} y2={points[0].priceY}
-                        stroke={colors.textSecondary} strokeWidth={1.5}
-                    />
-                    {points[0].promoY !== null && (
-                        <Line
-                            x1={points[0].x} y1={points[0].promoY}
-                            x2={width - padding.right} y2={points[0].promoY}
-                            stroke={colors.primary} strokeWidth={1.5}
-                        />
-                    )}
-                </>
-            )}
-
-            {/* Regular price line — continuous across all points */}
-            {points.length > 1 &&
-                points.map((p, i) => {
-                    if (i === 0) return null;
-                    const prev = points[i - 1];
-                    return (
-                        <Line
-                            key={`rl-${i}`}
-                            x1={prev.x}
-                            y1={prev.priceY}
-                            x2={p.x}
-                            y2={p.priceY}
-                            stroke={colors.textSecondary}
-                            strokeWidth={1.5}
-                        />
-                    );
-                })}
-
-            {/* Promo line — consecutive pairs only (both modal and mini) */}
-            {points.length > 1 &&
-                points.map((p, i) => {
-                    if (i === 0) return null;
-                    const prev = points[i - 1];
-                    if (prev.promoY === null || p.promoY === null) return null;
-                    return (
-                        <Line
-                            key={`pl-${i}`}
-                            x1={prev.x} y1={prev.promoY}
-                            x2={p.x} y2={p.promoY}
-                            stroke={colors.primary}
-                            strokeWidth={1.5}
-                        />
-                    );
-                })}
-
-            {/* Mini promo boundaries — same logic as modal */}
-            {!isModal && points.map((p, i) => {
-                const prevHasPromo = i > 0 && points[i - 1].promoY !== null;
-                const nextHasPromo = i < points.length - 1 && points[i + 1].promoY !== null;
-                const isPromoStart = p.promoY !== null && !prevHasPromo;
-                const isPromoEnd   = p.promoY !== null && i < points.length - 1 && !nextHasPromo;
-                const elems: React.ReactNode[] = [];
-
-                if (isPromoStart) {
-                    elems.push(
-                        <Line key={`promo-open-${i}`}
-                            x1={p.x} y1={p.priceY} x2={p.x} y2={p.promoY!}
-                            stroke={colors.primary} strokeWidth={1}
-                            strokeDasharray="2,2" strokeOpacity={0.65}
-                        />
-                    );
-                }
-
-                if (isPromoEnd) {
-                    const next = points[i + 1];
-                    elems.push(
-                        <Line key={`promo-ext-${i}`}
-                            x1={p.x} y1={p.promoY!} x2={next.x} y2={p.promoY!}
-                            stroke={colors.primary} strokeWidth={1.5}
-                            strokeOpacity={0.7}
-                        />,
-                        <Line key={`promo-close-${i}`}
-                            x1={next.x} y1={p.promoY!} x2={next.x} y2={next.priceY}
-                            stroke={colors.primary} strokeWidth={1}
-                            strokeDasharray="2,2" strokeOpacity={0.65}
-                        />
-                    );
-                }
-
-                return elems.length > 0 ? <React.Fragment key={`promo-boundary-${i}`}>{elems}</React.Fragment> : null;
-            })}
-
-            {/* Solid extensions from last point to the right edge (multi-point only) */}
-            {(isModal || points.length > 1) && (
-                <>
-                    <Line
-                        x1={last.x}
-                        y1={last.priceY}
-                        x2={width - padding.right}
-                        y2={last.priceY}
-                        stroke={colors.textSecondary}
-                        strokeWidth={1.25}
-                    />
-                    {last.promoY !== null && (
-                        <Line
-                            x1={last.x}
-                            y1={last.promoY}
-                            x2={width - padding.right}
-                            y2={last.promoY}
-                            stroke={colors.primary}
-                            strokeWidth={1.25}
-                        />
-                    )}
-                </>
-            )}
-
-            {/* Modal: Y-axis min/max reference lines + value labels */}
-            {isModal && range > 0 && (
-                <>
-                    <Line x1={padding.left} y1={ypos(maxPrice)} x2={width - padding.right} y2={ypos(maxPrice)}
-                        stroke={colors.textMuted} strokeWidth={0.5} strokeDasharray="2,3" strokeOpacity={0.45} />
-                    <SvgText x={padding.left - 4} y={ypos(maxPrice) + 3.5}
-                        fontSize={9} fill={colors.textMuted} textAnchor="end">
-                        {formatEuro(maxPrice)}
-                    </SvgText>
-                    <Line x1={padding.left} y1={ypos(minPrice)} x2={width - padding.right} y2={ypos(minPrice)}
-                        stroke={colors.textMuted} strokeWidth={0.5} strokeDasharray="2,3" strokeOpacity={0.45} />
-                    <SvgText x={padding.left - 4} y={ypos(minPrice) + 3.5}
-                        fontSize={9} fill={colors.textMuted} textAnchor="end">
-                        {formatEuro(minPrice)}
-                    </SvgText>
-                </>
-            )}
-
-            {/* Modal: promo period boundaries */}
-            {isModal && points.map((p, i) => {
-                const prevHasPromo = i > 0 && points[i - 1].promoY !== null;
-                const nextHasPromo = i < points.length - 1 && points[i + 1].promoY !== null;
-                const isPromoStart = p.promoY !== null && !prevHasPromo;
-                const isPromoEnd   = p.promoY !== null && i < points.length - 1 && !nextHasPromo;
-                const elems: React.ReactNode[] = [];
-
-                // Opening: dashed vertical drop from regular → promo price
-                if (isPromoStart) {
-                    elems.push(
-                        <Line key={`promo-open-${i}`}
-                            x1={p.x} y1={p.priceY} x2={p.x} y2={p.promoY!}
-                            stroke={colors.primary} strokeWidth={1}
-                            strokeDasharray="2,2" strokeOpacity={0.65}
-                        />
-                    );
-                }
-
-                // Closing: horizontal extension to next scrape date + vertical return to regular
-                if (isPromoEnd) {
-                    const next = points[i + 1];
-                    elems.push(
-                        <Line key={`promo-ext-${i}`}
-                            x1={p.x} y1={p.promoY!} x2={next.x} y2={p.promoY!}
-                            stroke={colors.primary} strokeWidth={1.5}
-                            strokeOpacity={0.7}
-                        />,
-                        <Line key={`promo-close-${i}`}
-                            x1={next.x} y1={p.promoY!} x2={next.x} y2={next.priceY}
-                            stroke={colors.primary} strokeWidth={1}
-                            strokeDasharray="2,2" strokeOpacity={0.65}
-                        />
-                    );
-                }
-
-                return elems.length > 0 ? <React.Fragment key={`promo-boundary-${i}`}>{elems}</React.Fragment> : null;
-            })}
-
-            {/* Dots */}
-            {isModal ? (
-                <>
-                    {/* Regular price dots — modal style */}
-                    {points.map((p, i) => {
-                        if (activePtIndex !== null && i === activePtIndex) return null; // drawn later
-                        if (i === lastIdx && activePtIndex === null) {
-                            // Last dot: outer ring + inner filled
-                            return (
-                                <React.Fragment key={`dot-r-${i}`}>
-                                    <Circle cx={p.x} cy={p.priceY} r={5} fill="transparent" stroke={colors.textSecondary} strokeWidth={1.5} strokeOpacity={0.4} />
-                                    <Circle cx={p.x} cy={p.priceY} r={3} fill={colors.textSecondary} />
-                                </React.Fragment>
-                            );
-                        }
-                        return <Circle key={`dot-r-${i}`} cx={p.x} cy={p.priceY} r={2.5} fill={colors.textSecondary} />;
-                    })}
-                    {/* Promo price dots — modal style */}
-                    {points.map((p, i) => {
-                        if (p.promoY === null) return null;
-                        if (activePtIndex !== null && i === activePtIndex) return null; // drawn later
-                        if (i === lastIdx && activePtIndex === null) {
-                            return (
-                                <React.Fragment key={`dot-p-${i}`}>
-                                    <Circle cx={p.x} cy={p.promoY} r={5} fill="transparent" stroke={colors.primary} strokeWidth={1.5} strokeOpacity={0.4} />
-                                    <Circle cx={p.x} cy={p.promoY} r={3} fill={colors.primary} />
-                                </React.Fragment>
-                            );
-                        }
-                        return <Circle key={`dot-p-${i}`} cx={p.x} cy={p.promoY} r={2.5} fill={colors.primary} />;
-                    })}
-                    {/* Crosshair */}
-                    {activePtIndex !== null && (
-                        <>
-                            <Line
-                                x1={points[activePtIndex].x}
-                                y1={padding.top}
-                                x2={points[activePtIndex].x}
-                                y2={height - padding.bottom}
-                                stroke={colors.textSecondary}
-                                strokeWidth={1}
-                                strokeDasharray="3,3"
-                                strokeOpacity={0.5}
-                            />
-                            <Circle cx={points[activePtIndex].x} cy={points[activePtIndex].priceY} r={4} fill={colors.textSecondary} />
-                            {points[activePtIndex].promoY !== null && (
-                                <Circle cx={points[activePtIndex].x} cy={points[activePtIndex].promoY!} r={4} fill={colors.primary} />
-                            )}
-                        </>
-                    )}
-                </>
-            ) : null}
-
-            {/* Date labels */}
-            {isModal ? (
-                // Modal: evenly-spaced date ticks
-                modalTickIndices.map((idx, tickPos) => {
-                    const p = points[idx];
-                    const isFirst = tickPos === 0;
-                    const isLast = tickPos === modalTickIndices.length - 1;
-                    const anchor = isFirst ? 'start' : isLast ? 'end' : 'middle';
-                    return (
-                        <SvgText
-                            key={`date-${idx}`}
-                            x={p.x}
-                            y={height - 3}
-                            fontSize={9}
-                            fill={colors.textMuted}
-                            textAnchor={anchor}
-                        >
-                            {shortDate(p.date)}
-                        </SvgText>
-                    );
-                })
-            ) : null}
-        </Svg>
-    );
-}
-
-function MiniPriceChart({
-    prices,
-    colors,
-    styles,
-    onTap,
-}: {
-    prices: PricePoint[];
-    colors: AppTheme;
-    styles: Styles;
-    onTap?: () => void;
-}) {
-    // Show last 3 months — recent enough to reflect current trends; fall back
-    // to all available data if nothing exists within that window.
-    const allData = preparePriceData(prices);
-    const recentData = filterByRange(allData, '3M');
-    const data = (recentData.length > 0 ? recentData : allData).slice(-MINI_CHART_MAX_POINTS);
-
-    if (!data.length) {
-        return (
-            <View style={styles.chartEmpty}>
-                <Ionicons name="analytics-outline" size={20} color={colors.border} />
-            </View>
-        );
-    }
-
-    return (
-        <TouchableOpacity
-            style={styles.chartContainer}
-            activeOpacity={0.7}
-            onPress={onTap}
-            disabled={!onTap}
-        >
-            <PriceChartSvg
-                data={data}
-                width={MINI_CHART_WIDTH}
-                height={MINI_CHART_HEIGHT}
-                colors={colors}
-            />
-        </TouchableOpacity>
-    );
-}
 
 function ModalChart({
     prices,
@@ -652,6 +171,8 @@ function ModalChart({
                     colors={colors}
                     isModal={true}
                     activePtIndex={crosshairIndex}
+                    shortDate={shortDate}
+                    formatEuro={formatEuro}
                 />
                 <View
                     style={{ position: 'absolute', top: 0, left: 0, width: chartWidth, height: MODAL_CHART_HEIGHT }}
@@ -926,12 +447,7 @@ export default function ProductDetailScreen() {
                         const latestPrice = prices.length > 0
                             ? prices[prices.length - 1]
                             : null;
-                        const amt = parseFloat(sp.amount);
-                        const amountStr = !isNaN(amt) && sp.unit
-                            ? sp.unit === 'g' && amt >= 1000
-                                ? `${amt / 1000} kg`
-                                : `${amt} ${sp.unit}`
-                            : null;
+                        const amountStr = formatAmountStr(sp.amount, sp.unit, !!sp.isWeighable);
 
                         return (
                             <View key={sp.id} style={styles.spCard}>
@@ -966,8 +482,6 @@ export default function ProductDetailScreen() {
                                 <View style={styles.spRight}>
                                     <MiniPriceChart
                                         prices={prices}
-                                        colors={colors}
-                                        styles={styles}
                                         onTap={() => setChartModalSp(sp)}
                                     />
                                 </View>
@@ -1157,15 +671,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
 
     // Chart
-    chartContainer: {
-        alignItems: 'center',
-    },
-    chartEmpty: {
-        width: MINI_CHART_WIDTH,
-        height: MINI_CHART_HEIGHT,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
     chartPrice: {
         fontSize: 11,
         color: c.primary,

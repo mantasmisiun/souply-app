@@ -164,21 +164,9 @@ export default function SettingsScreen() {
                     <View style={styles.rowMain}>
                         <Text style={styles.rowLabel}>{t('settings.about.version')}</Text>
                         <Text style={styles.rowValue}>
-                            {Constants.expoConfig?.version ?? '—'}
-                        </Text>
-                    </View>
-                </View>
-                <Divider styles={styles} />
-                <View style={styles.row}>
-                    <View style={styles.rowMain}>
-                        <Text style={styles.rowLabel}>{t('settings.about.build')}</Text>
-                        <Text style={styles.rowValue}>
-                            {String(
-                                Constants.expoConfig?.runtimeVersion
-                                ?? Constants.expoConfig?.ios?.buildNumber
-                                ?? Constants.expoConfig?.android?.versionCode
-                                ?? '—'
-                            )}
+                            {Constants.expoConfig?.version
+                                ? `${Constants.expoConfig.version}${Constants.nativeBuildVersion ? ` (build ${Constants.nativeBuildVersion})` : ''}`
+                                : '—'}
                         </Text>
                     </View>
                 </View>

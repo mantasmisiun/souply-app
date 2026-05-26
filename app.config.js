@@ -41,7 +41,7 @@ export default {
       },
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
-      package: 'com.souply.app',
+      package: IS_DEV ? 'com.souply.app.dev' : 'com.souply.app',
       permissions: [
         'ACCESS_COARSE_LOCATION',
         'ACCESS_FINE_LOCATION',
