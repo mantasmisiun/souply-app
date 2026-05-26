@@ -1,16 +1,7 @@
-import { Redirect, usePathname } from 'expo-router';
+import { Redirect } from 'expo-router';
 
-// Catch-all for unmatched routes. Share-intent URLs arrive as
-// `souply:///dataUrl=<key>` — the iOS Linking event can race with
-// expo-router's initial render so +native-intent.tsx doesn't always
-// intercept them in time. Redirect silently to home; expo-share-intent's
-// independent native module surfaces the actual shared data through
-// useShareIntentContext regardless of which route we're on.
+// Catch-all for unmatched routes (share-intent deep links, stale bookmarks, etc.)
+// Any path that reaches here sends the user home silently.
 export default function NotFound() {
-    const path = usePathname();
-    if (path.includes('dataUrl=')) {
-        return <Redirect href="/" />;
-    }
-    // Fall through to nothing — or add a real 404 UI here later.
-    return null;
+    return <Redirect href="/" />;
 }

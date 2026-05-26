@@ -34,7 +34,7 @@ export function redirectSystemPath({
     initial: boolean;
 }): string | null | undefined {
     try {
-        if (path && path.includes('dataUrl=')) {
+        if (path && (path.includes('dataUrl=') || path.includes('ShareKey'))) {
             return '/';
         }
     } catch (e) {
