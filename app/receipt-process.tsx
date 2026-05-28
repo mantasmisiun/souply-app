@@ -31,6 +31,7 @@ import {
 // option stays off and the existing pipeline is bit-for-bit identical.
 const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
 import { GlassIconButton } from "../components/GlassIconButton";
+import { ScreenBackButton } from "../components/ScreenBackButton";
 import ReceiptComparisonSection from "../components/receipt/ReceiptComparisonSection";
 import ReceiptCategoryBreakdown from "../components/receipt/ReceiptCategoryBreakdown";
 import ReceiptPhotoView from "../components/receipt/ReceiptPhotoView";
@@ -57,6 +58,7 @@ import {
     saveReceiptDraft,
 } from "../state/receiptDraft";
 import { useNetworkStatus } from "../state/networkStatus";
+import { recordStoreVisit } from "../utils/locationStorage";
 import { useLevelStore } from "../state/levelStore";
 import {
     fetchWithTimeout,
@@ -1457,6 +1459,23 @@ export default function ProcessReceiptScreen() {
       setReceiptId(data.id);
       setPostStatus("done");
       clearReceiptDraft().catch(() => {});
+      // Record store visit for location intelligence (fire-and-forget)
+      if (header.storeId && header.chainId) {
+        fetch(`${API_BASE_URL}/api/stores/${header.storeId}`)
+          .then(r => r.ok ? r.json() : null)
+          .then(store => {
+            if (store?.latitude && store?.longitude) {
+              recordStoreVisit(
+                header.storeId!,
+                store.latitude,
+                store.longitude,
+                header.chainId!,
+                header.chainName,
+              ).catch(() => {});
+            }
+          })
+          .catch(() => {});
+      }
       if (data.mandatorySwipesRequired > 0) {
         // User must swipe before seeing the price comparison — navigate to the
         // swipe screen now. Comparison will be fetched when they return to the
@@ -3043,17 +3062,9 @@ export default function ProcessReceiptScreen() {
     <>
       <Stack.Screen
         options={{
-          // iOS 26 liquid-glass nav bar renders the native back chevron
-          // but the tap target is dead. Override with our own chevron so
-          // users can actually go back. Same workaround used on the
-          // settings screen (see app/_layout.tsx).
-          headerLeft: () => (
-            <GlassIconButton
-              icon="chevron-back"
-              onPress={() => router.canGoBack() && router.back()}
-              size={24}
-            />
-          ),
+          headerStyle: { backgroundColor: colors.cardBackground },
+          headerShadowVisible: false,
+          headerLeft: () => <ScreenBackButton />,
           headerTitle: () => {
             if (isPreviewMode) {
               return (
@@ -3062,13 +3073,7 @@ export default function ProcessReceiptScreen() {
                 </Text>
               );
             }
-            // Compose the shop line the same way the hero card used to —
-            // prefer "Chain · Store" when both are known, fall back gracefully.
-            const shopLine =
-              (header?.chainName && header?.storeName
-                ? `${header.chainName} · ${header.storeName}`
-                : header?.storeName || header?.chainName) ||
-              t('receiptProcess.title');
+            const shopLine = header?.storeName || header?.chainName || t('receiptProcess.title');
             const addr = header?.storeAddressMatched || header?.storeAddress || null;
             const dateLabel = footer?.date ? formatDate(footer.date) : null;
             const subtitle = [addr, dateLabel].filter(Boolean).join(" · ");
@@ -3883,40 +3888,40 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   },
   container: { flex: 1, backgroundColor: c.pageBackground },
 
-  // C2 — segmented control pinned below the navbar.
+  // C2 — filter banner pinned below the navbar, styled like StoreChipBar so
+  // the segmented tab row visually matches the chain-filter pattern used on
+  // browse/discounts/shopping-list screens.
   segmentedWrap: {
     flexDirection: "row",
-    backgroundColor: c.surfaceMuted,
-    marginHorizontal: 16,
-    marginTop: 12,
-    padding: 4,
-    borderRadius: 10,
-    gap: 4,
+    backgroundColor: c.cardBackground,
+    borderBottomWidth: 0.5,
+    borderBottomColor: c.border,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 8,
   },
   segmentTab: {
-    flex: 1,
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    borderRadius: 8,
+    flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: c.border,
+    backgroundColor: c.cardBackground,
   },
   segmentTabActive: {
-    backgroundColor: c.cardBackground,
-    elevation: 1,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 1,
+    backgroundColor: c.primary,
+    borderColor: c.primary,
   },
   segmentTabLabel: {
     fontSize: 13,
-    fontWeight: "500",
-    color: c.textSecondary,
+    color: c.textPrimary,
   },
   segmentTabLabelActive: {
-    color: c.textPrimary,
-    fontWeight: "700",
+    color: c.onPrimary,
+    fontWeight: "600",
   },
 
   // C2 — Prekės tab wrapper: matches the card-stack rhythm of the other

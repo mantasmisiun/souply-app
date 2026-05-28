@@ -26,7 +26,8 @@
       "channel": "dev",
       "android": { "buildType": "apk" },
       "env": {
-        "APP_VARIANT": "dev"
+        "APP_VARIANT": "dev",
+        "GOOGLE_MAPS_API_KEY_ANDROID": "AIzaSyAUes7IPZzdfpYjroLMLjODP2FnlUYCmHg"
       }
     },
     "production": {

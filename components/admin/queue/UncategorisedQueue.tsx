@@ -2,6 +2,7 @@ import {
     View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView,
     Image, TextInput, Alert,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -305,7 +306,7 @@ export function UncategorisedQueue({ onEmpty }: Props) {
                 </TouchableOpacity>
             </View>
 
-            <ScrollView contentContainerStyle={styles.cardScroll}>
+            <KeyboardAwareScrollView contentContainerStyle={styles.cardScroll} keyboardShouldPersistTaps="handled" bottomOffset={72}>
                 <View style={styles.card}>
                     {(() => {
                         const logo = sourceReceipt
@@ -484,7 +485,7 @@ export function UncategorisedQueue({ onEmpty }: Props) {
                         )}
                     </Section>
                 </View>
-            </ScrollView>
+            </KeyboardAwareScrollView>
 
             <View style={styles.footer}>
                 <TouchableOpacity

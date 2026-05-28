@@ -185,6 +185,7 @@ const loadTruth = async (
 };
 
 const readManifest = async (chain: ChainName): Promise<ManifestEntry[]> => {
+    if (!__DEV__) return []; // local dev HTTP server not available in production/OTA builds
     const url = `${HTTP_BATCH_ROOT}/${chain}/manifest.json`;
     try {
         const res = await fetch(url);

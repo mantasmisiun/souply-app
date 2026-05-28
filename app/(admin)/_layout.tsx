@@ -104,9 +104,7 @@ export default function AdminTabLayout() {
                     backgroundColor: colors.cardBackground,
                     borderTopColor: colors.borderSubtle,
                 },
-                headerStyle: { backgroundColor: colors.pageBackground },
-                headerTintColor: colors.textPrimary,
-                headerShadowVisible: false,
+                headerShown: false,
             }}
         >
             <Tabs.Screen
@@ -124,6 +122,7 @@ export default function AdminTabLayout() {
                 name="queue"
                 options={{
                     title: t('admin.tabQueue'),
+                    headerShown: false,
                     tabBarIcon: ({ focused, color, size }) => (
                         <Ionicons name={focused ? 'list' : 'list-outline'} size={size} color={color} />
                     ),
@@ -133,6 +132,7 @@ export default function AdminTabLayout() {
                 name="receipts"
                 options={{
                     title: t('admin.tabReceipts'),
+                    headerShown: false,
                     ...(isSuperAdmin ? {} : { tabBarItemStyle: { display: 'none' } }),
                     tabBarIcon: ({ focused, color, size }) => (
                         <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />

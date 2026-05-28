@@ -190,14 +190,26 @@ export default function BrowseIndex() {
     };
 
     if (loading) return (
-        <View style={[styles.container, { padding: 16, gap: 10 }]}>
-            <SkeletonBox height={70} borderRadius={16} />
-            {Array.from({ length: 8 }).map((_, i) => (
-                <View key={i} style={{ flexDirection: 'row', alignItems: 'center', padding: 14, backgroundColor: colors.cardBackground, borderRadius: 12, gap: 12 }}>
-                    <SkeletonBox width={32} height={32} borderRadius={16} />
-                    <SkeletonBox width={180} height={14} borderRadius={7} />
-                </View>
-            ))}
+        <View style={{ flex: 1 }}>
+            <TabHeader title={t('browse.title')} />
+            <View style={[styles.container, { padding: 16, gap: 10 }]}>
+                <SkeletonBox height={70} borderRadius={14} />
+                {Array.from({ length: 8 }).map((_, i) => (
+                    <View
+                        key={i}
+                        style={{
+                            flexDirection: 'row', alignItems: 'center', gap: 12,
+                            paddingHorizontal: 16, paddingVertical: 14,
+                            backgroundColor: colors.cardBackground, borderRadius: 12,
+                            borderLeftWidth: 3, borderLeftColor: colors.softAccent,
+                        }}
+                    >
+                        <SkeletonBox width={24} height={24} borderRadius={6} />
+                        <SkeletonBox width={180} height={15} borderRadius={7} style={{ flex: 1 }} />
+                        <SkeletonBox width={16} height={16} borderRadius={4} />
+                    </View>
+                ))}
+            </View>
         </View>
     );
 

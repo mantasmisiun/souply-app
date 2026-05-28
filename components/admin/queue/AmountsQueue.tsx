@@ -2,6 +2,7 @@ import {
     View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView,
     Image, TextInput, Alert,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -182,7 +183,7 @@ export function AmountsQueue({ onEmpty }: Props) {
                 </TouchableOpacity>
             </View>
 
-            <ScrollView contentContainerStyle={styles.cardScroll}>
+            <KeyboardAwareScrollView contentContainerStyle={styles.cardScroll} keyboardShouldPersistTaps="handled" bottomOffset={72}>
                 <View style={styles.card}>
                     <View style={styles.cardHeader}>
                         {currentCard.chainLogoUrl
@@ -282,7 +283,7 @@ export function AmountsQueue({ onEmpty }: Props) {
                         </TouchableOpacity>
                     )}
                 </View>
-            </ScrollView>
+            </KeyboardAwareScrollView>
 
             <View style={styles.footer}>
                 <TouchableOpacity

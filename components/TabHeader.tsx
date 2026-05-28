@@ -26,8 +26,10 @@ export function TabHeader({ title, rightAction, style }: Props) {
                     paddingTop: insets.top,
                     height: insets.top + 44,
                     paddingHorizontal: 16,
-                    backgroundColor: colors.pageBackground,
+                    backgroundColor: colors.cardBackground,
                     justifyContent: 'center',
+                    zIndex: 1,
+                    elevation: 0,
                 },
                 style,
             ]}
@@ -37,7 +39,7 @@ export function TabHeader({ title, rightAction, style }: Props) {
                     fontSize: 17,
                     fontWeight: '600',
                     color: colors.textPrimary,
-                    textAlign: 'center',
+                    textAlign: 'left',
                 }}
                 numberOfLines={1}
             >

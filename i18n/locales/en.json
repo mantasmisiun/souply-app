@@ -553,16 +553,16 @@
     "addedToast": "Added to basket",
     "cancelled": "Cancelled",
     "noProducts": "No products in this category",
-    "combineAlternatives": "Merge alternatives",
+    "combineAlternatives": "Saver mode",
     "allProducts": "All products",
     "modeSwitch": {
       "title": "Change mode?",
       "body": "Your basket has items. Changing the mode will recalculate them too.",
       "confirm": "Change",
       "experimentalBadge": "(EXPERIMENTAL)",
-      "helpTitle": "Merge alternatives",
-      "explainer": "When this mode is on, similar products from different brands or variants are shown as one item. When pricing the basket, each store uses the cheapest variant from the group.",
-      "example": "For example, \"Milk 2.5%\" and \"Milk 3.5%\" are treated as alternatives — you'll see one line in the basket and the cheapest variant's price when comparing stores.",
+      "helpTitle": "Saver mode",
+      "explainer": "Saver mode broadens product comparison by including similar alternatives.",
+      "example": "The system analyses linked products across stores and calculates which variant offers the best value based on price, quantity, and user preferences.",
       "gotIt": "Got it"
     }
   },
@@ -902,7 +902,10 @@
     "pickStoreTitle": "Pick a store",
     "noStoresFound": "No stores found",
     "fabScanQr": "Scan QR",
-    "fabCreate": "Create"
+    "fabCreate": "Create",
+    "filterAll": "All",
+    "searchPlaceholder": "Search lists...",
+    "noSearchResults": "Nothing found"
   },
   "profilis": {
     "levelLabel": "Level {{level}}",

@@ -7,6 +7,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { TabHeader } from '../../components/TabHeader';
 import {
     getAdminReceiptList,
     type AdminReceiptRow,
@@ -113,6 +114,7 @@ export default function ReceiptsScreen() {
 
     return (
         <View style={styles.root}>
+            <TabHeader title={t('admin.tabReceipts')} />
             <View style={styles.chipBar}>
                 <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipBarContent}>
                     {chips.map(chip => {

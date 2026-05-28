@@ -21,6 +21,7 @@ import { useTranslation } from 'react-i18next';
 import { ScalePressable } from '../../components/ScalePressable';
 import { GlassButton } from '../../components/GlassButton';
 import { GlassIconButton } from '../../components/GlassIconButton';
+import { ScreenBackButton } from '../../components/ScreenBackButton';
 import { resolveCanonicalStep } from '../../utils/canonicalStep';
 
 interface Category {
@@ -326,6 +327,15 @@ export default function CategoryScreen() {
     const commitAddRef = useRef(commitAdd);
     useEffect(() => { commitAddRef.current = commitAdd; }, [commitAdd]);
 
+    // Tap-debounce so a rapid double-tap doesn't push /search twice.
+    const lastSearchPushAt = useRef(0);
+    const pushSearch = useCallback(() => {
+        const now = Date.now();
+        if (now - lastSearchPushAt.current < 600) return;
+        lastSearchPushAt.current = now;
+        router.push({ pathname: '/search', params: { mode: 'products', source: 'browse' } } as any);
+    }, [router]);
+
     const handleModeSwitchRequest = (nextOn: boolean) => {
         const target: 'base' | 'sku' = nextOn ? 'base' : 'sku';
         if (target === mode) return;
@@ -532,6 +542,7 @@ export default function CategoryScreen() {
             title: decodeURIComponent((name as string) || ''),
             headerStyle: { backgroundColor: colors.cardBackground },
             headerShadowVisible: false,
+            headerLeft: () => <ScreenBackButton />,
         }} />
         <View style={styles.container}>
             <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, gap: 6, backgroundColor: colors.cardBackground }}>
@@ -569,14 +580,9 @@ export default function CategoryScreen() {
                     title: decodeURIComponent(name || ''),
                     headerStyle: { backgroundColor: colors.cardBackground },
                     headerShadowVisible: false,
+                    headerLeft: () => <ScreenBackButton />,
                     headerRight: () => (
-                        <GlassIconButton
-                            icon="search"
-                            onPress={() => router.push({
-                                pathname: '/search',
-                                params: { mode: 'products', source: 'browse' },
-                            } as any)}
-                        />
+                        <GlassIconButton icon="search" onPress={pushSearch} />
                     ),
                 }}
             />

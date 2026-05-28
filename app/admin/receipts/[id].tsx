@@ -1,8 +1,9 @@
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
-    Alert, Modal, TextInput, Image, KeyboardAvoidingView, Platform,
+    Alert, Modal, TextInput, Image,
 } from 'react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -87,10 +88,7 @@ function EditModal({ visible, title, initialValue, keyboardType = 'default', onS
 
     return (
         <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
-            <KeyboardAvoidingView
-                style={editStyles.backdrop}
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            >
+            <KeyboardAvoidingView style={editStyles.backdrop}>
                 <View style={[editStyles.sheet, { backgroundColor: colors.cardBackground }]}>
                     <Text style={[editStyles.title, { color: colors.textPrimary }]}>{title}</Text>
                     <TextInput

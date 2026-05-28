@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import { View, Image, Text, StyleSheet } from 'react-native';
 import { useTheme, AppTheme } from '../constants/theme';
+import { chainBrandColorById } from '../utils/chainBrandName';
 
 interface ChainLogo {
     chainId: number;
@@ -39,14 +40,16 @@ export function ChainLogoStrip({ chainLogos, style }: Props) {
                 {shown.map(({ chainId, logoUrl }, index) => (
                     <View
                         key={chainId}
-                        style={[styles.logoWrapper, index > 0 && styles.secondLogo]}
+                        style={[
+                            styles.logoWrapper,
+                            { backgroundColor: chainBrandColorById(chainId) },
+                            index > 0 && styles.secondLogo,
+                        ]}
                     >
                         {logoUrl ? (
                             <Image source={{ uri: logoUrl }} style={styles.logo} resizeMode="contain" />
                         ) : (
-                            <View style={styles.fallback}>
-                                <Text style={styles.fallbackText}>{chainId}</Text>
-                            </View>
+                            <Text style={styles.fallbackText}>{chainId}</Text>
                         )}
                     </View>
                 ))}
@@ -72,10 +75,10 @@ function makeStyles(c: AppTheme) {
         logoWrapper: {
             width: WRAPPER_SIZE,
             height: WRAPPER_SIZE,
-            backgroundColor: c.surfaceMuted,
             borderRadius: 4,
             alignItems: 'center',
             justifyContent: 'center',
+            overflow: 'hidden',
         },
         secondLogo: {
             marginLeft: -8,
@@ -85,18 +88,10 @@ function makeStyles(c: AppTheme) {
             width: LOGO_SIZE,
             height: LOGO_SIZE,
         },
-        fallback: {
-            width: LOGO_SIZE,
-            height: LOGO_SIZE,
-            backgroundColor: c.surfaceMuted,
-            borderRadius: 3,
-            alignItems: 'center',
-            justifyContent: 'center',
-        },
         fallbackText: {
             fontSize: 7,
             fontWeight: '700',
-            color: c.textSecondary,
+            color: '#FFFFFF',
         },
         overflow: {
             fontSize: 9,

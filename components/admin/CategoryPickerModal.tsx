@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
     Modal, View, Text, TextInput, TouchableOpacity, ScrollView,
-    FlatList, StyleSheet, ActivityIndicator, KeyboardAvoidingView, Platform,
+    FlatList, StyleSheet, ActivityIndicator,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -436,10 +437,7 @@ export default function CategoryPickerModal({
                         {productsLoading ? (
                             <ActivityIndicator style={{ flex: 1 }} color={colors.primary} />
                         ) : selectedL3 ? (
-                            <KeyboardAvoidingView
-                                style={{ flex: 1 }}
-                                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-                            >
+                            <KeyboardAvoidingView style={{ flex: 1 }}>
                                 <FlatList
                                     data={products}
                                     keyExtractor={item => String(item.id)}

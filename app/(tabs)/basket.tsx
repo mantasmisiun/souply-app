@@ -1,6 +1,7 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, RefreshControl } from 'react-native';
 import { TabHeader } from '../../components/TabHeader';
-import { useMemo, useRef, useState, useCallback } from 'react';
+import { StoreChipBar } from '../../components/StoreChipBar';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -36,6 +37,7 @@ export default function BasketScreen() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [pullRefreshing, setPullRefreshing] = useState(false);
+    const [statusFilter, setStatusFilter] = useState<string>('draft');
     const [visibleCount, setVisibleCount] = useState(INITIAL_PAGE_SIZE);
     const hasFetchedRef = useRef(false);
     const router = useRouter();
@@ -114,29 +116,65 @@ export default function BasketScreen() {
         }
     };
 
+    const filteredBaskets = useMemo(
+        () => baskets.filter(b => b.status === statusFilter),
+        [baskets, statusFilter],
+    );
+
+    useEffect(() => { setVisibleCount(INITIAL_PAGE_SIZE); }, [statusFilter]);
+
+    const statusChips = useMemo(() => {
+        const order: Array<{ id: string; label: string }> = [
+            { id: 'draft',      label: t('basketTab.statusDraft') },
+            { id: 'compared',   label: t('basketTab.statusCompared') },
+            { id: 'inProgress', label: t('basketTab.statusInProgress') },
+            { id: 'completed',  label: t('basketTab.statusCompleted') },
+        ];
+        return order.map(c => ({
+            ...c,
+            count: baskets.filter(b => b.status === c.id).length,
+        }));
+    }, [baskets, t]);
+
     if (loading) return (
         <View style={styles.container}>
             <TabHeader title={t('tabs.basket')} />
+            <View style={{
+                backgroundColor: colors.cardBackground,
+                borderBottomWidth: 0.5, borderBottomColor: colors.border,
+                flexDirection: 'row', gap: 8,
+                paddingHorizontal: 12, paddingVertical: 10,
+            }}>
+                {Array.from({ length: 4 }).map((_, i) => (
+                    <SkeletonBox key={i} width={i === 0 ? 96 : 84} height={32} borderRadius={20} />
+                ))}
+            </View>
             <View style={{ padding: 16, gap: 12 }}>
-            {Array.from({ length: 5 }).map((_, i) => (
-                <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, borderLeftWidth: 3, borderLeftColor: colors.borderSubtle }}>
-                    <View style={{ gap: 8, flex: 1 }}>
-                        <SkeletonBox width={160} height={14} borderRadius={7} />
-                        <SkeletonBox width={100} height={12} borderRadius={6} />
+                {Array.from({ length: 5 }).map((_, i) => (
+                    <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, flexDirection: 'row', alignItems: 'center', gap: 12, borderLeftWidth: 3, borderLeftColor: colors.borderSubtle }}>
+                        <SkeletonBox width={36} height={36} borderRadius={8} />
+                        <View style={{ gap: 8, flex: 1 }}>
+                            <SkeletonBox width={160} height={14} borderRadius={7} />
+                            <SkeletonBox width={100} height={12} borderRadius={6} />
+                        </View>
+                        <SkeletonBox width={60} height={22} borderRadius={8} />
                     </View>
-                    <SkeletonBox width={60} height={22} borderRadius={8} />
-                </View>
-            ))}
+                ))}
             </View>
         </View>
     );
 
-    const visibleBaskets = baskets.slice(0, visibleCount);
-    const hasMore = baskets.length > visibleCount;
+    const visibleBaskets = filteredBaskets.slice(0, visibleCount);
+    const hasMore = filteredBaskets.length > visibleCount;
 
     return (
         <View style={styles.container}>
             <TabHeader title={t('tabs.basket')} />
+            <StoreChipBar
+                chips={statusChips}
+                selectedId={statusFilter}
+                onSelect={id => id != null && setStatusFilter(String(id))}
+            />
             {refreshing && (
                 <View style={styles.refreshingBanner}>
                     <ActivityIndicator size="small" color={colors.primary} />

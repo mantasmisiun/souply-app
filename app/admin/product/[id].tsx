@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
     View, Text, ScrollView, TouchableOpacity, StyleSheet,
     Alert, ActivityIndicator, Modal, TextInput, Switch,
-    Image, Pressable, KeyboardAvoidingView, Platform, Dimensions,
+    Image, Pressable, Dimensions,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
@@ -18,6 +19,7 @@ import { ChainLogoStrip } from '../../../components/ChainLogoStrip';
 import { getChainMiniLogoUrl } from '../../../utils/chainBrandName';
 import CategoryPickerModal from '../../../components/admin/CategoryPickerModal';
 import { Toast, type ToastHandle } from '../../../components/Toast';
+import { CardActionBar } from '../../../components/CardActionBar';
 import { API_BASE_URL } from '../../../config/api';
 import {
     getAdminProductDetail,
@@ -158,53 +160,6 @@ function ModalChart({
     );
 }
 
-// ── SP action banner ──────────────────────────────────────────────────────────
-
-function SpActionBar({
-    sp,
-    onEdit,
-    onDelete,
-    onMove,
-    onDismiss,
-    colors,
-    styles,
-}: {
-    sp: AdminSpDetail;
-    onEdit: () => void;
-    onDelete: () => void;
-    onMove: () => void;
-    onDismiss: () => void;
-    colors: AppTheme;
-    styles: ReturnType<typeof makeStyles>;
-}) {
-    const { t } = useTranslation();
-    return (
-        <Pressable style={styles.actionBarBackdrop} onPress={onDismiss}>
-            <Pressable style={styles.actionBar} onPress={e => e.stopPropagation()}>
-                <Text style={styles.actionBarTitle} numberOfLines={1}>
-                    {sp.storeProductName ?? sp.chainName}
-                </Text>
-                <View style={styles.actionBarBtns}>
-                    <TouchableOpacity style={styles.actionBarBtn} onPress={onEdit}>
-                        <Ionicons name="pencil-outline" size={18} color={colors.primary} />
-                        <Text style={[styles.actionBarBtnText, { color: colors.primary }]}>{t('admin.sp.actionEdit')}</Text>
-                    </TouchableOpacity>
-                    <View style={styles.actionBarSep} />
-                    <TouchableOpacity style={styles.actionBarBtn} onPress={onMove}>
-                        <Ionicons name="git-branch-outline" size={18} color={colors.primary} />
-                        <Text style={[styles.actionBarBtnText, { color: colors.primary }]}>{t('admin.sp.actionMove')}</Text>
-                    </TouchableOpacity>
-                    <View style={styles.actionBarSep} />
-                    <TouchableOpacity style={styles.actionBarBtn} onPress={onDelete}>
-                        <Ionicons name="trash-outline" size={18} color="#e53e3e" />
-                        <Text style={[styles.actionBarBtnText, { color: '#e53e3e' }]}>{t('admin.sp.actionDelete')}</Text>
-                    </TouchableOpacity>
-                </View>
-            </Pressable>
-        </Pressable>
-    );
-}
-
 // ── SP Edit modal ─────────────────────────────────────────────────────────────
 
 function SpEditModal({
@@ -223,7 +178,11 @@ function SpEditModal({
     const { t } = useTranslation();
     const { top } = useSafeAreaInsets();
     const [name, setName] = useState(sp.storeProductName ?? '');
-    const [amount, setAmount] = useState(sp.amount != null ? String(sp.amount) : '');
+    const [amount, setAmount] = useState(() => {
+        if (sp.amount == null) return '';
+        const n = parseFloat(String(sp.amount));
+        return isFinite(n) ? String(n) : '';
+    });
     const [unit, setUnit] = useState<Unit>((sp.unit as Unit) ?? 'g');
     const [isWeighable, setIsWeighable] = useState(sp.isWeighable);
     const [imageUrl, setImageUrl] = useState<string | null | undefined>(sp.imageUrl);
@@ -290,10 +249,7 @@ function SpEditModal({
 
     return (
         <Modal visible animationType="slide" onRequestClose={onCancel}>
-            <KeyboardAvoidingView
-                style={{ flex: 1, backgroundColor: colors.pageBackground }}
-                behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-            >
+            <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
                 {/* Header */}
                 <View style={[styles.editHeader, { paddingTop: top + 8 }]}>
                     <TouchableOpacity onPress={onCancel} style={styles.editHeaderSide}>
@@ -311,14 +267,18 @@ function SpEditModal({
                     </TouchableOpacity>
                 </View>
 
-                <ScrollView contentContainerStyle={styles.editScroll} keyboardShouldPersistTaps="handled">
+                <KeyboardAwareScrollView
+                    contentContainerStyle={styles.editScroll}
+                    keyboardShouldPersistTaps="handled"
+                    bottomOffset={16}
+                >
                     {/* Image section */}
                     <View style={styles.editSection}>
                         <Text style={styles.editSectionLabel}>{t('admin.sp.editSectionImage')}</Text>
                         {/* Current image */}
                         <View style={styles.editCurrentImageWrap}>
                             {imageUrl ? (
-                                <Image source={{ uri: imageUrl }} style={styles.editCurrentImage} resizeMode="cover" />
+                                <Image source={{ uri: imageUrl }} style={styles.editCurrentImage} resizeMode="contain" />
                             ) : (
                                 <ProductImage
                                     uris={null}
@@ -416,8 +376,8 @@ function SpEditModal({
                             trackColor={{ true: colors.primary }}
                         />
                     </View>
-                </ScrollView>
-            </KeyboardAvoidingView>
+                </KeyboardAwareScrollView>
+            </View>
         </Modal>
     );
 }
@@ -697,14 +657,17 @@ export default function AdminProductDetailScreen() {
 
             {/* SP action bar */}
             {activeSp && (
-                <SpActionBar
-                    sp={activeSp}
-                    onEdit={() => { setEditingSp(activeSp); setActiveSp(null); }}
-                    onDelete={() => handleDelete(activeSp)}
-                    onMove={() => { setMovingSp(activeSp); setActiveSp(null); }}
+                <CardActionBar
+                    title={activeSp.storeProductName ?? activeSp.chainName}
                     onDismiss={() => setActiveSp(null)}
-                    colors={colors}
-                    styles={styles}
+                    actions={[
+                        { icon: 'pencil-outline', label: t('admin.sp.actionEdit'),
+                          onPress: () => { setEditingSp(activeSp); setActiveSp(null); } },
+                        { icon: 'git-branch-outline', label: t('admin.sp.actionMove'),
+                          onPress: () => { setMovingSp(activeSp); setActiveSp(null); } },
+                        { icon: 'trash-outline', label: t('admin.sp.actionDelete'),
+                          destructive: true, onPress: () => handleDelete(activeSp) },
+                    ]}
                 />
             )}
 
@@ -860,26 +823,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     rangePillActive: { backgroundColor: c.primary },
     rangePillText: { fontSize: 12, fontWeight: '500', color: c.textSecondary },
     rangePillTextActive: { color: c.onPrimary },
-
-    // Action bar
-    actionBarBackdrop: {
-        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
-        justifyContent: 'flex-end',
-    },
-    actionBar: {
-        backgroundColor: c.cardBackground,
-        borderTopWidth: 1,
-        borderTopColor: c.border,
-        paddingTop: 12,
-        paddingHorizontal: 16,
-        paddingBottom: 32,
-        gap: 12,
-    },
-    actionBarTitle: { fontSize: 13, fontWeight: '600', color: c.textSecondary, textAlign: 'center' },
-    actionBarBtns: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4 },
-    actionBarSep: { width: 1, height: 24, backgroundColor: c.border, marginHorizontal: 4 },
-    actionBarBtn: { alignItems: 'center', gap: 4, paddingHorizontal: 16, paddingVertical: 8, borderRadius: 10, backgroundColor: c.surfaceMuted, minWidth: 80 },
-    actionBarBtnText: { fontSize: 12, fontWeight: '600' },
 
     // SP Edit modal
     editHeader: {

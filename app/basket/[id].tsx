@@ -4,6 +4,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { ScreenBackButton } from '../../components/ScreenBackButton';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../../config/api';
 import { ProductImage } from '../../components/ProductImage';
@@ -11,10 +12,13 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 import { useBasketState } from '../../state/basketState';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import LocationPromptModal from '../../components/LocationPromptModal';
+import LocationSettingsModal from '../../components/LocationSettingsModal';
 import * as Haptics from 'expo-haptics';
 import { ScalePressable } from '../../components/ScalePressable';
 import { formatDate } from '../../utils/formatCurrency';
 import { loadCachedCoords, persistCoords, tryGpsCoords, type UserCoords, VILNIUS_FALLBACK } from '../../utils/location';
+import { buildCandidatePool } from '../../utils/candidatePool';
+import { getLocationSettings, type LocationSettings } from '../../utils/locationStorage';
 import { useTranslation } from 'react-i18next';
 
 interface BasketItem {
@@ -70,6 +74,9 @@ export default function BasketDetailScreen() {
     // user hasn't previously cached an address. On resolve, we continue
     // the calc flow with the new coordinates.
     const [locationPromptVisible, setLocationPromptVisible] = useState(false);
+    const [locationSettingsVisible, setLocationSettingsVisible] = useState(false);
+    const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
+    const [activeSettings, setActiveSettings] = useState<LocationSettings | null>(null);
 
     const fetchBasket = async () => {
         try {
@@ -125,6 +132,8 @@ export default function BasketDetailScreen() {
 
     useFocusEffect(useCallback(() => {
         fetchBasket();
+        setSettingsRefreshKey(k => k + 1);
+        getLocationSettings().then(setActiveSettings);
     }, [id]));
 
     /**
@@ -243,14 +252,32 @@ export default function BasketDetailScreen() {
         setCalcError(null);
         setCalcing(true);
         try {
+            // Build candidate pool from location settings (non-blocking on failure)
+            const [pool, settings] = await Promise.all([
+                buildCandidatePool({ lat: coords.lat, lng: coords.lng }),
+                getLocationSettings(),
+            ]);
+
+            const body: Record<string, any> = { lat: coords.lat, lng: coords.lng };
+            if (pool.storeIds.length > 0) body.storeIds = pool.storeIds;
+
             const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ lat: coords.lat, lng: coords.lng }),
+                body: JSON.stringify(body),
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const newResults = await res.json();
-            await AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults));
+
+            // Persist results + location context so the results screen can score combos
+            await Promise.all([
+                AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults)),
+                AsyncStorage.setItem(`basket_calc_meta_${id}`, JSON.stringify({
+                    storeCount: settings.storeCount,
+                    searchCenter: pool.searchCenter,
+                })),
+            ]);
+
             setBasket(prev => prev ? { ...prev, status: 'compared' } : prev);
             // This basket is no longer a draft: subsequent "add to basket"
             // taps from product screens should create a new draft instead
@@ -385,6 +412,7 @@ export default function BasketDetailScreen() {
                             </Text>
                         </TouchableOpacity>
                     ),
+                headerLeft: () => <ScreenBackButton />,
             }} />
             <View style={styles.container}>
                 <FlatList
@@ -509,24 +537,61 @@ export default function BasketDetailScreen() {
                                 </ScalePressable>
                             </>
                         ) : (
-                            <ScalePressable
-                                style={[styles.showResultsButton, calcing && styles.buttonCalcing]}
-                                onPress={handleCalculate}
-                                disabled={calcing}
-                                scaleTo={calcing ? 1 : 0.95}
-                            >
-                                {calcing ? (
-                                    <>
-                                        <ActivityIndicator size="small" color={colors.onPrimary} />
-                                        <Text style={styles.showResultsText}>{t('basketDetail.calculating')}</Text>
-                                    </>
-                                ) : (
-                                    <>
-                                        <Ionicons name="calculator-outline" size={20} color={colors.onPrimary} />
-                                        <Text style={styles.showResultsText}>{t('basketDetail.calculate')}</Text>
-                                    </>
-                                )}
-                            </ScalePressable>
+                            <>
+                                <ScalePressable
+                                    style={[
+                                        styles.settingsSquircle,
+                                        activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
+                                            && styles.settingsSquircleActive,
+                                    ]}
+                                    onPress={() => {
+                                        setLocationSettingsVisible(true);
+                                    }}
+                                    disabled={calcing}
+                                    scaleTo={0.92}
+                                >
+                                    <Ionicons
+                                        name={
+                                            activeSettings?.mode === 'specific' ? 'location-outline'
+                                            : activeSettings?.mode === 'route' ? 'git-commit-outline'
+                                            : 'locate-outline'
+                                        }
+                                        size={20}
+                                        color={
+                                            activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
+                                                ? colors.primary
+                                                : colors.textSecondary
+                                        }
+                                    />
+                                    {activeSettings && activeSettings.storeCount > 1 && (
+                                        <View style={styles.settingsBadge}>
+                                            <Text style={styles.settingsBadgeText}>{activeSettings.storeCount}</Text>
+                                        </View>
+                                    )}
+                                </ScalePressable>
+                                <ScalePressable
+                                    style={[styles.showResultsButton, calcing && styles.buttonCalcing]}
+                                    onPress={handleCalculate}
+                                    disabled={calcing}
+                                    scaleTo={calcing ? 1 : 0.95}
+                                >
+                                    {calcing ? (
+                                        <>
+                                            <ActivityIndicator size="small" color={colors.onPrimary} />
+                                            <Text style={styles.showResultsText}>{t('basketDetail.calculating')}</Text>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
+                                            <Text style={styles.showResultsText}>
+                                                {(activeSettings?.storeCount ?? 1) > 1
+                                                    ? 'Rasti parduotuves'
+                                                    : 'Rasti parduotuvę'}
+                                            </Text>
+                                        </>
+                                    )}
+                                </ScalePressable>
+                            </>
                         )}
                     </View>
                 )}
@@ -562,6 +627,20 @@ export default function BasketDetailScreen() {
                 visible={locationPromptVisible}
                 onResolved={handleLocationResolved}
                 onCancel={() => setLocationPromptVisible(false)}
+            />
+
+            <LocationSettingsModal
+                visible={locationSettingsVisible}
+                onClose={() => {
+                    setLocationSettingsVisible(false);
+                    getLocationSettings().then(setActiveSettings);
+                }}
+                refreshKey={settingsRefreshKey}
+                onOpenPresetMap={(key, label, existing) => {
+                    router.push(
+                        `/preset/${key}/map?label=${encodeURIComponent(label)}${existing ? `&lat=${existing.lat}&lng=${existing.lng}` : ''}` as any,
+                    );
+                }}
             />
         </>
     );
@@ -624,6 +703,37 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         gap: 8,
     },
     showResultsText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
+    settingsSquircle: {
+        width: 50,
+        height: 50,
+        borderRadius: 14,
+        backgroundColor: c.surfaceMuted,
+        borderWidth: 1,
+        borderColor: c.border,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    settingsSquircleActive: {
+        borderColor: c.primary,
+        borderWidth: 2,
+        backgroundColor: c.primaryMuted,
+    },
+    settingsBadge: {
+        position: 'absolute',
+        top: -5,
+        right: -5,
+        width: 16,
+        height: 16,
+        borderRadius: 8,
+        backgroundColor: c.primary,
+        alignItems: 'center',
+        justifyContent: 'center',
+    },
+    settingsBadgeText: {
+        fontSize: 10,
+        fontWeight: '700',
+        color: c.onPrimary,
+    },
     secondaryButton: {
         backgroundColor: c.cardBackground,
         borderWidth: 1,

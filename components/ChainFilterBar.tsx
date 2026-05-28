@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { View, ScrollView, TouchableOpacity, Text, Image, StyleSheet } from 'react-native';
 import { useTheme, type AppTheme } from '../constants/theme';
-import { chainBrandName, getChainMiniLogoUrl } from '../utils/chainBrandName';
+import { chainBrandName, chainBrandColorById, getChainMiniLogoUrl } from '../utils/chainBrandName';
 
 export interface ChainFilterItem {
     id: number;
@@ -44,11 +44,13 @@ export function ChainFilterBar({ chains, selectedId, onSelect, allLabel }: Props
                             onPress={() => onSelect(chain.id)}
                         >
                             {chain.logoUrl ? (
-                                <Image
-                                    source={{ uri: getChainMiniLogoUrl(chain.id, chain.logoUrl) }}
-                                    style={styles.chipLogo}
-                                    resizeMode="contain"
-                                />
+                                <View style={[styles.chipLogoTile, { backgroundColor: chainBrandColorById(chain.id) }]}>
+                                    <Image
+                                        source={{ uri: getChainMiniLogoUrl(chain.id, chain.logoUrl) }}
+                                        style={styles.chipLogo}
+                                        resizeMode="contain"
+                                    />
+                                </View>
                             ) : null}
                             <Text style={[styles.chipText, active && styles.chipTextActive]}>
                                 {chainBrandName(chain.name)}
@@ -97,8 +99,16 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         color: c.onPrimary,
         fontWeight: '600',
     },
+    chipLogoTile: {
+        width: 20,
+        height: 20,
+        borderRadius: 4,
+        alignItems: 'center',
+        justifyContent: 'center',
+        overflow: 'hidden',
+    },
     chipLogo: {
-        width: 16,
-        height: 16,
+        width: 14,
+        height: 14,
     },
 });

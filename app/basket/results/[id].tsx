@@ -1,7 +1,7 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, RefreshControl } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect, useNavigation, Stack } from 'expo-router';
-import { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
@@ -13,14 +13,15 @@ import { useProfileStore } from '../../../state/profileStore';
 import { loadCachedCoords, tryGpsCoords, persistCoords, type UserCoords } from '../../../utils/location';
 import LocationPromptModal from '../../../components/LocationPromptModal';
 import { formatEuro } from '../../../utils/formatCurrency';
+import { scoreAllCombinations, type ScoredCombo } from '../../../utils/splitBasketScore';
+import { ScreenBackButton } from '../../../components/ScreenBackButton';
+import { chainBrandColorById } from '../../../utils/chainBrandName';
 
-/** Lithuanian plural inflection for "prekė":
- *    1  → prekės     (gen. sg.) "1 prekės"
- *    2–9, 22–29 … → prekių (gen. pl.)
- *    10–19, 20, 30 … → prekių
- *  Simplified to two forms since the badge only shows positive counts. */
 function pluralizePrekes(n: number): string {
-    if (n === 1) return 'prekės';
+    const mod10 = n % 10;
+    const mod100 = n % 100;
+    if (mod10 === 1 && mod100 !== 11) return 'prekė';
+    if (mod10 >= 2 && mod10 <= 9 && (mod100 < 10 || mod100 >= 20)) return 'prekės';
     return 'prekių';
 }
 
@@ -50,6 +51,7 @@ interface StoreResult {
     chainName: string;
     chainId: number;
     chainLogoUrl: string | null;
+    chainMiniLogoUrl?: string | null;
     storeAddress: string;
     distance: number;
     total: number;
@@ -73,6 +75,10 @@ export default function BasketResultsScreen() {
     const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
     const [swipesGated, setSwipesGated] = useState(false);
     const [locationPromptVisible, setLocationPromptVisible] = useState(false);
+    const [combos, setCombos] = useState<ScoredCombo[]>([]);
+    const [storeCount, setStoreCount] = useState<1 | 2 | 3>(1);
+    const [showAllCombos, setShowAllCombos] = useState(false);
+    const [selectedCombo, setSelectedCombo] = useState<ScoredCombo | null>(null);
 
     const loadResults = async () => {
         // Detail screen now awaits the calc before pushing to this route,
@@ -84,13 +90,38 @@ export default function BasketResultsScreen() {
         setLoading(true);
         setVisibleCount(0);
         setSelectedStoreId(null);
+        setSelectedCombo(null);
+        setShowAllCombos(false);
+        setCombos([]);
 
-        const stored = await AsyncStorage.getItem(`basket_results_${id}`);
+        const [stored, metaRaw] = await Promise.all([
+            AsyncStorage.getItem(`basket_results_${id}`),
+            AsyncStorage.getItem(`basket_calc_meta_${id}`),
+        ]);
+
         if (stored) {
-            const parsed = JSON.parse(stored);
+            const parsed: StoreResult[] = JSON.parse(stored);
             setResults(parsed);
             for (let i = 0; i <= parsed.length; i++) {
                 setTimeout(() => setVisibleCount(i), i * 150);
+            }
+
+            const meta = metaRaw ? JSON.parse(metaRaw) : null;
+            const sc: 1 | 2 | 3 = meta?.storeCount ?? 1;
+            setStoreCount(sc);
+
+            if (sc > 1 && parsed.length > 0) {
+                try {
+                    const itemsRes = await fetch(`${API_BASE_URL}/api/baskets/${id}/items`);
+                    const itemsData = await itemsRes.json();
+                    const criticalIds = new Set<number>(
+                        (itemsData as any[]).filter(it => it.isCritical).map(it => Number(it.productId)),
+                    );
+                    const scored = scoreAllCombinations(parsed, criticalIds, sc);
+                    setCombos(scored); // includes single-store options — recommendation can be 1 store
+                } catch {
+                    // non-fatal — falls back to single-store view
+                }
             }
         } else {
             setResults([]);
@@ -158,10 +189,7 @@ export default function BasketResultsScreen() {
         // Set header options here — after expo-router's own focus event —
         // so the button isn't cleared when an unregistered screen gets its
         // options reset to defaults on every focus.
-        navigation.setOptions({
-            title: 'Palyginimo rezultatai',
-            headerRight: undefined,
-        });
+        navigation.setOptions({ headerRight: undefined });
 
         (async () => {
             try {
@@ -196,6 +224,11 @@ export default function BasketResultsScreen() {
     const [creatingList, setCreatingList] = useState(false);
 
     const handleCreateShoppingList = async () => {
+        // Route to split-list creation when a multi-store combo is selected
+        if (selectedCombo && !selectedStore) {
+            await handleCreateSplitShoppingList();
+            return;
+        }
         if (!selectedStore || creatingList) return;
         setCreatingList(true);
         try {
@@ -231,7 +264,8 @@ export default function BasketResultsScreen() {
             if (res.status === 409) {
                 const data = await res.json();
                 clearSessionBasket();
-                router.replace('/(tabs)/shoppingList' as any);
+                router.dismissAll();
+                router.navigate('/(tabs)/shoppingList' as any);
                 setTimeout(() => {
                     router.push(`/shopping-list/${data.listId}` as any);
                 }, 100);
@@ -246,11 +280,75 @@ export default function BasketResultsScreen() {
 
             clearSessionBasket();
             useProfileStore.getState().invalidate();
-            router.replace('/(tabs)/shoppingList' as any);
+            router.dismissAll();
+            router.navigate('/(tabs)/shoppingList' as any);
             setTimeout(() => {
                 router.push(`/shopping-list/${listData.id}` as any);
             }, 100);
         } catch (error: any) {
+            Alert.alert('Klaida', 'Nepavyko sukurti pirkinių sąrašo');
+        } finally {
+            setCreatingList(false);
+        }
+    };
+
+    const handleCreateSplitShoppingList = async () => {
+        if (!selectedCombo || creatingList) return;
+        setCreatingList(true);
+        try {
+            const { getUserId } = await import('../../../config/user');
+            const userId = await getUserId();
+
+            const createdLists: { storeId: number; storeName: string; storeAddress: string; chainName: string; chainLogoUrl: string | null; listId: number }[] = [];
+
+            for (const store of selectedCombo.stores) {
+                const assignedPids = new Set(
+                    Object.entries(selectedCombo.itemAssignments)
+                        .filter(([, sid]) => sid === store.storeId)
+                        .map(([pid]) => Number(pid)),
+                );
+                const storeItems = store.items
+                    .filter(item => assignedPids.has(item.productId))
+                    .map(item => {
+                        const it = item as any;
+                        const wasSubstituted = it.isSubstituted || it.isCrossChainAverage;
+                        return {
+                            productId: item.productId,
+                            storeProductId: wasSubstituted ? null : (it.storeProductId || null),
+                            quantity: wasSubstituted
+                                ? it.quantity
+                                : (it.storeProductId
+                                    ? (it.isWeighable ? it.quantity : it.packsNeeded || it.quantity)
+                                    : it.quantity),
+                            price: item.totalPrice,
+                        };
+                    });
+
+                const res = await fetch(`${API_BASE_URL}/api/shopping-lists`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ userId, storeId: store.storeId, basketId: Number(id), items: storeItems }),
+                });
+                if (res.status === 409) {
+                    const data = await res.json();
+                    createdLists.push({ storeId: store.storeId, storeName: store.storeName, storeAddress: store.storeAddress, chainName: store.chainName, chainLogoUrl: store.chainLogoUrl, listId: data.listId });
+                    continue;
+                }
+                if (!res.ok) throw new Error(`HTTP ${res.status}`);
+                const listData = await res.json();
+                createdLists.push({ storeId: store.storeId, storeName: store.storeName, storeAddress: store.storeAddress, chainName: store.chainName, chainLogoUrl: store.chainLogoUrl, listId: listData.id });
+            }
+
+            if (createdLists.length === 0) throw new Error('No lists created');
+            await AsyncStorage.setItem(`split_lists_${id}`, JSON.stringify(createdLists));
+            clearSessionBasket();
+            useProfileStore.getState().invalidate();
+            router.dismissAll();
+            router.navigate('/(tabs)/shoppingList' as any);
+            setTimeout(() => {
+                router.push(`/shopping-list/split/${id}` as any);
+            }, 100);
+        } catch {
             Alert.alert('Klaida', 'Nepavyko sukurti pirkinių sąrašo');
         } finally {
             setCreatingList(false);
@@ -263,7 +361,7 @@ export default function BasketResultsScreen() {
                 useLayoutEffect above so re-renders keep the button
                 attached even if expo-router's initial push timing hides
                 it briefly. */}
-            <Stack.Screen options={{ title: 'Palyginimo rezultatai' }} />
+            <Stack.Screen options={{ title: storeCount > 1 ? 'Parduotuvės' : 'Parduotuvė', headerLeft: () => <ScreenBackButton /> }} />
             <View style={styles.container}>
                 {swipesGated && (
                     <Animated.View entering={FadeIn} style={styles.gateOverlay}>
@@ -287,7 +385,7 @@ export default function BasketResultsScreen() {
                     </Animated.View>
                 ) : (
                     <FlatList
-                        data={results.slice(0, visibleCount)}
+                        data={storeCount > 1 && combos.length > 0 ? [] : results.slice(0, visibleCount)}
                         keyExtractor={item => item.storeId.toString()}
                         contentContainerStyle={styles.list}
                         refreshControl={
@@ -298,10 +396,27 @@ export default function BasketResultsScreen() {
                                 tintColor={colors.primary}
                             />
                         }
+                        ListHeaderComponent={combos.length > 0 ? (
+                            <SplitCombosHeader
+                                combos={combos}
+                                miniLogoByChainId={Object.fromEntries(results.map(r => [r.chainId, r.chainMiniLogoUrl ?? r.chainLogoUrl]))}
+                                showAll={showAllCombos}
+                                onToggleShowAll={() => setShowAllCombos(v => !v)}
+                                selectedCombo={selectedCombo}
+                                onSelectCombo={c => {
+                                    setSelectedCombo(prev => prev?.storeIds.join() === c.storeIds.join() ? null : c);
+                                    setSelectedStoreId(null); // clear single-store selection
+                                }}
+                                styles={styles}
+                                colors={colors}
+                            />
+                        ) : null}
                         ListEmptyComponent={
-                            <View style={styles.centered}>
-                                <Text style={styles.emptyText}>Rezultatų nėra</Text>
-                            </View>
+                            storeCount > 1 && combos.length > 0 ? null : (
+                                <View style={styles.centered}>
+                                    <Text style={styles.emptyText}>Parduotuvių nerasta</Text>
+                                </View>
+                            )
                         }
                         renderItem={({ item, index }) => {
                             const isCheapest = item.storeId === cheapestStoreId;
@@ -330,13 +445,13 @@ export default function BasketResultsScreen() {
                                             </View>
                                         )}
                                         <View style={styles.cardLeft}>
-                                            {item.chainLogoUrl ? (
-                                                <Image source={{ uri: item.chainLogoUrl }} style={styles.logo} resizeMode="contain" />
-                                            ) : (
-                                                <View style={styles.logoPlaceholder}>
+                                            <View style={[styles.logo, { backgroundColor: chainBrandColorById(item.chainId) }]}>
+                                                {item.chainLogoUrl ? (
+                                                    <Image source={{ uri: item.chainMiniLogoUrl ?? item.chainLogoUrl }} style={styles.logoImage} resizeMode="contain" />
+                                                ) : (
                                                     <Text style={styles.logoPlaceholderText}>{item.chainName[0]}</Text>
-                                                </View>
-                                            )}
+                                                )}
+                                            </View>
                                         </View>
                                         <View style={styles.cardContent}>
                                             <Text style={styles.storeName}>{item.storeAddress}</Text>
@@ -376,26 +491,46 @@ export default function BasketResultsScreen() {
                     />
                 )}
 
-                {selectedStore && (
+                {(selectedStore || selectedCombo) && (
                     <Animated.View entering={FadeInDown} style={[styles.bottomBar, bottomInset > 0 && { paddingBottom: 12 + bottomInset }]}>
-                        <TouchableOpacity style={styles.navigateButton} onPress={handleNavigate}>
-                            <Ionicons name="navigate-outline" size={20} color={colors.primary} />
-                            <Text style={styles.navigateText}>Vykti</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.shoppingListButton}
-                            onPress={handleCreateShoppingList}
-                            disabled={creatingList}
-                        >
-                            {creatingList ? (
-                                <ActivityIndicator size="small" color={colors.onPrimary} />
-                            ) : (
-                                <Ionicons name="list-outline" size={20} color={colors.onPrimary} />
-                            )}
-                            <Text style={styles.shoppingListText}>
-                                {creatingList ? 'Kuriama…' : 'Pirkinių sąrašas'}
-                            </Text>
-                        </TouchableOpacity>
+                        {selectedStore && (
+                            <>
+                                <TouchableOpacity style={styles.navigateButton} onPress={handleNavigate}>
+                                    <Ionicons name="navigate-outline" size={20} color={colors.primary} />
+                                    <Text style={styles.navigateText}>Vykti</Text>
+                                </TouchableOpacity>
+                                <TouchableOpacity
+                                    style={styles.shoppingListButton}
+                                    onPress={handleCreateShoppingList}
+                                    disabled={creatingList}
+                                >
+                                    {creatingList ? (
+                                        <ActivityIndicator size="small" color={colors.onPrimary} />
+                                    ) : (
+                                        <Ionicons name="list-outline" size={20} color={colors.onPrimary} />
+                                    )}
+                                    <Text style={styles.shoppingListText}>
+                                        {creatingList ? 'Kuriama…' : 'Pirkinių sąrašas'}
+                                    </Text>
+                                </TouchableOpacity>
+                            </>
+                        )}
+                        {selectedCombo && !selectedStore && (
+                            <TouchableOpacity
+                                style={styles.shoppingListButton}
+                                onPress={handleCreateShoppingList}
+                                disabled={creatingList}
+                            >
+                                {creatingList ? (
+                                    <ActivityIndicator size="small" color={colors.onPrimary} />
+                                ) : (
+                                    <Ionicons name="list-outline" size={20} color={colors.onPrimary} />
+                                )}
+                                <Text style={styles.shoppingListText}>
+                                    {creatingList ? 'Kuriama…' : 'Pirkinių sąrašas'}
+                                </Text>
+                            </TouchableOpacity>
+                        )}
                     </Animated.View>
                 )}
             </View>
@@ -408,6 +543,149 @@ export default function BasketResultsScreen() {
                 onCancel={() => setLocationPromptVisible(false)}
             />
         </>
+    );
+}
+
+// ---------------------------------------------------------------------------
+// SplitCombosHeader — shown as ListHeaderComponent when storeCount > 1
+// ---------------------------------------------------------------------------
+
+interface SplitCombosHeaderProps {
+    combos: ScoredCombo[];
+    miniLogoByChainId: Record<number, string | null | undefined>;
+    showAll: boolean;
+    onToggleShowAll: () => void;
+    selectedCombo: ScoredCombo | null;
+    onSelectCombo: (c: ScoredCombo) => void;
+    styles: ReturnType<typeof makeStyles>;
+    colors: AppTheme;
+}
+
+function SplitCombosHeader({
+    combos,
+    miniLogoByChainId,
+    showAll,
+    onToggleShowAll,
+    selectedCombo,
+    onSelectCombo,
+    styles,
+    colors,
+}: SplitCombosHeaderProps) {
+    // Deduplicate: keep first occurrence of each (sorted chainIds + price) combination
+    const dedupedCombos = (() => {
+        const seen = new Set<string>();
+        return combos.filter(combo => {
+            const chainKey = combo.stores.map(s => s.chainId).sort((a, b) => a - b).join('-');
+            const key = `${chainKey}:${Math.round(combo.splitTotal * 100)}`;
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        });
+    })();
+
+    const MAX_TOTAL = 5;
+    const displayCombos = showAll ? dedupedCombos.slice(0, MAX_TOTAL) : dedupedCombos.slice(0, 1);
+    const hasMore = dedupedCombos.length > 1;
+    const recommendedTotal = dedupedCombos[0]?.splitTotal ?? 0;
+
+    return (
+        <View>
+            {displayCombos.map((combo, idx) => {
+                const isSelected = selectedCombo?.storeIds.join() === combo.storeIds.join();
+                const isRecommended = idx === 0;
+                const totalRouteKm = combo.stores.reduce((sum, s) => sum + s.distance, 0);
+                const delta = isRecommended ? 0 : combo.splitTotal - recommendedTotal;
+
+                return (
+                    <TouchableOpacity
+                        key={combo.storeIds.join('-')}
+                        style={[
+                            styles.comboCard,
+                            isRecommended && styles.comboCardRecommended,
+                            isSelected && styles.comboCardSelected,
+                            combo.hasMissingCritical && styles.comboCardDimmed,
+                        ]}
+                        onPress={() => onSelectCombo(combo)}
+                        activeOpacity={0.75}
+                    >
+                        {isRecommended && (
+                            <View style={styles.recommendedBadge}>
+                                <Text style={styles.recommendedBadgeText}>Rekomenduojama</Text>
+                            </View>
+                        )}
+                        {combo.hasMissingCritical && (
+                            <View style={styles.criticalWarning}>
+                                <Ionicons name="alert-circle-outline" size={13} color={colors.warning} />
+                                <Text style={styles.criticalWarningText}>Trūksta svarbių prekių</Text>
+                            </View>
+                        )}
+
+                        <View style={styles.comboCardRow}>
+                            {/* Left: mini logos + counts + distance */}
+                            <View style={styles.comboCardLeft}>
+                                <View style={styles.comboStoreDetails}>
+                                    {(() => {
+                                        const rows: React.ReactNode[] = [];
+                                        combo.stores.forEach((store, si) => {
+                                            const count = Object.values(combo.itemAssignments).filter(sid => sid === store.storeId).length;
+                                            const logoUri = miniLogoByChainId[store.chainId] || store.chainLogoUrl;
+                                            if (si > 0) {
+                                                rows.push(
+                                                    <Text key={`sep-${si}`} style={styles.comboPlusSep}>+</Text>
+                                                );
+                                            }
+                                            rows.push(
+                                                <View key={store.storeId} style={styles.comboStoreDetailRow}>
+                                                    <View style={[styles.comboMiniLogo, { backgroundColor: chainBrandColorById(store.chainId) }]}>
+                                                        {logoUri ? (
+                                                            <Image source={{ uri: logoUri }} style={styles.comboMiniLogoImage} resizeMode="contain" />
+                                                        ) : (
+                                                            <Text style={styles.comboMiniLogoText}>{store.chainName[0]}</Text>
+                                                        )}
+                                                    </View>
+                                                    <View>
+                                                        <Text style={styles.comboItemCount}>{count} {pluralizePrekes(count)}</Text>
+                                                        <Text style={styles.comboStoreAddress} numberOfLines={1}>{store.storeAddress}</Text>
+                                                    </View>
+                                                </View>
+                                            );
+                                        });
+                                        return rows;
+                                    })()}
+                                </View>
+                                <View style={styles.comboDistRow}>
+                                    <Ionicons name="location-outline" size={12} color={colors.textMuted} />
+                                    <Text style={styles.comboDistText}>{totalRouteKm.toFixed(1)} km</Text>
+                                </View>
+                            </View>
+
+                            {/* Right: price + delta vs recommended */}
+                            <View style={styles.comboCardRight}>
+                                <Text style={styles.comboTotal}>{formatEuro(combo.splitTotal)}</Text>
+                                {delta !== 0 && (
+                                    <Text style={[styles.comboDelta, delta < 0 && styles.comboDeltaGood]}>
+                                        {delta > 0 ? '+' : '−'}{formatEuro(Math.abs(delta))}
+                                    </Text>
+                                )}
+                            </View>
+                        </View>
+                    </TouchableOpacity>
+                );
+            })}
+
+            {hasMore && (
+                <TouchableOpacity style={styles.showMoreBtn} onPress={onToggleShowAll}>
+                    <Text style={styles.showMoreBtnText}>
+                        {showAll ? 'Mažiau' : 'Daugiau'}
+                    </Text>
+                    <Ionicons
+                        name={showAll ? 'chevron-up' : 'chevron-down'}
+                        size={14}
+                        color={colors.primary}
+                    />
+                </TouchableOpacity>
+            )}
+        </View>
     );
 }
 
@@ -437,12 +715,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     closestBadgeText: { color: c.textInverse, fontSize: 10, fontWeight: '700' },
     cardLeft: { marginRight: 12 },
-    logo: { width: 48, height: 48, borderRadius: 8 },
-    logoPlaceholder: {
+    logo: {
         width: 48, height: 48, borderRadius: 8,
-        backgroundColor: c.border, alignItems: 'center', justifyContent: 'center',
+        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
     },
-    logoPlaceholderText: { fontSize: 20, fontWeight: '700', color: c.textSecondary },
+    logoImage: { width: 36, height: 36 },
+    logoPlaceholderText: { fontSize: 20, fontWeight: '700', color: '#FFFFFF' },
     cardContent: { flex: 1 },
     storeName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
     metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 },
@@ -529,4 +807,86 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingVertical: 12, paddingHorizontal: 24, marginTop: 8,
     },
     gateButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
+
+    // ── Split basket section ──
+    splitSectionTitle: {
+        fontSize: 12, fontWeight: '700', color: c.textMuted,
+        textTransform: 'uppercase', letterSpacing: 0.5,
+        marginTop: 4, marginBottom: 8,
+    },
+    nudgeBanner: {
+        flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+        backgroundColor: c.surfaceMuted, borderRadius: 10,
+        paddingVertical: 10, paddingHorizontal: 12, marginBottom: 10,
+    },
+    nudgeBannerText: { flex: 1, fontSize: 13, color: c.textSecondary, lineHeight: 18 },
+    comboCard: {
+        backgroundColor: c.cardBackground, borderRadius: 12,
+        padding: 14, marginBottom: 10,
+        elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
+        shadowOpacity: 0.08, shadowRadius: 2,
+    },
+    comboCardRecommended: {
+        borderWidth: 2, borderColor: c.primary,
+    },
+    comboCardSelected: {
+        borderWidth: 2, borderColor: c.primary, backgroundColor: c.primaryMuted,
+    },
+    comboCardDimmed: { opacity: 0.55 },
+    recommendedBadge: {
+        position: 'absolute', top: -8, left: 14,
+        backgroundColor: c.primary, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8,
+    },
+    recommendedBadgeText: { color: c.onPrimary, fontSize: 10, fontWeight: '700' },
+    criticalWarning: {
+        flexDirection: 'row', alignItems: 'center', gap: 4,
+        marginBottom: 6,
+    },
+    criticalWarningText: { fontSize: 11, color: c.warning, fontWeight: '600' },
+    comboLogos: {
+        flexDirection: 'row', alignItems: 'center', gap: 0, marginBottom: 8, marginTop: 4,
+    },
+    comboLogoWrap: { flexDirection: 'row', alignItems: 'center' },
+    comboPlusSep: { width: 28, textAlign: 'center', fontSize: 13, color: c.textMuted, paddingVertical: 2 },
+    comboLogo: { width: 40, height: 40, borderRadius: 8 },
+    comboLogoPlaceholder: {
+        width: 40, height: 40, borderRadius: 8,
+        backgroundColor: c.border, alignItems: 'center', justifyContent: 'center',
+    },
+    comboLogoPlaceholderText: { fontSize: 16, fontWeight: '700', color: c.textSecondary },
+    comboStoreDetails: {
+        flexDirection: 'column',
+        marginBottom: 10, marginTop: 4,
+    },
+    comboStoreDetailRow: {
+        flexDirection: 'row', alignItems: 'flex-start', gap: 6,
+    },
+    comboMiniLogo: {
+        width: 28, height: 28, borderRadius: 6,
+        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+    },
+    comboMiniLogoImage: { width: 20, height: 20 },
+    comboMiniLogoText: { fontSize: 12, fontWeight: '700', color: '#FFFFFF' },
+    comboItemCount: { fontSize: 13, color: c.textSecondary, fontWeight: '500' },
+    comboStoreAddress: { fontSize: 11, color: c.textMuted, marginTop: 1 },
+    comboCardRow: { flexDirection: 'row', alignItems: 'center' },
+    comboCardLeft: { flex: 1 },
+    comboCardRight: { alignItems: 'flex-end', paddingLeft: 12 },
+    comboDelta: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+    comboDeltaGood: { color: c.success },
+    comboDistRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+    comboDistText: { fontSize: 11, color: c.textMuted },
+    comboTotalsRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    comboTotal: { fontSize: 18, fontWeight: '700', color: c.primary },
+    comboSavingBadge: {
+        backgroundColor: c.successMuted, borderRadius: 8,
+        paddingHorizontal: 8, paddingVertical: 3,
+    },
+    comboSavingText: { fontSize: 13, fontWeight: '700', color: c.success },
+    comboEurosPerKm: { fontSize: 11, color: c.textMuted, marginTop: 4 },
+    showMoreBtn: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+        gap: 4, paddingVertical: 10, marginBottom: 6,
+    },
+    showMoreBtnText: { fontSize: 13, fontWeight: '600', color: c.primary },
 });

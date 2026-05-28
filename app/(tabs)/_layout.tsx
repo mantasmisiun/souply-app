@@ -60,7 +60,11 @@ export default function TabLayout() {
                 : 0
             );
             setListCount(Array.isArray(lists)
-                ? lists.filter((l: any) => l.status === 'active').length
+                ? new Set(
+                    lists
+                        .filter((l: any) => l.status === 'active')
+                        .map((l: any) => l.basketId != null ? `b-${l.basketId}` : `l-${l.id}`)
+                ).size
                 : 0
             );
             setPendingSwipeCount(profile?.pendingSwipeCount ?? (profile?.pendingSwipes ? 1 : 0));

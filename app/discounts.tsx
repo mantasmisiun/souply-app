@@ -4,6 +4,7 @@ import {
 } from 'react-native';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useRouter, Stack, useFocusEffect } from 'expo-router';
+import { ScreenBackButton } from '../components/ScreenBackButton';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -381,6 +382,7 @@ export default function DiscountsScreen() {
                 title: 'Nuolaidos',
                 headerStyle: { backgroundColor: colors.cardBackground },
                 headerShadowVisible: false,
+                headerLeft: () => <ScreenBackButton />,
             }} />
             <View style={{ flex: 1 }}>
                 <View style={styles.container}>

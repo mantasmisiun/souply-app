@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { TabHeader } from '../../components/TabHeader';
 import { getQueueCounts, type QueueCounts } from '../../services/adminClient';
 import { FlagsQueue } from '../../components/admin/queue/FlagsQueue';
 import { UncategorisedQueue } from '../../components/admin/queue/UncategorisedQueue';
@@ -97,6 +98,7 @@ export default function QueueScreen() {
 
     return (
         <View style={styles.root}>
+            <TabHeader title={t('admin.tabQueue')} />
             <View style={styles.chipBar}>
                 <ScrollView
                     horizontal

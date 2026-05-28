@@ -36,8 +36,13 @@ export default {
     },
     android: {
       adaptiveIcon: {
-        backgroundColor: '#FBF3E6',
-        foregroundImage: ICON,
+        // Android masks the outer ~33% of the foreground, so the artwork must
+        // sit inside the centred 66% safe zone. The *-foreground.png assets
+        // already include the padded canvas; the background colour fills
+        // whatever launcher mask shape clips the corners. Pink matches the
+        // baked-in tile for the DEV variant; cream matches the production icon.
+        backgroundColor: '#F16F8B',
+        foregroundImage: IS_DEV ? './assets/images/DEV-foreground.png' : './assets/images/android-icon-foreground.png',
       },
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
@@ -75,6 +80,15 @@ export default {
         },
       ],
       [
+        'react-native-maps',
+        {
+          // Android requires a Maps SDK API key (free, Google Cloud Console →
+          // enable "Maps SDK for Android" → create key → set GOOGLE_MAPS_API_KEY_ANDROID).
+          // iOS uses Apple Maps by default — no key needed.
+          androidGoogleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY_ANDROID || '',
+        },
+      ],
+      [
         'expo-share-intent',
         {
           // Share Extension — appears in the standard iOS/Android share sheet
@@ -97,7 +111,7 @@ export default {
       reactCompiler: true,
     },
     extra: {
-      router: {},
+      router: { notFound: false },
       eas: {
         projectId: 'd3053a04-a3bb-4dd2-81e5-d10ceddd06db',
       },

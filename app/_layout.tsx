@@ -9,6 +9,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 
 import { useTheme, useResolvedScheme } from '../constants/theme';
 import { GlassIconButton } from '../components/GlassIconButton';
+import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { DevUpdateBanner } from '../components/DevUpdateBanner';
@@ -25,6 +26,7 @@ import { QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { KeyboardProvider } from 'react-native-keyboard-controller';
 
 // Install the global fetch shim once at module load so every API call
 // — including those that bypass `fetchWithTimeout` — sends the right
@@ -205,6 +207,7 @@ export default function RootLayout() {
   };
 
   return (
+    <KeyboardProvider>
     <PersistQueryClientProvider
       client={queryClient}
       persistOptions={{
@@ -272,13 +275,7 @@ export default function RootLayout() {
             // in global screenOptions) sidesteps the phantom-screen
             // duplicate-mount bug that hit when headerLeft was set
             // globally on the root Stack.
-            headerLeft: () => (
-              <GlassIconButton
-                icon="chevron-back"
-                onPress={() => router.canGoBack() && router.back()}
-                size={24}
-              />
-            ),
+            headerLeft: () => <ScreenBackButton />,
           }}
         />
         <Stack.Screen name="profile/restore-account" options={{ title: t('restore.title') }} />
@@ -298,5 +295,6 @@ export default function RootLayout() {
     </DisplayPreferenceProvider>
     </ShareIntentProvider>
     </PersistQueryClientProvider>
+    </KeyboardProvider>
   );
 }

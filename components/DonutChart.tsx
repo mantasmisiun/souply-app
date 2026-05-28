@@ -21,6 +21,8 @@ export interface DonutSlice {
     value: number;
     color: string;
     logoUri?: string | null;
+    /** Background colour for the center logo tile when this slice is selected. */
+    brandColor?: string;
 }
 
 interface Props {
@@ -301,10 +303,15 @@ export function DonutChart({
 
             {/* Logo floats above the text block without affecting its layout */}
             {selectedSlice?.logoUri && (
-                <View pointerEvents="none" style={{ position: 'absolute', top: logoTop, left: logoLeft }}>
+                <View pointerEvents="none" style={{
+                    position: 'absolute', top: logoTop, left: logoLeft,
+                    width: LOGO_SIZE, height: LOGO_SIZE, borderRadius: 6, overflow: 'hidden',
+                    alignItems: 'center', justifyContent: 'center',
+                    backgroundColor: selectedSlice.brandColor ?? 'transparent',
+                }}>
                     <Image
                         source={{ uri: selectedSlice.logoUri }}
-                        style={{ width: LOGO_SIZE, height: LOGO_SIZE, borderRadius: 4 }}
+                        style={{ width: LOGO_SIZE * 0.7, height: LOGO_SIZE * 0.7 }}
                         resizeMode="contain"
                     />
                 </View>

@@ -524,16 +524,16 @@
     "addedToast": "Pridėta į krepšelį",
     "cancelled": "Atšaukta",
     "noProducts": "Ši kategorija neturi produktų",
-    "combineAlternatives": "Apjungti alternatyvas",
+    "combineAlternatives": "Taupytojo režimas",
     "allProducts": "Visi produktai",
     "modeSwitch": {
       "title": "Keisti režimą?",
       "body": "Jūsų krepšelyje yra prekių. Keičiant režimą jos bus taip pat pakeistos.",
       "confirm": "Keisti",
       "experimentalBadge": "(EKSPERIMENTINĖ)",
-      "helpTitle": "Apjungti alternatyvas",
-      "explainer": "Įjungus šį režimą, panašūs produktai iš skirtingų gamintojų ar variantų rodomi kaip viena prekė. Skaičiuojant krepšelio kainą, kiekvienoje parduotuvėje bus parenkamas pigiausias variantas iš tos grupės.",
-      "example": "Pavyzdžiui, „Pienas 2,5%\" ir „Pienas 3,5%\" yra laikomi alternatyvomis — krepšelyje matysite vieną eilutę, o lygindami parduotuves matysite pigiausio varianto kainą.",
+      "helpTitle": "Taupytojo režimas",
+      "explainer": "Taupytojo režimas išplečia produktų palyginimą įtraukiant panašias alternatyvas.",
+      "example": "Sistema analizuoja susietus produktus tarp parduotuvių ir apskaičiuoja, kuris variantas suteikia geriausią vertę pagal kainą, kiekį ir vartotojo pasirinkimus.",
       "gotIt": "Supratau"
     }
   },
@@ -874,7 +874,10 @@
     "pickStoreTitle": "Pasirinkite parduotuvę",
     "noStoresFound": "Nerasta parduotuvių",
     "fabScanQr": "Skenuoti QR",
-    "fabCreate": "Kurti"
+    "fabCreate": "Kurti",
+    "filterAll": "Visi",
+    "searchPlaceholder": "Ieškoti sąrašų...",
+    "noSearchResults": "Nieko nerasta"
   },
   "profilis": {
     "levelLabel": "Lygis {{level}}",

@@ -9,6 +9,7 @@ import Animated, {
     withTiming,
 } from 'react-native-reanimated';
 import { TabHeader } from '../../components/TabHeader';
+import { GlassIconButton } from '../../components/GlassIconButton';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -22,6 +23,7 @@ import { useLevelStore } from '../../state/levelStore';
 import { useProfileStore, fetchProfileIfStale } from '../../state/profileStore';
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { formatEuro } from '../../utils/formatCurrency';
+import { chainBrandColor } from '../../utils/chainBrandName';
 import * as Haptics from 'expo-haptics';
 import Constants from 'expo-constants';
 
@@ -59,22 +61,25 @@ function Legend({
                 return (
                     <Animated.View
                         key={item.label}
-                        style={[legendStyles.row, dimmed && legendStyles.rowDimmed]}
                         entering={FadeIn.duration(280)}
                         exiting={FadeOut.duration(160)}
                         layout={LinearTransition.duration(280)}
                     >
-                        {item.logoUri ? (
-                            <Image
-                                source={{ uri: item.logoUri }}
-                                style={legendStyles.logo}
-                                resizeMode="contain"
-                            />
-                        ) : (
-                            <View style={[legendStyles.dot, { backgroundColor: item.color }]} />
-                        )}
-                        <Text style={[legendStyles.label, { color: colors.textSecondary }]} numberOfLines={1}>{item.label}</Text>
-                        <Text style={[legendStyles.value, { color: colors.textPrimary }]}>{formatEuro(item.value)}</Text>
+                        <View style={[legendStyles.row, dimmed && legendStyles.rowDimmed]}>
+                            {item.logoUri ? (
+                                <View style={[legendStyles.logoTile, { backgroundColor: chainBrandColor(item.label) }]}>
+                                    <Image
+                                        source={{ uri: item.logoUri }}
+                                        style={legendStyles.logo}
+                                        resizeMode="contain"
+                                    />
+                                </View>
+                            ) : (
+                                <View style={[legendStyles.dot, { backgroundColor: item.color }]} />
+                            )}
+                            <Text style={[legendStyles.label, { color: colors.textSecondary }]} numberOfLines={1}>{item.label}</Text>
+                            <Text style={[legendStyles.value, { color: colors.textPrimary }]}>{formatEuro(item.value)}</Text>
+                        </View>
                     </Animated.View>
                 );
             })}
@@ -86,7 +91,11 @@ const legendStyles = StyleSheet.create({
     row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     rowDimmed: { opacity: 0.3 },
     dot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
-    logo: { width: 20, height: 20, borderRadius: 4, flexShrink: 0 },
+    logoTile: {
+        width: 20, height: 20, borderRadius: 4, flexShrink: 0,
+        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+    },
+    logo: { width: 14, height: 14 },
     label: { flex: 1, fontSize: 13 },
     value: { fontSize: 13, fontWeight: '600', flexShrink: 0 },
 });
@@ -155,6 +164,7 @@ export default function ProfilisScreen() {
 
     const storeSlices: DonutSlice[] = (stats?.storeBreakdown ?? []).map(s => ({
         label: s.chainName, value: s.total, color: s.color, logoUri: s.miniLogoUrl,
+        brandColor: chainBrandColor(s.chainName),
     }));
     // Server returns categoryBreakdown already truncated with a synthetic
     // "Kitos" aggregate as the last item; the full per-category split lives
@@ -267,12 +277,7 @@ export default function ProfilisScreen() {
     ];
 
     const settingsGear = (
-        <TouchableOpacity
-            onPress={() => router.push('/settings' as any)}
-            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-        >
-            <Ionicons name="settings-outline" size={24} color={colors.textPrimary} />
-        </TouchableOpacity>
+        <GlassIconButton icon="settings-outline" onPress={() => router.push('/settings' as any)} />
     );
 
     return (

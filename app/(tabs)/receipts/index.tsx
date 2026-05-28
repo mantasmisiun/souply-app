@@ -1,12 +1,13 @@
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
-import { useFocusEffect, useRouter } from "expo-router";
-import { useSafeBottomTabBarHeight } from "../../hooks/useSafeBottomTabBarHeight";
+import { Stack, useFocusEffect, useRouter } from "expo-router";
+import { useSafeBottomTabBarHeight } from "../../../hooks/useSafeBottomTabBarHeight";
+import { StoreChipBar } from "../../../components/StoreChipBar";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { useReceiptQueueStore, type QueueItem } from "../../state/receiptQueueStore";
+import { useReceiptQueueStore, type QueueItem } from "../../../state/receiptQueueStore";
 import {
     ActivityIndicator,
     Alert,
@@ -15,28 +16,26 @@ import {
     Modal,
     Pressable,
     RefreshControl,
-    ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
     View,
 } from "react-native";
-import { TabHeader } from "../../components/TabHeader";
-import { API_BASE_URL } from "../../config/api";
-import { getUserId } from "../../config/user";
-import { useTheme, type AppTheme } from "../../constants/theme";
-import { chainBrandName } from "../../utils/chainBrandName";
-import { SkeletonBox } from "../../components/SkeletonBox";
-import { PendingSwipesBanner } from "../../components/PendingSwipesBanner";
-import { DEV_MODE } from "../../constants/flags";
+import { API_BASE_URL } from "../../../config/api";
+import { getUserId } from "../../../config/user";
+import { useTheme, type AppTheme } from "../../../constants/theme";
+import { chainBrandName, chainBrandColor } from "../../../utils/chainBrandName";
+import { SkeletonBox } from "../../../components/SkeletonBox";
+import { PendingSwipesBanner } from "../../../components/PendingSwipesBanner";
+import { DEV_MODE } from "../../../constants/flags";
 import {
     clearReceiptDraft,
     loadReceiptDraft,
-} from "../../state/receiptDraft";
-import { fetchWithTimeout, TIMEOUT_HEAVY_MS, TIMEOUT_STANDARD_MS } from "../../utils/fetchWithTimeout";
-import { formatDate } from "../../utils/formatCurrency";
-import { useNetworkStatus } from "../../state/networkStatus";
-import { useLevelStore } from "../../state/levelStore";
+} from "../../../state/receiptDraft";
+import { fetchWithTimeout, TIMEOUT_HEAVY_MS, TIMEOUT_STANDARD_MS } from "../../../utils/fetchWithTimeout";
+import { formatDate } from "../../../utils/formatCurrency";
+import { useNetworkStatus } from "../../../state/networkStatus";
+import { useLevelStore } from "../../../state/levelStore";
 
 interface Receipt {
   id: number;
@@ -52,11 +51,6 @@ interface Receipt {
   storeAddress: string | null;
   mandatorySwipesRequired: number;
   mandatorySwipesCompleted: number;
-  /**
-   * Persisted parsed receipt blob. mysql2 returns this as either a
-   * pre-parsed object (JSON column) or a raw string (TEXT column),
-   * depending on the underlying schema version.
-   */
   parsedData?: unknown;
 }
 
@@ -66,11 +60,6 @@ type ListItem =
   | { kind: "section"; title: string; id: string }
   | { kind: "receipt"; data: Receipt };
 
-/**
- * `JSON.parse` that swallows errors. Used for receipt rows whose
- * `parsedData` column is a TEXT blob — a malformed row shouldn't
- * crash the receipt list.
- */
 const safeJsonParse = (raw: string): any => {
   try {
     return JSON.parse(raw);
@@ -79,28 +68,14 @@ const safeJsonParse = (raw: string): any => {
   }
 };
 
-/**
- * The `StoreChain.name` column stores the legal entity (e.g. "UAB RIMI
- * LIETUVA"), which is what scrapers see in receipt headers. Map it to
- * the short brand name for UI surfaces like the filter chips. Falls
- * through to the raw name when an entry isn't in the table — safer
- * than silently dropping unfamiliar chains.
- */
-
 function queueStatusLabel(item: QueueItem, t: TFunction): string {
   if (item.status === "pending") return t('receipts.status.pending');
   if (item.status === "awaiting_network") return t('receipts.status.awaitingNetworkBadge');
   if (item.status === "error") {
-    // Duplicate-detection key compares against the RAW backend error
-    // string (Lithuanian-only on the server) — that comparison stays
-    // hardcoded. The UI label is translated.
     return item.error === "Kvitas jau įkeltas"
       ? t('receipts.status.duplicate')
       : t('receipts.status.failed');
   }
-  // processing — `progress` is a server-emitted Lithuanian phase string
-  // ("Nuskaitoma", "Atpažįstama X/Y", "Išsaugoma..."). We pattern-match
-  // its prefix to pick a translated badge label.
   const p = item.progress;
   if (!p) return t('receipts.status.processing');
   if (p.startsWith("Nusk")) return t('receipts.status.scanning');
@@ -109,13 +84,11 @@ function queueStatusLabel(item: QueueItem, t: TFunction): string {
   return t('receipts.status.processing');
 }
 
-/** Title that appears as the queue card heading. Filename when known. */
 function queueCardTitle(item: QueueItem, t: TFunction): string {
   if (item.name) return item.name;
   return t('receipts.status.defaultTitle');
 }
 
-/** Progress fraction 0..1 for the bottom bar. Returns null for indeterminate. */
 function queueProgressFraction(item: QueueItem): number | null {
   if (item.status !== "processing") return null;
   if (item.progressTotal && item.progressTotal > 0 && item.progressDone != null) {
@@ -123,7 +96,7 @@ function queueProgressFraction(item: QueueItem): number | null {
   }
   if (item.progress?.startsWith("Išsaug")) return 0.95;
   if (item.progress?.startsWith("Atpažįst")) return 0.4;
-  return null; // indeterminate (OCR phase)
+  return null;
 }
 
 const hasPendingSwipes = (item: Receipt) =>
@@ -135,28 +108,14 @@ export default function ReceiptsScreen() {
   const colors = useTheme();
   const { t } = useTranslation();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  // Tab bar is position:absolute on iOS (liquid-glass), so the FAB
-  // needs to sit above it instead of using a static bottom: 24 which
-  // gets hidden under the bar.
   const tabBarHeight = useSafeBottomTabBarHeight();
   const checkCandidate = useLevelStore(s => s.checkCandidate);
   useFocusEffect(useCallback(() => { checkCandidate(); }, [checkCandidate]));
   const [receipts, setReceipts] = useState<Receipt[]>([]);
-  // Chain filter for the list. `null` = "Visi" (show every chain).
-  // Resets on focus only when the underlying chain disappears from the
-  // user's receipts (e.g. after a delete), so navigating away and back
-  // preserves the user's current filter.
   const [selectedChain, setSelectedChain] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
-  // Block scan actions when offline — OCR still works but every
-  // downstream HTTP call (store match, product match, POST, upload,
-  // comparison) will fail. Better to stop the user up front than
-  // surface a cascade of errors after a 5-second OCR. FAB visually
-  // dims and the "+" becomes inert while offline; existing-receipt
-  // taps still navigate fine (loadExistingReceipt has its own
-  // error handling for broken parsedData).
   const isOnline = useNetworkStatus((s) => s.isOnline);
   const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
   const [previewOnly, setPreviewOnly] = useState(false);
@@ -170,16 +129,12 @@ export default function ReceiptsScreen() {
   const onPickCamera = () => {
     setUploadMenuOpen(false);
     if (previewOnly) {
-      // Camera preview mode still needs a URI path; capture screen handles it.
       router.push(`/receipt/capture?preview=true` as any);
     } else {
       router.push("/receipt/capture" as any);
     }
   };
 
-  // File upload — single or multiple — always enqueues. The interactive
-  // /receipt-process screen is reachable via camera capture or by tapping
-  // an existing receipt; never auto-navigated from file pick.
   const onPickFile = async () => {
     setUploadMenuOpen(false);
     await new Promise(resolve => setTimeout(resolve, 300));
@@ -190,8 +145,6 @@ export default function ReceiptsScreen() {
     });
     if (picked.canceled || !picked.assets?.length) return;
 
-    // Show the PDF spinner only if any picked file is a PDF — for plain
-    // images we add to the queue immediately.
     const hasPdf = picked.assets.some(a =>
       (a.mimeType === 'application/pdf') ||
       (a.name?.toLowerCase().endsWith('.pdf') ?? false)
@@ -260,16 +213,10 @@ export default function ReceiptsScreen() {
     } catch (error) {
       console.error("Failed to fetch receipts:", error);
     } finally {
-      // Only the very first fetch needs to flip the initial spinner off.
-      // Background refreshes leave `loading` alone (it's already false).
       setLoading((prev) => (prev ? false : prev));
     }
   };
 
-  // Safety-net poll for legacy server-side processing. With the new
-  // batch flow, receipts arrive as `completed` — this rarely engages.
-  // Memoising the dep as a boolean prevents the interval from being
-  // torn down and recreated every time `setReceipts` runs.
   const hasPendingProcessing = useMemo(
     () =>
       receipts.some(
@@ -290,35 +237,23 @@ export default function ReceiptsScreen() {
     }, []),
   );
 
-  // Refresh receipts list whenever a batch queue item finishes processing.
   const lastCompletedAt = useReceiptQueueStore((s) => s.lastCompletedAt);
   useEffect(() => {
     if (!lastCompletedAt) return;
     fetchReceipts();
   }, [lastCompletedAt]);
 
-  // Clear recentIds (and thus the "Nauji" section + banner) only once
-  // the *entire* batch is done — i.e., no recent receipt still has
-  // pending swipes. Pruning individuals would split the batch visually,
-  // making receipts hop from "Nauji" to "Anksčiau" while their siblings
-  // are still in flight. Worse UX than keeping them grouped.
   useEffect(() => {
     if (recentIds.length === 0) return;
     const anyStillPending = receipts.some(
       (r) => recentIds.includes(r.id) && hasPendingSwipes(r),
     );
-    // Defensive: also clear if recentIds references receipts that no
-    // longer exist server-side (deleted, never persisted). Otherwise
-    // a ghost ID would block the batch from ever closing out.
     const anyKnownRecent = receipts.some((r) => recentIds.includes(r.id));
     if (!anyStillPending && anyKnownRecent) {
       pruneRecentIds([]);
     }
   }, [receipts, recentIds, pruneRecentIds]);
 
-  // Resume prompt: if a draft was saved by a previous /receipt-process
-  // session that didn't survive to POST, offer the user the option to
-  // pick up where they left off.
   useEffect(() => {
     let active = true;
     (async () => {
@@ -384,7 +319,6 @@ export default function ReceiptsScreen() {
     }
   };
 
-  // ── Derived: pending-swipes banner state ─────────────────────────
   const recentReceiptsWithPending = useMemo(
     () => receipts.filter((r) => recentIds.includes(r.id) && hasPendingSwipes(r)),
     [receipts, recentIds],
@@ -417,20 +351,10 @@ export default function ReceiptsScreen() {
     } as any);
   };
 
-  // ── Derived: chain filter chips ──────────────────────────────────
-  // Aggregate receipts by chainName, sort by count desc so the chains
-  // the user actually shops at most appear first. Chains with zero
-  // receipts (and the bucket for receipts whose chain couldn't be
-  // matched — chainName null) don't get their own chip. Keeps a logo
-  // URL per chip so we can render a mini brand mark instead of the
-  // raw legal entity name ("UAB RIMI LIETUVA" → Rimi logo).
   const chainFilters = useMemo(() => {
     const acc = new Map<string, { name: string; logoUrl: string | null; count: number }>();
     for (const r of receipts) {
       if (!r.chainName) continue;
-      // Prefer the mini logo (square brand mark) for the chip — falls
-      // back to the full logo when a chain doesn't have a dedicated
-      // mini asset (Iki, Lidl ship the same image for both).
       const logo = r.chainMiniLogoUrl ?? r.chainLogoUrl ?? null;
       const existing = acc.get(r.chainName);
       if (existing) {
@@ -443,9 +367,6 @@ export default function ReceiptsScreen() {
     return Array.from(acc.values()).sort((a, b) => b.count - a.count);
   }, [receipts]);
 
-  // Drop the selected filter if the underlying chain no longer has
-  // receipts (e.g. user deleted the last one). Prevents the UI from
-  // sitting on a now-empty filter that hides the whole list.
   useEffect(() => {
     if (selectedChain === null) return;
     if (!chainFilters.some((c) => c.name === selectedChain)) {
@@ -453,11 +374,8 @@ export default function ReceiptsScreen() {
     }
   }, [chainFilters, selectedChain]);
 
-  // ── Derived: section-aware data array ────────────────────────────
   const listData: ListItem[] = useMemo(() => {
     const out: ListItem[] = [];
-    // Queue items always show — they're transient processing state and
-    // a chain filter wouldn't apply (chain isn't resolved yet).
     for (const q of queueItems) out.push({ kind: "queue", data: q });
     const filtered = selectedChain
       ? receipts.filter((r) => r.chainName === selectedChain)
@@ -477,20 +395,33 @@ export default function ReceiptsScreen() {
 
   if (loading) {
     return (
-      <View style={[styles.list, { paddingTop: 16 }]}>
-        {Array.from({ length: 5 }).map((_, i) => (
-          <View key={i} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10, gap: 12 }}>
-            <SkeletonBox width={44} height={44} borderRadius={8} />
-            <View style={{ flex: 1, gap: 8 }}>
-              <SkeletonBox width='70%' height={13} borderRadius={6} />
-              <SkeletonBox width='45%' height={11} borderRadius={6} />
+      <View style={styles.container}>
+        <Stack.Screen options={{ title: t('tabs.receipts') }} />
+        <View style={{
+          backgroundColor: colors.cardBackground,
+          borderBottomWidth: 0.5, borderBottomColor: colors.border,
+          flexDirection: 'row', gap: 8,
+          paddingHorizontal: 12, paddingVertical: 10,
+        }}>
+          {Array.from({ length: 4 }).map((_, i) => (
+            <SkeletonBox key={i} width={i === 0 ? 64 : 80} height={32} borderRadius={20} />
+          ))}
+        </View>
+        <View style={[styles.list, { paddingTop: 16 }]}>
+          {Array.from({ length: 5 }).map((_, i) => (
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10, gap: 12 }}>
+              <SkeletonBox width={32} height={32} borderRadius={6} />
+              <View style={{ flex: 1, gap: 8 }}>
+                <SkeletonBox width='70%' height={13} borderRadius={6} />
+                <SkeletonBox width='45%' height={11} borderRadius={6} />
+              </View>
+              <View style={{ alignItems: 'flex-end', gap: 8 }}>
+                <SkeletonBox width={48} height={11} borderRadius={6} />
+                <SkeletonBox width={56} height={18} borderRadius={8} />
+              </View>
             </View>
-            <View style={{ alignItems: 'flex-end', gap: 8 }}>
-              <SkeletonBox width={48} height={11} borderRadius={6} />
-              <SkeletonBox width={56} height={18} borderRadius={8} />
-            </View>
-          </View>
-        ))}
+          ))}
+        </View>
       </View>
     );
   }
@@ -558,8 +489,6 @@ export default function ReceiptsScreen() {
             <Ionicons name="close" size={20} color={colors.textMuted} />
           </TouchableOpacity>
         )}
-        {/* Bottom progress bar: 4px sliver. Determinate when we know the
-            product count, indeterminate-ish (partial fill) otherwise. */}
         {isProcessing && (
           <View style={styles.progressTrack} pointerEvents="none">
             <View
@@ -607,12 +536,18 @@ export default function ReceiptsScreen() {
         }}
       >
         <View style={styles.cardLeft}>
-          {item.chainLogoUrl ? (
-            <Image
-              source={{ uri: item.chainLogoUrl }}
-              style={styles.cardLogo}
-              resizeMode="contain"
-            />
+          {item.chainLogoUrl || item.chainName ? (
+            <View style={[styles.cardLogo, { backgroundColor: chainBrandColor(item.chainName ?? '') }]}>
+              {item.chainMiniLogoUrl ?? item.chainLogoUrl ? (
+                <Image
+                  source={{ uri: (item.chainMiniLogoUrl ?? item.chainLogoUrl) as string }}
+                  style={styles.cardLogoImage}
+                  resizeMode="contain"
+                />
+              ) : (
+                <Text style={styles.cardLogoFallback}>{(item.chainName ?? '?')[0]}</Text>
+              )}
+            </View>
           ) : (
             <Ionicons name="receipt-outline" size={28} color={colors.primary} />
           )}
@@ -646,49 +581,18 @@ export default function ReceiptsScreen() {
 
   return (
     <View style={styles.container}>
-      <TabHeader title={t('tabs.receipts')} />
-      {/* Chain filter chips — own section under the navbar, white
-          background continuous with the (now-white) navbar above.
-          Hidden when the user has no receipts yet (nothing to filter)
-          or only a single chain (filter would have no effect). */}
+      <Stack.Screen options={{ title: t('tabs.receipts') }} />
       {chainFilters.length > 1 && (
-        <View style={styles.filterBar}>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.filterScroll}
-          >
-            <TouchableOpacity
-              style={[styles.chip, selectedChain === null && styles.chipActive]}
-              onPress={() => setSelectedChain(null)}
-            >
-              <Text style={[styles.chipText, selectedChain === null && styles.chipTextActive]}>
-                {t('receipts.filterAll')}
-              </Text>
-            </TouchableOpacity>
-            {chainFilters.map((f) => {
-              const active = selectedChain === f.name;
-              return (
-                <TouchableOpacity
-                  key={f.name}
-                  style={[styles.chip, active && styles.chipActive]}
-                  onPress={() => setSelectedChain(f.name)}
-                >
-                  {f.logoUrl && (
-                    <Image
-                      source={{ uri: f.logoUrl }}
-                      style={styles.chipLogo}
-                      resizeMode="contain"
-                    />
-                  )}
-                  <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                    {chainBrandName(f.name)}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
-          </ScrollView>
-        </View>
+        <StoreChipBar
+          chips={chainFilters.map(f => ({
+            id: f.name,
+            label: chainBrandName(f.name),
+            logoUrl: f.logoUrl,
+          }))}
+          selectedId={selectedChain}
+          onSelect={id => setSelectedChain(id as string | null)}
+          allLabel={t('receipts.filterAll')}
+        />
       )}
       <FlatList
         data={listData}
@@ -784,10 +688,6 @@ export default function ReceiptsScreen() {
               <Text style={styles.menuRowText}>{t('receipts.menu.uploadAction')}</Text>
             </TouchableOpacity>
 
-            {/* Preview-only mode is a parser-iteration tool, not a user
-                feature — hide it from release builds. DEV_MODE is a
-                compile-time boolean in constants/flags.ts; when false,
-                the minifier drops this whole block. */}
             {DEV_MODE && (
               <TouchableOpacity
                 style={styles.previewToggle}
@@ -825,48 +725,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   list: { padding: 16, paddingBottom: 80 },
 
-  // ── Chain filter chips ───────────────────────────────────────────
-  // Visual + structural copy of the L2-category browse screen's
-  // bubble row so the two screens read as the same component family.
-  filterBar: {
-    backgroundColor: c.cardBackground,
-    borderBottomWidth: 0.5,
-    borderBottomColor: c.border,
-    flexGrow: 0,
-    flexShrink: 0,
-  },
-  filterScroll: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    gap: 8,
-  },
-  chip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: c.border,
-    backgroundColor: c.cardBackground,
-  },
-  chipActive: {
-    backgroundColor: c.primary,
-    borderColor: c.primary,
-  },
-  chipText: {
-    fontSize: 13,
-    color: c.textPrimary,
-  },
-  chipTextActive: {
-    color: c.onPrimary,
-    fontWeight: "600",
-  },
-  chipLogo: {
-    width: 16,
-    height: 16,
-  },
   card: {
     backgroundColor: c.cardBackground,
     borderRadius: 12,
@@ -923,7 +781,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     shadowOpacity: 0.12,
   },
   cardLeft: { marginRight: 12, width: 36, alignItems: "center", justifyContent: "center" },
-  cardLogo: { width: 32, height: 32 },
+  cardLogo: {
+    width: 32, height: 32, borderRadius: 6,
+    alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
+  },
+  cardLogoImage: { width: 22, height: 22 },
+  cardLogoFallback: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
   cardContent: { flex: 1, minWidth: 0 },
   cardTitle: { fontSize: 15, fontWeight: "600", color: c.textPrimary },
   cardAddress: { fontSize: 12, color: c.textSecondary, marginTop: 2 },

@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
     Modal, View, Text, TextInput, TouchableOpacity,
-    StyleSheet, KeyboardAvoidingView, Platform,
+    StyleSheet,
 } from 'react-native';
+import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
@@ -31,10 +32,7 @@ export default function ProductEditModal({ visible, product, onSave, onCancel }:
 
     return (
         <Modal visible={visible} animationType="slide" onRequestClose={onCancel} transparent>
-            <KeyboardAvoidingView
-                style={styles.overlay}
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            >
+            <KeyboardAvoidingView style={styles.overlay}>
                 <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onCancel} />
                 <View style={[styles.sheet, { paddingBottom: Math.max(24, bottom) }]}>
                     <View style={styles.handle} />

@@ -1,7 +1,8 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView,
-    TextInput, Alert, Image, KeyboardAvoidingView, Platform,
+    View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
+    TextInput, Alert, Image,
 } from 'react-native';
+import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -168,10 +169,6 @@ export default function ReceiptSplitScreen() {
 
     return (
         <GestureHandlerRootView style={{ flex: 1 }}>
-        <KeyboardAvoidingView
-            style={{ flex: 1 }}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
             <Stack.Screen
                 options={{
                     title: t('admin.split.title'),
@@ -181,10 +178,11 @@ export default function ReceiptSplitScreen() {
                     headerShadowVisible: false,
                 }}
             />
-            <ScrollView
+            <KeyboardAwareScrollView
                 style={styles.page}
                 contentContainerStyle={styles.scroll}
                 keyboardShouldPersistTaps="handled"
+                bottomOffset={72}
             >
                 {/* Receipt crop with draggable split divider */}
                 <View style={styles.cropCard}>
@@ -255,7 +253,7 @@ export default function ReceiptSplitScreen() {
                 />
 
                 <View style={styles.spacer} />
-            </ScrollView>
+            </KeyboardAwareScrollView>
 
             <View style={styles.footer}>
                 <TouchableOpacity
@@ -271,7 +269,6 @@ export default function ReceiptSplitScreen() {
                           </>}
                 </TouchableOpacity>
             </View>
-        </KeyboardAvoidingView>
         </GestureHandlerRootView>
     );
 }

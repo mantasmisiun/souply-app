@@ -5,9 +5,7 @@ import {
     ActivityIndicator,
     Alert,
     Image,
-    KeyboardAvoidingView,
     Modal,
-    Platform,
     ScrollView,
     StyleSheet,
     Text,
@@ -15,6 +13,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../../config/api";
 import { getUserId } from "../../config/user";
@@ -359,10 +358,7 @@ export default function CreateStoreProductModal({
       animationType="fade"
       onRequestClose={onClose}
     >
-      <KeyboardAvoidingView
-        style={styles.overlay}
-        behavior={Platform.OS === "ios" ? "padding" : undefined}
-      >
+      <KeyboardAvoidingView style={styles.overlay}>
         <View style={styles.card}>
           <Text style={styles.title}>{t('createProduct.title')}</Text>
 
