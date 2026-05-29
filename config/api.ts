@@ -46,7 +46,10 @@ const getDevHost = (): string => {
 
 const DEV_LAN_URL = `http://${getDevHost()}:3000`;
 const DEV_VARIANT_LAN_URL = `http://${DEV_VARIANT_LAN_HOST}:3000`;
-const PROD_URL = 'https://api.manofoto.dpdns.org';
+// New stack: souply-api → souply_production (full migrations + features
+// the legacy basket-api/Basket_DB lacks). Legacy host was
+// api.manofoto.dpdns.org → basket-api → Basket_DB.
+const PROD_URL = 'https://api.souply.manofoto.dpdns.org';
 
 // Order matters:
 //   __DEV__ wins (Metro is the source of truth for the LAN host).
