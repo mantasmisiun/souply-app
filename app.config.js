@@ -4,7 +4,7 @@ const ICON = IS_DEV ? './assets/images/DEV.png' : './assets/images/icon.png';
 export default {
   expo: {
     name: IS_DEV ? 'Souply (DEV)' : 'Souply',
-    slug: 'souply',
+    slug: 'souply-app',
     version: '1.0.0',
     orientation: 'portrait',
     icon: ICON,
@@ -13,7 +13,7 @@ export default {
     newArchEnabled: true,
     ios: {
       supportsTablet: true,
-      bundleIdentifier: IS_DEV ? 'com.souply.app.dev' : 'com.souply.app',
+      bundleIdentifier: IS_DEV ? 'lt.souply.app.dev' : 'lt.souply.app',
       buildNumber: '5',
       // Associated Domains — Universal Links for souply.lt/t/{slug} and
       // souply.lt/@{username}. The matching apple-app-site-association
@@ -68,7 +68,7 @@ export default {
       ],
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
-      package: IS_DEV ? 'com.souply.app.dev' : 'com.souply.app',
+      package: IS_DEV ? 'lt.souply.app.dev' : 'lt.souply.app',
       permissions: [
         'ACCESS_COARSE_LOCATION',
         'ACCESS_FINE_LOCATION',
@@ -120,10 +120,10 @@ export default {
             NSExtensionActivationSupportsImageWithMaxCount: 10,
             NSExtensionActivationSupportsFileWithMaxCount: 10,
           },
-          iosAppGroupIdentifier: IS_DEV ? 'group.com.souply.app.dev' : 'group.com.souply.app',
+          iosAppGroupIdentifier: IS_DEV ? 'group.lt.souply.app.dev' : 'group.lt.souply.app',
           iosShareExtensionBundleIdentifier: IS_DEV
-            ? 'com.souply.app.dev.ShareExtension'
-            : 'com.souply.app.ShareExtension',
+            ? 'lt.souply.app.dev.ShareExtension'
+            : 'lt.souply.app.ShareExtension',
           // Android — single and multi-file sharing
           androidIntentFilters: ['image/*', 'application/pdf', '*/*'],
           androidMultiIntentFilters: ['image/*', 'application/pdf'],

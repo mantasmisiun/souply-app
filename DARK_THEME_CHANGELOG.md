@@ -72,7 +72,7 @@
 
 ## Commit + push
 
-From `/home/mantas/Documents/Projects/basket-app`:
+From `/home/mantas/Documents/Projects/souply-app`:
 
 ```sh
 git add \

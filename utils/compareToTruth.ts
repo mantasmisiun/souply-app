@@ -97,7 +97,7 @@ const AMOUNT_EPS = 0.001;
 
 /** Levenshtein edit distance — same algorithm as
  *  basket-api/src/utils/addressMatcher.ts. Inlined here because
- *  basket-app can't import from basket-api. */
+ *  souply-app can't import from basket-api. */
 function levenshtein(a: string, b: string): number {
     if (a.length === 0) return b.length;
     if (b.length === 0) return a.length;

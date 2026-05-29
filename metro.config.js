@@ -1,7 +1,7 @@
 // Metro config. The parsers live in `Project/shared/parsers/` —
-// outside basket-app. We point at the IN-PROJECT `./shared/` copy
+// outside souply-app. We point at the IN-PROJECT `./shared/` copy
 // (populated by `npm run sync-shared` from `../shared`) rather than
-// `../shared` directly: EAS Build uploads only the basket-app tree,
+// `../shared` directly: EAS Build uploads only the souply-app tree,
 // so a watchFolder pointing OUTSIDE the project root resolves to a
 // nonexistent path on the EAS worker and Metro fails with
 // `verifyRootExists ENOENT '/home/expo/workingdir/shared'` before

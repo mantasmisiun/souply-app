@@ -1,50 +1,83 @@
-# Welcome to your Expo app 👋
+# souply-app
 
-This is an [Expo](https://expo.dev) project created with [`create-expo-app`](https://www.npmjs.com/package/create-expo-app).
+The native [Souply](https://souply.lt) experience — receipt scanning,
+basket templates, price comparison across Lithuanian grocery chains,
+the swipe-based product cluster system, and creator publishing.
 
-## Get started
+Web client lives in `souply-web`. Backend in `souply-api`.
 
-1. Install dependencies
+## Stack
 
-   ```bash
-   npm install
-   ```
+- **Expo SDK 54 / React Native 0.81 / React 19** — new architecture on
+- **TypeScript** with strict + typed routes via `expo-router`
+- **Zustand** for cross-screen state (basket, auth, template-add)
+- **i18next** with Lithuanian (default) + English
+- **MLKit text recognition** for on-device receipt OCR
+- **expo-share-intent** for receiving PDFs/images from the system share sheet
+- **Jest + jest-expo** for unit tests; ad-hoc EAS preview builds for QA
+- Cross-stack `shared/` folder pulled in via `npm run sync-shared`
+  before each EAS build (canonical source lives at the monorepo root)
 
-2. Start the app
+## Bundle / identity
 
-   ```bash
-   npx expo start
-   ```
+| | Production | Dev |
+|---|---|---|
+| iOS bundle ID | `lt.souply.app` | `lt.souply.app.dev` |
+| Android package | `lt.souply.app` | `lt.souply.app.dev` |
+| App Group | `group.lt.souply.app` | `group.lt.souply.app.dev` |
+| Share extension | `lt.souply.app.ShareExtension` | `lt.souply.app.dev.ShareExtension` |
+| Display name | `Souply` | `Souply (DEV)` |
+| EAS slug | `souply-app` | `souply-app` |
+| EAS owner | `souply-solutions` | `souply-solutions` |
+| Deep-link scheme | `souply://` | `souply://` |
+| Universal Links | `souply.lt/t/{slug}`, `souply.lt/@{username}` | (same) |
 
-In the output, you'll find options to open the app in a
-
-- [development build](https://docs.expo.dev/develop/development-builds/introduction/)
-- [Android emulator](https://docs.expo.dev/workflow/android-studio-emulator/)
-- [iOS simulator](https://docs.expo.dev/workflow/ios-simulator/)
-- [Expo Go](https://expo.dev/go), a limited sandbox for trying out app development with Expo
-
-You can start developing by editing the files inside the **app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
-
-## Get a fresh project
-
-When you're ready, run:
+## Commands
 
 ```bash
-npm run reset-project
+# Variant flag — controls icon, bundle ID, display name, OTA channel.
+APP_VARIANT=dev npm run start   # interactive Expo CLI on the dev variant
+npm run start                   # production variant
+npm run android                 # local Android dev build (eas not required)
+npm run ios                     # local iOS dev build
+npm run web                     # web preview (limited; full web lives in souply-web)
+npm run lint                    # expo lint
+npm test                        # jest
+
+# EAS — always target the `dev` channel for OTA pushes
+APP_VARIANT=dev eas update --branch dev
+eas build --profile preview --platform android
+npm run sync-shared             # pull /Project/shared into ./shared before EAS upload
+npm run build:apk               # sync-shared + EAS preview Android build
 ```
 
-This command will move the starter code to the **app-example** directory and create a blank **app** directory where you can start developing.
+## Layout
 
-## Learn more
+```
+app/
+├── _layout.tsx                 ← root Stack + providers (auth, i18n, query)
+├── (tabs)/                     ← Krepšelis, Naršyti, Šablonai, Profilis tabs
+├── (admin)/                    ← moderation queues (Žymos, Kvitai, etc.)
+├── basket/[id].tsx, results/   ← basket detail + comparison results
+├── browse/[categoryId].tsx     ← L2 product list (stack-pushed, supports template-add mode)
+├── product/[id].tsx            ← product detail (price history + add to basket / template)
+├── template/[id].tsx           ← template editor
+├── template-add/[id].tsx       ← browse-on-top-of-template flow
+├── t/[slug].tsx                ← shared template preview from Universal Link
+├── search.tsx, discounts.tsx, settings.tsx
+└── profile/                    ← edit, audit log, restore-account
+components/                     ← shared UI (BasketProductCard, GlassIconButton, etc.)
+utils/                          ← parsers, formatters, fuzzy search, OAuth helpers
+state/                          ← Zustand stores (basket, auth, templateAdd)
+i18n/                           ← LT + EN locales (LT is the source of truth)
+shared/                         ← synced from monorepo root before EAS uploads
+constants/                      ← theme palette mirrored in souply-web
+```
 
-To learn more about developing your project with Expo, look at the following resources:
+## Receipt-batch test pipeline
 
-- [Expo documentation](https://docs.expo.dev/): Learn fundamentals, or go into advanced topics with our [guides](https://docs.expo.dev/guides).
-- [Learn Expo tutorial](https://docs.expo.dev/tutorial/introduction/): Follow a step-by-step tutorial where you'll create a project that runs on Android, iOS, and the web.
-
-## Join the community
-
-Join our community of developers creating universal apps.
-
-- [Expo on GitHub](https://github.com/expo/expo): View our open source platform and contribute.
-- [Discord community](https://chat.expo.dev): Chat with Expo users and ask questions.
+```bash
+npm run receipts:stage          # stages receipt PDFs as PNGs to ./assets/_batch_test
+# then on the phone: Kvitų paketinis testas screen → "Run batch"
+# raw OCR output lands under ../souply-api/receipts/_logs/<chain>/<file>/raw.txt
+```
