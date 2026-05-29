@@ -20,6 +20,8 @@ import { loadCachedCoords, persistCoords, tryGpsCoords, type UserCoords, VILNIUS
 import { buildCandidatePool } from '../../utils/candidatePool';
 import { getLocationSettings, type LocationSettings } from '../../utils/locationStorage';
 import { useTranslation } from 'react-i18next';
+import { GlassIconButton } from '../../components/GlassIconButton';
+import { createTemplateFromBasket } from '../../utils/basketTemplatesApi';
 
 interface BasketItem {
     id: number;
@@ -75,8 +77,50 @@ export default function BasketDetailScreen() {
     // the calc flow with the new coordinates.
     const [locationPromptVisible, setLocationPromptVisible] = useState(false);
     const [locationSettingsVisible, setLocationSettingsVisible] = useState(false);
+    // Save-as-template flow: bookmark icon in the nav bar opens a name
+    // prompt → POST /api/basket-templates/from-basket/:id → toast.
+    const [saveTplVisible, setSaveTplVisible] = useState(false);
+    const [saveTplName, setSaveTplName] = useState('');
+    const [saveTplBusy, setSaveTplBusy] = useState(false);
+    const saveTplNameRef = useRef<TextInput>(null);
+
+    const submitSaveAsTemplate = useCallback(async () => {
+        const trimmed = saveTplName.trim();
+        if (trimmed.length === 0 || saveTplBusy) return;
+        try {
+            setSaveTplBusy(true);
+            const basketIdNum = Number(id);
+            await createTemplateFromBasket(basketIdNum, { name: trimmed });
+            setSaveTplVisible(false);
+            setSaveTplName('');
+            // Cross-platform toast — Android has ToastAndroid but iOS doesn't,
+            // so an Alert is the lowest-common-denominator confirmation.
+            Alert.alert(
+                t('basketTab.templates.savedToast', { name: trimmed }),
+            );
+        } catch {
+            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorInstantiate'));
+        } finally {
+            setSaveTplBusy(false);
+        }
+    }, [saveTplName, saveTplBusy, id, t]);
     const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
     const [activeSettings, setActiveSettings] = useState<LocationSettings | null>(null);
+    // Snapshot of the settings used at the time of the most recent calculation.
+    // Loaded from AsyncStorage `basket_calc_meta_${id}` whenever the basket
+    // is in 'compared' status. Drives the "settings changed → re-find vs
+    // view results" branch on the bottom button.
+    const [calcSettingsSnapshot, setCalcSettingsSnapshot] = useState<LocationSettings | null>(null);
+
+    // Cheap structural compare — both objects are flat, the modal only edits
+    // primitive fields. Stringifying with sorted keys avoids the ordering
+    // gotchas a naive JSON.stringify would have.
+    const settingsChanged = useMemo(() => {
+        if (!calcSettingsSnapshot || !activeSettings) return false;
+        const norm = (s: LocationSettings) =>
+            JSON.stringify(s, Object.keys(s as any).sort());
+        return norm(calcSettingsSnapshot) !== norm(activeSettings);
+    }, [calcSettingsSnapshot, activeSettings]);
 
     const fetchBasket = async () => {
         try {
@@ -134,6 +178,18 @@ export default function BasketDetailScreen() {
         fetchBasket();
         setSettingsRefreshKey(k => k + 1);
         getLocationSettings().then(setActiveSettings);
+        // Hydrate the calc-time settings snapshot for the
+        // "settings changed" branch. Missing key → leave null and the
+        // button falls back to "Rodyti parduotuves".
+        AsyncStorage.getItem(`basket_calc_meta_${id}`).then(raw => {
+            if (!raw) { setCalcSettingsSnapshot(null); return; }
+            try {
+                const meta = JSON.parse(raw);
+                setCalcSettingsSnapshot(meta?.settings ?? null);
+            } catch {
+                setCalcSettingsSnapshot(null);
+            }
+        });
     }, [id]));
 
     /**
@@ -269,12 +325,16 @@ export default function BasketDetailScreen() {
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const newResults = await res.json();
 
-            // Persist results + location context so the results screen can score combos
+            // Persist results + location context so the results screen can score combos.
+            // The full `settings` snapshot is also written so the basket-detail
+            // screen can detect "user changed settings since the last calc" and
+            // swap the button text from "view results" to "re-find stores".
             await Promise.all([
                 AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults)),
                 AsyncStorage.setItem(`basket_calc_meta_${id}`, JSON.stringify({
                     storeCount: settings.storeCount,
                     searchCenter: pool.searchCenter,
+                    settings,
                 })),
             ]);
 
@@ -413,6 +473,17 @@ export default function BasketDetailScreen() {
                         </TouchableOpacity>
                     ),
                 headerLeft: () => <ScreenBackButton />,
+                // Bookmark icon → save-as-template modal. Only meaningful
+                // when the basket has at least one item; hide otherwise
+                // so the user isn't prompted to save an empty template.
+                headerRight: items.length > 0
+                    ? () => (
+                        <GlassIconButton
+                            icon="bookmark-outline"
+                            onPress={() => setSaveTplVisible(true)}
+                        />
+                    )
+                    : undefined,
             }} />
             <View style={styles.container}>
                 <FlatList
@@ -444,45 +515,58 @@ export default function BasketDetailScreen() {
                                     <Text style={styles.readOnlyQty}>
                                         {item.quantity}{item.isWeighable ? ' kg' : ' vnt.'}
                                     </Text>
-                                ) : (
-                                <View style={styles.controls}>
-                                    <TouchableOpacity
-                                        style={styles.controlButton}
-                                        onPress={() => updateQuantity(item.id, item.quantity - 1)}
-                                    >
-                                        <Ionicons name="remove" size={18} color={colors.primary} />
-                                    </TouchableOpacity>
-                                    <TextInput
-                                        style={styles.quantityInput}
-                                        value={quantityInputs[item.id] ?? String(item.quantity)}
-                                        onChangeText={v => {
-                                            if (!item.isWeighable && (v.includes('.') || v.includes(','))) return;
-                                            const dotIndex = v.indexOf('.');
-                                            const commaIndex = v.indexOf(',');
-                                            const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
-                                            if (separatorIndex !== -1 && v.length - separatorIndex > 2) return;
-                                            setQuantityInputs(prev => ({ ...prev, [item.id]: v }));
-                                        }}
-                                        onEndEditing={async e => {
-                                            const val = parseFloat(e.nativeEvent.text.replace(',', '.'));
-                                            if (!val || val <= 0) {
-                                                removeItem(item.id);
-                                                return;
-                                            }
-                                            await updateQuantity(item.id, val);
-                                            setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
-                                        }}
-                                        keyboardType={item.isWeighable ? 'numeric' : 'number-pad'}
-                                        selectTextOnFocus
-                                    />
-                                    <TouchableOpacity
-                                        style={styles.controlButton}
-                                        onPress={() => updateQuantity(item.id, item.quantity + 1)}
-                                    >
-                                        <Ionicons name="add" size={18} color={colors.primary} />
-                                    </TouchableOpacity>
-                                </View>
-                                )}
+                                ) : (() => {
+                                    // Weighable rows step in 0.1 kg; piece rows
+                                    // step in whole units. Mirrors the template
+                                    // editor so the two surfaces feel identical.
+                                    const step = item.isWeighable ? 0.1 : 1;
+                                    const inputValueDefault = item.isWeighable
+                                        ? Number(item.quantity).toFixed(1).replace('.', ',')
+                                        : String(item.quantity);
+                                    return (
+                                    <View style={styles.controls}>
+                                        <TouchableOpacity
+                                            style={styles.controlButton}
+                                            onPress={() => updateQuantity(item.id, Number(item.quantity) - step)}
+                                        >
+                                            <Ionicons name="remove" size={18} color={colors.primary} />
+                                        </TouchableOpacity>
+                                        <TextInput
+                                            style={styles.quantityInput}
+                                            value={quantityInputs[item.id] ?? inputValueDefault}
+                                            onChangeText={v => {
+                                                if (!item.isWeighable && (v.includes('.') || v.includes(','))) return;
+                                                const dotIndex = v.indexOf('.');
+                                                const commaIndex = v.indexOf(',');
+                                                const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
+                                                if (separatorIndex !== -1 && v.length - separatorIndex > 2) return;
+                                                setQuantityInputs(prev => ({ ...prev, [item.id]: v }));
+                                            }}
+                                            onEndEditing={async e => {
+                                                const val = parseFloat(e.nativeEvent.text.replace(',', '.'));
+                                                if (!val || val <= 0) {
+                                                    removeItem(item.id);
+                                                    return;
+                                                }
+                                                await updateQuantity(item.id, val);
+                                                setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
+                                            }}
+                                            keyboardType={item.isWeighable ? 'decimal-pad' : 'number-pad'}
+                                            selectTextOnFocus
+                                            underlineColorAndroid="transparent"
+                                        />
+                                        <Text style={styles.unitLabel}>
+                                            {item.isWeighable ? 'kg' : 'vnt.'}
+                                        </Text>
+                                        <TouchableOpacity
+                                            style={styles.controlButton}
+                                            onPress={() => updateQuantity(item.id, Number(item.quantity) + step)}
+                                        >
+                                            <Ionicons name="add" size={18} color={colors.primary} />
+                                        </TouchableOpacity>
+                                    </View>
+                                    );
+                                })()}
                             </View>
                             {!readOnly && (
                                 <TouchableOpacity
@@ -528,12 +612,62 @@ export default function BasketDetailScreen() {
                                 >
                                     <Text style={styles.secondaryButtonText}>{t('basketDetail.draft')}</Text>
                                 </ScalePressable>
+                                {/* Settings squircle stays available while compared
+                                    so the user can tweak storeCount / location
+                                    and have the main button retarget to "Rasti
+                                    parduotuves" (re-find). Without this, there'd
+                                    be no surface to change the inputs. */}
                                 <ScalePressable
-                                    style={styles.showResultsButton}
-                                    onPress={() => router.push(`/basket/results/${id}`)}
+                                    style={[
+                                        styles.settingsSquircle,
+                                        activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
+                                            && styles.settingsSquircleActive,
+                                    ]}
+                                    onPress={() => setLocationSettingsVisible(true)}
+                                    disabled={calcing}
+                                    scaleTo={0.92}
                                 >
-                                    <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
-                                    <Text style={styles.showResultsText}>Rodyti parduotuves</Text>
+                                    <Ionicons
+                                        name={
+                                            activeSettings?.mode === 'specific' ? 'location-outline'
+                                            : activeSettings?.mode === 'route' ? 'git-commit-outline'
+                                            : 'locate-outline'
+                                        }
+                                        size={20}
+                                        color={
+                                            activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
+                                                ? colors.primary
+                                                : colors.textSecondary
+                                        }
+                                    />
+                                    {activeSettings && activeSettings.storeCount > 1 && (
+                                        <View style={styles.settingsBadge}>
+                                            <Text style={styles.settingsBadgeText}>{activeSettings.storeCount}</Text>
+                                        </View>
+                                    )}
+                                </ScalePressable>
+                                <ScalePressable
+                                    style={[styles.showResultsButton, calcing && styles.buttonCalcing]}
+                                    onPress={settingsChanged ? handleCalculate : () => router.push(`/basket/results/${id}`)}
+                                    disabled={calcing}
+                                >
+                                    {calcing ? (
+                                        <>
+                                            <ActivityIndicator size="small" color={colors.onPrimary} />
+                                            <Text style={styles.showResultsText}>{t('basketDetail.calculating')}</Text>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
+                                            <Text style={styles.showResultsText}>
+                                                {settingsChanged
+                                                    ? ((activeSettings?.storeCount ?? 1) > 1
+                                                        ? 'Rasti parduotuves'
+                                                        : 'Rasti parduotuvę')
+                                                    : 'Rodyti parduotuves'}
+                                            </Text>
+                                        </>
+                                    )}
                                 </ScalePressable>
                             </>
                         ) : (
@@ -623,6 +757,87 @@ export default function BasketDetailScreen() {
                 </View>
             </Modal>
 
+            <Modal
+                visible={saveTplVisible}
+                transparent
+                animationType="fade"
+                onRequestClose={() => !saveTplBusy && setSaveTplVisible(false)}
+                onShow={() => setTimeout(() => saveTplNameRef.current?.focus(), 80)}
+            >
+                <TouchableOpacity
+                    style={styles.calcModalBackdrop}
+                    activeOpacity={1}
+                    onPress={() => !saveTplBusy && setSaveTplVisible(false)}
+                >
+                    <TouchableOpacity
+                        activeOpacity={1}
+                        onPress={() => {}}
+                        style={{
+                            backgroundColor: colors.cardBackground, borderRadius: 16,
+                            padding: 20, width: '85%', gap: 12,
+                        }}
+                    >
+                        <Text style={{ fontSize: 16, fontWeight: '700', color: colors.textPrimary }}>
+                            {t('basketTab.templates.saveFromBasketTitle')}
+                        </Text>
+                        <Text style={{ fontSize: 13, color: colors.textSecondary }}>
+                            {t('basketTab.templates.saveFromBasketBody')}
+                        </Text>
+                        <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 4 }}>
+                            {t('basketTab.templates.createNameLabel')}
+                        </Text>
+                        <TextInput
+                            ref={saveTplNameRef}
+                            value={saveTplName}
+                            onChangeText={setSaveTplName}
+                            placeholder={t('basketTab.templates.createNamePlaceholder')}
+                            placeholderTextColor={colors.textMuted}
+                            maxLength={100}
+                            returnKeyType="done"
+                            onSubmitEditing={submitSaveAsTemplate}
+                            style={{
+                                borderWidth: 1, borderColor: colors.border,
+                                borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10,
+                                fontSize: 15, color: colors.textPrimary,
+                            }}
+                        />
+                        <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
+                            <TouchableOpacity
+                                onPress={() => setSaveTplVisible(false)}
+                                disabled={saveTplBusy}
+                                style={{
+                                    flex: 1, paddingVertical: 12, borderRadius: 10,
+                                    borderWidth: 1, borderColor: colors.border, alignItems: 'center',
+                                }}
+                            >
+                                <Text style={{ color: colors.textPrimary, fontWeight: '600' }}>
+                                    {t('basketTab.templates.createCancel')}
+                                </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                onPress={submitSaveAsTemplate}
+                                disabled={saveTplBusy || saveTplName.trim().length === 0}
+                                style={{
+                                    flex: 1, paddingVertical: 12, borderRadius: 10,
+                                    backgroundColor: saveTplName.trim().length === 0
+                                        ? colors.border
+                                        : colors.primary,
+                                    alignItems: 'center',
+                                }}
+                            >
+                                {saveTplBusy ? (
+                                    <ActivityIndicator size="small" color={colors.onPrimary} />
+                                ) : (
+                                    <Text style={{ color: colors.onPrimary, fontWeight: '700' }}>
+                                        {t('basketTab.templates.saveFromBasketConfirm')}
+                                    </Text>
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </TouchableOpacity>
+                </TouchableOpacity>
+            </Modal>
+
             <LocationPromptModal
                 visible={locationPromptVisible}
                 onResolved={handleLocationResolved}
@@ -663,6 +878,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderBottomWidth: 1, borderBottomColor: c.border,
         paddingVertical: 2,
     },
+    unitLabel: { fontSize: 13, fontWeight: '600', color: c.textSecondary, minWidth: 28 },
     readOnlyQty: {
         fontSize: 13,
         color: c.textSecondary,

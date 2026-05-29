@@ -60,8 +60,12 @@ export default function AdminAmountsScreen() {
 
     useEffect(() => {
         if (!currentCard) return;
-        setAmountInput(String(currentCard.suggestion.amount));
-        setUnitInput(currentCard.suggestion.unit);
+        // Suggestion may be null when the parser failed to produce a hint —
+        // start with empty inputs so the admin types from scratch.
+        setAmountInput(currentCard.suggestion ? String(currentCard.suggestion.amount) : '');
+        // Default to 'g' (the initial state value) when no suggestion exists —
+        // matches the queue's most common case for packaged goods.
+        setUnitInput(currentCard.suggestion?.unit ?? 'g');
         // Seed from the stored value so an already-weighable 1kg item
         // stays weighable until the admin explicitly toggles it.
         setIsWeighable(currentCard.storedIsWeighable);
@@ -252,9 +256,11 @@ export default function AdminAmountsScreen() {
                         </View>
                     </View>
 
-                    <Text style={styles.matchedHint}>
-                        {t('admin.amounts.matchedHint', { matched: currentCard.suggestion.matched })}
-                    </Text>
+                    {currentCard.suggestion && (
+                        <Text style={styles.matchedHint}>
+                            {t('admin.amounts.matchedHint', { matched: currentCard.suggestion.matched })}
+                        </Text>
+                    )}
 
                     {/* Sveriama / Weighed-at-checkout toggle. Only the
                         unit-`1 kg` combination is ambiguous (loose at

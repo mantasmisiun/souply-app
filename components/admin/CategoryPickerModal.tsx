@@ -33,7 +33,9 @@ interface SearchResult {
     path: string;
 }
 
-type View =
+// Renamed from `View` to avoid shadowing react-native's View component
+// (the local type would silently override the import and TS flags it).
+type PickerView =
     | { kind: 'l1' }
     | { kind: 'l2'; l2Id: number; l2Name: string };
 
@@ -143,7 +145,7 @@ export default function CategoryPickerModal({
     const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     // ── L1 view state ──────────────────────────────────────────────────────
-    const [view, setView] = useState<View>({ kind: 'l1' });
+    const [view, setView] = useState<PickerView>({ kind: 'l1' });
     const [expandedL1, setExpandedL1] = useState<number | null>(null);
     const [l2Map, setL2Map] = useState<Record<number, Category[]>>({});
     const [search, setSearch] = useState('');

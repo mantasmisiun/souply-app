@@ -12,6 +12,8 @@ import AmountPickerModal from '../../components/AmountPickerModal';
 import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../components/ComparedBasketChoiceModal';
 import BasketProductCard from '../../components/browse/BasketProductCard';
 import CategoryBubbles from '../../components/browse/CategoryBubbles';
+import { TemplateReturnBanner } from '../../components/template/TemplateReturnBanner';
+import { useTemplateAddState } from '../../state/templateAddState';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import { getUserId } from '../../config/user';
@@ -53,7 +55,10 @@ export default function CategoryScreen() {
     const { t, i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
-    const { categoryId, name } = useLocalSearchParams<{ categoryId: string; name: string }>();
+    const { categoryId, name, templateId: rawTemplateId } =
+        useLocalSearchParams<{ categoryId: string; name: string; templateId?: string }>();
+    const templateId = rawTemplateId != null && rawTemplateId.length > 0 ? Number(rawTemplateId) : null;
+    const isTemplateMode = templateId != null && Number.isFinite(templateId);
     const [l3Categories, setL3Categories] = useState<Category[]>([]);
     const [products, setProducts] = useState<Product[]>([]);
     // hideId → keepId: products the user personally merged via 'same' swipe verdicts.
@@ -333,8 +338,13 @@ export default function CategoryScreen() {
         const now = Date.now();
         if (now - lastSearchPushAt.current < 600) return;
         lastSearchPushAt.current = now;
-        router.push({ pathname: '/search', params: { mode: 'products', source: 'browse' } } as any);
-    }, [router]);
+        router.push({
+            pathname: '/search',
+            params: isTemplateMode
+                ? { mode: 'products', source: 'template-add', templateId: String(templateId) }
+                : { mode: 'products', source: 'browse' },
+        } as any);
+    }, [router, isTemplateMode, templateId]);
 
     const handleModeSwitchRequest = (nextOn: boolean) => {
         const target: 'base' | 'sku' = nextOn ? 'base' : 'sku';
@@ -452,8 +462,38 @@ export default function CategoryScreen() {
     );
 
     const onNavigate = useCallback((id: number) => {
-        router.push(`/product/${id}` as any);
-    }, [router]);
+        if (isTemplateMode) {
+            router.push(`/product/${id}?templateId=${templateId}` as any);
+        } else {
+            router.push(`/product/${id}` as any);
+        }
+    }, [router, isTemplateMode, templateId]);
+
+    const templateItems = useTemplateAddState(s => s.items);
+    const templateAdd = useTemplateAddState(s => s.add);
+    const templateSetQty = useTemplateAddState(s => s.setQuantity);
+    /** productId → in-template entry (for the current template only). */
+    const templateMap = useMemo(() => {
+        const m: Record<number, { quantity: number }> = {};
+        if (!isTemplateMode) return m;
+        for (const it of templateItems) m[it.productId] = { quantity: it.quantity };
+        return m;
+    }, [templateItems, isTemplateMode]);
+
+    const commitTemplateAdd = useCallback(async (productId: number, quantity: number) => {
+        if (!isTemplateMode || templateId == null) return;
+        setAddingIds(prev => { const n = new Set(prev); n.add(productId); return n; });
+        try {
+            await templateAdd(productId, quantity);
+            toastRef.current?.show(t('basketTab.templates.addedToTemplateToast'));
+        } catch {
+            // Silent: the template editor will reload on focus and pick up
+            // whatever did land. Aggressive error UI here would surprise
+            // users mid-shop.
+        } finally {
+            setAddingIds(prev => { const n = new Set(prev); n.delete(productId); return n; });
+        }
+    }, [isTemplateMode, templateId, templateAdd, t]);
 
     const onAdd = useCallback((item: Product) => {
         const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
@@ -462,6 +502,10 @@ export default function CategoryScreen() {
         // 1L milk SP, 0.5L for a 500ml SP) so the server pack-math lands
         // on exactly one pack — never half a pack.
         const initialQty = resolveCanonicalStep(item);
+        if (isTemplateMode) {
+            commitTemplateAdd(item.id, initialQty);
+            return;
+        }
         setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
         commitAddRef.current(item.id, initialQty).then(result => {
             if (result.success) {
@@ -472,7 +516,7 @@ export default function CategoryScreen() {
         }).finally(() => {
             setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
         });
-    }, [setAmountModal]);
+    }, [setAmountModal, isTemplateMode, commitTemplateAdd, t]);
 
     const onDecrement = useCallback((item: Product, qty: number) => {
         const step = resolveCanonicalStep(item);
@@ -520,21 +564,42 @@ export default function CategoryScreen() {
         const amountText = item.minAmount != null && item.maxAmount != null
             ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
             : '';
+        // In template mode the card's quantity reflects the in-template
+        // amount (so already-added products render the stepper instead of
+        // the "Į šabloną" CTA). +/− operate on the template, not a basket.
+        const templateQty = isTemplateMode ? (templateMap[item.id]?.quantity ?? 0) : 0;
+        const cardQuantity = isTemplateMode ? templateQty : quantity;
+        const step = resolveCanonicalStep(item);
         return (
             <BasketProductCard
                 name={item.name}
                 imageUrls={item.imageUrls}
                 chainLogos={item.chainLogos}
                 amountText={amountText}
-                quantity={quantity}
+                quantity={cardQuantity}
                 isAdding={addingIds.has(item.id)}
+                addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
                 onOpen={() => onNavigate(item.id)}
                 onAdd={() => onAdd(item)}
-                onDec={() => onDecrement(item, quantity)}
-                onInc={() => onIncrement(item, quantity)}
+                onDec={() => {
+                    if (isTemplateMode) {
+                        const next = Math.max(0, Math.round((templateQty - step) / step) * step);
+                        templateSetQty(item.id, next).catch(() => {});
+                        return;
+                    }
+                    onDecrement(item, quantity);
+                }}
+                onInc={() => {
+                    if (isTemplateMode) {
+                        const next = Math.round((templateQty + step) / step) * step;
+                        templateSetQty(item.id, next).catch(() => {});
+                        return;
+                    }
+                    onIncrement(item, quantity);
+                }}
             />
         );
-    }, [basketQuantities, mergedIntoMe, addingIds, onNavigate, onAdd, onDecrement, onIncrement]);
+    }, [basketQuantities, mergedIntoMe, addingIds, onNavigate, onAdd, onDecrement, onIncrement, isTemplateMode, templateMap, templateSetQty, t]);
 
     if (loading) return (
         <>
@@ -632,7 +697,13 @@ export default function CategoryScreen() {
                         <FlatList
                             data={visibleProducts}
                             keyExtractor={item => item.id.toString()}
-                            contentContainerStyle={styles.list}
+                            contentContainerStyle={[
+                                styles.list,
+                                // Reserve room for the absolute "Šablonas"
+                                // banner so the last row's "Į šabloną" CTA
+                                // isn't hidden under it.
+                                isTemplateMode && { paddingBottom: 96 + bottomInset },
+                            ]}
                             numColumns={2}
                             columnWrapperStyle={styles.row}
                             ListEmptyComponent={
@@ -643,7 +714,7 @@ export default function CategoryScreen() {
                     )}
                 </View>
             </View>
-            {basketItemCount > 0 && draftBasketId && (
+            {!isTemplateMode && basketItemCount > 0 && draftBasketId && (
                 <Animated.View
                     entering={FadeInDown.duration(200)}
                     exiting={FadeOutDown.duration(150)}
@@ -663,6 +734,9 @@ export default function CategoryScreen() {
                         <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
                     </ScalePressable>
                 </Animated.View>
+            )}
+            {isTemplateMode && templateId != null && (
+                <TemplateReturnBanner templateId={templateId} />
             )}
             </View>
             <Modal
@@ -753,13 +827,24 @@ export default function CategoryScreen() {
                 onConfirm={async (amount) => {
                     const product = amountModal.product;
                     setAmountModal({ visible: false, product: null });
-                    if (product) {
-                        const result = await commitAdd(product.id, amount);
-                        if (result.success) {
-                            setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
-                            setBasketItemCount(prev => prev + 1);
-                            toastRef.current?.show(t('browse.addedToast'));
+                    if (!product) return;
+                    if (isTemplateMode) {
+                        // In template mode the picker is the "set absolute
+                        // quantity" surface — overrides any existing row
+                        // rather than incrementing it (matches how the
+                        // template editor's per-row input works).
+                        if (templateMap[product.id]) {
+                            await templateSetQty(product.id, amount).catch(() => {});
+                        } else {
+                            await commitTemplateAdd(product.id, amount);
                         }
+                        return;
+                    }
+                    const result = await commitAdd(product.id, amount);
+                    if (result.success) {
+                        setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
+                        setBasketItemCount(prev => prev + 1);
+                        toastRef.current?.show(t('browse.addedToast'));
                     }
                 }}
             />

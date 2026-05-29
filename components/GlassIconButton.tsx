@@ -10,6 +10,7 @@ interface Props {
     /** Defaults to the theme primary color. */
     color?: string;
     accessibilityLabel?: string;
+    disabled?: boolean;
 }
 
 /**
@@ -30,19 +31,21 @@ export function GlassIconButton({
     size = 22,
     color,
     accessibilityLabel,
+    disabled,
 }: Props) {
     const colors = useTheme();
-    const tint = color ?? colors.primary;
+    const tint = disabled ? colors.textMuted : (color ?? colors.primary);
     const disc = size + 14;
 
     return (
         <Pressable
             onPress={onPress}
+            disabled={disabled}
             hitSlop={12}
             accessibilityRole="button"
             accessibilityLabel={accessibilityLabel}
             style={({ pressed }) => ({
-                opacity: pressed ? 0.5 : 1,
+                opacity: disabled ? 0.5 : (pressed ? 0.5 : 1),
                 marginHorizontal: 4,
             })}
         >

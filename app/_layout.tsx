@@ -174,6 +174,13 @@ export default function RootLayout() {
     hydrateSettings().catch((e) => console.warn('[settings] hydrate failed', e));
   }, [hydrateSettings]);
 
+  // Hydrate the verified-user session from expo-secure-store on boot so
+  // the publish wall + share sheet can read the JWT immediately.
+  useEffect(() => {
+    import('../state/authState').then(m => m.useAuthState.getState().hydrate())
+      .catch(e => console.warn('[auth] hydrate failed', e));
+  }, []);
+
   // Hydrate admin-mode flag and, if the user last left the app in admin
   // mode, route into the admin section immediately. Cheap — the store
   // reads one AsyncStorage key. No-op when the user has never been an

@@ -15,6 +15,13 @@ export default {
       supportsTablet: true,
       bundleIdentifier: IS_DEV ? 'com.souply.app.dev' : 'com.souply.app',
       buildNumber: '5',
+      // Associated Domains — Universal Links for souply.lt/t/{slug} and
+      // souply.lt/@{username}. The matching apple-app-site-association
+      // file must be served from https://souply.lt/.well-known/
+      // apple-app-site-association (see Documentation/roadmap/landing-page.md
+      // Part 5). Validation only kicks in once the AASA file is live;
+      // until then the entitlement is harmless.
+      associatedDomains: ['applinks:souply.lt'],
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
         // "Open In Souply" — appears when user taps a PDF/image in Files or Mail
@@ -44,6 +51,21 @@ export default {
         backgroundColor: '#F16F8B',
         foregroundImage: IS_DEV ? './assets/images/DEV-foreground.png' : './assets/images/android-icon-foreground.png',
       },
+      // App Links — autoVerify=true asks Android to fetch the
+      // assetlinks.json from souply.lt/.well-known and skip the chooser
+      // sheet on URL taps. assetlinks.json must list this app's SHA-256
+      // signing cert fingerprint; see landing-page.md Part 5.
+      intentFilters: [
+        {
+          action: 'VIEW',
+          autoVerify: true,
+          data: [
+            { scheme: 'https', host: 'souply.lt', pathPrefix: '/t/' },
+            { scheme: 'https', host: 'souply.lt', pathPrefix: '/@' },
+          ],
+          category: ['BROWSABLE', 'DEFAULT'],
+        },
+      ],
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       package: IS_DEV ? 'com.souply.app.dev' : 'com.souply.app',
@@ -67,6 +89,8 @@ export default {
       ],
       'expo-router',
       'expo-localization',
+      'expo-secure-store',
+      'expo-web-browser',
       [
         'expo-splash-screen',
         {

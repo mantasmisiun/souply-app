@@ -19,6 +19,8 @@ import { useReceiptPickerState } from "../state/basketState";
 import { useBasketState } from '../state/basketState';
 import { addProductToBasket } from '../utils/basketUtils';
 import BasketProductCard from '../components/browse/BasketProductCard';
+import { TemplateReturnBanner } from '../components/template/TemplateReturnBanner';
+import { useTemplateAddState } from '../state/templateAddState';
 import { ProductImage } from "../components/ProductImage";
 import CreateStoreProductModal, {
   CreatedStoreProductPayload,
@@ -107,7 +109,21 @@ export default function SearchScreen() {
         ocrName?: string;
         createCategoryId?: string;
         source?: string;
+        templateId?: string;
     }>();
+    const templateIdNum = typeof params.templateId === 'string' && params.templateId.length > 0
+        ? Number(params.templateId)
+        : null;
+    const isTemplateMode = templateIdNum != null && Number.isFinite(templateIdNum);
+    const templateItems = useTemplateAddState(s => s.items);
+    const templateAdd = useTemplateAddState(s => s.add);
+    const templateSetQty = useTemplateAddState(s => s.setQuantity);
+    const templateMap = useMemo(() => {
+        const m: Record<number, { quantity: number }> = {};
+        if (!isTemplateMode) return m;
+        for (const it of templateItems) m[it.productId] = { quantity: it.quantity };
+        return m;
+    }, [templateItems, isTemplateMode]);
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { setPendingPick } = useReceiptPickerState();
@@ -534,7 +550,12 @@ export default function SearchScreen() {
             key="products-search-grid"
             data={filteredProductResults}
             keyExtractor={(item, idx) => `p-${item.id}-${idx}`}
-            contentContainerStyle={styles.list}
+            contentContainerStyle={[
+              styles.list,
+              // Reserve room for the absolute "Šablonas" banner so the
+              // last row's "Į šabloną" CTA isn't hidden under it.
+              isTemplateMode && { paddingBottom: 96 + insets.bottom },
+            ]}
             numColumns={2}
             columnWrapperStyle={styles.row}
             ListEmptyComponent={
@@ -579,14 +600,21 @@ const quantity = basketQuantities[item.id] ?? 0;
                 const amountText = item.minAmount != null && item.maxAmount != null
                     ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
                     : '';
+                const templateQty = isTemplateMode ? (templateMap[item.id]?.quantity ?? 0) : 0;
+                const cardQty = isTemplateMode ? templateQty : quantity;
                 return (
                     <BasketProductCard
                     name={item.name}
                     imageUrls={item.imageUrls}
                     chainLogos={item.chainLogos}
                     amountText={amountText}
-                    quantity={quantity}
-                    onOpen={() => router.push(`/product/${item.id}` as any)}
+                    quantity={cardQty}
+                    addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
+                    onOpen={() => router.push(
+                        isTemplateMode
+                            ? `/product/${item.id}?templateId=${templateIdNum}`
+                            : `/product/${item.id}` as any
+                    )}
                     onAdd={() => {
                         const hasRange = item.minAmount != null && item.maxAmount != null && item.minAmount !== item.maxAmount;
                         if (hasRange || !!item.hasWeighable) {
@@ -594,13 +622,33 @@ const quantity = basketQuantities[item.id] ?? 0;
                             return;
                         }
                         const qty = resolveCanonicalStep(item);
+                        if (isTemplateMode && templateIdNum != null) {
+                            templateAdd(item.id, qty).catch(() => {});
+                            return;
+                        }
                         setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
                         addProductToBasket(item.id, draftBasketId, setDraftBasketId, qty).then(result => {
                             if (!result.success) setBasketQuantities(prev => { const next = { ...prev }; delete next[item.id]; return next; });
                         });
                     }}
-                    onDec={() => syncQty(Number((quantity - 1).toFixed(1)))}
-                    onInc={() => syncQty(Number((quantity + 1).toFixed(1)))}
+                    onDec={() => {
+                        if (isTemplateMode) {
+                            const step = resolveCanonicalStep(item);
+                            const next = Math.max(0, Math.round((templateQty - step) / step) * step);
+                            templateSetQty(item.id, next).catch(() => {});
+                            return;
+                        }
+                        syncQty(Number((quantity - 1).toFixed(1)));
+                    }}
+                    onInc={() => {
+                        if (isTemplateMode) {
+                            const step = resolveCanonicalStep(item);
+                            const next = Math.round((templateQty + step) / step) * step;
+                            templateSetQty(item.id, next).catch(() => {});
+                            return;
+                        }
+                        syncQty(Number((quantity + 1).toFixed(1)));
+                    }}
                     />
                 );
                 }}
@@ -621,11 +669,27 @@ const quantity = basketQuantities[item.id] ?? 0;
         onConfirm={async (amount) => {
           const product = amountModal.product!;
           setAmountModal({ visible: false, product: null });
+          if (isTemplateMode && templateIdNum != null) {
+            try {
+              // Picker = set-absolute; override existing row rather than
+              // incrementing so the new amount matches what the user just
+              // dialed in.
+              if (templateMap[product.id]) {
+                await templateSetQty(product.id, amount);
+              } else {
+                await templateAdd(product.id, amount);
+              }
+            } catch {}
+            return;
+          }
           setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
           const result = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, amount);
           if (!result.success) setBasketQuantities(prev => { const next = { ...prev }; delete next[product.id]; return next; });
         }}
       />
+      {isTemplateMode && templateIdNum != null && (
+        <TemplateReturnBanner templateId={templateIdNum} />
+      )}
       <CreateStoreProductModal
         visible={createModalVisible}
         onClose={() => setCreateModalVisible(false)}

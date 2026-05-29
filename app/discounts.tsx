@@ -3,8 +3,9 @@ import {
     StyleSheet, ActivityIndicator, RefreshControl, Keyboard
 } from 'react-native';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
-import { useRouter, Stack, useFocusEffect } from 'expo-router';
+import { useRouter, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ScreenBackButton } from '../components/ScreenBackButton';
+import { GlassIconButton } from '../components/GlassIconButton';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -26,6 +27,9 @@ import { ChainLogoStrip } from '../components/ChainLogoStrip';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '../utils/fetchWithTimeout';
+import { fuzzyMatches } from '../utils/fuzzyMatch';
+import { TemplateReturnBanner } from '../components/template/TemplateReturnBanner';
+import { useTemplateAddState } from '../state/templateAddState';
 
 interface L2Category {
     id: number;
@@ -68,7 +72,7 @@ interface CardCallbacks {
 }
 
 const DiscountProductCard = memo(({
-    item, quantity, isAdding, styles, colors,
+    item, quantity, isAdding, styles, colors, addLabel,
     onNavigate, onAdd, onDecrement, onIncrement,
 }: CardCallbacks & {
     item: DiscountedProduct;
@@ -76,6 +80,8 @@ const DiscountProductCard = memo(({
     isAdding: boolean;
     styles: ReturnType<typeof makeStyles>;
     colors: AppTheme;
+    /** Overrides "Į krepšelį" copy — template-add flow uses "Į šabloną". */
+    addLabel?: string;
 }) => {
     const { t } = useTranslation();
     // minAmount/maxAmount are server-normalised into grams (g/ml as 1000-base).
@@ -103,7 +109,7 @@ const DiscountProductCard = memo(({
             </View>
             {quantity === 0 ? (
                 <ScalePressable style={[styles.addButton, isAdding && { opacity: 0.5 }]} disabled={isAdding} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); onAdd(item); }}>
-                    <Text style={styles.addButtonText}>{t('browse.addToBasket')}</Text>
+                    <Text style={styles.addButtonText}>{addLabel ?? t('browse.addToBasket')}</Text>
                 </ScalePressable>
             ) : (
                 <View style={styles.quantityControl}>
@@ -126,9 +132,27 @@ export default function DiscountsScreen() {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
     const router = useRouter();
+    const { templateId: rawTemplateId } = useLocalSearchParams<{ templateId?: string }>();
+    const templateId = rawTemplateId != null && rawTemplateId.length > 0 ? Number(rawTemplateId) : null;
+    const isTemplateMode = templateId != null && Number.isFinite(templateId);
+    const templateItems = useTemplateAddState(s => s.items);
+    const templateAddFn = useTemplateAddState(s => s.add);
+    const templateSetQty = useTemplateAddState(s => s.setQuantity);
+    const templateMap = useMemo(() => {
+        const m: Record<number, { quantity: number }> = {};
+        if (!isTemplateMode) return m;
+        for (const it of templateItems) m[it.productId] = { quantity: it.quantity };
+        return m;
+    }, [templateItems, isTemplateMode]);
 
     const [selectedL2, setSelectedL2] = useState<number | null>(null);
     const [search, setSearch] = useState('');
+    /** When true the nav-bar title flips to a TextInput that filters the
+     *  in-screen list (no navigation). Mirrors the template editor's
+     *  inline-edit pattern; chosen over pushing /search to keep React
+     *  Query's cached data and freshness indicator on screen. */
+    const [searchOpen, setSearchOpen] = useState(false);
+    const searchInputRef = useRef<TextInput>(null);
     const [addingIds, setAddingIds] = useState<Set<number>>(() => new Set());
     const toastRef = useRef<ToastHandle>(null);
 
@@ -182,9 +206,14 @@ export default function DiscountsScreen() {
     const products = useMemo(() => {
         let list = allProducts;
         if (selectedL2 != null) list = list.filter(p => p.l2CategoryId === selectedL2);
-        if (search.trim()) {
-            const q = search.trim().toLowerCase();
-            list = list.filter(p => p.name.toLowerCase().includes(q));
+        const trimmed = search.trim();
+        if (trimmed) {
+            // Diacritic-fold + token-AND + per-token Levenshtein so
+            // "zvake" hits "žvakė", "kapu zvake" finds "Kapų raudona
+            // žvakė" (missed middle word), and small typos like "zkae"
+            // still resolve. Cost stays sub-ms per row for typical
+            // product names.
+            list = list.filter((p) => fuzzyMatches(p.name, trimmed));
         }
         return list;
     }, [allProducts, selectedL2, search]);
@@ -304,16 +333,28 @@ export default function DiscountsScreen() {
     useEffect(() => { commitAddRef.current = commitAdd; }, [commitAdd]);
 
     const onNavigate = useCallback((id: number) => {
-        router.push(`/product/${id}` as any);
-    }, [router]);
+        router.push(isTemplateMode
+            ? `/product/${id}?templateId=${templateId}`
+            : `/product/${id}` as any);
+    }, [router, isTemplateMode, templateId]);
 
     const onAdd = useCallback((item: DiscountedProduct) => {
         const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
         if (hasRange || item.hasWeighable) { setAmountModal({ visible: true, product: item }); return; }
+        const initialQty = resolveCanonicalStep(item);
+        if (isTemplateMode) {
+            setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
+            templateAddFn(item.id, initialQty)
+                .then(() => toastRef.current?.show(t('basketTab.templates.addedToTemplateToast')))
+                .catch(() => {})
+                .finally(() => {
+                    setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
+                });
+            return;
+        }
         // First-tap quick-add: send one canonical step as the quantity so
         // server pack-math lands on exactly one pack (1L for a 1L SP, but
         // 0.5L = 1 bottle for a 500ml SP — never half a pack).
-        const initialQty = resolveCanonicalStep(item);
         setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
         commitAddRef.current(item.id, initialQty).then(result => {
             if (result.success) {
@@ -324,11 +365,16 @@ export default function DiscountsScreen() {
         }).finally(() => {
             setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
         });
-    }, [setAmountModal]);
+    }, [setAmountModal, isTemplateMode, templateAddFn, t]);
 
     const onDecrement = useCallback((item: DiscountedProduct, qty: number) => {
         const step = resolveCanonicalStep(item);
         const newQty = Math.round((qty - step) / step) * step;
+        if (isTemplateMode) {
+            const clamped = Math.max(0, newQty);
+            templateSetQty(item.id, clamped).catch(() => {});
+            return;
+        }
         const bid = draftBasketIdRef.current;
         if (newQty <= 0) {
             setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
@@ -348,11 +394,15 @@ export default function DiscountsScreen() {
                 if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
             }).catch(() => {});
         }
-    }, [clearSessionBasket]);
+    }, [clearSessionBasket, isTemplateMode, templateSetQty]);
 
     const onIncrement = useCallback((item: DiscountedProduct, qty: number) => {
         const step = resolveCanonicalStep(item);
         const newQty = Math.round((qty + step) / step) * step;
+        if (isTemplateMode) {
+            templateSetQty(item.id, newQty).catch(() => {});
+            return;
+        }
         const bid = draftBasketIdRef.current;
         setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
         if (!bid) return;
@@ -360,21 +410,32 @@ export default function DiscountsScreen() {
             const bi = items2.find((i: any) => i.productId === item.id);
             if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
         }).catch(() => {});
-    }, []);
+    }, [isTemplateMode, templateSetQty]);
 
-    const renderItem = useCallback(({ item }: { item: DiscountedProduct }) => (
-        <DiscountProductCard
-            item={item}
-            quantity={basketQuantities[item.id] ?? 0}
-            isAdding={addingIds.has(item.id)}
-            styles={styles}
-            colors={colors}
-            onNavigate={onNavigate}
-            onAdd={onAdd}
-            onDecrement={onDecrement}
-            onIncrement={onIncrement}
-        />
-    ), [basketQuantities, addingIds, styles, colors, onNavigate, onAdd, onDecrement, onIncrement]);
+    const renderItem = useCallback(({ item }: { item: DiscountedProduct }) => {
+        const quantity = isTemplateMode
+            ? (templateMap[item.id]?.quantity ?? 0)
+            : (basketQuantities[item.id] ?? 0);
+        return (
+            <DiscountProductCard
+                item={item}
+                quantity={quantity}
+                isAdding={addingIds.has(item.id)}
+                styles={styles}
+                colors={colors}
+                addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
+                onNavigate={onNavigate}
+                onAdd={onAdd}
+                onDecrement={onDecrement}
+                onIncrement={onIncrement}
+            />
+        );
+    }, [basketQuantities, addingIds, styles, colors, onNavigate, onAdd, onDecrement, onIncrement, isTemplateMode, templateMap, t]);
+
+    const closeSearch = useCallback(() => {
+        setSearch('');
+        setSearchOpen(false);
+    }, []);
 
     return (
         <>
@@ -383,6 +444,45 @@ export default function DiscountsScreen() {
                 headerStyle: { backgroundColor: colors.cardBackground },
                 headerShadowVisible: false,
                 headerLeft: () => <ScreenBackButton />,
+                headerTitle: searchOpen
+                    ? () => (
+                        <TextInput
+                            ref={searchInputRef}
+                            autoFocus
+                            value={search}
+                            onChangeText={setSearch}
+                            placeholder={t('browse.searchPlaceholder')}
+                            placeholderTextColor={colors.textMuted}
+                            returnKeyType="search"
+                            onSubmitEditing={() => Keyboard.dismiss()}
+                            style={{
+                                fontSize: 17, fontWeight: '500',
+                                color: colors.textPrimary, minWidth: 220,
+                                paddingVertical: 2,
+                                borderBottomWidth: 1, borderBottomColor: colors.primary,
+                            }}
+                        />
+                    )
+                    : () => (
+                        // Title + freshness sit in a 2-line stack so the
+                        // "Atnaujinta dabar" indicator costs zero vertical
+                        // space in the list area. Mirrors the product
+                        // detail nav-bar (title + breadcrumb).
+                        <View style={{ alignItems: 'flex-start' }}>
+                            <Text style={{ fontSize: 17, fontWeight: '600', color: colors.textPrimary }}>
+                                Nuolaidos
+                            </Text>
+                            {dataUpdatedAt > 0 && allProducts.length > 0 && (
+                                <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 1 }} numberOfLines={1}>
+                                    {formatFreshness(dataUpdatedAt, t)}
+                                </Text>
+                            )}
+                        </View>
+                    ),
+                headerRight: () =>
+                    searchOpen
+                        ? <GlassIconButton icon="close" onPress={closeSearch} />
+                        : <GlassIconButton icon="search" onPress={() => setSearchOpen(true)} />,
             }} />
             <View style={{ flex: 1 }}>
                 <View style={styles.container}>
@@ -415,26 +515,6 @@ export default function DiscountsScreen() {
                         </ScrollView>
                     )}
 
-                    <View style={styles.searchRow}>
-                        <Ionicons name="search" size={18} color={colors.textMuted} style={styles.searchIcon} />
-                        <TextInput
-                            style={styles.searchInput}
-                            placeholder={t('browse.searchPlaceholder')}
-                            placeholderTextColor={colors.textMuted}
-                            value={search}
-                            onChangeText={setSearch}
-                            returnKeyType="search"
-                            onSubmitEditing={() => Keyboard.dismiss()}
-                        />
-                        {refreshing ? (
-                            <ActivityIndicator size="small" color={colors.primary} />
-                        ) : search.length > 0 ? (
-                            <TouchableOpacity onPress={() => setSearch('')} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                                <Ionicons name="close-circle" size={18} color={colors.textMuted} />
-                            </TouchableOpacity>
-                        ) : null}
-                    </View>
-
                     {isError && allProducts.length > 0 && (
                         <TouchableOpacity style={styles.errorBanner} onPress={() => refetch()} activeOpacity={0.7}>
                             <Ionicons name="warning-outline" size={16} color={colors.onPrimary} style={{ marginRight: 6 }} />
@@ -443,10 +523,6 @@ export default function DiscountsScreen() {
                             </Text>
                             <Text style={styles.errorBannerRetry}>{t('discounts.retry')}</Text>
                         </TouchableOpacity>
-                    )}
-
-                    {dataUpdatedAt > 0 && allProducts.length > 0 && (
-                        <Text style={styles.freshness}>{formatFreshness(dataUpdatedAt, t)}</Text>
                     )}
 
                     <View style={{ flex: 1 }}>
@@ -477,7 +553,13 @@ export default function DiscountsScreen() {
                             <FlatList
                                 data={products}
                                 keyExtractor={item => item.id.toString()}
-                                contentContainerStyle={styles.list}
+                                contentContainerStyle={[
+                                    styles.list,
+                                    // Reserve space for the absolute "Šablonas"
+                                    // banner so the last row's "Į šabloną" CTA
+                                    // isn't hidden under it.
+                                    isTemplateMode && { paddingBottom: 96 + bottomInset },
+                                ]}
                                 numColumns={2}
                                 columnWrapperStyle={styles.row}
                                 keyboardDismissMode="on-drag"
@@ -500,7 +582,7 @@ export default function DiscountsScreen() {
                     </View>
                 </View>
 
-                {sessionBasketId !== null && basketItemCount > 0 && (
+                {!isTemplateMode && sessionBasketId !== null && basketItemCount > 0 && (
                     <Animated.View
                         entering={FadeInDown.duration(200)}
                         exiting={FadeOutDown.duration(150)}
@@ -520,6 +602,9 @@ export default function DiscountsScreen() {
                             <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
                         </ScalePressable>
                     </Animated.View>
+                )}
+                {isTemplateMode && templateId != null && (
+                    <TemplateReturnBanner templateId={templateId} />
                 )}
             </View>
 
@@ -544,13 +629,23 @@ export default function DiscountsScreen() {
                 onConfirm={async (amount) => {
                     const product = amountModal.product;
                     setAmountModal({ visible: false, product: null });
-                    if (product) {
-                        const result = await commitAdd(product.id, amount);
-                        if (result.success) {
-                            setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
-                            setBasketItemCount(prev => prev + 1);
-                            toastRef.current?.show(t('browse.addedToast'));
-                        }
+                    if (!product) return;
+                    if (isTemplateMode) {
+                        try {
+                            if (templateMap[product.id]) {
+                                await templateSetQty(product.id, amount);
+                            } else {
+                                await templateAddFn(product.id, amount);
+                                toastRef.current?.show(t('basketTab.templates.addedToTemplateToast'));
+                            }
+                        } catch {}
+                        return;
+                    }
+                    const result = await commitAdd(product.id, amount);
+                    if (result.success) {
+                        setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
+                        setBasketItemCount(prev => prev + 1);
+                        toastRef.current?.show(t('browse.addedToast'));
                     }
                 }}
             />

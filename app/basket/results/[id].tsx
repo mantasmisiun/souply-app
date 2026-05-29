@@ -78,6 +78,10 @@ export default function BasketResultsScreen() {
     const [combos, setCombos] = useState<ScoredCombo[]>([]);
     const [storeCount, setStoreCount] = useState<1 | 2 | 3>(1);
     const [showAllCombos, setShowAllCombos] = useState(false);
+    // Single-store list: show only the recommended (cheapest) row by
+    // default, with a "Daugiau" reveal for the rest. Keeps the results
+    // screen focused on the action — "go here" — instead of the spread.
+    const [showAllSingleStores, setShowAllSingleStores] = useState(false);
     const [selectedCombo, setSelectedCombo] = useState<ScoredCombo | null>(null);
 
     const loadResults = async () => {
@@ -92,6 +96,7 @@ export default function BasketResultsScreen() {
         setSelectedStoreId(null);
         setSelectedCombo(null);
         setShowAllCombos(false);
+        setShowAllSingleStores(false);
         setCombos([]);
 
         const [stored, metaRaw] = await Promise.all([
@@ -207,11 +212,13 @@ export default function BasketResultsScreen() {
     const closestStoreId = results.length > 0
         ? [...results].sort((a, b) => a.distance - b.distance)[0].storeId
         : null;
-    const cheapestStoreId = results.length > 1 && results[0].total < results[1].total
-        ? results[0].storeId
-        : results.length === 1
-            ? results[0].storeId
-            : null;
+    // Results arrive pre-sorted by the calc service (fewest missing →
+    // fewest CCA → fewest substituted → lowest total). results[0] is
+    // therefore always the recommended option, even on price ties — the
+    // tiebreak chain has already settled them. Earlier code returned
+    // null on ties, which made the "Daugiau" collapse fall through to
+    // showing every store.
+    const cheapestStoreId: number | null = results[0]?.storeId ?? null;
     const selectedStore = results.find(r => r.storeId === selectedStoreId);
 
     const handleNavigate = () => {
@@ -385,7 +392,18 @@ export default function BasketResultsScreen() {
                     </Animated.View>
                 ) : (
                     <FlatList
-                        data={storeCount > 1 && combos.length > 0 ? [] : results.slice(0, visibleCount)}
+                        data={
+                            storeCount > 1 && combos.length > 0
+                                ? []
+                                : (() => {
+                                    const allVisible = results.slice(0, visibleCount);
+                                    if (showAllSingleStores || !cheapestStoreId) return allVisible;
+                                    // Default state: collapse everything to just the
+                                    // recommended store. The "Daugiau" footer reveals
+                                    // the remaining options on demand.
+                                    return allVisible.filter(r => r.storeId === cheapestStoreId);
+                                })()
+                        }
                         keyExtractor={item => item.storeId.toString()}
                         contentContainerStyle={styles.list}
                         refreshControl={
@@ -418,6 +436,31 @@ export default function BasketResultsScreen() {
                                 </View>
                             )
                         }
+                        ListFooterComponent={
+                            // Show the reveal/collapse footer only when (a) we're on
+                            // the single-store list (not the combos view) and (b)
+                            // there's more than the recommended one to show.
+                            // Styling matches the SplitCombosHeader's internal
+                            // showMore button so the two paths look identical.
+                            !(storeCount > 1 && combos.length > 0) && results.length > 1
+                                ? (
+                                    <TouchableOpacity
+                                        style={styles.showMoreBtn}
+                                        onPress={() => setShowAllSingleStores(v => !v)}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Text style={styles.showMoreBtnText}>
+                                            {showAllSingleStores ? 'Mažiau' : 'Daugiau'}
+                                        </Text>
+                                        <Ionicons
+                                            name={showAllSingleStores ? 'chevron-up' : 'chevron-down'}
+                                            size={14}
+                                            color={colors.primary}
+                                        />
+                                    </TouchableOpacity>
+                                )
+                                : null
+                        }
                         renderItem={({ item, index }) => {
                             const isCheapest = item.storeId === cheapestStoreId;
                             const isClosest = item.storeId === closestStoreId;
@@ -435,13 +478,11 @@ export default function BasketResultsScreen() {
                                         onPress={() => setSelectedStoreId(isSelected ? null : item.storeId)}
                                     >
                                         {isCheapest && (
-                                            <View style={styles.cheapestBadge}>
-                                                <Text style={styles.cheapestBadgeText}>Pigiausia</Text>
-                                            </View>
-                                        )}
-                                        {isClosest && !isCheapest && (
-                                            <View style={styles.closestBadge}>
-                                                <Text style={styles.closestBadgeText}>Artimiausia</Text>
+                                            // Matches the multi-store SplitCombosHeader
+                                            // recommended ribbon — consistent recommendation
+                                            // language across single + multi paths.
+                                            <View style={styles.recommendedBadge}>
+                                                <Text style={styles.recommendedBadgeText}>Rekomenduojama</Text>
                                             </View>
                                         )}
                                         <View style={styles.cardLeft}>

@@ -14,6 +14,8 @@ import { ChainFilterBar } from '../../components/ChainFilterBar';
 import { ChainLogoStrip } from '../../components/ChainLogoStrip';
 import { getChainMiniLogoUrl } from '../../utils/chainBrandName';
 import { addProductToBasket } from '../../utils/basketUtils';
+import { TemplateReturnBanner } from '../../components/template/TemplateReturnBanner';
+import { useTemplateAddState } from '../../state/templateAddState';
 import { useBasketState } from '../../state/basketState';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
@@ -204,7 +206,10 @@ export default function ProductDetailScreen() {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const { id } = useLocalSearchParams<{ id: string }>();
+    const { id, templateId: rawTemplateId } =
+        useLocalSearchParams<{ id: string; templateId?: string }>();
+    const templateId = rawTemplateId != null && rawTemplateId.length > 0 ? Number(rawTemplateId) : null;
+    const isTemplateMode = templateId != null && Number.isFinite(templateId);
     const [product, setProduct] = useState<Product | null>(null);
     const [categoryParts, setCategoryParts] = useState<string[]>([]);
     const [storeProducts, setStoreProducts] = useState<StoreProduct[]>([]);
@@ -218,6 +223,14 @@ export default function ProductDetailScreen() {
     const [amountModalVisible, setAmountModalVisible] = useState(false);
     const { mode, ready: prefReady } = useDisplayMode();
     const { draftBasketId, setDraftBasketId } = useBasketState();
+    const templateItems = useTemplateAddState(s => s.items);
+    const templateAdd = useTemplateAddState(s => s.add);
+    const templateSetQty = useTemplateAddState(s => s.setQuantity);
+    const templateEntry = useMemo(
+        () => (isTemplateMode ? templateItems.find(i => i.productId === Number(id)) : undefined),
+        [isTemplateMode, templateItems, id],
+    );
+    const templateQuantity = templateEntry?.quantity ?? 0;
     const { bottom: bottomInset } = useSafeAreaInsets();
     const draftBasketIdRef = useRef(draftBasketId);
     useEffect(() => { draftBasketIdRef.current = draftBasketId; }, [draftBasketId]);
@@ -304,7 +317,10 @@ export default function ProductDetailScreen() {
 
     const getPricesForSp = (spId: number): PricePoint[] => priceCache[`${spId}-all`] || [];
 
-    const BAR_HEIGHT = 64;
+    // Template mode renders a return banner below the add bar, eating
+    // another ~64pt of bottom space the ScrollView needs to clear so the
+    // final SP card isn't hidden under the stack.
+    const BAR_HEIGHT = isTemplateMode ? 132 : 64;
 
     const fetchBasketQty = useCallback(() => {
         const bid = useBasketState.getState().draftBasketId;
@@ -332,10 +348,30 @@ export default function ProductDetailScreen() {
         const qty = resolveCanonicalStep(product);
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
         setIsAdding(true);
+        if (isTemplateMode && templateId != null) {
+            templateAdd(product.id, qty)
+                .catch(() => {})
+                .finally(() => setIsAdding(false));
+            return;
+        }
         addProductToBasket(product.id, draftBasketId, setDraftBasketId, qty, mode)
             .then(result => { if (result.success) setBasketQuantity(qty); })
             .finally(() => setIsAdding(false));
-    }, [product, isAdding, draftBasketId, mode]);
+    }, [product, isAdding, draftBasketId, mode, isTemplateMode, templateId, templateAdd]);
+
+    const handleTemplateDecrement = useCallback(() => {
+        if (!product) return;
+        const step = resolveCanonicalStep(product);
+        const next = Math.max(0, Math.round((templateQuantity - step) / step) * step);
+        templateSetQty(product.id, next).catch(() => {});
+    }, [product, templateQuantity, templateSetQty]);
+
+    const handleTemplateIncrement = useCallback(() => {
+        if (!product) return;
+        const step = resolveCanonicalStep(product);
+        const next = Math.round((templateQuantity + step) / step) * step;
+        templateSetQty(product.id, next).catch(() => {});
+    }, [product, templateQuantity, templateSetQty]);
 
     const handleDecrement = useCallback(() => {
         if (!product) return;
@@ -496,9 +532,35 @@ export default function ProductDetailScreen() {
                 <View style={{ height: 40 }} />
             </ScrollView>
 
-            {/* Sticky bottom add-to-basket bar */}
-            <View style={[styles.addBar, { paddingBottom: bottomInset || 12 }]}>
-                {basketQuantity > 0 ? (
+            {/* Sticky add-to bar. Template mode shows a +/− stepper for
+                products already in the template (so users tweak amount
+                from the product detail without bouncing back to the
+                editor); otherwise the primary "Į šabloną" CTA. Basket
+                mode keeps the pre-existing QuantityControl ↔ "Į krepšelį"
+                toggle untouched. */}
+            <View style={[styles.addBar, { paddingBottom: isTemplateMode ? 12 : (bottomInset || 12) }]}>
+                {isTemplateMode && templateQuantity > 0 ? (
+                    <QuantityControl
+                        quantity={templateQuantity}
+                        onDecrement={handleTemplateDecrement}
+                        onIncrement={handleTemplateIncrement}
+                        unit={resolveDisplayUnit(product)}
+                        size="large"
+                        style={{ width: '100%' }}
+                    />
+                ) : isTemplateMode ? (
+                    <TouchableOpacity
+                        style={[styles.addButton, isAdding && styles.addButtonDone]}
+                        onPress={handleAdd}
+                        disabled={isAdding}
+                        activeOpacity={0.8}
+                    >
+                        {isAdding
+                            ? <ActivityIndicator size="small" color="#fff" />
+                            : <Ionicons name="albums-outline" size={20} color="#fff" />}
+                        <Text style={styles.addButtonText}>{t('basketTab.templates.addToTemplate')}</Text>
+                    </TouchableOpacity>
+                ) : basketQuantity > 0 ? (
                     <QuantityControl
                         quantity={basketQuantity}
                         onDecrement={handleDecrement}
@@ -521,6 +583,9 @@ export default function ProductDetailScreen() {
                     </TouchableOpacity>
                 )}
             </View>
+            {isTemplateMode && templateId != null && (
+                <TemplateReturnBanner templateId={templateId} />
+            )}
 
             <AmountPickerModal
                 visible={amountModalVisible}
@@ -536,6 +601,25 @@ export default function ProductDetailScreen() {
                 onConfirm={async (amount) => {
                     setAmountModalVisible(false);
                     setIsAdding(true);
+                    if (isTemplateMode && templateId != null) {
+                        try {
+                            // Picker is the "set absolute quantity" surface
+                            // — override any existing row rather than
+                            // incrementing (mirrors the template editor's
+                            // per-row input).
+                            if (templateEntry) {
+                                await templateSetQty(product.id, amount);
+                            } else {
+                                await templateAdd(product.id, amount);
+                            }
+                        } catch {
+                            // Swallow; template detail screen will reflect
+                            // server truth on next focus.
+                        } finally {
+                            setIsAdding(false);
+                        }
+                        return;
+                    }
                     const result = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, amount, mode);
                     setIsAdding(false);
                     if (result.success) setBasketQuantity(amount);

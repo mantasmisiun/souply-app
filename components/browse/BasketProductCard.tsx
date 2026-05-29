@@ -18,6 +18,9 @@ type Props = {
     amountText?: string;
     quantity: number;
     isAdding?: boolean;
+    /** Overrides the default "Į krepšelį" label on the add CTA. Used by
+     *  the template-add flow to render "Į šabloną" instead. */
+    addLabel?: string;
     onOpen?: () => void;
     onAdd: () => void;
     onDec: () => void;
@@ -31,6 +34,7 @@ function BasketProductCard({
     amountText,
     quantity,
     isAdding = false,
+    addLabel,
     onOpen,
     onAdd,
     onDec,
@@ -73,7 +77,7 @@ function BasketProductCard({
                         onAdd();
                     }}
                 >
-                    <Text style={styles.addButtonText}>{t('browse.addToBasket')}</Text>
+                    <Text style={styles.addButtonText}>{addLabel ?? t('browse.addToBasket')}</Text>
                 </ScalePressable>
             ) : (
                 <QuantityControl

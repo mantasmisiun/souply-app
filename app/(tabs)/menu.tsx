@@ -100,6 +100,26 @@ const legendStyles = StyleSheet.create({
     value: { fontSize: 13, fontWeight: '600', flexShrink: 0 },
 });
 
+/**
+ * Renders the creator-profile row in the Profilis quick-links section.
+ * Hidden when the user is anonymous (no JWT yet) — surfaces the moment
+ * they go through the publish wall.
+ */
+function CreatorProfileRow({ styles, colors, router, t }: any) {
+    const { useAuthState } = require('../../state/authState');
+    const user = useAuthState((s: any) => s.user);
+    if (!user) return null;
+    return (
+        <TouchableOpacity style={styles.row} onPress={() => router.push('/profile/edit')}>
+            <Ionicons name="person-circle-outline" size={22} color={colors.textSecondary} />
+            <Text style={styles.rowText}>
+                {user.username ? `@${user.username}` : t('creatorProfile.title')}
+            </Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+        </TouchableOpacity>
+    );
+}
+
 export default function ProfilisScreen() {
     const colors = useTheme();
     const { t } = useTranslation();
@@ -403,6 +423,10 @@ export default function ProfilisScreen() {
 
             {/* Quick links */}
             <View style={{ marginTop: 8 }}>
+                {/* Creator profile editor — surfaces only after the user has
+                    been through the publish wall (token present). For
+                    unverified users this row stays hidden. */}
+                <CreatorProfileRow styles={styles} colors={colors} router={router} t={t} />
                 <TouchableOpacity
                     style={styles.row}
                     onPress={() => router.push('/profile/vote-history')}
