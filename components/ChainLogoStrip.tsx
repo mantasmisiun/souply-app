@@ -14,11 +14,16 @@ interface Props {
 }
 
 function parse(raw: ChainLogo[] | string | null | undefined): ChainLogo[] {
-    if (!raw) return [];
-    if (typeof raw === 'string') {
-        try { return JSON.parse(raw); } catch { return []; }
+    // MariaDB (souply_test / souply_production) returns JSON columns as
+    // STRINGS — sometimes double-encoded — whereas MySQL (Basket_DB)
+    // auto-parsed them to arrays. So decode up to twice and ALWAYS return
+    // an array: a non-array result must not reach `.slice()/.map()` or the
+    // discounts screen crashes ("shown.map is not a function").
+    let val: unknown = raw;
+    for (let i = 0; i < 2 && typeof val === 'string'; i++) {
+        try { val = JSON.parse(val); } catch { return []; }
     }
-    return raw;
+    return Array.isArray(val) ? (val as ChainLogo[]) : [];
 }
 
 const LOGO_SIZE = 13;

@@ -4,7 +4,7 @@ const ICON = IS_DEV ? './assets/images/DEV.png' : './assets/images/icon.png';
 export default {
   expo: {
     name: IS_DEV ? 'Souply (DEV)' : 'Souply',
-    slug: 'souply-app',
+    slug: 'souply',
     version: '1.0.0',
     orientation: 'portrait',
     icon: ICON,
