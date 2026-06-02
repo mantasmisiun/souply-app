@@ -15,12 +15,15 @@
  * `chainBrandColour(id, fallback)`.
  */
 
+// Kept in sync with `chainBrandColorById` in utils/chainBrandName.ts (the
+// source of truth used by the Analizė chip filter). IKI is green, NORFA is
+// orange — they were previously swapped here.
 export const CHAIN_BRAND_COLOURS: Record<number, string> = {
-    1: "#0046B5", // MAXIMA — corporate blue
-    2: "#E60028", // RIMI — corporate red
-    3: "#FF7E0E", // IKI — corporate orange
-    4: "#00873E", // NORFA — corporate green
-    5: "#FFE500", // LIDL — corporate yellow
+    1: "#003DA5", // MAXIMA — corporate blue
+    2: "#E2001A", // RIMI — corporate red
+    3: "#1F8B3A", // IKI — corporate green
+    4: "#F28C00", // NORFA — corporate orange
+    5: "#FFD500", // LIDL — corporate yellow
 };
 
 /**

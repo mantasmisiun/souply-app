@@ -574,7 +574,7 @@ export default function BasketDetailScreen() {
                 headerStyle: { backgroundColor: headerColor },
                 headerTintColor: onCover,
                 headerShadowVisible: false,
-                headerLeft: () => <ScreenBackButton color={onCover} />,
+                headerLeft: () => <ScreenBackButton color={fromTemplate && basket?.templateCoverColor ? '#FFFFFF' : colors.primary} />,
                 // Bookmark icon → save-as-template modal. Only meaningful
                 // when the basket has at least one item; hide otherwise
                 // so the user isn't prompted to save an empty template.

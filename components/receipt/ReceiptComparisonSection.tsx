@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { chainBrandColour } from '../../constants/chainBrandColours';
+import { getChainMiniLogoUrl } from '../../utils/chainBrandName';
 import { formatEuro, formatKm } from '../../utils/formatCurrency';
 type Props = {
   comparison: ReceiptComparison | null;
@@ -215,13 +216,19 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
           >
             <View style={styles.rowHeader}>
               <View style={styles.storeInfo}>
-                {row.chainLogoUrl ? (
-                  <Image source={{ uri: row.chainLogoUrl }} style={styles.logo} resizeMode="contain" />
-                ) : (
-                  <View style={styles.logoFallback}>
+                {/* Mini logo on a brand-coloured tile — same treatment as the
+                    Analizė tab and elsewhere (not the full store logo). */}
+                <View style={[styles.logo, { backgroundColor: chainBrandColour(row.chainId, colors.primary) }]}>
+                  {row.chainLogoUrl ? (
+                    <Image
+                      source={{ uri: getChainMiniLogoUrl(row.chainId, row.chainLogoUrl) }}
+                      style={styles.logoImage}
+                      resizeMode="contain"
+                    />
+                  ) : (
                     <Text style={styles.logoFallbackText}>{getInitials(row.storeName || row.chainName)}</Text>
-                  </View>
-                )}
+                  )}
+                </View>
 
                 <View style={{ flex: 1 }}>
                   <View style={styles.storeTitleRow}>
@@ -400,16 +407,16 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   warningText: { fontSize: 12, color: c.warning, marginTop: 6 },
   loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
 
-  logo: { width: 28, height: 28, borderRadius: 14, backgroundColor: c.cardBackground },
-  logoFallback: {
+  logo: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: c.border,
     alignItems: 'center',
     justifyContent: 'center',
+    overflow: 'hidden',
   },
-  logoFallbackText: { fontSize: 11, fontWeight: '700', color: c.textPrimary },
+  logoImage: { width: 18, height: 18 },
+  logoFallbackText: { fontSize: 11, fontWeight: '700', color: '#FFFFFF' },
 
   storeLabel: { fontSize: 13, color: c.textPrimary, fontWeight: '600' },
 

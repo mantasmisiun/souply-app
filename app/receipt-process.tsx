@@ -3610,7 +3610,7 @@ export default function ProcessReceiptScreen() {
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-  navHeaderWrap: { alignItems: "center", maxWidth: 240 },
+  navHeaderWrap: { alignItems: "flex-start", maxWidth: 240 },
   navTitle: { fontSize: 15, fontWeight: "700", color: c.textPrimary },
   navSubtitle: { fontSize: 11, color: c.textSecondary, marginTop: 1 },
   swipeEntryCard: {

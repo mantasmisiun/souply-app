@@ -135,6 +135,19 @@ export async function deleteTemplate(id: number): Promise<void> {
     await jsonOrThrow(await tfetch(`${API_BASE_URL}/api/basket-templates/${id}`, { method: 'DELETE' }));
 }
 
+/** Build (or rebuild) the auto "default" template from the caller's receipts.
+ *  Throws on 409 (e.g. not enough receipts / no purchased products). */
+export async function buildDefaultTemplate(): Promise<BasketTemplateDetail> {
+    const res = await tfetch(`${API_BASE_URL}/api/basket-templates/default/build`, { method: 'POST' });
+    return jsonOrThrow(res);
+}
+
+/** Copy any owned template into a new editable (isDefault=0) template. */
+export async function duplicateTemplate(id: number): Promise<{ id: number; name: string; itemCount: number }> {
+    const res = await tfetch(`${API_BASE_URL}/api/basket-templates/${id}/duplicate`, { method: 'POST' });
+    return jsonOrThrow(res);
+}
+
 export async function instantiateTemplate(id: number, userId: string, opts: { force?: boolean } = {}): Promise<InstantiateResult> {
     const res = await tfetch(`${API_BASE_URL}/api/basket-templates/${id}/instantiate`, {
         method: 'POST',

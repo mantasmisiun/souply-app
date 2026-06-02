@@ -22,9 +22,11 @@ import { formatDate, formatEuro } from '../../utils/formatCurrency';
 import {
     listTemplates,
     createTemplate,
+    buildDefaultTemplate,
     type BasketTemplate,
 } from '../../utils/basketTemplatesApi';
 import { SystemNoticeCard } from '../../components/SystemNoticeCard';
+import { BuildingTemplateCard } from '../../components/BuildingTemplateCard';
 
 interface Basket {
     id: number;
@@ -168,6 +170,8 @@ export default function BasketScreen() {
     const [receiptCount, setReceiptCount] = useState(0);
     const [distinctChainCount, setDistinctChainCount] = useState(0);
     const [gateDismissed, setGateDismissed] = useState(false);
+    const [buildDismissed, setBuildDismissed] = useState(false);
+    const [building, setBuilding] = useState(false);
     // `loading` = full-screen spinner on FIRST mount only.
     // `refreshing` = small header pill shown on subsequent focus refetches
     // so the list doesn't blank out every time the tab regains focus.
@@ -194,7 +198,6 @@ export default function BasketScreen() {
     // (isDefault=1) appears for the first time. Dismissal is per-template-id
     // so a fresh auto-update doesn't re-show the card unless it really is
     // the user's first one. Stored under TEMPLATE_ANNOUNCE_KEY:{id}.
-    const [dismissedAnnounceId, setDismissedAnnounceId] = useState<number | null>(null);
 
     const hasFetchedRef = useRef(false);
     // Auto-expand the priority section the first time baskets land, but
@@ -299,14 +302,6 @@ export default function BasketScreen() {
         [templates],
     );
 
-    // Rehydrate the dismissal flag whenever the default template changes
-    // so the card doesn't flash on every focus refetch.
-    useEffect(() => {
-        if (!defaultTemplate) return;
-        AsyncStorage.getItem(`template_announce_dismissed:${defaultTemplate.id}`)
-            .then(v => { if (v === '1') setDismissedAnnounceId(defaultTemplate.id); });
-    }, [defaultTemplate?.id]);
-
     // Onboarding gate dismissal persists across sessions. Once the user
     // taps "Vėliau" we never bring the full-screen card back; the slim
     // banner replaces it until they hit the 3-receipt × 2-chain bar.
@@ -328,14 +323,34 @@ export default function BasketScreen() {
     const showGate = !defaultTemplate && !meetsThreshold && !gateDismissed;
     const showGateBanner = !defaultTemplate && !meetsThreshold && gateDismissed;
 
-    const dismissAnnouncement = useCallback(async (templateId: number) => {
-        setDismissedAnnounceId(templateId);
-        try {
-            await AsyncStorage.setItem(`template_announce_dismissed:${templateId}`, '1');
-        } catch {}
+    // Once the user qualifies, offer to BUILD the default template (user-
+    // initiated, per spec). Dismiss is permanent. Hidden while building or
+    // once the template exists.
+    useEffect(() => {
+        AsyncStorage.getItem('default_build_dismissed')
+            .then(v => { if (v === '1') setBuildDismissed(true); });
     }, []);
+    const dismissBuild = useCallback(async () => {
+        setBuildDismissed(true);
+        try { await AsyncStorage.setItem('default_build_dismissed', '1'); } catch {}
+    }, []);
+    const showBuildBanner = meetsThreshold && !defaultTemplate && !buildDismissed && !building;
 
-    const showAnnouncement = !!defaultTemplate && dismissedAnnounceId !== defaultTemplate.id;
+    const handleBuild = useCallback(async () => {
+        if (building) return;
+        setBuilding(true);
+        // Artificial floor so the "AI working" card is visible even if the
+        // server answers instantly (per spec — pretend to think for ~5s).
+        const minDelay = new Promise(resolve => setTimeout(resolve, 5000));
+        try {
+            await Promise.all([buildDefaultTemplate(), minDelay]);
+            await fetchAll(true); // refetch → the new default card appears
+        } catch {
+            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.buildFailed'));
+        } finally {
+            setBuilding(false);
+        }
+    }, [building, t]);
 
     const handleSectionTap = useCallback((status: BasketStatus) => {
         if (grouped[status].length === 0) return;
@@ -440,6 +455,22 @@ export default function BasketScreen() {
                                     actions={[{ label: t('basketTab.templates.gateBannerCta'), onPress: () => router.navigate('/(tabs)/receipts' as any) }]}
                                 />
                             )}
+                            {/* Qualified → offer to build the auto template. */}
+                            {showBuildBanner && (
+                                <SystemNoticeCard
+                                    variant="success"
+                                    icon="sparkles"
+                                    title={t('basketTab.templates.buildOfferTitle')}
+                                    body={t('basketTab.templates.buildOfferBody')}
+                                    onDismiss={dismissBuild}
+                                    actions={[
+                                        { label: t('basketTab.templates.buildDismiss'), onPress: dismissBuild, style: 'secondary' },
+                                        { label: t('basketTab.templates.buildCta'), onPress: handleBuild, style: 'primary' },
+                                    ]}
+                                />
+                            )}
+                            {/* While building → AI placeholder card. */}
+                            {building && <BuildingTemplateCard />}
                         </>
                     }
                     ListEmptyComponent={
@@ -458,31 +489,46 @@ export default function BasketScreen() {
                         const visitsStr = t(`basketTab.templates.visitCount_${ltPluralSuffix(visitCount)}`, { count: visitCount });
                         return (
                             <TouchableOpacity
-                                style={[styles.templateCard, item.coverColor ? { borderLeftWidth: 4, borderLeftColor: item.coverColor } : null]}
+                                style={[
+                                    styles.templateCard,
+                                    item.isDefault === 1
+                                        ? styles.smartCard
+                                        : item.coverColor ? { borderLeftWidth: 4, borderLeftColor: item.coverColor } : null,
+                                ]}
                                 onPress={() => handleTemplateTap(item)}
                                 activeOpacity={0.75}
                             >
                                 <View style={styles.cardLeft}>
-                                    {/* Server-owned cover, shared with the web dashboard +
-                                        public share page: emoji as the icon, colour on the
-                                        card's left edge. Falls back to the bookmark icon for
-                                        templates with no cover yet. */}
+                                    {/* Smart template → AI sparkle. Otherwise the server-owned
+                                        cover emoji (shared with web + share page), falling back
+                                        to the bookmark icon when no cover is set. */}
                                     <View style={styles.templateIcon}>
-                                        {emoji
-                                            ? <Text style={styles.templateCoverEmoji}>{emoji}</Text>
-                                            : <Ionicons name="bookmark" size={22} color={colors.primary} />}
+                                        {item.isDefault === 1
+                                            ? <Ionicons name="sparkles" size={22} color={colors.primary} />
+                                            : emoji
+                                                ? <Text style={styles.templateCoverEmoji}>{emoji}</Text>
+                                                : <Ionicons name="bookmark" size={22} color={colors.primary} />}
                                     </View>
                                 </View>
                                 <View style={styles.cardContent}>
-                                    <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
+                                    <Text style={styles.cardTitle} numberOfLines={1}>
+                                        {item.isDefault === 1 ? t('basketTab.templates.smartName') : item.name}
+                                    </Text>
                                     <Text style={styles.cardDate}>
                                         {itemsStr}
                                         {visitCount > 0 && ` · ${visitsStr}`}
                                     </Text>
-                                    {/* Visibility badge — creators only. Neutral
-                                        theme-aware pill identical to the web dashboard's
-                                        VisibilityTag (icon + label). Binary Privatus/Viešas. */}
-                                    {authUsername && (() => {
+                                    {/* Smart template → "auto-renews" pill, shown ONLY while
+                                        learning is on (autoUpdate=1). Otherwise, for creators,
+                                        the neutral visibility pill (mirrors web VisibilityTag). */}
+                                    {item.isDefault === 1 ? (
+                                        item.autoUpdate === 1 ? (
+                                            <View style={styles.autoBadge}>
+                                                <Ionicons name="sync" size={10} color={colors.primary} />
+                                                <Text style={styles.autoBadgeText}>{t('basketTab.templates.autoBadge')}</Text>
+                                            </View>
+                                        ) : null
+                                    ) : authUsername ? (() => {
                                         const isPriv = ((item as any).visibility ?? 'private') === 'private';
                                         return (
                                             <View style={styles.visBadge}>
@@ -496,7 +542,7 @@ export default function BasketScreen() {
                                                 </Text>
                                             </View>
                                         );
-                                    })()}
+                                    })() : null}
                                 </View>
                                 <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
                             </TouchableOpacity>
@@ -554,31 +600,9 @@ export default function BasketScreen() {
                 }
             >
                 {/* Notification surfaces — the auto-template gate/banner now
-                    live on the Šablonai tab. */}
-                        {showAnnouncement && defaultTemplate && (
-                            <SystemNoticeCard
-                                variant="info"
-                                icon="sparkles"
-                                title={t('basketTab.templates.announceTitle')}
-                                body={t('basketTab.templates.announceBody')}
-                                onDismiss={() => dismissAnnouncement(defaultTemplate.id)}
-                                actions={[
-                                    {
-                                        label: t('basketTab.templates.announceDismiss'),
-                                        onPress: () => dismissAnnouncement(defaultTemplate.id),
-                                        style: 'secondary',
-                                    },
-                                    {
-                                        label: t('basketTab.templates.announceCta'),
-                                        onPress: () => {
-                                            dismissAnnouncement(defaultTemplate.id);
-                                            router.push(`/template/${defaultTemplate.id}` as any);
-                                        },
-                                        style: 'primary',
-                                    },
-                                ]}
-                            />
-                        )}
+                    live on the Šablonai tab. The "template ready" announcement
+                    was removed: the Build flow already navigates the user to
+                    the new Smart template, so the banner was redundant. */}
 
                 {/* Accordion sections — rendered inline so LayoutAnimation's
                     parent re-flow drives a real height transition. FlatList's
@@ -746,6 +770,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 1.5,
     },
     visBadgeText: { fontSize: 10, fontWeight: '600', color: c.textPrimary },
+    autoBadge: {
+        flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6, alignSelf: 'flex-start',
+        backgroundColor: (c as any).primaryMuted ?? c.surfaceMuted, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3,
+    },
+    autoBadgeText: { fontSize: 10, fontWeight: '700', color: c.primary },
     cardTotal: { fontSize: 15, fontWeight: '700', color: c.primary, marginLeft: 8 },
 
     // ── "+ New template" card on the Šablonai list ────────────────────────
@@ -793,6 +822,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
         shadowOpacity: 0.06, shadowRadius: 2,
         borderLeftWidth: 3, borderLeftColor: c.primary,
+    },
+    // Smart (auto) template — full pink fill so it stands out from manual cards.
+    smartCard: {
+        backgroundColor: (c as any).primaryMuted ?? c.surfaceMuted,
+        borderWidth: 1.5, borderColor: c.primary,
+        borderLeftWidth: 1.5, borderLeftColor: c.primary,
     },
     templateIcon: {
         width: 36, height: 36, borderRadius: 8,

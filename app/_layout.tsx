@@ -243,7 +243,14 @@ export default function RootLayout() {
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: colors.pageBackground },
-          headerTintColor: colors.textPrimary,
+          // Pink tint colours the native back chevron consistently across the
+          // app. Title colour is pinned to textPrimary via headerTitleStyle so
+          // it stays dark (headerTintColor would otherwise turn it pink too).
+          headerTintColor: colors.primary,
+          headerTitleStyle: { color: colors.textPrimary },
+          // Left-align titles everywhere (iOS defaults to centre; we want the
+          // Android-style left alignment app-wide).
+          headerTitleAlign: 'left',
           headerShadowVisible: false,
           contentStyle: { backgroundColor: colors.pageBackground },
           // Hide the previous route's title next to the iOS back
@@ -266,8 +273,11 @@ export default function RootLayout() {
             NativeTabs tab bar hides on push (it stays visible when a
             screen is inside a tab's nested stack). Each screen sets its
             own <Stack.Screen options/> inline. */}
-        <Stack.Screen name="discounts" />
-        <Stack.Screen name="browse/[categoryId]" />
+        {/* Back button registered at the route-entry level (not in global
+            screenOptions — that caused the iOS phantom-mount bug) so the pink
+            chevron is present on the first frame, with no native-arrow flash. */}
+        <Stack.Screen name="discounts" options={{ headerLeft: () => <ScreenBackButton /> }} />
+        <Stack.Screen name="browse/[categoryId]" options={{ headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="admin/catalog/[categoryId]" options={{ headerShown: false }} />
         <Stack.Screen name="basket/[id]" options={{ title: t('screens.basket') }} />
         {/* basket/results/[id] intentionally configures its own <Stack.Screen>
@@ -276,9 +286,9 @@ export default function RootLayout() {
             initial-mount timing and leave the refresh button missing
             until the child's options apply. File-based routing picks the
             screen up without this entry. */}
-        <Stack.Screen name="shopping-list/[id]" options={{ title: t('screens.shoppingList') }} />
+        <Stack.Screen name="shopping-list/[id]" options={{ title: t('screens.shoppingList'), headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
-        <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess') }} />
+        <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess'), headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
         <Stack.Screen
           name="settings"

@@ -205,7 +205,7 @@ export default function PresetMapScreen() {
                 <Stack.Screen options={{
                     headerTitle,
                     headerBackTitle: '',
-                    headerTintColor: colors.textPrimary,
+                    headerTintColor: colors.primary,
                     headerStyle: { backgroundColor: colors.cardBackground },
                     headerShadowVisible: false,
                 }} />
@@ -226,7 +226,7 @@ export default function PresetMapScreen() {
         <View style={[styles.root, { backgroundColor: colors.pageBackground }]}>
             <Stack.Screen options={{
                 headerTitle,
-                headerTintColor: colors.textPrimary,
+                headerTintColor: colors.primary,
                 headerStyle: { backgroundColor: colors.cardBackground },
                 headerShadowVisible: false,
             }} />

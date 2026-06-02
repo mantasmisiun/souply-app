@@ -1,6 +1,6 @@
 import {
     View, Text, FlatList, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
-    Alert, TextInput, RefreshControl,
+    Alert, TextInput, RefreshControl, Switch,
 } from 'react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
@@ -33,6 +33,7 @@ import {
     patchTemplate,
     deleteTemplate as deleteTemplateApi,
     instantiateTemplate,
+    duplicateTemplate,
     patchTemplateItem,
     deleteTemplateItem,
     type BasketTemplateDetail,
@@ -250,6 +251,32 @@ export default function TemplateDetailScreen() {
         setInstantiating(false);
     }, [template, instantiating, router, t, runInstantiate]);
 
+    // ── Copy (duplicate into an editable template) ────────────────────────
+    const [duplicating, setDuplicating] = useState(false);
+    const handleDuplicate = useCallback(async () => {
+        if (!template || duplicating) return;
+        try {
+            setDuplicating(true);
+            const dup = await duplicateTemplate(template.id);
+            router.replace(`/template/${dup.id}` as any);
+        } catch {
+            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
+            setDuplicating(false);
+        }
+    }, [template, duplicating, router, t]);
+
+    // ── Learning switch (default template only) = autoUpdate ──────────────
+    const toggleLearning = useCallback(async (value: boolean) => {
+        if (!template) return;
+        setTemplate(prev => prev ? { ...prev, autoUpdate: value ? 1 : 0 } : prev);
+        try {
+            await patchTemplate(template.id, { autoUpdate: value });
+        } catch {
+            setTemplate(prev => prev ? { ...prev, autoUpdate: value ? 0 : 1 } : prev);
+            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
+        }
+    }, [template, t]);
+
     // ── Skeleton ──────────────────────────────────────────────────────────
     if (loading || !template) {
         return (
@@ -269,7 +296,14 @@ export default function TemplateDetailScreen() {
         );
     }
 
-    const titleText = template.name || t('basketTab.templates.fallbackName');
+    // The auto "default" template is read-only: no rename/cover/share/edit/
+    // delete — only use (create basket), copy, and the learning switch. Its
+    // name is always the branded "Smart template", regardless of the stored
+    // value (older defaults were created as "Pirkinių sąrašas").
+    const isDefault = template.isDefault === 1;
+    const titleText = isDefault
+        ? t('basketTab.templates.smartName')
+        : (template.name || t('basketTab.templates.fallbackName'));
     // Colour the nav bar with the template's cover colour; text/icons flip to
     // white for contrast. Falls back to the neutral header when no cover set.
     const headerColor = template.coverColor ?? colors.cardBackground;
@@ -283,8 +317,9 @@ export default function TemplateDetailScreen() {
                 // Emoji + name both open the identity sheet (name/emoji/colour).
                 headerTitle: () => (
                     <TouchableOpacity
-                        onPress={() => setCoverEditorOpen(true)}
-                        activeOpacity={0.7}
+                        onPress={isDefault ? undefined : () => setCoverEditorOpen(true)}
+                        activeOpacity={isDefault ? 1 : 0.7}
+                        disabled={isDefault}
                         style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
                     >
                         <View style={{
@@ -292,7 +327,9 @@ export default function TemplateDetailScreen() {
                             backgroundColor: template.coverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
                             alignItems: 'center', justifyContent: 'center',
                         }}>
-                            <Text style={{ fontSize: 18 }}>{headerEmoji}</Text>
+                            {isDefault
+                                ? <Ionicons name="sparkles" size={18} color={colors.primary} />
+                                : <Text style={{ fontSize: 18 }}>{headerEmoji}</Text>}
                         </View>
                         <Text style={{ fontSize: 17, fontWeight: '600', color: onCover }} numberOfLines={1}>
                             {titleText}
@@ -302,19 +339,19 @@ export default function TemplateDetailScreen() {
                 headerStyle: { backgroundColor: headerColor },
                 headerTintColor: onCover,
                 headerShadowVisible: false,
-                headerLeft: () => <ScreenBackButton color={onCover} />,
+                headerLeft: () => <ScreenBackButton color={template.coverColor ? '#FFFFFF' : colors.primary} />,
                 headerRight: () => (
                     <View style={{ flexDirection: 'row' }}>
-                        {/* Dalintis lives on the nav bar so a single tap
-                            opens the share sheet. Disabled when the template
-                            is empty — sharing an item-less template is
-                            meaningless (the server would reject it anyway). */}
-                        <GlassIconButton
-                            icon="share-social-outline"
-                            color={onCover}
-                            onPress={() => template.items.length > 0 && setShareSheetOpen(true)}
-                            disabled={template.items.length === 0}
-                        />
+                        {/* Share — not for the personal auto template. Disabled
+                            when empty (sharing an item-less template is moot). */}
+                        {!isDefault && (
+                            <GlassIconButton
+                                icon="share-social-outline"
+                                color={onCover}
+                                onPress={() => template.items.length > 0 && setShareSheetOpen(true)}
+                                disabled={template.items.length === 0}
+                            />
+                        )}
                         <GlassIconButton
                             icon="ellipsis-horizontal"
                             color={onCover}
@@ -326,8 +363,10 @@ export default function TemplateDetailScreen() {
 
             <View style={styles.container}>
                 {/* Tabs only for signed-in creators — anonymous users just see
-                    the items list (Statistika holds creator-only data). */}
-                {authedUser && (
+                    the items list (Statistika holds creator-only data). The
+                    Smart template hides them entirely: it can't be shared and
+                    has no creator metrics, so only its item list is shown. */}
+                {authedUser && !isDefault && (
                     <View style={styles.tabBar}>
                         <StoreChipBar
                             chips={[
@@ -364,6 +403,22 @@ export default function TemplateDetailScreen() {
                             tintColor={colors.primary}
                         />
                     }
+                    ListHeaderComponent={
+                        isDefault ? (
+                            <View style={styles.settingRow}>
+                                <View style={{ flex: 1, marginRight: 12 }}>
+                                    <Text style={styles.settingLabel}>{t('basketTab.templates.learnLabel')}</Text>
+                                    <Text style={styles.settingHint}>{t('basketTab.templates.learnHint')}</Text>
+                                </View>
+                                <Switch
+                                    value={template.autoUpdate === 1}
+                                    onValueChange={toggleLearning}
+                                    trackColor={{ false: colors.border, true: colors.primary }}
+                                    thumbColor={colors.cardBackground}
+                                />
+                            </View>
+                        ) : null
+                    }
                     ListEmptyComponent={
                         <View style={styles.centered}>
                             <Ionicons name="albums-outline" size={56} color={colors.textMuted} />
@@ -392,6 +447,11 @@ export default function TemplateDetailScreen() {
                                 />
                                 <View style={styles.cardContent}>
                                     <Text style={styles.itemName} numberOfLines={2}>{item.productName}</Text>
+                                    {isDefault ? (
+                                        <Text style={styles.readonlyQty}>
+                                            {fallbackQty} {isWeighable ? 'kg' : 'vnt.'}
+                                        </Text>
+                                    ) : (
                                     <View style={styles.controls}>
                                         <TouchableOpacity
                                             style={styles.controlButton}
@@ -443,23 +503,29 @@ export default function TemplateDetailScreen() {
                                             <Ionicons name="add" size={18} color={colors.primary} />
                                         </TouchableOpacity>
                                     </View>
+                                    )}
                                 </View>
-                                <TouchableOpacity style={styles.removeButton} onPress={() => removeItem(item.id)}>
-                                    <Ionicons name="trash-outline" size={20} color={colors.error} />
-                                </TouchableOpacity>
+                                {!isDefault && (
+                                    <TouchableOpacity style={styles.removeButton} onPress={() => removeItem(item.id)}>
+                                        <Ionicons name="trash-outline" size={20} color={colors.error} />
+                                    </TouchableOpacity>
+                                )}
                             </View>
                         );
                     }}
                 />
 
                 <View style={styles.footer}>
-                    <TouchableOpacity
-                        style={styles.addItemBtn}
-                        onPress={() => router.push(`/template-add/${template.id}` as any)}
-                    >
-                        <Ionicons name="add" size={18} color={colors.primary} />
-                        <Text style={styles.addItemBtnText}>{t('basketTab.templates.addItemTitle')}</Text>
-                    </TouchableOpacity>
+                    {/* The auto template is read-only — no adding items. */}
+                    {!isDefault && (
+                        <TouchableOpacity
+                            style={styles.addItemBtn}
+                            onPress={() => router.push(`/template-add/${template.id}` as any)}
+                        >
+                            <Ionicons name="add" size={18} color={colors.primary} />
+                            <Text style={styles.addItemBtnText}>{t('basketTab.templates.addItemTitle')}</Text>
+                        </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                         style={[styles.cta, (instantiating || template.items.length === 0) && styles.ctaDisabled]}
                         onPress={handleInstantiate}
@@ -518,14 +584,21 @@ export default function TemplateDetailScreen() {
                     title={template.name}
                     onDismiss={() => setActionBarOpen(false)}
                     actions={[
-                        // Share moved to the nav-bar share icon. Only the
-                        // destructive action remains in the overflow menu.
+                        // Copy → a new editable template. Available for every
+                        // template, and the only way to "edit" the auto one.
                         {
-                            icon: 'trash-outline',
+                            icon: 'copy-outline',
+                            label: t('basketTab.templates.copyTemplate'),
+                            onPress: () => { setActionBarOpen(false); handleDuplicate(); },
+                        },
+                        // The auto default template can't be deleted (learning
+                        // switch only); manual templates keep delete.
+                        ...(isDefault ? [] : [{
+                            icon: 'trash-outline' as const,
                             label: t('basketTab.templates.deleteConfirm'),
                             destructive: true,
                             onPress: () => { setActionBarOpen(false); confirmDelete(); },
-                        },
+                        }]),
                     ]}
                 />
             )}
@@ -586,7 +659,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
         backgroundColor: c.cardBackground, borderRadius: 12, padding: 14, marginBottom: 12,
     },
-    settingLabel: { flex: 1, fontSize: 14, color: c.textPrimary, marginRight: 12 },
+    settingLabel: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
+    settingHint: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
 
     // ── Statistika tab — creator-account explainer ────────────────────────
     statsScroll: { padding: 16, paddingBottom: 32 },
@@ -662,6 +736,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         ...(({} as any)),
     },
     unitLabel: { fontSize: 13, fontWeight: '600', color: c.textSecondary, minWidth: 28 },
+    readonlyQty: { fontSize: 13, fontWeight: '600', color: c.textSecondary },
     removeButton: { padding: 4 },
 
     // ── Footer ────────────────────────────────────────────────────────────

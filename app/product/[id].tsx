@@ -443,7 +443,6 @@ export default function ProductDetailScreen() {
     return (
         <>
             <Stack.Screen options={{
-                headerBackTitle: 'Atgal',
                 headerStyle: { backgroundColor: colors.cardBackground },
                 headerShadowVisible: false,
                 headerTitle: () => (
