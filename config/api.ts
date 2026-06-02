@@ -46,10 +46,11 @@ const getDevHost = (): string => {
 
 const DEV_LAN_URL = `http://${getDevHost()}:3000`;
 const DEV_VARIANT_LAN_URL = `http://${DEV_VARIANT_LAN_HOST}:3000`;
-// New stack: souply-api → souply_production (full migrations + features
-// the legacy basket-api/Basket_DB lacks). Legacy host was
-// api.manofoto.dpdns.org → basket-api → Basket_DB.
-const PROD_URL = 'https://api.souply.manofoto.dpdns.org';
+// Production API on souply.lt → souply-api → souply_production. This is the
+// permanent prod endpoint; release builds (preview/production profiles) hit it.
+// Staging (api.souply.manofoto → souply_test) is LAN-gated and validated via
+// the DEV-variant build pointing at the local/LAN souply-api instead.
+const PROD_URL = 'https://api.souply.lt';
 
 // Order matters:
 //   __DEV__ wins (Metro is the source of truth for the LAN host).

@@ -12,7 +12,6 @@ import { GlassIconButton } from '../components/GlassIconButton';
 import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
-import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
@@ -237,7 +236,6 @@ export default function RootLayout() {
     <ThemeProvider value={navTheme}>
       <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
       <ShareHandler />
-      <DevUpdateBanner />
       <OfflineBanner />
       <LevelUpModal />
       <Stack

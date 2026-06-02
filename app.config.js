@@ -29,6 +29,16 @@ export default {
       associatedDomains: [`applinks:${LINK_HOST}`],
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
+        // Descriptive purpose strings — Apple rejects generic ones. These
+        // override whatever the package config plugins would inject.
+        NSCameraUsageDescription:
+          'Souply uses the camera to scan your receipts and product barcodes so it can compare prices for you.',
+        NSPhotoLibraryUsageDescription:
+          'Souply needs access to your photos so you can upload receipt images for price comparison.',
+        NSPhotoLibraryAddUsageDescription:
+          'Souply saves shared shopping-list QR codes to your photo library.',
+        NSLocationWhenInUseUsageDescription:
+          'Souply uses your approximate location to show the nearest stores with the best prices.',
         // "Open In Souply" — appears when user taps a PDF/image in Files or Mail
         CFBundleDocumentTypes: [
           {
@@ -74,9 +84,11 @@ export default {
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       package: IS_DEV ? 'lt.souply.app.dev' : 'lt.souply.app',
+      // COARSE only — the app requests Accuracy.Balanced (utils/location.ts)
+      // to find the nearest stores; precise (FINE) location is not needed and
+      // FINE triggers Google Play's sensitive-permission review.
       permissions: [
         'ACCESS_COARSE_LOCATION',
-        'ACCESS_FINE_LOCATION',
       ],
     },
     web: {
@@ -90,6 +102,16 @@ export default {
           ios: {
             deploymentTarget: '16.0',
           },
+        },
+      ],
+      [
+        'expo-camera',
+        {
+          cameraPermission:
+            'Souply uses the camera to scan your receipts and product barcodes so it can compare prices for you.',
+          // The app never records audio/video — drop the Android RECORD_AUDIO
+          // permission expo-camera adds by default (avoids Play Store scrutiny).
+          recordAudioAndroid: false,
         },
       ],
       'expo-router',
