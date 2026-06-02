@@ -1,5 +1,10 @@
 const IS_DEV = process.env.APP_VARIANT === 'dev';
 const ICON = IS_DEV ? './assets/images/DEV.png' : './assets/images/icon.png';
+// Universal/App Link host per environment. The dev build (testers) deep-links
+// against the test web stack; prod against souply.lt. localhost can't host
+// universal links, so dev points at the reachable test domain. The matching
+// apple-app-site-association / assetlinks.json must be served from each host.
+const LINK_HOST = IS_DEV ? 'souply.manofoto.dpdns.org' : 'souply.lt';
 
 export default {
   expo: {
@@ -21,7 +26,7 @@ export default {
       // apple-app-site-association (see Documentation/roadmap/landing-page.md
       // Part 5). Validation only kicks in once the AASA file is live;
       // until then the entitlement is harmless.
-      associatedDomains: ['applinks:souply.lt'],
+      associatedDomains: [`applinks:${LINK_HOST}`],
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
         // "Open In Souply" — appears when user taps a PDF/image in Files or Mail
@@ -60,8 +65,8 @@ export default {
           action: 'VIEW',
           autoVerify: true,
           data: [
-            { scheme: 'https', host: 'souply.lt', pathPrefix: '/t/' },
-            { scheme: 'https', host: 'souply.lt', pathPrefix: '/@' },
+            { scheme: 'https', host: LINK_HOST, pathPrefix: '/t/' },
+            { scheme: 'https', host: LINK_HOST, pathPrefix: '/@' },
           ],
           category: ['BROWSABLE', 'DEFAULT'],
         },
@@ -91,6 +96,15 @@ export default {
       'expo-localization',
       'expo-secure-store',
       'expo-web-browser',
+      [
+        'expo-media-library',
+        {
+          // Save-only: writing shared-template QR PNGs to the gallery.
+          photosPermission: 'Leisk Souply išsaugoti QR kodus į nuotraukas.',
+          savePhotosPermission: 'Souply išsaugo dalijamus QR kodus į nuotraukas.',
+          isAccessMediaLocationEnabled: false,
+        },
+      ],
       [
         'expo-splash-screen',
         {

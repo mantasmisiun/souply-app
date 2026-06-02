@@ -1,4 +1,5 @@
 import { API_BASE_URL } from '../config/api';
+import { getUserId } from '../config/user';
 
 export interface BasketTemplate {
     id: number;
@@ -11,6 +12,7 @@ export interface BasketTemplate {
     creatorHandle: string | null;
     sourceTemplateId: number | null;
     useCount: number;
+    visitCount: number;
     collectiveSavingsEur: string;
     snapshotCheapestChainId: number | null;
     snapshotTotalEur: string | null;
@@ -18,10 +20,24 @@ export interface BasketTemplate {
     snapshotCalculatedAt: string | null;
     lastAutoUpdateDelta: number | null;
     lastAutoUpdateAt: string | null;
+    /** Server-owned cover identity (shared with the web dashboard +
+     *  public share page). null → fall back to a default tint. */
+    coverColor: string | null;
+    coverImage: TemplateCoverImage | null;
     createdAt: string;
     updatedAt: string;
+    /** Set only on content edits (name / cover / items); null = never edited.
+     *  Drives the "Sukurta → Redaguota" stat (not `updatedAt`, which the server
+     *  auto-bumps on counters/shares too). */
+    editedAt: string | null;
     itemCount: number;
 }
+
+/** Cover image descriptor — preset icon key or a raw emoji glyph. Mirrors
+ *  the web's `CoverImage` so all surfaces render the same cover. */
+export type TemplateCoverImage =
+    | { kind: 'preset'; iconKey: string }
+    | { kind: 'emoji'; emoji: string };
 
 export interface BasketTemplateItem {
     id: number;
@@ -45,6 +61,19 @@ export type InstantiateResult =
     | { action: 'created'; basketId: number; templateId: number; itemCount: number }
     | { action: 'resume'; basketId: number; templateId: number };
 
+/**
+ * fetch tagged with the caller's device userId (X-User-Id) so the API can
+ * enforce template ownership. For verified creators the server prefers the
+ * Bearer/cookie identity, but X-User-Id == the same id (User.id is never
+ * reassigned), so this covers anonymous and creator clients alike.
+ */
+async function tfetch(input: string, init: RequestInit = {}): Promise<Response> {
+    const uid = await getUserId();
+    const headers = new Headers(init.headers);
+    headers.set('X-User-Id', uid);
+    return fetch(input, { ...init, headers });
+}
+
 async function jsonOrThrow(res: Response): Promise<any> {
     if (!res.ok) {
         let detail = '';
@@ -56,12 +85,12 @@ async function jsonOrThrow(res: Response): Promise<any> {
 }
 
 export async function listTemplates(userId: string): Promise<BasketTemplate[]> {
-    const res = await fetch(`${API_BASE_URL}/api/basket-templates/user/${userId}`);
+    const res = await tfetch(`${API_BASE_URL}/api/basket-templates/user/${userId}`);
     return jsonOrThrow(res) ?? [];
 }
 
 export async function getTemplate(id: number): Promise<BasketTemplateDetail> {
-    const res = await fetch(`${API_BASE_URL}/api/basket-templates/${id}`);
+    const res = await tfetch(`${API_BASE_URL}/api/basket-templates/${id}`);
     return jsonOrThrow(res);
 }
 
@@ -69,9 +98,11 @@ export async function createTemplate(opts: {
     userId: string;
     name: string;
     autoUpdate?: boolean;
+    coverColor?: string | null;
+    coverImage?: TemplateCoverImage | null;
     items?: Array<{ productId: number; quantity: number; unit?: string | null; sortOrder?: number }>;
 }): Promise<{ id: number; userId: string; name: string; itemCount: number }> {
-    const res = await fetch(`${API_BASE_URL}/api/basket-templates`, {
+    const res = await tfetch(`${API_BASE_URL}/api/basket-templates`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(opts),
@@ -79,8 +110,8 @@ export async function createTemplate(opts: {
     return jsonOrThrow(res);
 }
 
-export async function createTemplateFromBasket(basketId: number, opts: { name: string; autoUpdate?: boolean }): Promise<{ id: number; userId: string; name: string; itemCount: number }> {
-    const res = await fetch(`${API_BASE_URL}/api/basket-templates/from-basket/${basketId}`, {
+export async function createTemplateFromBasket(basketId: number, opts: { name: string; autoUpdate?: boolean; coverColor?: string | null; coverImage?: TemplateCoverImage | null }): Promise<{ id: number; userId: string; name: string; itemCount: number }> {
+    const res = await tfetch(`${API_BASE_URL}/api/basket-templates/from-basket/${basketId}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(opts),
@@ -88,8 +119,11 @@ export async function createTemplateFromBasket(basketId: number, opts: { name: s
     return jsonOrThrow(res);
 }
 
-export async function patchTemplate(id: number, fields: { name?: string; autoUpdate?: boolean }): Promise<BasketTemplate> {
-    const res = await fetch(`${API_BASE_URL}/api/basket-templates/${id}`, {
+export async function patchTemplate(
+    id: number,
+    fields: { name?: string; autoUpdate?: boolean; coverColor?: string | null; coverImage?: TemplateCoverImage | null },
+): Promise<BasketTemplate> {
+    const res = await tfetch(`${API_BASE_URL}/api/basket-templates/${id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(fields),
@@ -98,11 +132,11 @@ export async function patchTemplate(id: number, fields: { name?: string; autoUpd
 }
 
 export async function deleteTemplate(id: number): Promise<void> {
-    await jsonOrThrow(await fetch(`${API_BASE_URL}/api/basket-templates/${id}`, { method: 'DELETE' }));
+    await jsonOrThrow(await tfetch(`${API_BASE_URL}/api/basket-templates/${id}`, { method: 'DELETE' }));
 }
 
 export async function instantiateTemplate(id: number, userId: string, opts: { force?: boolean } = {}): Promise<InstantiateResult> {
-    const res = await fetch(`${API_BASE_URL}/api/basket-templates/${id}/instantiate`, {
+    const res = await tfetch(`${API_BASE_URL}/api/basket-templates/${id}/instantiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ userId, force: opts.force ?? false }),
@@ -111,7 +145,7 @@ export async function instantiateTemplate(id: number, userId: string, opts: { fo
 }
 
 export async function ackAutoUpdate(templateId: number): Promise<void> {
-    await jsonOrThrow(await fetch(`${API_BASE_URL}/api/basket-templates/${templateId}/ack-auto-update`, {
+    await jsonOrThrow(await tfetch(`${API_BASE_URL}/api/basket-templates/${templateId}/ack-auto-update`, {
         method: 'POST',
     }));
 }
@@ -142,14 +176,14 @@ export interface ShareLinkResult {
 }
 
 export async function generateShareLink(templateId: number): Promise<ShareLinkResult> {
-    const res = await fetch(`${API_BASE_URL}/api/basket-templates/${templateId}/share`, {
+    const res = await tfetch(`${API_BASE_URL}/api/basket-templates/${templateId}/share`, {
         method: 'POST',
     });
     return jsonOrThrow(res);
 }
 
 export async function revokeShareLink(templateId: number): Promise<void> {
-    await jsonOrThrow(await fetch(`${API_BASE_URL}/api/basket-templates/${templateId}/share`, {
+    await jsonOrThrow(await tfetch(`${API_BASE_URL}/api/basket-templates/${templateId}/share`, {
         method: 'DELETE',
     }));
 }
@@ -160,7 +194,7 @@ export interface SharedTemplate {
         name: string;
         creatorHandle: string | null;
         useCount: number;
-        visibility: 'unlisted' | 'public';
+        visibility: 'unlisted' | 'public' | 'private';
     };
     snapshot: {
         cheapestChainId: number | null;
@@ -179,7 +213,7 @@ export interface SharedTemplate {
 }
 
 export async function fetchSharedTemplate(slug: string): Promise<SharedTemplate> {
-    const res = await fetch(`${API_BASE_URL}/api/t/${slug}`);
+    const res = await tfetch(`${API_BASE_URL}/api/t/${slug}`);
     return jsonOrThrow(res);
 }
 
@@ -191,7 +225,7 @@ export async function addTemplateItem(templateId: number, item: {
     unit?: string | null;
     sortOrder?: number;
 }): Promise<{ id: number; templateId: number; productId: number; quantity: number }> {
-    const res = await fetch(`${API_BASE_URL}/api/basket-templates/${templateId}/items`, {
+    const res = await tfetch(`${API_BASE_URL}/api/basket-templates/${templateId}/items`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(item),
@@ -203,7 +237,7 @@ export async function patchTemplateItem(templateId: number, itemId: number, fiel
     quantity?: number;
     sortOrder?: number;
 }): Promise<void> {
-    await jsonOrThrow(await fetch(`${API_BASE_URL}/api/basket-templates/${templateId}/items/${itemId}`, {
+    await jsonOrThrow(await tfetch(`${API_BASE_URL}/api/basket-templates/${templateId}/items/${itemId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(fields),
@@ -211,7 +245,7 @@ export async function patchTemplateItem(templateId: number, itemId: number, fiel
 }
 
 export async function deleteTemplateItem(templateId: number, itemId: number): Promise<void> {
-    await jsonOrThrow(await fetch(`${API_BASE_URL}/api/basket-templates/${templateId}/items/${itemId}`, {
+    await jsonOrThrow(await tfetch(`${API_BASE_URL}/api/basket-templates/${templateId}/items/${itemId}`, {
         method: 'DELETE',
     }));
 }

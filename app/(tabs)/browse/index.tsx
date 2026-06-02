@@ -34,42 +34,41 @@ export default function BrowseIndex() {
         <GlassIconButton icon="search" onPress={pushSearch} />
     );
 
+    // Nuolaidos shortcut — passed as the categories list HEADER so it
+    // scrolls away with the list (like a category item) instead of being
+    // pinned above it.
+    const discountsHeader = (
+        <TouchableOpacity
+            style={styles.discountsCard}
+            onPress={() => router.push('/discounts' as any)}
+            activeOpacity={0.8}
+        >
+            <Text style={styles.discountsIcon}>🔥</Text>
+            <View style={styles.discountsTextWrap}>
+                <Text style={styles.discountsTitle}>{t('browse.discountsCardTitle')}</Text>
+                <Text style={styles.discountsSub}>{t('browse.discountsSub')}</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.onPrimary} />
+        </TouchableOpacity>
+    );
+
     return (
         <View style={{ flex: 1 }}>
             <TabHeader title={t('browse.title')} rightAction={searchAction} />
-            {/* Nuolaidos shortcut sits above the categories list as a
-                sticky entry point — kept outside the FlatList so it never
-                misses a frame while L1 data is fetching. */}
-            <View style={styles.discountsWrap}>
-                <TouchableOpacity
-                    style={styles.discountsCard}
-                    onPress={() => router.push('/discounts' as any)}
-                    activeOpacity={0.8}
-                >
-                    <Text style={styles.discountsIcon}>🔥</Text>
-                    <View style={styles.discountsTextWrap}>
-                        <Text style={styles.discountsTitle}>{t('browse.discountsCardTitle')}</Text>
-                        <Text style={styles.discountsSub}>{t('browse.discountsSub')}</Text>
-                    </View>
-                    <Ionicons name="chevron-forward" size={20} color={colors.onPrimary} />
-                </TouchableOpacity>
-            </View>
-            <CategoriesList onSelectL2={handleSelectL2} />
+            <CategoriesList onSelectL2={handleSelectL2} header={discountsHeader} />
         </View>
     );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    discountsWrap: {
-        paddingHorizontal: 16,
-        paddingTop: 12,
-        backgroundColor: c.pageBackground,
-    },
     discountsCard: {
         backgroundColor: c.primary,
         borderRadius: 14,
         paddingHorizontal: 16,
         paddingVertical: 18,
+        // Sits inside the list's 16px content padding now; this matches
+        // the inter-card gap so it reads like the first row of the list.
+        marginBottom: 10,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,

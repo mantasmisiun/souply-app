@@ -1,4 +1,4 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, Image } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, Image, Alert } from 'react-native';
 import Animated, {
     Easing,
     FadeIn,
@@ -116,6 +116,80 @@ function CreatorProfileRow({ styles, colors, router, t }: any) {
                 {user.username ? `@${user.username}` : t('creatorProfile.title')}
             </Text>
             <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+        </TouchableOpacity>
+    );
+}
+
+/**
+ * Sign-out row — shown only when signed in (verified user present).
+ * Clears the session AND resets the device's anonymous identity, then
+ * reloads so every store rehydrates against a fresh user — i.e. this
+ * phone's receipts / baskets / lists no longer appear. Confirmation
+ * popup first since it's effectively "leave + start clean here".
+ */
+function SignOutRow({ styles, colors, router, t }: any) {
+    const { useAuthState } = require('../../state/authState');
+    const user = useAuthState((s: any) => s.user);
+    if (!user) return null;
+
+    const doSignOut = async () => {
+        try {
+            await useAuthState.getState().clear();
+            const { resetUserId } = require('../../config/user');
+            await resetUserId();
+            try {
+                const Updates = await import('expo-updates');
+                await Updates.reloadAsync();
+            } catch {
+                router.replace('/(tabs)/receipts' as any);
+            }
+        } catch { /* best-effort */ }
+    };
+
+    const confirm = () => {
+        Alert.alert(
+            t('profilis.signOutConfirm.title'),
+            t('profilis.signOutConfirm.body'),
+            [
+                { text: t('profilis.signOutConfirm.cancel'), style: 'cancel' },
+                { text: t('profilis.signOutConfirm.confirm'), style: 'destructive', onPress: doSignOut },
+            ],
+        );
+    };
+
+    return (
+        <TouchableOpacity style={styles.row} onPress={confirm}>
+            <Ionicons name="log-out-outline" size={22} color={colors.textSecondary} />
+            <Text style={styles.rowText}>{t('profilis.signOut')}</Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+        </TouchableOpacity>
+    );
+}
+
+/**
+ * Standout CTA at the bottom of Profilis inviting non-creators to make a
+ * Kūrėjo paskyra. Hidden once the user is a verified creator (token present)
+ * — they get the CreatorProfileRow instead. Deliberately not a plain row:
+ * filled brand card + emoji + description so it reads as the primary action.
+ */
+function CreatorAccountCTA({ styles, router, t }: any) {
+    const { useAuthState } = require('../../state/authState');
+    const user = useAuthState((s: any) => s.user);
+    if (user) return null;
+    return (
+        <TouchableOpacity
+            style={styles.creatorCta}
+            onPress={() => router.push('/profile/creator-auth')}
+            activeOpacity={0.85}
+        >
+            <View style={styles.creatorCtaBadge}>
+                <Text style={styles.creatorCtaEmoji}>✨</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+                <Text style={styles.creatorCtaTitle}>{t('profilis.creatorCta.title')}</Text>
+                <Text style={styles.creatorCtaDesc}>{t('profilis.creatorCta.desc')}</Text>
+            </View>
+            <Ionicons name="arrow-forward" size={20} color="#fff" />
         </TouchableOpacity>
     );
 }
@@ -466,6 +540,9 @@ export default function ProfilisScreen() {
                         <Ionicons name="chevron-forward" size={18} color={colors.primary} />
                     </TouchableOpacity>
                 )}
+
+                {/* Sign out — only when signed in. Resets to a fresh user. */}
+                <SignOutRow styles={styles} colors={colors} router={router} t={t} />
             </View>
 
             {/* Dev tools — visible in Metro dev mode AND in the EAS DEV variant.
@@ -486,6 +563,9 @@ export default function ProfilisScreen() {
                     ))}
                 </View>
             )}
+
+            {/* Creator-account CTA — bottom of the profile, non-creators only. */}
+            <CreatorAccountCTA styles={styles} router={router} t={t} />
         </ScrollView>
 
         </View>
@@ -596,6 +676,22 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderRadius: 10, marginBottom: 8,
     },
     rowText: { flex: 1, fontSize: 15, color: c.textPrimary, fontWeight: '500' },
+    creatorCta: {
+        flexDirection: 'row', alignItems: 'center', gap: 14,
+        backgroundColor: c.primary,
+        paddingVertical: 16, paddingHorizontal: 16,
+        borderRadius: 18, marginTop: 24,
+        shadowColor: c.primary, shadowOpacity: 0.35, shadowRadius: 12,
+        shadowOffset: { width: 0, height: 6 }, elevation: 4,
+    },
+    creatorCtaBadge: {
+        width: 44, height: 44, borderRadius: 14,
+        backgroundColor: 'rgba(255,255,255,0.18)',
+        alignItems: 'center', justifyContent: 'center',
+    },
+    creatorCtaEmoji: { fontSize: 22 },
+    creatorCtaTitle: { fontSize: 16, fontWeight: '800', color: '#fff' },
+    creatorCtaDesc: { fontSize: 12.5, color: 'rgba(255,255,255,0.85)', marginTop: 2 },
 
     // "Kitos" aggregate row — visually identical to a Legend row (dot +
     // label + amount). Shown below the legend, separated by a hairline

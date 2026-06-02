@@ -12,6 +12,12 @@ import * as SecureStore from 'expo-secure-store';
 const TOKEN_KEY = 'souply_session_token';
 const USER_KEY = 'souply_verified_user';
 
+/** Fake session token set by the DEV quick-login (creator-auth screen). The
+ *  server rejects it on verified-only endpoints, so UI that needs a real
+ *  creator session checks for it to show a clearer "sign in for real" message
+ *  instead of a generic error. */
+export const DEV_SESSION_TOKEN = 'dev-session-token';
+
 export interface VerifiedUser {
     id: string;
     username: string | null;

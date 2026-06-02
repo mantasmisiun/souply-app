@@ -221,6 +221,15 @@ export default function RootLayout() {
         persister: queryPersister,
         maxAge: 24 * 60 * 60 * 1000,
         buster: 'v1',
+        dehydrateOptions: {
+          // Don't persist the discounts list — it's thousands of products and
+          // a single AsyncStorage value that big overflows Android's ~2 MB
+          // SQLite CursorWindow row, which makes the WHOLE persisted cache get
+          // discarded on launch ("Row too big to fit into CursorWindow"). It's
+          // refetched on open anyway; small queries (categories) still persist.
+          shouldDehydrateQuery: (query) =>
+            query.state.status === 'success' && query.queryKey[0] !== 'discounts',
+        },
       }}
     >
     <ShareIntentProvider>
@@ -286,6 +295,7 @@ export default function RootLayout() {
           }}
         />
         <Stack.Screen name="profile/restore-account" options={{ title: t('restore.title') }} />
+        <Stack.Screen name="profile/creator-auth" options={{ title: t('creatorAuth.title') }} />
         <Stack.Screen
           name="profile/audit-log"
           options={{

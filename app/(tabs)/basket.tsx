@@ -8,6 +8,11 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
+import { coverEmoji } from '../../utils/templateCover';
+import { useSafeBottomTabBarHeight } from '../../hooks/useSafeBottomTabBarHeight';
+import { TemplateCoverEditor, type CoverDraft } from '../../components/TemplateCoverEditor';
+import { useAuthState } from '../../state/authState';
+import { ltPluralSuffix } from '../../utils/ltPlural';
 import { getUserId } from '../../config/user';
 import { useBasketState } from '../../state/basketState';
 import { useTheme, type AppTheme } from '../../constants/theme';
@@ -17,7 +22,6 @@ import { formatDate, formatEuro } from '../../utils/formatCurrency';
 import {
     listTemplates,
     createTemplate,
-    ackAutoUpdate,
     type BasketTemplate,
 } from '../../utils/basketTemplatesApi';
 import { SystemNoticeCard } from '../../components/SystemNoticeCard';
@@ -37,6 +41,14 @@ interface Basket {
     /** Cheapest store's total from the most recent comparison run.
      *  Drives the "nuo €X" line on compared baskets. */
     cheapestTotal: string | number | null;
+    /** 1 once the user has changed items/amounts after creation — drives the
+     *  "Redaguota" chip (this basket diverged from the creator's original). */
+    userEditedAfterCreation?: 0 | 1;
+    /** Inherited identity from the source template (null for manual baskets). */
+    templateCoverColor?: string | null;
+    templateCoverImage?: { kind: 'preset'; iconKey: string } | { kind: 'emoji'; emoji: string } | null;
+    templateCreatorHandle?: string | null;
+    templateName?: string | null;
 }
 
 type ViewMode = 'baskets' | 'templates';
@@ -141,7 +153,11 @@ export default function BasketScreen() {
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
+    const tabBarHeight = useSafeBottomTabBarHeight();
     const { setDraftBasketId } = useBasketState();
+    // Own/private-template baskets attribute to the current user's handle when
+    // the server hasn't a DB username for the owner yet.
+    const authUsername = useAuthState((s: any) => s.user?.username ?? null);
 
     const [baskets, setBaskets] = useState<Basket[]>([]);
     const [templates, setTemplates] = useState<BasketTemplate[]>([]);
@@ -172,10 +188,7 @@ export default function BasketScreen() {
 
     // Blank-template creation: tapping the "+" card opens this modal.
     // Spec 1.1 path A — for users crafting a list without shopping first.
-    const [createModalOpen, setCreateModalOpen] = useState(false);
-    const [createName, setCreateName] = useState('');
-    const [createBusy, setCreateBusy] = useState(false);
-    const createInputRef = useRef<TextInput>(null);
+    const [coverSheetOpen, setCoverSheetOpen] = useState(false);
 
     // Announcement card — shown when the server-generated default template
     // (isDefault=1) appears for the first time. Dismissal is per-template-id
@@ -277,8 +290,8 @@ export default function BasketScreen() {
     // numbers live on the accordion section headers instead.
     const chips = useMemo(() => [
         { id: 'baskets', label: t('basketTab.chipBaskets') },
-        { id: 'templates', label: t('basketTab.chipTemplates') },
-    ], [t]);
+        { id: 'templates', label: templates.length > 0 ? `${t('basketTab.chipTemplates')} (${templates.length})` : t('basketTab.chipTemplates') },
+    ], [t, templates.length]);
 
     // Default (auto-generated) template — what powers the announcement card.
     const defaultTemplate = useMemo(
@@ -315,22 +328,6 @@ export default function BasketScreen() {
     const showGate = !defaultTemplate && !meetsThreshold && !gateDismissed;
     const showGateBanner = !defaultTemplate && !meetsThreshold && gateDismissed;
 
-    // Auto-update nudge — appears once when the server-side regeneration
-    // produces a delta > 3. Acked via PATCH which clears the counter.
-    const nudgeDelta = defaultTemplate?.lastAutoUpdateDelta ?? 0;
-    const showNudge = !!defaultTemplate && nudgeDelta > 3;
-
-    const ackNudge = useCallback(async (templateId: number) => {
-        try {
-            await ackAutoUpdate(templateId);
-        } catch {}
-        // Optimistically clear locally so the nudge disappears even before
-        // the next refetch lands.
-        setTemplates(prev => prev.map(t =>
-            t.id === templateId ? { ...t, lastAutoUpdateDelta: null } : t
-        ));
-    }, []);
-
     const dismissAnnouncement = useCallback(async (templateId: number) => {
         setDismissedAnnounceId(templateId);
         try {
@@ -356,25 +353,17 @@ export default function BasketScreen() {
         router.push(`/template/${template.id}` as any);
     };
 
-    const submitCreateTemplate = useCallback(async () => {
-        const trimmed = createName.trim();
-        if (trimmed.length === 0 || createBusy) return;
+    // FAB → identity sheet → create the template with the chosen name/emoji/
+    // colour, then route into the editor to add items.
+    const handleCreateTemplate = useCallback(async (next: CoverDraft) => {
         try {
-            setCreateBusy(true);
             const userId = await getUserId();
-            const created = await createTemplate({ userId, name: trimmed });
-            setCreateModalOpen(false);
-            setCreateName('');
-            // Route straight into the editor so the user can start adding
-            // items — blank-template creation only makes sense paired with
-            // immediate population.
+            const created = await createTemplate({ userId, name: next.name, coverColor: next.coverColor, coverImage: next.coverImage });
             router.push(`/template/${created.id}` as any);
         } catch {
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
-        } finally {
-            setCreateBusy(false);
         }
-    }, [createName, createBusy, router, t]);
+    }, [router, t]);
 
     if (loading) return (
         <View style={styles.container}>
@@ -421,18 +410,37 @@ export default function BasketScreen() {
                         />
                     }
                     ListHeaderComponent={
-                        <TouchableOpacity
-                            style={styles.addTemplateCard}
-                            onPress={() => {
-                                setCreateModalOpen(true);
-                                setCreateName('');
-                                setTimeout(() => createInputRef.current?.focus(), 80);
-                            }}
-                            activeOpacity={0.7}
-                        >
-                            <Ionicons name="add-circle-outline" size={26} color={colors.primary} />
-                            <Text style={styles.addTemplateCardText}>{t('basketTab.templates.addCard')}</Text>
-                        </TouchableOpacity>
+                        // "Įkelkite kvitus, kad gautumėte savo šabloną" lives here
+                        // (Šablonai) — this is where the auto-generated template
+                        // lands, so the prompt to earn it belongs on this tab.
+                        <>
+                            {showGate && (
+                                <SystemNoticeCard
+                                    variant="info"
+                                    icon="sparkles"
+                                    title={t('basketTab.templates.gateTitle')}
+                                    body={`${t('basketTab.templates.gateBody')}\n\n${t('basketTab.templates.gateBodyDetail')}`}
+                                    onDismiss={dismissGate}
+                                    actions={[
+                                        { label: t('basketTab.templates.gateLater'), onPress: dismissGate, style: 'secondary' },
+                                        { label: t('basketTab.templates.gateUpload'), onPress: () => router.navigate('/(tabs)/receipts' as any), style: 'primary' },
+                                    ]}
+                                />
+                            )}
+                            {showGateBanner && (
+                                <SystemNoticeCard
+                                    layout="banner"
+                                    variant="info"
+                                    icon="receipt-outline"
+                                    title={t('basketTab.templates.gateBannerTitle')}
+                                    body={t('basketTab.templates.gateBannerBody', {
+                                        progress: Math.min(receiptCount, 3),
+                                        chains: Math.min(distinctChainCount, 2),
+                                    })}
+                                    actions={[{ label: t('basketTab.templates.gateBannerCta'), onPress: () => router.navigate('/(tabs)/receipts' as any) }]}
+                                />
+                            )}
+                        </>
                     }
                     ListEmptyComponent={
                         <View style={styles.centered}>
@@ -443,83 +451,78 @@ export default function BasketScreen() {
                     }
                     renderItem={({ item }) => {
                         const itemCount = Number(item.itemCount ?? 0);
-                        const useCount = Number(item.useCount ?? 0);
+                        const visitCount = Number(item.visitCount ?? 0);
+                        const emoji = coverEmoji(item.coverImage);
+                        // Explicit LT plural suffix — RN Intl doesn't resolve LT `few`.
+                        const itemsStr = t(`basketTab.templates.itemCount_${ltPluralSuffix(itemCount)}`, { count: itemCount });
+                        const visitsStr = t(`basketTab.templates.visitCount_${ltPluralSuffix(visitCount)}`, { count: visitCount });
                         return (
                             <TouchableOpacity
-                                style={styles.templateCard}
+                                style={[styles.templateCard, item.coverColor ? { borderLeftWidth: 4, borderLeftColor: item.coverColor } : null]}
                                 onPress={() => handleTemplateTap(item)}
                                 activeOpacity={0.75}
                             >
                                 <View style={styles.cardLeft}>
+                                    {/* Server-owned cover, shared with the web dashboard +
+                                        public share page: emoji as the icon, colour on the
+                                        card's left edge. Falls back to the bookmark icon for
+                                        templates with no cover yet. */}
                                     <View style={styles.templateIcon}>
-                                        <Ionicons name="bookmark" size={22} color={colors.primary} />
+                                        {emoji
+                                            ? <Text style={styles.templateCoverEmoji}>{emoji}</Text>
+                                            : <Ionicons name="bookmark" size={22} color={colors.primary} />}
                                     </View>
                                 </View>
                                 <View style={styles.cardContent}>
                                     <Text style={styles.cardTitle} numberOfLines={1}>{item.name}</Text>
                                     <Text style={styles.cardDate}>
-                                        {t('basketTab.templates.itemCount', { count: itemCount })}
-                                        {useCount > 0 && ` · ${t('basketTab.templates.useCount', { count: useCount })}`}
+                                        {itemsStr}
+                                        {visitCount > 0 && ` · ${visitsStr}`}
                                     </Text>
+                                    {/* Visibility badge — creators only. Neutral
+                                        theme-aware pill identical to the web dashboard's
+                                        VisibilityTag (icon + label). Binary Privatus/Viešas. */}
+                                    {authUsername && (() => {
+                                        const isPriv = ((item as any).visibility ?? 'private') === 'private';
+                                        return (
+                                            <View style={styles.visBadge}>
+                                                <Ionicons
+                                                    name={isPriv ? 'lock-closed' : 'globe-outline'}
+                                                    size={10}
+                                                    color={colors.textPrimary}
+                                                />
+                                                <Text style={styles.visBadgeText}>
+                                                    {isPriv ? t('basketTab.templates.tagPrivate') : t('basketTab.templates.tagPublic')}
+                                                </Text>
+                                            </View>
+                                        );
+                                    })()}
                                 </View>
                                 <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
                             </TouchableOpacity>
                         );
                     }}
                 />
-                <Modal
-                    visible={createModalOpen}
-                    transparent
-                    animationType="fade"
-                    onRequestClose={() => !createBusy && setCreateModalOpen(false)}
+                <TemplateCoverEditor
+                    visible={coverSheetOpen}
+                    onClose={() => setCoverSheetOpen(false)}
+                    name=""
+                    coverColor={null}
+                    coverImage={null}
+                    submitLabel={t('basketTab.templates.createConfirm')}
+                    onSubmit={handleCreateTemplate}
+                />
+
+                {/* FAB — pink "+" matching the other tabs (receipts, lists).
+                    Replaces the old inline "Naujas šablonas" list header. */}
+                <TouchableOpacity
+                    style={[styles.fab, { bottom: tabBarHeight + 16 }]}
+                    onPress={() => setCoverSheetOpen(true)}
+                    activeOpacity={0.85}
+                    accessibilityLabel={t('basketTab.templates.addCard')}
                 >
-                    <TouchableOpacity
-                        style={styles.modalBackdrop}
-                        activeOpacity={1}
-                        onPress={() => !createBusy && setCreateModalOpen(false)}
-                    >
-                        <TouchableOpacity activeOpacity={1} onPress={() => {}} style={styles.modalCard}>
-                            <Text style={styles.modalTitle}>
-                                {t('basketTab.templates.createTitle')}
-                            </Text>
-                            <Text style={styles.modalLabel}>{t('basketTab.templates.createNameLabel')}</Text>
-                            <TextInput
-                                ref={createInputRef}
-                                value={createName}
-                                onChangeText={setCreateName}
-                                placeholder={t('basketTab.templates.createNamePlaceholder')}
-                                placeholderTextColor={colors.textMuted}
-                                maxLength={100}
-                                returnKeyType="done"
-                                onSubmitEditing={submitCreateTemplate}
-                                style={styles.modalInput}
-                            />
-                            <View style={styles.modalActions}>
-                                <TouchableOpacity
-                                    onPress={() => setCreateModalOpen(false)}
-                                    disabled={createBusy}
-                                    style={styles.modalCancel}
-                                >
-                                    <Text style={styles.modalCancelText}>
-                                        {t('basketTab.templates.createCancel')}
-                                    </Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    onPress={submitCreateTemplate}
-                                    disabled={createBusy || createName.trim().length === 0}
-                                    style={[
-                                        styles.modalConfirm,
-                                        (createBusy || createName.trim().length === 0) && styles.modalConfirmDisabled,
-                                    ]}
-                                >
-                                    {createBusy
-                                        ? <ActivityIndicator color={colors.onPrimary} />
-                                        : <Text style={styles.modalConfirmText}>{t('basketTab.templates.createConfirm')}</Text>}
-                                </TouchableOpacity>
-                            </View>
-                        </TouchableOpacity>
-                    </TouchableOpacity>
-                </Modal>
+                    <Ionicons name="add" size={28} color={colors.onPrimary} />
+                </TouchableOpacity>
             </View>
         );
     }
@@ -550,69 +553,9 @@ export default function BasketScreen() {
                     />
                 }
             >
-                {/* Notification surfaces — gate / banner / announcement / nudge */}
-                {showGate && (
-                            <SystemNoticeCard
-                                variant="info"
-                                icon="sparkles"
-                                title={t('basketTab.templates.gateTitle')}
-                                body={`${t('basketTab.templates.gateBody')}\n\n${t('basketTab.templates.gateBodyDetail')}`}
-                                onDismiss={dismissGate}
-                                actions={[
-                                    {
-                                        label: t('basketTab.templates.gateLater'),
-                                        onPress: dismissGate,
-                                        style: 'secondary',
-                                    },
-                                    {
-                                        label: t('basketTab.templates.gateUpload'),
-                                        onPress: () => router.navigate('/(tabs)/receipts' as any),
-                                        style: 'primary',
-                                    },
-                                ]}
-                            />
-                        )}
-                        {showGateBanner && (
-                            <SystemNoticeCard
-                                layout="banner"
-                                variant="info"
-                                icon="receipt-outline"
-                                title={t('basketTab.templates.gateBannerTitle')}
-                                body={t('basketTab.templates.gateBannerBody', {
-                                    progress: Math.min(receiptCount, 3),
-                                    chains: Math.min(distinctChainCount, 2),
-                                })}
-                                actions={[{
-                                    label: t('basketTab.templates.gateBannerCta'),
-                                    onPress: () => router.navigate('/(tabs)/receipts' as any),
-                                }]}
-                            />
-                        )}
-                        {showNudge && defaultTemplate && (
-                            <SystemNoticeCard
-                                variant="success"
-                                icon="refresh-outline"
-                                title={t('basketTab.templates.autoUpdateNudgeTitle')}
-                                body={t('basketTab.templates.autoUpdateNudgeBody')}
-                                onDismiss={() => ackNudge(defaultTemplate.id)}
-                                actions={[
-                                    {
-                                        label: t('basketTab.templates.autoUpdateNudgeDismiss'),
-                                        onPress: () => ackNudge(defaultTemplate.id),
-                                        style: 'secondary',
-                                    },
-                                    {
-                                        label: t('basketTab.templates.autoUpdateNudgeCta'),
-                                        onPress: () => {
-                                            ackNudge(defaultTemplate.id);
-                                            router.push(`/template/${defaultTemplate.id}` as any);
-                                        },
-                                        style: 'primary',
-                                    },
-                                ]}
-                            />
-                        )}
-                        {showAnnouncement && defaultTemplate && !showNudge && (
+                {/* Notification surfaces — the auto-template gate/banner now
+                    live on the Šablonai tab. */}
+                        {showAnnouncement && defaultTemplate && (
                             <SystemNoticeCard
                                 variant="info"
                                 icon="sparkles"
@@ -680,15 +623,31 @@ export default function BasketScreen() {
                                     const showCheapest =
                                         b.status === 'compared'
                                         && Number.isFinite(cheapest) && (cheapest as number) > 0;
+                                    const basketEmoji = coverEmoji(b.templateCoverImage ?? null);
+                                    const basketTitle = b.templateName ?? b.name ?? formatDate(b.updatedAt);
+                                    // True only while the title is a real name (template or
+                                    // user-given) rather than the date fallback — so we don't
+                                    // print the date twice on a nameless regular basket.
+                                    const hasExplicitTitle = !!(b.templateName || b.name);
+                                    const fromTpl = !!(b.templateName || b.templateCoverColor);
+                                    const basketHandle = b.templateCreatorHandle ?? (fromTpl ? authUsername : null);
+                                    // "Redaguota" only makes sense while the basket is still tied
+                                    // to a template (diverged from the creator's original). Once
+                                    // the template is gone it's just a regular basket.
+                                    const edited = fromTpl && b.userEditedAfterCreation === 1;
                                     return (
                                         <TouchableOpacity
                                             key={b.id}
-                                            style={styles.card}
+                                            style={[styles.card, b.templateCoverColor ? { borderLeftWidth: 4, borderLeftColor: b.templateCoverColor } : null]}
                                             onPress={() => router.push(`/basket/${b.id}`)}
                                         >
                                             <View style={styles.cardLeft}>
                                                 <View style={styles.iconContainer}>
-                                                    <Ionicons name="cart-outline" size={28} color={colors.primary} />
+                                                    {/* Inherited cover emoji (template-derived baskets) or
+                                                        the default cart icon (manual baskets). */}
+                                                    {basketEmoji
+                                                        ? <Text style={styles.basketEmoji}>{basketEmoji}</Text>
+                                                        : <Ionicons name="cart-outline" size={28} color={colors.primary} />}
                                                     {b.itemCount > 0 && (
                                                         <View style={styles.badge}>
                                                             <Text style={styles.badgeText}>{b.itemCount}</Text>
@@ -697,14 +656,22 @@ export default function BasketScreen() {
                                                 </View>
                                             </View>
                                             <View style={styles.cardContent}>
-                                                {b.name ? (
-                                                    <>
-                                                        <Text style={styles.cardTitle} numberOfLines={1}>{b.name}</Text>
-                                                        <Text style={styles.cardDate}>{formatDate(b.updatedAt)}</Text>
-                                                    </>
-                                                ) : (
-                                                    <Text style={styles.cardTitle}>{formatDate(b.updatedAt)}</Text>
-                                                )}
+                                                <View style={styles.titleRow}>
+                                                    <Text style={styles.cardTitle} numberOfLines={1}>{basketTitle}</Text>
+                                                    {edited && (
+                                                        <View style={styles.editedChip}>
+                                                            <Text style={styles.editedChipText}>{t('basketTab.edited')}</Text>
+                                                        </View>
+                                                    )}
+                                                </View>
+                                                {/* Sub-line: @handle for template baskets; the date
+                                                    only when the title is a real name (else it'd repeat
+                                                    the date already shown as the title). */}
+                                                {basketHandle
+                                                    ? <Text style={styles.attrib} numberOfLines={1}>@{basketHandle}</Text>
+                                                    : hasExplicitTitle
+                                                        ? <Text style={styles.cardDate}>{formatDate(b.updatedAt)}</Text>
+                                                        : null}
                                             </View>
                                             {showSelected && (
                                                 <Text style={styles.cardTotal}>{formatEuro(selected as number)}</Text>
@@ -770,8 +737,15 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     cardLeft: { marginRight: 12 },
     cardContent: { flex: 1, minWidth: 0 },
-    cardTitle: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+    titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    cardTitle: { fontSize: 15, fontWeight: '600', color: c.textPrimary, flexShrink: 1 },
     cardDate: { fontSize: 13, color: c.textSecondary, marginTop: 2 },
+    visBadge: {
+        flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6, alignSelf: 'flex-start',
+        backgroundColor: c.surfaceMuted, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3,
+        elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 1.5,
+    },
+    visBadgeText: { fontSize: 10, fontWeight: '600', color: c.textPrimary },
     cardTotal: { fontSize: 15, fontWeight: '700', color: c.primary, marginLeft: 8 },
 
     // ── "+ New template" card on the Šablonai list ────────────────────────
@@ -824,6 +798,20 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         width: 36, height: 36, borderRadius: 8,
         backgroundColor: c.primaryMuted ?? c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
+    },
+    templateCoverEmoji: { fontSize: 20 },
+    basketEmoji: { fontSize: 26 },
+    attribRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
+    attrib: { fontSize: 12, color: c.primary, fontWeight: '600', flexShrink: 1 },
+    editedChip: { backgroundColor: c.surfaceMuted ?? c.border, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2 },
+    editedChipText: { fontSize: 10, fontWeight: '700', color: c.textSecondary, textTransform: 'uppercase', letterSpacing: 0.4 },
+    fab: {
+        position: 'absolute', right: 20,
+        width: 56, height: 56, borderRadius: 28,
+        backgroundColor: c.primary,
+        alignItems: 'center', justifyContent: 'center',
+        elevation: 4, shadowColor: c.primary,
+        shadowOpacity: 0.35, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
     },
 
     // ── Empty ─────────────────────────────────────────────────────────────

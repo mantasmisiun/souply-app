@@ -1,12 +1,15 @@
 import {
     View, Text, FlatList, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
-    Alert, TextInput, Switch, RefreshControl,
+    Alert, TextInput, RefreshControl,
 } from 'react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { TemplateCoverEditor } from '../../components/TemplateCoverEditor';
+import { coverEmoji } from '../../utils/templateCover';
+import { formatEuro } from '../../utils/formatCurrency';
 import { ScreenBackButton } from '../../components/ScreenBackButton';
 import { GlassIconButton } from '../../components/GlassIconButton';
 import { ProductImage } from '../../components/ProductImage';
@@ -14,9 +17,15 @@ import { SkeletonBox } from '../../components/SkeletonBox';
 import { CardActionBar, type CardAction } from '../../components/CardActionBar';
 import { TemplateShareSheet } from '../../components/TemplateShareSheet';
 import { PublishWallModal } from '../../components/PublishWallModal';
+import { ConfirmModal } from '../../components/ConfirmModal';
+import { StatsHelpModal } from '../../components/StatsHelpModal';
 import { StoreChipBar } from '../../components/StoreChipBar';
 import { authedFetch } from '../../utils/authApi';
-import { useAuthState } from '../../state/authState';
+import { useAuthState, DEV_SESSION_TOKEN } from '../../state/authState';
+
+/** Result of a visibility change: ok = applied; wall = publish wall opened;
+ *  dev = blocked because the DEV fake token can't publish; error = other. */
+type VisResult = 'ok' | 'wall' | 'dev' | 'error';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import {
@@ -40,9 +49,6 @@ export default function TemplateDetailScreen() {
     const [template, setTemplate] = useState<BasketTemplateDetail | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
-    const [nameDraft, setNameDraft] = useState('');
-    const [editingName, setEditingName] = useState(false);
-    const nameInputRef = useRef<TextInput>(null);
 
     // Per-row local input buffer so the user can type "0" or "12" without
     // the optimistic-update fight clobbering their input mid-keystroke.
@@ -51,6 +57,7 @@ export default function TemplateDetailScreen() {
     const [actionBarOpen, setActionBarOpen] = useState(false);
     const [shareSheetOpen, setShareSheetOpen] = useState(false);
     const [publishWallOpen, setPublishWallOpen] = useState(false);
+    const [coverEditorOpen, setCoverEditorOpen] = useState(false);
     // Tabs at the top of the editor — "Prekės" = items list (default),
     // "Statistika" = creator-account explainer + CTA. Renamed from the
     // visibility selector; visibility is now derived implicitly (templates
@@ -60,36 +67,51 @@ export default function TemplateDetailScreen() {
 
     const authedUser = useAuthState(s => s.user);
 
-    const setVisibility = useCallback(async (target: 'private' | 'unlisted' | 'public') => {
-        if (!template) return;
-        if (target === template.visibility) return;
+    const setVisibility = useCallback(async (target: 'private' | 'unlisted' | 'public'): Promise<VisResult> => {
+        if (!template) return 'error';
+        if (target === template.visibility) return 'ok';
         try {
+            // X-User-Id authorises ownership even when the Bearer isn't a real
+            // server session (e.g. the DEV quick-login's fake token); the
+            // public upgrade still needs a genuine verified user server-side.
+            const ownerId = await getUserId();
             const res = await authedFetch(`${API_BASE_URL}/api/basket-templates/${template.id}`, {
                 method: 'PATCH',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'X-User-Id': ownerId },
                 body: JSON.stringify({ visibility: target }),
             });
             if (res.status === 401 || res.status === 412) {
-                // Publish wall: server says we need auth + username for 'public'.
+                // Publish wall: server needs auth + username for 'public'. BUT if
+                // the user already has a token + handle, the wall would just
+                // auto-complete → retry → fail → reopen forever. Report instead.
+                // The DEV quick-login uses a fake token the server rejects — call
+                // that out specifically so dev testing isn't confusing.
+                const auth = useAuthState.getState();
+                if (auth.token && auth.user?.username) {
+                    return auth.token === DEV_SESSION_TOKEN ? 'dev' : 'error';
+                }
+                // Close the share sheet first — two RN Modals stacked (sheet +
+                // wall) flicker on Android. The wall reopens the sheet on success.
+                setShareSheetOpen(false);
                 setPublishWallOpen(true);
-                return;
+                return 'wall';
             }
-            if (!res.ok) {
-                Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
-                return;
-            }
+            if (!res.ok) return 'error';
             const data = await res.json();
             setTemplate(prev => prev ? { ...prev, visibility: data.visibility ?? target } : prev);
+            return 'ok';
         } catch {
-            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
+            return 'error';
         }
-    }, [template, t]);
+    }, [template]);
 
-    // After OAuth + username flow completes, retry the 'public' upgrade.
-    const handlePublishWallComplete = useCallback(() => {
+    // After OAuth + username flow completes, retry the 'public' upgrade and
+    // reopen the share sheet so the now-public QR/link is right there.
+    const handlePublishWallComplete = useCallback(async () => {
         setPublishWallOpen(false);
         if (template && template.visibility !== 'public') {
-            setVisibility('public');
+            const r = await setVisibility('public');
+            if (r === 'ok') setShareSheetOpen(true);
         }
     }, [template, setVisibility]);
 
@@ -102,7 +124,6 @@ export default function TemplateDetailScreen() {
         try {
             const data = await getTemplate(templateId);
             setTemplate(data);
-            setNameDraft(data.name);
         } catch {
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorLoad'));
         } finally {
@@ -111,39 +132,6 @@ export default function TemplateDetailScreen() {
     }, [templateId, t]);
 
     useFocusEffect(useCallback(() => { fetchTemplate(false); }, [fetchTemplate]));
-
-    // ── Name editing ──────────────────────────────────────────────────────
-    const saveName = useCallback(async () => {
-        const trimmed = nameDraft.trim();
-        if (!template) return;
-        if (trimmed.length === 0 || trimmed === template.name) {
-            setNameDraft(template.name);
-            setEditingName(false);
-            return;
-        }
-        try {
-            await patchTemplate(template.id, { name: trimmed });
-            setTemplate(prev => prev ? { ...prev, name: trimmed } : prev);
-        } catch {
-            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
-            setNameDraft(template.name);
-        } finally {
-            setEditingName(false);
-        }
-    }, [nameDraft, template, t]);
-
-    // ── Auto-update toggle ────────────────────────────────────────────────
-    const toggleAutoUpdate = useCallback(async (value: boolean) => {
-        if (!template) return;
-        // Optimistic: flip in state immediately, revert on error.
-        setTemplate(prev => prev ? { ...prev, autoUpdate: value ? 1 : 0 } : prev);
-        try {
-            await patchTemplate(template.id, { autoUpdate: value });
-        } catch {
-            setTemplate(prev => prev ? { ...prev, autoUpdate: value ? 0 : 1 } : prev);
-            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
-        }
-    }, [template, t]);
 
     // ── Item quantity ─────────────────────────────────────────────────────
     const setQty = useCallback(async (itemId: number, raw: number) => {
@@ -187,28 +175,26 @@ export default function TemplateDetailScreen() {
     }, [template, fetchTemplate]);
 
     // ── Delete template ───────────────────────────────────────────────────
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const [deleting, setDeleting] = useState(false);
+    const [statsHelpOpen, setStatsHelpOpen] = useState(false);
     const confirmDelete = useCallback(() => {
         if (!template) return;
-        Alert.alert(
-            t('basketTab.templates.deleteTitle'),
-            t('basketTab.templates.deleteBody', { name: template.name }),
-            [
-                { text: t('basketTab.templates.deleteCancel'), style: 'cancel' },
-                {
-                    text: t('basketTab.templates.deleteConfirm'),
-                    style: 'destructive',
-                    onPress: async () => {
-                        try {
-                            await deleteTemplateApi(template.id);
-                            router.back();
-                        } catch {
-                            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorDelete'));
-                        }
-                    },
-                },
-            ],
-        );
-    }, [template, t, router]);
+        setDeleteOpen(true);
+    }, [template]);
+    const handleDelete = useCallback(async () => {
+        if (!template || deleting) return;
+        try {
+            setDeleting(true);
+            await deleteTemplateApi(template.id);
+            setDeleteOpen(false);
+            router.back();
+        } catch {
+            setDeleting(false);
+            setDeleteOpen(false);
+            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorDelete'));
+        }
+    }, [template, deleting, router, t]);
 
     // ── Instantiate ───────────────────────────────────────────────────────
     const runInstantiate = useCallback(async (force: boolean) => {
@@ -283,42 +269,40 @@ export default function TemplateDetailScreen() {
         );
     }
 
-    const titleText = editingName ? '' : (template.name || t('basketTab.templates.fallbackName'));
+    const titleText = template.name || t('basketTab.templates.fallbackName');
+    // Colour the nav bar with the template's cover colour; text/icons flip to
+    // white for contrast. Falls back to the neutral header when no cover set.
+    const headerColor = template.coverColor ?? colors.cardBackground;
+    const onCover = template.coverColor ? '#FFFFFF' : colors.textPrimary;
+    const headerEmoji = coverEmoji(template.coverImage) ?? '🫜';
 
     return (
         <>
             <Stack.Screen options={{
                 title: titleText,
-                headerTitle: editingName
-                    ? () => (
-                        <TextInput
-                            ref={nameInputRef}
-                            defaultValue={nameDraft}
-                            onChangeText={setNameDraft}
-                            onEndEditing={saveName}
-                            onSubmitEditing={saveName}
-                            onBlur={saveName}
-                            placeholder={t('basketTab.templates.fallbackName')}
-                            placeholderTextColor={colors.textMuted}
-                            maxLength={100}
-                            style={{
-                                fontSize: 17, fontWeight: '600',
-                                color: colors.textPrimary, minWidth: 200,
-                                paddingVertical: 2,
-                                borderBottomWidth: 1, borderBottomColor: colors.primary,
-                            }}
-                        />
-                    )
-                    : () => (
-                        <TouchableOpacity onPress={() => setEditingName(true)} activeOpacity={0.6}>
-                            <Text style={{ fontSize: 17, fontWeight: '600', color: colors.textPrimary }} numberOfLines={1}>
-                                {titleText}
-                            </Text>
-                        </TouchableOpacity>
-                    ),
-                headerStyle: { backgroundColor: colors.cardBackground },
+                // Emoji + name both open the identity sheet (name/emoji/colour).
+                headerTitle: () => (
+                    <TouchableOpacity
+                        onPress={() => setCoverEditorOpen(true)}
+                        activeOpacity={0.7}
+                        style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
+                    >
+                        <View style={{
+                            width: 34, height: 34, borderRadius: 10,
+                            backgroundColor: template.coverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
+                            alignItems: 'center', justifyContent: 'center',
+                        }}>
+                            <Text style={{ fontSize: 18 }}>{headerEmoji}</Text>
+                        </View>
+                        <Text style={{ fontSize: 17, fontWeight: '600', color: onCover }} numberOfLines={1}>
+                            {titleText}
+                        </Text>
+                    </TouchableOpacity>
+                ),
+                headerStyle: { backgroundColor: headerColor },
+                headerTintColor: onCover,
                 headerShadowVisible: false,
-                headerLeft: () => <ScreenBackButton />,
+                headerLeft: () => <ScreenBackButton color={onCover} />,
                 headerRight: () => (
                     <View style={{ flexDirection: 'row' }}>
                         {/* Dalintis lives on the nav bar so a single tap
@@ -327,11 +311,13 @@ export default function TemplateDetailScreen() {
                             meaningless (the server would reject it anyway). */}
                         <GlassIconButton
                             icon="share-social-outline"
+                            color={onCover}
                             onPress={() => template.items.length > 0 && setShareSheetOpen(true)}
                             disabled={template.items.length === 0}
                         />
                         <GlassIconButton
                             icon="ellipsis-horizontal"
+                            color={onCover}
                             onPress={() => setActionBarOpen(true)}
                         />
                     </View>
@@ -339,15 +325,32 @@ export default function TemplateDetailScreen() {
             }} />
 
             <View style={styles.container}>
-                <StoreChipBar
-                    chips={[
-                        { id: 'items', label: t('basketTab.templates.tabItems') },
-                        { id: 'stats', label: t('basketTab.templates.tabStats') },
-                    ]}
-                    selectedId={tab}
-                    onSelect={id => { if (id != null) setTab(id as 'items' | 'stats'); }}
-                />
-                {tab === 'items' ? (
+                {/* Tabs only for signed-in creators — anonymous users just see
+                    the items list (Statistika holds creator-only data). */}
+                {authedUser && (
+                    <View style={styles.tabBar}>
+                        <StoreChipBar
+                            chips={[
+                                { id: 'items', label: t('basketTab.templates.tabItems') },
+                                { id: 'stats', label: t('basketTab.templates.tabStats') },
+                            ]}
+                            selectedId={tab}
+                            onSelect={id => { if (id != null) setTab(id as 'items' | 'stats'); }}
+                        />
+                        {/* Overlaid on the chip bar's right edge so it shares the
+                            banner's surface background (not the page wash). */}
+                        {tab === 'stats' && (
+                            <TouchableOpacity
+                                onPress={() => setStatsHelpOpen(true)}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                style={styles.tabHelpBtn}
+                            >
+                                <Ionicons name="help-circle-outline" size={22} color={colors.textMuted} />
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                )}
+                {!(authedUser && tab === 'stats') ? (
                 <>
                 <FlatList
                     data={template.items}
@@ -360,19 +363,6 @@ export default function TemplateDetailScreen() {
                             colors={[colors.primary]}
                             tintColor={colors.primary}
                         />
-                    }
-                    ListHeaderComponent={
-                        template.isDefault === 1 ? (
-                            <View style={styles.settingRow}>
-                                <Text style={styles.settingLabel}>{t('basketTab.templates.autoUpdateLabel')}</Text>
-                                <Switch
-                                    value={template.autoUpdate === 1}
-                                    onValueChange={toggleAutoUpdate}
-                                    trackColor={{ false: colors.border, true: colors.primary }}
-                                    thumbColor={colors.cardBackground}
-                                />
-                            </View>
-                        ) : null
                     }
                     ListEmptyComponent={
                         <View style={styles.centered}>
@@ -482,50 +472,42 @@ export default function TemplateDetailScreen() {
                 </View>
                 </>
                 ) : (
-                    // Statistika tab — creator-account explainer + sign-up CTA.
-                    // Renders inline (no modal) so users can read at their own
-                    // pace and the "regular users don't need this" framing is
-                    // visible up front.
+                    // Statistika — real creator metrics. Same data the website
+                    // shows on the template card. Only reachable when signed in
+                    // (tabs are hidden otherwise).
                     <ScrollView contentContainerStyle={styles.statsScroll}>
-                        <View style={styles.statsCard}>
-                            <Ionicons
-                                name="people-circle-outline"
-                                size={42}
-                                color={colors.primary}
-                                style={{ alignSelf: 'flex-start' }}
-                            />
-                            <Text style={styles.statsTitle}>
-                                {t('basketTab.templates.statsCreatorTitle')}
-                            </Text>
-                            <Text style={styles.statsIntro}>
-                                {t('basketTab.templates.statsCreatorIntro')}
-                            </Text>
-                            {[
-                                t('basketTab.templates.statsCreatorBullet1'),
-                                t('basketTab.templates.statsCreatorBullet2'),
-                                t('basketTab.templates.statsCreatorBullet3'),
-                                t('basketTab.templates.statsCreatorBullet4'),
-                            ].map((line, i) => (
-                                <View key={i} style={styles.statsBulletRow}>
-                                    <Ionicons name="checkmark-circle" size={16} color={colors.success} style={{ marginTop: 2 }} />
-                                    <Text style={styles.statsBulletText}>{line}</Text>
-                                </View>
-                            ))}
-                            {authedUser?.username ? (
-                                <Text style={styles.statsAlready}>
-                                    {t('basketTab.templates.statsAlreadyCreator', { handle: authedUser.username })}
+                        <View style={styles.metricsGrid}>
+                            <View style={styles.metricTile}>
+                                <Text style={styles.metricValue}>{Number(template.visitCount ?? 0).toLocaleString('lt-LT')}</Text>
+                                <Text style={styles.metricLabel}>{t('basketTab.templates.metricVisits')}</Text>
+                            </View>
+                            <View style={styles.metricTile}>
+                                <Text style={styles.metricValue}>{Number(template.useCount ?? 0).toLocaleString('lt-LT')}</Text>
+                                <Text style={styles.metricLabel}>{t('basketTab.templates.metricUses')}</Text>
+                            </View>
+                            <View style={styles.metricTile}>
+                                <Text style={[styles.metricValue, { color: colors.primary }]}>
+                                    {formatEuro(Number(template.collectiveSavingsEur ?? 0))}
                                 </Text>
-                            ) : (
-                                <TouchableOpacity
-                                    style={styles.statsCta}
-                                    onPress={() => setPublishWallOpen(true)}
-                                >
-                                    <Ionicons name="logo-electron" size={16} color={colors.onPrimary} />
-                                    <Text style={styles.statsCtaText}>
-                                        {t('basketTab.templates.statsCreatorCta')}
-                                    </Text>
-                                </TouchableOpacity>
-                            )}
+                                <Text style={styles.metricLabel}>{t('basketTab.templates.metricSaved')}</Text>
+                            </View>
+                            <View style={styles.metricTile}>
+                                {(() => {
+                                    // Same rule as the web: `editedAt` is set only on real
+                                    // content edits (name/cover/items) → flips Sukurta → Redaguota.
+                                    const tplEdited = !!template.editedAt;
+                                    return (
+                                        <>
+                                            <Text style={styles.metricValue}>
+                                                {new Date(tplEdited ? template.editedAt! : template.createdAt).toLocaleDateString('lt-LT')}
+                                            </Text>
+                                            <Text style={styles.metricLabel}>
+                                                {t(tplEdited ? 'basketTab.templates.metricUpdated' : 'basketTab.templates.metricCreated')}
+                                            </Text>
+                                        </>
+                                    );
+                                })()}
+                            </View>
                         </View>
                     </ScrollView>
                 )}
@@ -553,6 +535,9 @@ export default function TemplateDetailScreen() {
                 templateId={template.id}
                 templateName={template.name}
                 itemCount={template.items.length}
+                visibility={template.visibility}
+                isCreator={!!authedUser?.username}
+                onSetVisibility={(next) => setVisibility(next)}
                 onClose={() => setShareSheetOpen(false)}
             />
 
@@ -560,6 +545,32 @@ export default function TemplateDetailScreen() {
                 visible={publishWallOpen}
                 onClose={() => setPublishWallOpen(false)}
                 onComplete={handlePublishWallComplete}
+            />
+
+            <ConfirmModal
+                visible={deleteOpen}
+                title={t('basketTab.templates.deleteTitle')}
+                body={template ? t('basketTab.templates.deleteBody', { name: template.name }) : undefined}
+                confirmLabel={t('basketTab.templates.deleteConfirm')}
+                cancelLabel={t('basketTab.templates.deleteCancel')}
+                destructive
+                busy={deleting}
+                onConfirm={handleDelete}
+                onClose={() => setDeleteOpen(false)}
+            />
+
+            <StatsHelpModal visible={statsHelpOpen} onClose={() => setStatsHelpOpen(false)} />
+
+            <TemplateCoverEditor
+                visible={coverEditorOpen}
+                onClose={() => setCoverEditorOpen(false)}
+                name={template.name}
+                coverColor={template.coverColor}
+                coverImage={template.coverImage}
+                onSubmit={(next) => {
+                    setTemplate(prev => prev ? { ...prev, name: next.name, coverColor: next.coverColor, coverImage: next.coverImage } : prev);
+                    patchTemplate(template.id, next).catch(() => {});
+                }}
             />
         </>
     );
@@ -579,6 +590,19 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
 
     // ── Statistika tab — creator-account explainer ────────────────────────
     statsScroll: { padding: 16, paddingBottom: 32 },
+    tabBar: { position: 'relative' },
+    tabHelpBtn: {
+        position: 'absolute', right: 0, top: 0, bottom: 0,
+        justifyContent: 'center', paddingHorizontal: 14,
+        backgroundColor: c.cardBackground,
+    },
+    metricsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
+    metricTile: {
+        width: '47%', flexGrow: 1, backgroundColor: c.cardBackground,
+        borderRadius: 16, padding: 16,
+    },
+    metricValue: { fontSize: 22, fontWeight: '800', color: c.textPrimary },
+    metricLabel: { fontSize: 12, color: c.textSecondary, marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: '600' },
     statsCard: {
         backgroundColor: c.cardBackground, borderRadius: 16, padding: 18,
         gap: 12, borderLeftWidth: 4, borderLeftColor: c.primary,

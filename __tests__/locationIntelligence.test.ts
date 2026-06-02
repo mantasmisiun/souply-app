@@ -182,24 +182,24 @@ describe('scoreAllCombinations', () => {
         }
     });
 
+    // Each store is uniquely cheapest for exactly one of three products, so
+    // every multi-store split is non-degenerate (no store is "visited for
+    // nothing"). This exercises the full combination generator — a basket
+    // where only one store ever wins prunes all splits away by design.
+    const splitFriendlyStores = () => [
+        makeStore(1, 11, 0.5, [{ pid: 1, price: 1 }, { pid: 2, price: 5 }, { pid: 3, price: 5 }]),
+        makeStore(2, 11, 0.5, [{ pid: 1, price: 5 }, { pid: 2, price: 1 }, { pid: 3, price: 5 }]),
+        makeStore(3, 11, 0.5, [{ pid: 1, price: 5 }, { pid: 2, price: 5 }, { pid: 3, price: 1 }]),
+    ];
+
     it('generates C(3,2) = 3 two-store combos from 3 stores', () => {
-        const stores = [
-            makeStore(1, 10, 0.5, [{ pid: 1, price: 5 }]),
-            makeStore(2, 10, 0.5, [{ pid: 1, price: 4 }]),
-            makeStore(3, 10, 0.5, [{ pid: 1, price: 6 }]),
-        ];
-        const combos = scoreAllCombinations(stores, new Set(), 2);
+        const combos = scoreAllCombinations(splitFriendlyStores(), new Set(), 2);
         const twoStoreCombos = combos.filter(c => c.storeIds.length === 2);
         expect(twoStoreCombos.length).toBe(3);
     });
 
     it('generates C(3,2) + C(3,3) = 4 multi-store combos for storeCount=3', () => {
-        const stores = [
-            makeStore(1, 10, 0.5, [{ pid: 1, price: 5 }]),
-            makeStore(2, 10, 0.5, [{ pid: 1, price: 4 }]),
-            makeStore(3, 10, 0.5, [{ pid: 1, price: 6 }]),
-        ];
-        const combos = scoreAllCombinations(stores, new Set(), 3);
+        const combos = scoreAllCombinations(splitFriendlyStores(), new Set(), 3);
         const multiStore = combos.filter(c => c.storeIds.length > 1);
         expect(multiStore.length).toBe(4); // C(3,2)=3 + C(3,3)=1
     });

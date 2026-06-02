@@ -13,7 +13,7 @@
  */
 import {
     View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator,
-    Alert, Image,
+    Alert, Image, Modal,
 } from 'react-native';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
@@ -41,6 +41,7 @@ export default function SharedTemplatePreviewScreen() {
     const [loading, setLoading] = useState(true);
     const [notFound, setNotFound] = useState(false);
     const [busy, setBusy] = useState(false);
+    const [helpOpen, setHelpOpen] = useState(false);
 
     useEffect(() => {
         if (!slug) return;
@@ -110,12 +111,37 @@ export default function SharedTemplatePreviewScreen() {
         );
     }
 
+    // The creator turned this template private after sharing it. The link
+    // still resolves (so it's not a dead 404) but there's nothing to act on —
+    // just explain it and let them go back.
+    if (data.template.visibility === 'private') {
+        return (
+            <>
+                <Stack.Screen options={{
+                    title: '',
+                    headerStyle: { backgroundColor: colors.cardBackground },
+                    headerShadowVisible: false,
+                    headerLeft: () => <ScreenBackButton />,
+                }} />
+                <View style={styles.errorWrap}>
+                    <Ionicons name="lock-closed-outline" size={56} color={colors.textMuted} />
+                    <Text style={styles.errorTitle}>{t('basketTab.templates.previewPrivateTitle')}</Text>
+                    <Text style={styles.errorBody}>{t('basketTab.templates.previewPrivateBody')}</Text>
+                </View>
+            </>
+        );
+    }
+
     const { template, snapshot, items } = data;
     const cheapest = snapshot.cheapestTotalEur;
     const runnerUp = snapshot.runnerUpTotalEur;
+    const mostExpensive = snapshot.mostExpensiveTotalEur;
+    // Max cross-store gap (priciest minus cheapest), runner-up as fallback for
+    // older snapshots. Hidden entirely when there's no gap.
     const savings =
-        cheapest != null && runnerUp != null && runnerUp > cheapest
-            ? (runnerUp - cheapest).toFixed(2)
+        cheapest == null ? null
+            : (mostExpensive != null && mostExpensive > cheapest) ? (mostExpensive - cheapest).toFixed(2)
+            : (runnerUp != null && runnerUp > cheapest) ? (runnerUp - cheapest).toFixed(2)
             : null;
     const calculatedWhen = snapshot.calculatedAt
         ? new Date(snapshot.calculatedAt).toLocaleDateString()
@@ -156,9 +182,17 @@ export default function SharedTemplatePreviewScreen() {
                                         €{cheapest.toFixed(2)}
                                     </Text>
                                     {savings && (
-                                        <Text style={styles.snapshotSavings}>
-                                            {t('basketTab.templates.shareSavings', { amount: savings })}
-                                        </Text>
+                                        <View style={styles.snapshotSavingsRow}>
+                                            <Text style={styles.snapshotSavings}>
+                                                {t('basketTab.templates.shareSavingsViewer', { amount: savings })}
+                                            </Text>
+                                            <TouchableOpacity
+                                                onPress={() => setHelpOpen(true)}
+                                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                            >
+                                                <Ionicons name="help-circle-outline" size={18} color={colors.textMuted} />
+                                            </TouchableOpacity>
+                                        </View>
                                     )}
                                     {calculatedWhen && (
                                         <Text style={styles.snapshotWhen}>
@@ -199,6 +233,18 @@ export default function SharedTemplatePreviewScreen() {
                     </TouchableOpacity>
                 </View>
             </View>
+
+            <Modal visible={helpOpen} transparent animationType="fade" onRequestClose={() => setHelpOpen(false)}>
+                <TouchableOpacity style={styles.helpBackdrop} activeOpacity={1} onPress={() => setHelpOpen(false)}>
+                    <View style={styles.helpCard} onStartShouldSetResponder={() => true}>
+                        <Text style={styles.helpTitle}>{t('basketTab.templates.shareSavingsHelpTitle')}</Text>
+                        <Text style={styles.helpBody}>{t('basketTab.templates.shareSavingsHelpBody')}</Text>
+                        <TouchableOpacity style={styles.helpClose} onPress={() => setHelpOpen(false)}>
+                            <Text style={styles.helpCloseText}>{t('common.gotIt')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                </TouchableOpacity>
+            </Modal>
         </>
     );
 }
@@ -218,6 +264,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     snapshotLabel: { fontSize: 12, color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 },
     snapshotPrice: { fontSize: 28, fontWeight: '700', color: c.textPrimary },
+    snapshotSavingsRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     snapshotSavings: { fontSize: 14, color: c.success, fontWeight: '600' },
     snapshotWhen: { fontSize: 12, color: c.textMuted, marginTop: 2 },
 
@@ -253,4 +300,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     errorTitle: { fontSize: 18, fontWeight: '700', color: c.textPrimary, textAlign: 'center' },
     errorBody: { fontSize: 14, color: c.textSecondary, textAlign: 'center', lineHeight: 20 },
+
+    helpBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 28 },
+    helpCard: { backgroundColor: c.cardBackground, borderRadius: 18, padding: 20, gap: 10, maxWidth: 420, width: '100%' },
+    helpTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
+    helpBody: { fontSize: 14, color: c.textSecondary, lineHeight: 20 },
+    helpClose: { alignSelf: 'flex-end', paddingVertical: 8, paddingHorizontal: 12, marginTop: 4 },
+    helpCloseText: { fontSize: 14, fontWeight: '700', color: c.primary },
 });

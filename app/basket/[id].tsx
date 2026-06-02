@@ -21,7 +21,12 @@ import { buildCandidatePool } from '../../utils/candidatePool';
 import { getLocationSettings, type LocationSettings } from '../../utils/locationStorage';
 import { useTranslation } from 'react-i18next';
 import { GlassIconButton } from '../../components/GlassIconButton';
-import { createTemplateFromBasket } from '../../utils/basketTemplatesApi';
+import { coverEmoji } from '../../utils/templateCover';
+import { TemplateCoverEditor, type CoverDraft } from '../../components/TemplateCoverEditor';
+import { createTemplateFromBasket, instantiateTemplate } from '../../utils/basketTemplatesApi';
+import { CardActionBar } from '../../components/CardActionBar';
+import { getUserId } from '../../config/user';
+import { useAuthState } from '../../state/authState';
 
 interface BasketItem {
     id: number;
@@ -40,6 +45,12 @@ interface Basket {
     status: string;
     name: string;
     createdAt: string;
+    userEditedAfterCreation?: 0 | 1;
+    sourceTemplateId?: number | null;
+    templateCoverColor?: string | null;
+    templateCoverImage?: { kind: 'preset'; iconKey: string } | { kind: 'emoji'; emoji: string } | null;
+    templateCreatorHandle?: string | null;
+    templateName?: string | null;
 }
 
 export default function BasketDetailScreen() {
@@ -51,6 +62,7 @@ export default function BasketDetailScreen() {
     const router = useRouter();
     const { mode: displayMode } = useDisplayMode();
     const { setDraftBasketId, clearSessionBasket } = useBasketState();
+    const authUsername = useAuthState((s: any) => s.user?.username ?? null);
 
     const [basket, setBasket] = useState<Basket | null>(null);
     const [items, setItems] = useState<BasketItem[]>([]);
@@ -79,31 +91,56 @@ export default function BasketDetailScreen() {
     const [locationSettingsVisible, setLocationSettingsVisible] = useState(false);
     // Save-as-template flow: bookmark icon in the nav bar opens a name
     // prompt → POST /api/basket-templates/from-basket/:id → toast.
+    // Save-as-template: the bookmark opens the shared identity sheet
+    // (prefilled with the basket name); on submit we create the template
+    // from this basket with the chosen name/emoji/colour.
     const [saveTplVisible, setSaveTplVisible] = useState(false);
-    const [saveTplName, setSaveTplName] = useState('');
-    const [saveTplBusy, setSaveTplBusy] = useState(false);
-    const saveTplNameRef = useRef<TextInput>(null);
 
-    const submitSaveAsTemplate = useCallback(async () => {
-        const trimmed = saveTplName.trim();
-        if (trimmed.length === 0 || saveTplBusy) return;
+    const handleSaveAsTemplate = useCallback(async (next: CoverDraft) => {
         try {
-            setSaveTplBusy(true);
-            const basketIdNum = Number(id);
-            await createTemplateFromBasket(basketIdNum, { name: trimmed });
-            setSaveTplVisible(false);
-            setSaveTplName('');
-            // Cross-platform toast — Android has ToastAndroid but iOS doesn't,
-            // so an Alert is the lowest-common-denominator confirmation.
-            Alert.alert(
-                t('basketTab.templates.savedToast', { name: trimmed }),
-            );
+            await createTemplateFromBasket(Number(id), {
+                name: next.name, coverColor: next.coverColor, coverImage: next.coverImage,
+            });
+            Alert.alert(t('basketTab.templates.savedToast', { name: next.name }));
         } catch {
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorInstantiate'));
-        } finally {
-            setSaveTplBusy(false);
         }
-    }, [saveTplName, saveTplBusy, id, t]);
+    }, [id, t]);
+
+    // 3-dots actions for template-derived baskets.
+    const [actionsOpen, setActionsOpen] = useState(false);
+
+    // Copy the basket as it is now. If it was edited, the server returns a
+    // "plain" copy (no template identity) — navigate into it.
+    const handleCopyBasket = useCallback(async () => {
+        setActionsOpen(false);
+        try {
+            const userId = await getUserId();
+            const res = await fetch(`${API_BASE_URL}/api/baskets/${Number(id)}/copy`, {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userId }),
+            });
+            const data = await res.json();
+            if (data?.id) router.push(`/basket/${data.id}` as any);
+        } catch {
+            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
+        }
+    }, [id, router, t]);
+
+    // Copy the creator's original (re-instantiate the source template) —
+    // keeps the inherited emoji/colour/@attribution + the original items.
+    const handleCopyOriginal = useCallback(async () => {
+        setActionsOpen(false);
+        const tplId = basket?.sourceTemplateId;
+        if (!tplId) return;
+        try {
+            const userId = await getUserId();
+            const res = await instantiateTemplate(tplId, userId, { force: true });
+            if (res?.basketId) router.push(`/basket/${res.basketId}` as any);
+        } catch {
+            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorInstantiate'));
+        }
+    }, [basket?.sourceTemplateId, router, t]);
     const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
     const [activeSettings, setActiveSettings] = useState<LocationSettings | null>(null);
     // Snapshot of the settings used at the time of the most recent calculation.
@@ -238,6 +275,24 @@ export default function BasketDetailScreen() {
         await AsyncStorage.removeItem(`basket_results_${id}`);
     };
 
+    /** "Add item" CTA on a draft basket: mark this basket as the active
+     *  session/draft so the Narsyti tab edits it directly — items already in
+     *  it show the amount picker, and new items add without a basket prompt —
+     *  then switch to that tab. Drafts are singletons, so this is always the
+     *  basket the user is looking at. */
+    const handleAddItem = () => {
+        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        setDraftBasketId(Number(id));
+        router.navigate('/(tabs)/browse' as any);
+    };
+
+    // Mirror the server's userEditedAfterCreation flag locally so the
+    // "Redaguota" chip and the "Copy original" action appear together the
+    // moment the user changes items (no refetch needed).
+    const markEditedLocally = useCallback(() => {
+        setBasket(prev => (prev && prev.userEditedAfterCreation !== 1 ? { ...prev, userEditedAfterCreation: 1 } : prev));
+    }, []);
+
     const updateQuantity = async (itemId: number, newQuantity: number) => {
         const rounded = Math.round(newQuantity * 100) / 100;
         const existing = items.find(i => i.id === itemId);
@@ -267,6 +322,7 @@ export default function BasketDetailScreen() {
                 body: JSON.stringify({ quantity: rounded }),
             });
             if (!res.ok) throw new Error(`PUT ${res.status}`);
+            markEditedLocally();
         } catch {
             // Rollback: restore the prior quantity so the UI never shows
             // a number that isn't on the server.
@@ -284,6 +340,7 @@ export default function BasketDetailScreen() {
         try {
             await revertToDraftIfCompared();
             await fetch(`${API_BASE_URL}/api/basket-items/${itemId}`, { method: 'DELETE' });
+            markEditedLocally();
             const remaining = previous.filter(item => item.id !== itemId);
             if (remaining.length === 0) {
                 // Deleting the last item is handled by FK cascade once the
@@ -430,16 +487,58 @@ export default function BasketDetailScreen() {
     const fallbackTitle = formatDate(basket?.createdAt || '');
     const titleText = basketName || fallbackTitle;
 
+    // Template-derived baskets inherit the template's identity (emoji + colour
+    // + creator @handle) and are NOT renamable here — the name belongs to the
+    // creator's template. Manual baskets keep the editable name.
+    const fromTemplate = !!(basket?.templateName || basket?.templateCoverColor);
+    const headerColor = fromTemplate && basket?.templateCoverColor ? basket.templateCoverColor : colors.cardBackground;
+    const onCover = fromTemplate && basket?.templateCoverColor ? '#FFFFFF' : colors.textPrimary;
+    const basketEmoji = coverEmoji(basket?.templateCoverImage ?? null);
+    const inheritedName = basket?.templateName ?? titleText;
+    // "Redaguota" only applies while the basket is still tied to a template.
+    const edited = fromTemplate && basket?.userEditedAfterCreation === 1;
+    // Attribution = template owner's @handle; fall back to the current user's
+    // handle for own/private templates (DB username not populated yet).
+    const attribHandle = basket?.templateCreatorHandle ?? (fromTemplate ? authUsername : null);
+
     return (
         <>
             <Stack.Screen options={{
-                // Tap-title-to-edit: no separate pencil button. Headless
-                // mode in the header: if editing, show a TextInput; if
-                // not, render the title as a tappable Text that flips
-                // editing on. Blurring the input (including via Back)
-                // saves.
-                title: editingName ? '' : titleText,
-                headerTitle: editingName
+                title: editingName ? '' : (fromTemplate ? inheritedName : titleText),
+                headerTitle: fromTemplate
+                    ? () => (
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                            <View style={{
+                                width: 32, height: 32, borderRadius: 9,
+                                backgroundColor: basket?.templateCoverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
+                                alignItems: 'center', justifyContent: 'center',
+                            }}>
+                                <Text style={{ fontSize: 17 }}>{basketEmoji ?? '🫜'}</Text>
+                            </View>
+                            <View>
+                                {/* "Redaguota" sits next to the name (this basket diverged
+                                    from the creator's original), not next to the @handle. */}
+                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                                    <Text style={{ fontSize: 16, fontWeight: '700', color: onCover, flexShrink: 1 }} numberOfLines={1}>
+                                        {inheritedName}
+                                    </Text>
+                                    {edited && (
+                                        <View style={{ backgroundColor: 'rgba(255,255,255,0.25)', borderRadius: 7, paddingHorizontal: 6, paddingVertical: 1 }}>
+                                            <Text style={{ fontSize: 9, fontWeight: '800', color: onCover, textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                                                {t('basketTab.edited')}
+                                            </Text>
+                                        </View>
+                                    )}
+                                </View>
+                                {/* Attribution = the template owner's @handle; falls back to
+                                    the creation date when the owner isn't a creator (no handle). */}
+                                <Text style={{ fontSize: 11, fontWeight: '600', color: onCover, opacity: 0.85 }} numberOfLines={1}>
+                                    {attribHandle ? `@${attribHandle}` : formatDate(basket?.createdAt || '')}
+                                </Text>
+                            </View>
+                        </View>
+                    )
+                    : editingName
                     ? () => (
                         <TextInput
                             ref={nameInputRef}
@@ -472,24 +571,51 @@ export default function BasketDetailScreen() {
                             </Text>
                         </TouchableOpacity>
                     ),
-                headerLeft: () => <ScreenBackButton />,
+                headerStyle: { backgroundColor: headerColor },
+                headerTintColor: onCover,
+                headerShadowVisible: false,
+                headerLeft: () => <ScreenBackButton color={onCover} />,
                 // Bookmark icon → save-as-template modal. Only meaningful
                 // when the basket has at least one item; hide otherwise
                 // so the user isn't prompted to save an empty template.
-                headerRight: items.length > 0
+                // Template-derived baskets get a 3-dots menu (copy / copy
+                // original); manual + plain baskets keep the save-as-template
+                // bookmark.
+                headerRight: items.length === 0
+                    ? undefined
+                    : fromTemplate
                     ? () => (
                         <GlassIconButton
-                            icon="bookmark-outline"
-                            onPress={() => setSaveTplVisible(true)}
+                            icon="ellipsis-horizontal"
+                            color={onCover}
+                            onPress={() => setActionsOpen(true)}
                         />
                     )
-                    : undefined,
+                    : () => (
+                        <GlassIconButton
+                            icon="bookmark-outline"
+                            color={onCover}
+                            onPress={() => setSaveTplVisible(true)}
+                        />
+                    ),
             }} />
             <View style={styles.container}>
                 <FlatList
                     data={items}
                     keyExtractor={item => item.id.toString()}
                     contentContainerStyle={styles.list}
+                    ListHeaderComponent={
+                        basket?.status === 'draft' ? (
+                            <TouchableOpacity
+                                style={styles.addItemBtn}
+                                onPress={handleAddItem}
+                                activeOpacity={0.7}
+                            >
+                                <Ionicons name="add" size={18} color={colors.primary} />
+                                <Text style={styles.addItemBtnText}>{t('basketDetail.addItem')}</Text>
+                            </TouchableOpacity>
+                        ) : null
+                    }
                     ListEmptyComponent={
                         <View style={styles.centered}>
                             <Text style={styles.emptyText}>{t('basketDetail.empty')}</Text>
@@ -757,86 +883,26 @@ export default function BasketDetailScreen() {
                 </View>
             </Modal>
 
-            <Modal
+            <TemplateCoverEditor
                 visible={saveTplVisible}
-                transparent
-                animationType="fade"
-                onRequestClose={() => !saveTplBusy && setSaveTplVisible(false)}
-                onShow={() => setTimeout(() => saveTplNameRef.current?.focus(), 80)}
-            >
-                <TouchableOpacity
-                    style={styles.calcModalBackdrop}
-                    activeOpacity={1}
-                    onPress={() => !saveTplBusy && setSaveTplVisible(false)}
-                >
-                    <TouchableOpacity
-                        activeOpacity={1}
-                        onPress={() => {}}
-                        style={{
-                            backgroundColor: colors.cardBackground, borderRadius: 16,
-                            padding: 20, width: '85%', gap: 12,
-                        }}
-                    >
-                        <Text style={{ fontSize: 16, fontWeight: '700', color: colors.textPrimary }}>
-                            {t('basketTab.templates.saveFromBasketTitle')}
-                        </Text>
-                        <Text style={{ fontSize: 13, color: colors.textSecondary }}>
-                            {t('basketTab.templates.saveFromBasketBody')}
-                        </Text>
-                        <Text style={{ fontSize: 12, color: colors.textMuted, marginTop: 4 }}>
-                            {t('basketTab.templates.createNameLabel')}
-                        </Text>
-                        <TextInput
-                            ref={saveTplNameRef}
-                            value={saveTplName}
-                            onChangeText={setSaveTplName}
-                            placeholder={t('basketTab.templates.createNamePlaceholder')}
-                            placeholderTextColor={colors.textMuted}
-                            maxLength={100}
-                            returnKeyType="done"
-                            onSubmitEditing={submitSaveAsTemplate}
-                            style={{
-                                borderWidth: 1, borderColor: colors.border,
-                                borderRadius: 10, paddingHorizontal: 12, paddingVertical: 10,
-                                fontSize: 15, color: colors.textPrimary,
-                            }}
-                        />
-                        <View style={{ flexDirection: 'row', gap: 10, marginTop: 8 }}>
-                            <TouchableOpacity
-                                onPress={() => setSaveTplVisible(false)}
-                                disabled={saveTplBusy}
-                                style={{
-                                    flex: 1, paddingVertical: 12, borderRadius: 10,
-                                    borderWidth: 1, borderColor: colors.border, alignItems: 'center',
-                                }}
-                            >
-                                <Text style={{ color: colors.textPrimary, fontWeight: '600' }}>
-                                    {t('basketTab.templates.createCancel')}
-                                </Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                onPress={submitSaveAsTemplate}
-                                disabled={saveTplBusy || saveTplName.trim().length === 0}
-                                style={{
-                                    flex: 1, paddingVertical: 12, borderRadius: 10,
-                                    backgroundColor: saveTplName.trim().length === 0
-                                        ? colors.border
-                                        : colors.primary,
-                                    alignItems: 'center',
-                                }}
-                            >
-                                {saveTplBusy ? (
-                                    <ActivityIndicator size="small" color={colors.onPrimary} />
-                                ) : (
-                                    <Text style={{ color: colors.onPrimary, fontWeight: '700' }}>
-                                        {t('basketTab.templates.saveFromBasketConfirm')}
-                                    </Text>
-                                )}
-                            </TouchableOpacity>
-                        </View>
-                    </TouchableOpacity>
-                </TouchableOpacity>
-            </Modal>
+                onClose={() => setSaveTplVisible(false)}
+                name={basketName || ''}
+                coverColor={null}
+                coverImage={null}
+                submitLabel={t('basketTab.templates.saveFromBasketConfirm')}
+                onSubmit={handleSaveAsTemplate}
+            />
+
+            {actionsOpen && (
+                <CardActionBar
+                    title={inheritedName}
+                    onDismiss={() => setActionsOpen(false)}
+                    actions={[
+                        { icon: 'copy-outline', label: t('basketTab.copyBasket'), onPress: handleCopyBasket },
+                        ...(edited ? [{ icon: 'duplicate-outline' as const, label: t('basketTab.copyOriginal'), onPress: handleCopyOriginal }] : []),
+                    ]}
+                />
+            )}
 
             <LocationPromptModal
                 visible={locationPromptVisible}
@@ -865,6 +931,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
     list: { padding: 16 },
+    addItemBtn: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+        gap: 6, paddingVertical: 12, borderRadius: 10, marginBottom: 12,
+        borderWidth: 1, borderColor: c.primary, borderStyle: 'dashed',
+    },
+    addItemBtnText: { fontSize: 14, fontWeight: '600', color: c.primary },
     controlButton: {
         width: 28, height: 28, borderRadius: 14,
         borderWidth: 1, borderColor: c.primary,

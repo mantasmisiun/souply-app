@@ -1,6 +1,6 @@
 import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch,
-    Modal, Pressable, TextInput, ActivityIndicator, Alert,
+    Modal, Pressable, TextInput, ActivityIndicator, Alert, Linking,
 } from 'react-native';
 import { useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
@@ -170,6 +170,30 @@ export default function SettingsScreen() {
                         </Text>
                     </View>
                 </View>
+                <Divider styles={styles} />
+                {/* Links to the canonical web policy (single source of truth)
+                    so the app and site never drift. Required by both stores. */}
+                <TouchableOpacity
+                    style={styles.row}
+                    onPress={() => Linking.openURL('https://souply.lt/legal/privacy')}
+                    activeOpacity={0.7}
+                >
+                    <View style={styles.rowMain}>
+                        <Text style={styles.rowLabel}>{t('settings.about.privacy')}</Text>
+                    </View>
+                    <Ionicons name="open-outline" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
+                <Divider styles={styles} />
+                <TouchableOpacity
+                    style={styles.row}
+                    onPress={() => Linking.openURL('https://souply.lt/legal/terms')}
+                    activeOpacity={0.7}
+                >
+                    <View style={styles.rowMain}>
+                        <Text style={styles.rowLabel}>{t('settings.about.terms')}</Text>
+                    </View>
+                    <Ionicons name="open-outline" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
             </Section>
 
             {/* ── Language picker modal ────────────────────────────────── */}

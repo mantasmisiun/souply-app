@@ -1,5 +1,5 @@
 import { View, FlatList, TouchableOpacity, Text, StyleSheet, ActivityIndicator } from 'react-native';
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
 import { useTranslation } from 'react-i18next';
@@ -124,9 +124,13 @@ interface Props {
      *  a templateId param so downstream screens know to add to the template
      *  instead of the basket). */
     onSelectL2: (l2: Category) => void;
+    /** Optional content rendered as the FlatList's header — scrolls with
+     *  the list (e.g. the Nuolaidos shortcut), so it isn't pinned above
+     *  the categories. */
+    header?: ReactElement | null;
 }
 
-export function CategoriesList({ onSelectL2 }: Props) {
+export function CategoriesList({ onSelectL2, header }: Props) {
     const colors = useTheme();
     const { i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -179,6 +183,7 @@ export function CategoriesList({ onSelectL2 }: Props) {
     if (loading) {
         return (
             <View style={[styles.container, { padding: 16, gap: 10 }]}>
+                {header}
                 {Array.from({ length: 8 }).map((_, i) => (
                     <View
                         key={i}
@@ -204,6 +209,7 @@ export function CategoriesList({ onSelectL2 }: Props) {
             data={l1Categories}
             keyExtractor={item => item.id.toString()}
             contentContainerStyle={styles.list}
+            ListHeaderComponent={header ?? undefined}
             renderItem={({ item }) => (
                 <L1Item
                     item={item}

@@ -242,10 +242,31 @@ export default function BasketResultsScreen() {
             const { getUserId } = await import('../../../config/user');
             const userId = await getUserId();
 
+            // "Padėjai sutaupyti" basis = average of the UNIQUE full-coverage
+            // store totals − the store the user chose. Deduping the totals
+            // (rounded to cents) stops a cluster of equally-cheap stores near
+            // the user from skewing the average down; only full-coverage stores
+            // count so a partial basket can't pollute it. Accrued server-side
+            // onto the template's collectiveSavingsEur, once per basket.
+            const round2 = (n: number) => Math.round(n * 100) / 100;
+            let savingsEur = 0;
+            if (selectedStore.missingItemNames.length === 0) {
+                const uniqueTotals = [...new Set(
+                    results
+                        .filter(r => r.missingItemNames.length === 0)
+                        .map(r => round2(r.total)),
+                )];
+                if (uniqueTotals.length > 1) {
+                    const avg = uniqueTotals.reduce((s, v) => s + v, 0) / uniqueTotals.length;
+                    savingsEur = Math.max(0, round2(avg - selectedStore.total));
+                }
+            }
+
             const body = {
                 userId,
                 storeId: selectedStore.storeId,
                 basketId: Number(id),
+                savingsEur,
                 items: selectedStore.items.map(item => {
                     const wasSubstituted =
                         (item as any).isSubstituted || (item as any).isCrossChainAverage;
