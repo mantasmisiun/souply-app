@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import Reanimated, { runOnJS, FadeInDown, FadeOutUp, LinearTransition } from 'react-native-reanimated';
 import ColorPicker, { Panel1, HueSlider } from 'reanimated-color-picker';
@@ -61,6 +62,7 @@ export function TemplateCoverEditor({
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { t } = useTranslation();
+    const { bottom: bottomInset } = useSafeAreaInsets();
 
     const [draftName, setDraftName] = useState(name);
     const [draftColor, setDraftColor] = useState(coverColor ?? DEFAULT_COLOR);
@@ -146,7 +148,7 @@ export function TemplateCoverEditor({
                     the colour-wheel/slider drags get starved and only taps
                     register. Tapping above the sheet closes it. */}
                 <Pressable style={styles.backdrop} onPress={onClose} />
-                <Animated.View style={[styles.sheet, { transform: [{ translateY }] }]}>
+                <Animated.View style={[styles.sheet, { paddingBottom: Math.max(bottomInset, 16), transform: [{ translateY }] }]}>
                     <View style={styles.grabArea} {...panResponder.panHandlers}>
                         <View style={styles.pill} />
                     </View>

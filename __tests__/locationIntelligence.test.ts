@@ -81,6 +81,8 @@ function makeStore(id: number, total: number, distance: number, items: { pid: nu
         chainId: id,
         chainLogoUrl: null,
         storeAddress: `Address ${id}`,
+        latitude: null,
+        longitude: null,
         distance,
         total,
         isApproximated: false,

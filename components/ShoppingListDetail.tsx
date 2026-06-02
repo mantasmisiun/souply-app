@@ -2,6 +2,8 @@ import {
     View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
     Alert, TextInput, Image, Platform, Modal, KeyboardAvoidingView, Keyboard,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { KeyboardStickyView } from 'react-native-keyboard-controller';
 import { SkeletonBox } from './SkeletonBox';
 import { ScreenBackButton } from './ScreenBackButton';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
@@ -145,6 +147,7 @@ export function ShoppingListDetail({
     isPartOfBasket = false,
 }: Props) {
     const colors = useTheme();
+    const insets = useSafeAreaInsets();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
@@ -564,7 +567,7 @@ export function ShoppingListDetail({
                 }} />
             )}
 
-            <View style={[styles.container, { paddingBottom: kbHeight }]}>
+            <View style={styles.container}>
                     {pendingDeleteRef.current && (
                         <TouchableOpacity style={styles.undoToast} onPress={undoItemDelete} activeOpacity={0.85}>
                             <Ionicons name="arrow-undo" size={14} color={colors.onPrimary} />
@@ -610,6 +613,10 @@ export function ShoppingListDetail({
                         )}
                     </ScrollView>
 
+                    {/* Bottom bar group — KeyboardStickyView lifts it above the
+                        keyboard reliably (manual padding under-lifts in Android
+                        edge-to-edge). */}
+                    <KeyboardStickyView>
                     {/* Floating search results — sit above the pinned add bar */}
                     {showSearchResults && (
                         <View style={styles.floatingResults}>
@@ -649,9 +656,10 @@ export function ShoppingListDetail({
                         </View>
                     )}
 
-                    {/* Pinned add bar — only for active lists */}
+                    {/* Pinned add bar — only for active lists. Bottom inset clears
+                        the Android nav bar (skipped while the keyboard is open). */}
                     {list?.status === 'active' && (
-                        <View style={styles.addBar}>
+                        <View style={[styles.addBar, { paddingBottom: 12 + (kbHeight > 0 ? 0 : insets.bottom) }]}>
                             <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
                             <TextInput
                                 style={styles.addBarInput}
@@ -679,6 +687,7 @@ export function ShoppingListDetail({
                             )}
                         </View>
                     )}
+                    </KeyboardStickyView>
 
                     {menuVisible && (
                         <TouchableOpacity style={styles.menuOverlay} onPress={() => setMenuVisible(false)} activeOpacity={1}>

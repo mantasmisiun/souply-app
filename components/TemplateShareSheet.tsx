@@ -3,6 +3,7 @@ import {
     View, Text, Modal, TouchableOpacity, StyleSheet, ActivityIndicator,
     Share, Image, PanResponder, Animated, Platform, ToastAndroid, Alert, type LayoutChangeEvent,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import * as MediaLibrary from 'expo-media-library';
@@ -53,6 +54,7 @@ export function TemplateShareSheet({
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    const { bottom: bottomInset } = useSafeAreaInsets();
 
     const [loading, setLoading] = useState(false);
     const [data, setData] = useState<ShareLinkResult | null>(null);
@@ -258,7 +260,7 @@ export function TemplateShareSheet({
         <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
             <TouchableOpacity style={styles.backdrop} activeOpacity={1} onPress={onClose}>
                 <Animated.View
-                    style={[styles.sheet, { transform: [{ translateY }] }]}
+                    style={[styles.sheet, { paddingBottom: Math.max(bottomInset + 12, 32), transform: [{ translateY }] }]}
                     onStartShouldSetResponder={() => true}
                 >
                     <View {...panResponder.panHandlers} style={styles.handleArea}>

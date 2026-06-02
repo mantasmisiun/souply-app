@@ -16,6 +16,8 @@ export interface StoreResult {
     chainLogoUrl: string | null;
     chainMiniLogoUrl?: string | null;
     storeAddress: string;
+    latitude: number | null;
+    longitude: number | null;
     distance: number;   // km from search center
     total: number;
     isApproximated: boolean;

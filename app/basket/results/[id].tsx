@@ -1,13 +1,12 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, RefreshControl } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, RefreshControl, InteractionManager } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect, useNavigation, Stack } from 'expo-router';
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeInDown, FadeIn } from 'react-native-reanimated';
 import { API_BASE_URL } from '../../../config/api';
 import { useTheme, type AppTheme } from '../../../constants/theme';
-import { getUserId } from '../../../config/user';
 import { useBasketState } from '../../../state/basketState';
 import { useProfileStore } from '../../../state/profileStore';
 import { loadCachedCoords, tryGpsCoords, persistCoords, type UserCoords } from '../../../utils/location';
@@ -16,6 +15,20 @@ import { formatEuro } from '../../../utils/formatCurrency';
 import { scoreAllCombinations, type ScoredCombo } from '../../../utils/splitBasketScore';
 import { ScreenBackButton } from '../../../components/ScreenBackButton';
 import { chainBrandColorById } from '../../../utils/chainBrandName';
+import ViewToggle, { type ResultsView } from '../../../components/results/ViewToggle';
+import StoreResultsMap, { type MapPin } from '../../../components/results/StoreResultsMap';
+import ResultsWheel, { type WheelItem } from '../../../components/results/ResultsWheel';
+
+/** Sum of a store's assigned items within a split combo (its share of the bill). */
+function comboStorePortion(combo: ScoredCombo, storeId: number): number {
+    const store = combo.stores.find(s => s.storeId === storeId);
+    if (!store) return 0;
+    let sum = 0;
+    for (const it of store.items) {
+        if (combo.itemAssignments[it.productId] === storeId && it.totalPrice != null) sum += it.totalPrice;
+    }
+    return Math.round(sum * 100) / 100;
+}
 
 function pluralizePrekes(n: number): string {
     const mod10 = n % 10;
@@ -53,12 +66,18 @@ interface StoreResult {
     chainLogoUrl: string | null;
     chainMiniLogoUrl?: string | null;
     storeAddress: string;
+    latitude: number | null;
+    longitude: number | null;
     distance: number;
     total: number;
     isApproximated: boolean;
     missingItemNames: string[];
     items: ItemResult[];
 }
+
+/** Hard cap on the single-store list — near a city centre the calc can return
+ *  hundreds of stores; we only ever show the top 10 ranked options. */
+const MAX_SINGLE_STORES = 10;
 
 export default function BasketResultsScreen() {
     const colors = useTheme();
@@ -73,7 +92,6 @@ export default function BasketResultsScreen() {
     const [pullRefreshing, setPullRefreshing] = useState(false);
     const [visibleCount, setVisibleCount] = useState(0);
     const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
-    const [swipesGated, setSwipesGated] = useState(false);
     const [locationPromptVisible, setLocationPromptVisible] = useState(false);
     const [combos, setCombos] = useState<ScoredCombo[]>([]);
     const [storeCount, setStoreCount] = useState<1 | 2 | 3>(1);
@@ -83,6 +101,18 @@ export default function BasketResultsScreen() {
     // screen focused on the action — "go here" — instead of the spread.
     const [showAllSingleStores, setShowAllSingleStores] = useState(false);
     const [selectedCombo, setSelectedCombo] = useState<ScoredCombo | null>(null);
+    const [view, setView] = useState<ResultsView>('stores');
+    const [mapMounted, setMapMounted] = useState(false);
+    const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+    // Defer the heavy MapView mount until after the toggle's tap interaction so
+    // switching to Žemėlapis feels instant (the capsule animates immediately,
+    // the map appears a frame later).
+    useEffect(() => {
+        if (view !== 'map' || mapMounted) return;
+        const task = InteractionManager.runAfterInteractions(() => setMapMounted(true));
+        return () => task.cancel();
+    }, [view, mapMounted]);
 
     const loadResults = async () => {
         // Detail screen now awaits the calc before pushing to this route,
@@ -107,7 +137,8 @@ export default function BasketResultsScreen() {
         if (stored) {
             const parsed: StoreResult[] = JSON.parse(stored);
             setResults(parsed);
-            for (let i = 0; i <= parsed.length; i++) {
+            const animCount = Math.min(parsed.length, MAX_SINGLE_STORES);
+            for (let i = 0; i <= animCount; i++) {
                 setTimeout(() => setVisibleCount(i), i * 150);
             }
 
@@ -147,9 +178,11 @@ export default function BasketResultsScreen() {
             const newResults = await res.json();
             await AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults));
             await persistCoords(coords);
+            setUserCoords({ lat: coords.lat, lng: coords.lng });
             setResults(newResults);
             setLoading(false);
-            for (let i = 0; i <= newResults.length; i++) {
+            const animCount = Math.min(newResults.length, MAX_SINGLE_STORES);
+            for (let i = 0; i <= animCount; i++) {
                 setTimeout(() => setVisibleCount(i), i * 150);
             }
         } catch {
@@ -190,23 +223,32 @@ export default function BasketResultsScreen() {
         }
     }, [runRecalcWithCoords, id]);
 
-    useFocusEffect(useCallback(() => {
-        // Set header options here — after expo-router's own focus event —
-        // so the button isn't cleared when an unregistered screen gets its
-        // options reset to defaults on every focus.
-        navigation.setOptions({ headerRight: undefined });
+    // The full header config (Parduotuvės/Žemėlapis toggle + back chevron).
+    // Kept in a ref so the focus effect can re-assert it without depending on
+    // `view` (which would re-run loadResults on every toggle).
+    const headerCfgRef = useRef<() => void>(() => {});
+    headerCfgRef.current = () => {
+        navigation.setOptions({
+            title: storeCount > 1 ? 'Parduotuvės' : 'Parduotuvė',
+            headerTitleAlign: 'center',
+            headerLeft: () => <ScreenBackButton />,
+            headerTitle: () => <ViewToggle value={view} onChange={setView} colors={colors} />,
+            headerRight: undefined,
+        });
+    };
+    // Re-apply when the toggle flips (and on mount).
+    useLayoutEffect(() => { headerCfgRef.current(); }, [view, storeCount, colors]);
 
-        (async () => {
-            try {
-                const userId = await getUserId();
-                const res = await fetch(`${API_BASE_URL}/api/users/${userId}/profile`);
-                const profile = await res.json();
-                setSwipesGated(!!profile?.pendingSwipes);
-            } catch {
-                setSwipesGated(false);
-            }
-        })();
+    useFocusEffect(useCallback(() => {
+        // Re-assert the header here — after expo-router's own focus event —
+        // because an unregistered screen has its options reset to defaults on
+        // focus, which otherwise blanks the toggle until the next re-render.
+        headerCfgRef.current();
+
+        // Store results render regardless of pending mandatory swipes — the
+        // comparison is never gated behind card-swiping.
         loadResults();
+        loadCachedCoords().then(c => { if (c) setUserCoords({ lat: c.lat, lng: c.lng }); });
     }, [id, navigation, handleRecalculate, colors.primary]));
 
     const closestStoreId = results.length > 0
@@ -220,6 +262,125 @@ export default function BasketResultsScreen() {
     // showing every store.
     const cheapestStoreId: number | null = results[0]?.storeId ?? null;
     const selectedStore = results.find(r => r.storeId === selectedStoreId);
+
+    // ── Map / wheel data ──────────────────────────────────────────────────
+    // Single-store list (capped) vs split combos (deduped by chain composition,
+    // capped at 5) — mirrors the list view so the map matches what's on screen.
+    const singleStores = useMemo(() => results.slice(0, MAX_SINGLE_STORES), [results]);
+    const dedupedCombos = useMemo(() => {
+        const seen = new Set<string>();
+        const out: ScoredCombo[] = [];
+        for (const combo of combos) {
+            const key = combo.stores.map(s => s.chainId).sort((a, b) => a - b).join('-');
+            if (seen.has(key)) continue;
+            seen.add(key);
+            out.push(combo);
+        }
+        return out.slice(0, 5);
+    }, [combos]);
+    const mapMode: 'single' | 'combo' = storeCount > 1 && dedupedCombos.length > 0 ? 'combo' : 'single';
+
+    const pins: MapPin[] = useMemo(() => {
+        if (mapMode === 'combo') {
+            const byStore = new Map<number, MapPin>();
+            const recIds = new Set(dedupedCombos[0]?.storeIds ?? []);
+            for (const combo of dedupedCombos) {
+                for (const s of combo.stores) {
+                    if (s.latitude == null || s.longitude == null || byStore.has(s.storeId)) continue;
+                    byStore.set(s.storeId, {
+                        storeId: s.storeId, chainId: s.chainId, chainName: s.chainName,
+                        miniLogoUrl: s.chainMiniLogoUrl ?? s.chainLogoUrl ?? null,
+                        latitude: s.latitude, longitude: s.longitude,
+                        euro: null, active: false, recommended: recIds.has(s.storeId),
+                    });
+                }
+            }
+            if (selectedCombo) {
+                for (const sid of selectedCombo.storeIds) {
+                    const pin = byStore.get(sid);
+                    if (pin) { pin.active = true; pin.euro = comboStorePortion(selectedCombo, sid); }
+                }
+            }
+            return [...byStore.values()];
+        }
+        return singleStores
+            .filter(s => s.latitude != null && s.longitude != null)
+            .map(s => ({
+                storeId: s.storeId, chainId: s.chainId, chainName: s.chainName,
+                miniLogoUrl: s.chainMiniLogoUrl ?? s.chainLogoUrl ?? null,
+                latitude: s.latitude as number, longitude: s.longitude as number,
+                euro: s.storeId === selectedStoreId ? s.total : null,
+                active: s.storeId === selectedStoreId,
+                recommended: s.storeId === cheapestStoreId,
+            }));
+    }, [mapMode, dedupedCombos, selectedCombo, singleStores, selectedStoreId, cheapestStoreId]);
+
+    const wheelItems: WheelItem[] = useMemo(() => {
+        // First option = "Visi" (overview / full map).
+        const all: WheelItem = { key: '__all__', logos: [], sum: 0, recommended: false, isAll: true };
+        if (mapMode === 'combo') {
+            return [all, ...dedupedCombos.map((combo, idx) => ({
+                key: combo.storeIds.join('-'),
+                logos: combo.stores.map(s => ({ chainId: s.chainId, logoUrl: s.chainMiniLogoUrl ?? s.chainLogoUrl ?? null })),
+                sum: combo.splitTotal,
+                recommended: idx === 0,
+            }))];
+        }
+        return [all, ...singleStores.map(s => ({
+            key: `s-${s.storeId}`,
+            logos: [{ chainId: s.chainId, logoUrl: s.chainMiniLogoUrl ?? s.chainLogoUrl ?? null }],
+            sum: s.total,
+            recommended: s.storeId === cheapestStoreId,
+        }))];
+    }, [mapMode, dedupedCombos, singleStores, cheapestStoreId]);
+
+    // Index 0 is "Visi"; real options start at 1.
+    const wheelSelectedIndex = useMemo(() => {
+        if (mapMode === 'combo') {
+            if (!selectedCombo) return 0;
+            const i = dedupedCombos.findIndex(c => c.storeIds.join('-') === selectedCombo.storeIds.join('-'));
+            return i < 0 ? 0 : i + 1;
+        }
+        if (selectedStoreId == null) return 0;
+        const i = singleStores.findIndex(s => s.storeId === selectedStoreId);
+        return i < 0 ? 0 : i + 1;
+    }, [mapMode, selectedCombo, dedupedCombos, selectedStoreId, singleStores]);
+
+    const handleWheelSelect = useCallback((i: number) => {
+        if (i === 0) { setSelectedStoreId(null); setSelectedCombo(null); return; } // Visi → full map
+        if (mapMode === 'combo') {
+            const combo = dedupedCombos[i - 1];
+            if (combo) { setSelectedCombo(combo); setSelectedStoreId(null); }
+        } else {
+            const s = singleStores[i - 1];
+            if (s) { setSelectedStoreId(s.storeId); setSelectedCombo(null); }
+        }
+    }, [mapMode, dedupedCombos, singleStores]);
+
+    // Coords the map zooms to: the selected store/combo, or null = fit all (Visi).
+    const focusCoords = useMemo(() => {
+        if (mapMode === 'combo') {
+            if (!selectedCombo) return null;
+            const cs = selectedCombo.stores
+                .filter(s => s.latitude != null && s.longitude != null)
+                .map(s => ({ latitude: s.latitude as number, longitude: s.longitude as number }));
+            return cs.length ? cs : null;
+        }
+        if (selectedStoreId == null) return null;
+        const s = singleStores.find(x => x.storeId === selectedStoreId);
+        return s && s.latitude != null && s.longitude != null
+            ? [{ latitude: s.latitude, longitude: s.longitude }]
+            : null;
+    }, [mapMode, selectedCombo, selectedStoreId, singleStores]);
+
+    const handlePinTap = useCallback((storeId: number) => {
+        if (mapMode === 'combo') {
+            const combo = dedupedCombos.find(c => c.storeIds.includes(storeId));
+            if (combo) { setSelectedCombo(combo); setSelectedStoreId(null); }
+        } else {
+            setSelectedStoreId(storeId); setSelectedCombo(null);
+        }
+    }, [mapMode, dedupedCombos]);
 
     const handleNavigate = () => {
         if (!selectedStore) return;
@@ -383,41 +544,94 @@ export default function BasketResultsScreen() {
         }
     };
 
+    // Shared action bar (Vykti / Pirkinių sąrašas) — rendered in-flow for the
+    // list view and inside the floating stack for the map view.
+    const bottomBarNode = (selectedStore || selectedCombo) ? (
+        <Animated.View entering={FadeInDown} style={[styles.bottomBar, bottomInset > 0 && { paddingBottom: 12 + bottomInset }]}>
+            {selectedStore && (
+                <>
+                    <TouchableOpacity style={styles.navigateButton} onPress={handleNavigate}>
+                        <Ionicons name="navigate-outline" size={20} color={colors.primary} />
+                        <Text style={styles.navigateText}>Vykti</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        style={styles.shoppingListButton}
+                        onPress={handleCreateShoppingList}
+                        disabled={creatingList}
+                    >
+                        {creatingList ? (
+                            <ActivityIndicator size="small" color={colors.onPrimary} />
+                        ) : (
+                            <Ionicons name="list-outline" size={20} color={colors.onPrimary} />
+                        )}
+                        <Text style={styles.shoppingListText}>
+                            {creatingList ? 'Kuriama…' : 'Pirkinių sąrašas'}
+                        </Text>
+                    </TouchableOpacity>
+                </>
+            )}
+            {selectedCombo && !selectedStore && (
+                <TouchableOpacity
+                    style={styles.shoppingListButton}
+                    onPress={handleCreateShoppingList}
+                    disabled={creatingList}
+                >
+                    {creatingList ? (
+                        <ActivityIndicator size="small" color={colors.onPrimary} />
+                    ) : (
+                        <Ionicons name="list-outline" size={20} color={colors.onPrimary} />
+                    )}
+                    <Text style={styles.shoppingListText}>
+                        {creatingList ? 'Kuriama…' : 'Pirkinių sąrašas'}
+                    </Text>
+                </TouchableOpacity>
+            )}
+        </Animated.View>
+    ) : null;
+
     return (
         <>
             {/* Declarative options for the first-mount case. Mirrored by
                 useLayoutEffect above so re-renders keep the button
                 attached even if expo-router's initial push timing hides
                 it briefly. */}
-            <Stack.Screen options={{ title: storeCount > 1 ? 'Parduotuvės' : 'Parduotuvė', headerLeft: () => <ScreenBackButton /> }} />
+            <Stack.Screen options={{
+                title: storeCount > 1 ? 'Parduotuvės' : 'Parduotuvė',
+                headerLeft: () => <ScreenBackButton />,
+                headerTitleAlign: 'center',
+                headerTitle: () => <ViewToggle value={view} onChange={setView} colors={colors} />,
+            }} />
             <View style={styles.container}>
-                {swipesGated && (
-                    <Animated.View entering={FadeIn} style={styles.gateOverlay}>
-                        <Ionicons name="lock-closed" size={48} color={colors.primary} />
-                        <Text style={styles.gateTitle}>Užbaik kortelių brauksymą</Text>
-                        <Text style={styles.gateBody}>
-                            Kad matytum pigiausia parduotuvę, reikia užbaigti privalomąjį kortelių brauksymą. Eik į Analizė ir atlik likusius brauksmus.
-                        </Text>
-                        <TouchableOpacity
-                            style={styles.gateButton}
-                            onPress={() => router.push('/(tabs)/receipts' as any)}
-                        >
-                            <Text style={styles.gateButtonText}>Eiti į Analizė</Text>
-                        </TouchableOpacity>
-                    </Animated.View>
-                )}
-                {!swipesGated && loading && !pullRefreshing ? (
+                {loading && !pullRefreshing ? (
                     <Animated.View entering={FadeIn} style={styles.loadingContainer}>
                         <ActivityIndicator size="large" color={colors.primary} />
                         <Text style={styles.loadingText}>Skaičiuojamos kainos...</Text>
                     </Animated.View>
+                ) : view === 'map' ? (
+                    // Full-bleed backdrop — fills the whole content region; the
+                    // wheel + action bar float over it at the bottom. The heavy
+                    // MapView mount is deferred past the toggle tap so switching
+                    // feels instant (a spinner shows for the one frame).
+                    mapMounted ? (
+                        <StoreResultsMap
+                            pins={pins}
+                            userCoords={userCoords}
+                            focusCoords={focusCoords}
+                            onSelectStore={handlePinTap}
+                            colors={colors}
+                        />
+                    ) : (
+                        <View style={styles.loadingContainer}>
+                            <ActivityIndicator size="large" color={colors.primary} />
+                        </View>
+                    )
                 ) : (
                     <FlatList
                         data={
                             storeCount > 1 && combos.length > 0
                                 ? []
                                 : (() => {
-                                    const allVisible = results.slice(0, visibleCount);
+                                    const allVisible = results.slice(0, Math.min(visibleCount, MAX_SINGLE_STORES));
                                     if (showAllSingleStores || !cheapestStoreId) return allVisible;
                                     // Default state: collapse everything to just the
                                     // recommended store. The "Daugiau" footer reveals
@@ -553,47 +767,27 @@ export default function BasketResultsScreen() {
                     />
                 )}
 
-                {(selectedStore || selectedCombo) && (
-                    <Animated.View entering={FadeInDown} style={[styles.bottomBar, bottomInset > 0 && { paddingBottom: 12 + bottomInset }]}>
-                        {selectedStore && (
-                            <>
-                                <TouchableOpacity style={styles.navigateButton} onPress={handleNavigate}>
-                                    <Ionicons name="navigate-outline" size={20} color={colors.primary} />
-                                    <Text style={styles.navigateText}>Vykti</Text>
-                                </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={styles.shoppingListButton}
-                                    onPress={handleCreateShoppingList}
-                                    disabled={creatingList}
-                                >
-                                    {creatingList ? (
-                                        <ActivityIndicator size="small" color={colors.onPrimary} />
-                                    ) : (
-                                        <Ionicons name="list-outline" size={20} color={colors.onPrimary} />
-                                    )}
-                                    <Text style={styles.shoppingListText}>
-                                        {creatingList ? 'Kuriama…' : 'Pirkinių sąrašas'}
-                                    </Text>
-                                </TouchableOpacity>
-                            </>
-                        )}
-                        {selectedCombo && !selectedStore && (
-                            <TouchableOpacity
-                                style={styles.shoppingListButton}
-                                onPress={handleCreateShoppingList}
-                                disabled={creatingList}
-                            >
-                                {creatingList ? (
-                                    <ActivityIndicator size="small" color={colors.onPrimary} />
-                                ) : (
-                                    <Ionicons name="list-outline" size={20} color={colors.onPrimary} />
-                                )}
-                                <Text style={styles.shoppingListText}>
-                                    {creatingList ? 'Kuriama…' : 'Pirkinių sąrašas'}
-                                </Text>
-                            </TouchableOpacity>
-                        )}
-                    </Animated.View>
+                {/* Bottom controls. In map view the wheel + action bar float in
+                    an absolute stack over the full-bleed map; in list view the
+                    action bar sits in-flow under the list. */}
+                {view === 'map' ? (
+                    !loading && mapMounted ? (
+                        <View style={styles.mapBottomStack}>
+                            {/* Inset below the wheel clears the Android nav bar
+                                when no action bar is shown (Visi / nothing selected). */}
+                            <View style={{ backgroundColor: colors.cardBackground, paddingBottom: (selectedStore || selectedCombo) ? 0 : bottomInset }}>
+                                <ResultsWheel
+                                    items={wheelItems}
+                                    selectedIndex={wheelSelectedIndex}
+                                    onSelectIndex={handleWheelSelect}
+                                    colors={colors}
+                                />
+                            </View>
+                            {bottomBarNode}
+                        </View>
+                    ) : null
+                ) : (
+                    bottomBarNode
                 )}
             </View>
             <LocationPromptModal
@@ -846,6 +1040,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         flexDirection: 'row', padding: 12, gap: 10,
         backgroundColor: c.cardBackground, borderTopWidth: 1, borderTopColor: c.border,
     },
+    mapBottomStack: { position: 'absolute', left: 0, right: 0, bottom: 0 },
     emptyText: { fontSize: 16, color: c.textSecondary },
     shoppingListButton: {
         flex: 2, backgroundColor: c.primary, borderRadius: 12,

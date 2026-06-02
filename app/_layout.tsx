@@ -280,12 +280,14 @@ export default function RootLayout() {
         <Stack.Screen name="browse/[categoryId]" options={{ headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="admin/catalog/[categoryId]" options={{ headerShown: false }} />
         <Stack.Screen name="basket/[id]" options={{ title: t('screens.basket') }} />
-        {/* basket/results/[id] intentionally configures its own <Stack.Screen>
-            options from inside the screen — registering a default here
-            (title: 'Rezultatai' or a stub headerRight) would win on
-            initial-mount timing and leave the refresh button missing
-            until the child's options apply. File-based routing picks the
-            screen up without this entry. */}
+        {/* basket/results/[id] MUST be registered here. Unregistered pushed
+            screens have their options reset to defaults on focus, which blanked
+            the Parduotuvės/Žemėlapis header on every (re)calculation until a
+            back-gesture re-triggered focus. Registering it makes the route's
+            options persist (the screen still injects the dynamic toggle via its
+            own <Stack.Screen>/setOptions). No headerRight stub here, so nothing
+            overrides the screen's header. */}
+        <Stack.Screen name="basket/results/[id]" options={{ headerLeft: () => <ScreenBackButton />, headerTitleAlign: 'center' }} />
         <Stack.Screen name="shopping-list/[id]" options={{ title: t('screens.shoppingList'), headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
         <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess'), headerLeft: () => <ScreenBackButton /> }} />

@@ -466,21 +466,35 @@ export default function BasketDetailScreen() {
     };
 
     if (loading) return (
-        <View style={[styles.container, { padding: 16, gap: 10 }]}>
-            {Array.from({ length: 5 }).map((_, i) => (
-                <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 12, flexDirection: 'row', gap: 12, alignItems: 'center' }}>
-                    <SkeletonBox width={56} height={56} borderRadius={8} />
-                    <View style={{ flex: 1, gap: 8 }}>
-                        <SkeletonBox width={150} height={13} borderRadius={6} />
-                        <SkeletonBox width={90} height={11} borderRadius={5} />
-                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 4 }}>
-                            <SkeletonBox width={28} height={28} borderRadius={14} />
-                            <SkeletonBox width={40} height={28} borderRadius={6} />
-                            <SkeletonBox width={28} height={28} borderRadius={14} />
+        <View style={styles.container}>
+            {/* Match the loaded header: white bg + pink back chevron + an
+                emoji-tile/name placeholder, so nothing flashes on load. */}
+            <Stack.Screen options={{
+                headerStyle: { backgroundColor: colors.cardBackground },
+                headerShadowVisible: false,
+                headerLeft: () => <ScreenBackButton />,
+                headerTitle: () => (
+                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+                        <SkeletonBox width={34} height={34} borderRadius={10} />
+                        <SkeletonBox width={120} height={15} borderRadius={6} />
+                    </View>
+                ),
+            }} />
+            <View style={styles.list}>
+                {Array.from({ length: 5 }).map((_, i) => (
+                    <View key={i} style={styles.card}>
+                        <SkeletonBox width={56} height={56} borderRadius={8} />
+                        <View style={{ flex: 1, marginLeft: 12, gap: 10 }}>
+                            <SkeletonBox width={150} height={14} borderRadius={6} />
+                            <View style={{ flexDirection: 'row', gap: 8, marginTop: 2, alignItems: 'center' }}>
+                                <SkeletonBox width={28} height={28} borderRadius={14} />
+                                <SkeletonBox width={40} height={24} borderRadius={6} />
+                                <SkeletonBox width={28} height={28} borderRadius={14} />
+                            </View>
                         </View>
                     </View>
-                </View>
-            ))}
+                ))}
+            </View>
         </View>
     );
 
