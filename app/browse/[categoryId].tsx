@@ -433,6 +433,15 @@ export default function CategoryScreen() {
         }
     };
 
+    // Chip taps: ignore a tap on the chip that's already active — its results
+    // are already loaded, so re-fetching would just flash the list for nothing.
+    // (The mode-toggle effect below still calls selectL3 directly to force a
+    // refresh when the granularity changes.)
+    const handleChipSelect = (l3Id: number | null) => {
+        if (l3Id === selectedL3) return;
+        selectL3(l3Id);
+    };
+
     // When the user flips the detalumas toggle on this screen, re-run the
     // currently-selected L3 fetch so the list reflects the new granularity
     // without a full navigation reset.
@@ -673,7 +682,7 @@ export default function CategoryScreen() {
                 <CategoryBubbles
                     categories={l3Categories}
                     selectedId={selectedL3}
-                    onSelect={selectL3}
+                    onSelect={handleChipSelect}
                     allLabel={t('browse.allProducts')}
                 />
 
