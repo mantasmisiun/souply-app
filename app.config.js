@@ -102,6 +102,13 @@ export default {
           ios: {
             deploymentTarget: '16.0',
           },
+          android: {
+            // DEV variant only: allow plain-HTTP to the LAN dev API
+            // (http://192.168.1.127:3000). Release-style builds block
+            // cleartext by default. Production stays HTTPS-only (false) —
+            // Play Store requires it and prod talks to https://api.souply.lt.
+            usesCleartextTraffic: IS_DEV,
+          },
         },
       ],
       [
