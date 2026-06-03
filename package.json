@@ -9,7 +9,7 @@
     "ios": "expo run:ios",
     "web": "expo start --web",
     "lint": "expo lint",
-    "sync-shared": "rm -rf ./shared && cp -r ../shared ./shared",
+    "sync-shared": "rm -rf ./shared && cp -r ../shared ./shared && rm -rf ./shared/.git",
     "build:apk": "npm run sync-shared && eas build --profile preview --platform android",
     "test": "jest",
     "postinstall": "patch-package",
