@@ -18,7 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../constants/theme';
 import { useAuthState } from '../state/authState';
-import { useGoogleOauth, signInWithApple, isAppleSignInAvailable } from '../utils/oauthFlow';
+import { signInWithGoogle, signInWithApple, isAppleSignInAvailable } from '../utils/oauthFlow';
 import { exchangeOauthToken, setUsername, checkUsernameAvailability, type UsernameRejectReason } from '../utils/authApi';
 import { getUserId } from '../config/user';
 
@@ -80,12 +80,15 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
         }
     }, [setSession, t]);
 
-    const { request, promptAsync } = useGoogleOauth(handleGoogleIdToken);
-
     const onGooglePress = useCallback(async () => {
-        if (busy || !request) return;
-        await promptAsync();
-    }, [busy, request, promptAsync]);
+        if (busy) return;
+        try {
+            const r = await signInWithGoogle();
+            if (r) await handleGoogleIdToken(r.idToken); // null = user cancelled
+        } catch {
+            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
+        }
+    }, [busy, handleGoogleIdToken, t]);
 
     const onApplePress = useCallback(async () => {
         if (busy) return;
@@ -185,7 +188,7 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
                             <TouchableOpacity
                                 style={[styles.providerBtn, styles.googleBtn]}
                                 onPress={onGooglePress}
-                                disabled={busy || !request}
+                                disabled={busy}
                             >
                                 <Ionicons name="logo-google" size={18} color="#fff" />
                                 <Text style={styles.providerBtnText}>{t('basketTab.templates.publishContinueGoogle')}</Text>

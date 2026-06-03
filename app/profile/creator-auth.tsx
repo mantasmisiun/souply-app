@@ -10,7 +10,7 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { getUserId } from '../../config/user';
-import { useGoogleOauth, signInWithApple, isAppleSignInAvailable } from '../../utils/oauthFlow';
+import { signInWithGoogle, signInWithApple, isAppleSignInAvailable } from '../../utils/oauthFlow';
 import { exchangeOauthToken } from '../../utils/authApi';
 import { useAuthState, DEV_SESSION_TOKEN } from '../../state/authState';
 import { CreateUsernameModal } from '../../components/CreateUsernameModal';
@@ -81,13 +81,15 @@ export default function CreatorAuthScreen() {
         }
     }, [setSession, router, t]);
 
-    const handleGoogleIdToken = useCallback((idToken: string) => { onSignedIn('google', idToken); }, [onSignedIn]);
-    const { request, promptAsync } = useGoogleOauth(handleGoogleIdToken);
-
     const onGooglePress = useCallback(async () => {
-        if (busy || !request) return;
-        await promptAsync();
-    }, [busy, request, promptAsync]);
+        if (busy) return;
+        try {
+            const r = await signInWithGoogle();
+            if (r) await onSignedIn('google', r.idToken); // null = user cancelled
+        } catch {
+            Alert.alert(t('creatorAuth.title'), t('basketTab.errorGeneric'));
+        }
+    }, [busy, onSignedIn, t]);
 
     const onApplePress = useCallback(async () => {
         if (busy) return;
@@ -131,7 +133,7 @@ export default function CreatorAuthScreen() {
                     <TouchableOpacity
                         style={[styles.oauthBtn, styles.googleBtn]}
                         onPress={onGooglePress}
-                        disabled={busy || !request}
+                        disabled={busy}
                         activeOpacity={0.85}
                     >
                         {busy

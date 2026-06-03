@@ -202,6 +202,10 @@ export default {
           url: 'https://de.sentry.io/',
         },
       ],
+      // Native Google Sign-In (Play Services). No options needed for Android —
+      // the Android OAuth client is matched by package + SHA-1 in GCP; the ID
+      // token's audience is the webClientId set in GoogleSignin.configure().
+      '@react-native-google-signin/google-signin',
       // Must come last: strips unused permissions (mic / media-audio /
       // draw-over) that the plugins above pull in. See the plugin file.
       './plugins/withBlockedPermissions',

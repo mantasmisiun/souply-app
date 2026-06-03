@@ -1,31 +1,31 @@
 /**
- * OAuth flow wrappers — Pass B.4.
+ * OAuth flow wrappers.
  *
- *   • `signInWithGoogle()` — uses Expo's AuthSession Google provider.
- *     Returns the ID token to be exchanged with our server.
- *   • `signInWithApple()`  — uses expo-apple-authentication. iOS-only;
- *     the publish wall hides the Apple button on Android.
+ *   • `signInWithGoogle()` — NATIVE Google Sign-In via Google Play Services
+ *     (@react-native-google-signin). No browser, no redirect scheme — returns
+ *     the ID token directly. Replaced the old expo-auth-session browser flow,
+ *     which couldn't reliably return from the Android Custom Tab (it landed on
+ *     google.com instead of deep-linking back).
+ *   • `signInWithApple()`  — expo-apple-authentication. iOS-only; the publish
+ *     wall hides the Apple button on Android.
  *
- * Client IDs come from env (loaded via expo-constants). For dev the
- * "iosClientId" / "androidClientId" / "expoClientId" values can be
- * overridden through .env.local — same as every other Expo OAuth
- * tutorial.
+ * Client IDs come from EXPO_PUBLIC_* env (eas.json profile env).
  */
 import * as AppleAuthentication from 'expo-apple-authentication';
-import * as Google from 'expo-auth-session/providers/google';
-import * as WebBrowser from 'expo-web-browser';
-import { useEffect } from 'react';
+import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { Platform } from 'react-native';
 
-// Required for the Google in-app browser to dismiss correctly after the
-// callback redirect. Safe to call multiple times.
-WebBrowser.maybeCompleteAuthSession();
-
-// Client IDs come from app.config.js → extra. We're pulling from
-// process.env so EAS Secrets can inject without code changes.
-const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
-const GOOGLE_ANDROID_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
+// webClientId = the audience of the ID token Google returns (must be in the
+// server's accepted-audience list — GOOGLE_OAUTH_CLIENT_ID is comma-separated).
+// On Android the sign-in itself authenticates via the app's package + SHA-1
+// against the Android OAuth client in GCP — no google-services.json required.
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
+const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
+
+GoogleSignin.configure({
+    webClientId: GOOGLE_WEB_CLIENT_ID,
+    ...(GOOGLE_IOS_CLIENT_ID ? { iosClientId: GOOGLE_IOS_CLIENT_ID } : {}),
+});
 
 export interface OauthTokenResult {
     provider: 'google' | 'apple';
@@ -33,34 +33,29 @@ export interface OauthTokenResult {
 }
 
 /**
- * Hook wrapping `useAuthRequest`. The publish wall calls
- * `promptAsync()` from the returned tuple. On success the resolved
- * promise carries `.id_token`.
+ * Native Google sign-in. Resolves to the ID token on success, or `null` when
+ * the user cancels (callers treat null as a silent no-op). Throws on a real
+ * error so the caller can surface it.
  */
-export function useGoogleOauth(onIdToken: (token: string) => void) {
-    const [request, response, promptAsync] = Google.useAuthRequest({
-        iosClientId: GOOGLE_IOS_CLIENT_ID,
-        androidClientId: GOOGLE_ANDROID_CLIENT_ID,
-        webClientId: GOOGLE_WEB_CLIENT_ID,
-        // Scope `openid` so we get a JWT id_token in the response. The
-        // rest are standard.
-        scopes: ['openid', 'profile', 'email'],
-    });
-
-    useEffect(() => {
-        if (response?.type !== 'success') return;
-        const idToken = response.authentication?.idToken ?? (response.params as any)?.id_token;
-        if (typeof idToken === 'string' && idToken.length > 0) {
-            onIdToken(idToken);
-        }
-    }, [response, onIdToken]);
-
-    return { request, promptAsync, response };
+export async function signInWithGoogle(): Promise<OauthTokenResult | null> {
+    try {
+        await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+        const res: any = await GoogleSignin.signIn();
+        // v13+ returns { type: 'success' | 'cancelled', data }; older returns the
+        // user directly and throws on cancel. Handle both shapes.
+        if (res?.type === 'cancelled') return null;
+        const idToken: string | null = res?.data?.idToken ?? res?.idToken ?? null;
+        if (!idToken) throw new Error('Google sign-in returned no idToken');
+        return { provider: 'google', idToken };
+    } catch (e: any) {
+        if (e?.code === statusCodes.SIGN_IN_CANCELLED) return null;
+        throw e;
+    }
 }
 
 /**
- * Apple sign-in. iOS only at v1; on Android the button is hidden by
- * the caller. Returns the identityToken (Apple's JWT) on success.
+ * Apple sign-in. iOS only at v1; on Android the button is hidden by the caller.
+ * Returns the identityToken (Apple's JWT) on success.
  */
 export async function signInWithApple(): Promise<OauthTokenResult> {
     if (Platform.OS !== 'ios') throw new Error('Apple sign-in is iOS-only');
