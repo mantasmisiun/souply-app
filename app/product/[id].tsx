@@ -5,6 +5,7 @@ import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react'
 import { useLocalSearchParams, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
+import { getUserId } from '../../config/user';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import MiniPriceChart, { PriceChartSvg, type PricePoint, type RangeKey, preparePriceData, filterByRange } from '../../components/MiniPriceChart';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
@@ -274,9 +275,12 @@ export default function ProductDetailScreen() {
                 // (head + all variants) so chain tabs + the list below show
                 // every variant side-by-side. In sku mode it's exactly this
                 // Product's SPs, same as pre-Phase-1.
+                // userId personalises the SP set to this user's equivalence
+                // component (unions swiped-equivalent SPs, incl. 688 orphans).
+                const userId = await getUserId();
                 const [prodRes, spRes] = await Promise.all([
                     fetch(`${API_BASE_URL}/api/products/${id}`),
-                    fetch(`${API_BASE_URL}/api/store-products/product/${id}?mode=${mode}`),
+                    fetch(`${API_BASE_URL}/api/store-products/product/${id}?mode=${mode}&userId=${encodeURIComponent(userId)}`),
                 ]);
                 const prodData = await prodRes.json();
                 const spData = await spRes.json();

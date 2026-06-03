@@ -151,6 +151,7 @@ export default function ProfilisScreen() {
     // single "Kitos" legend row (not drawn on the ring, so one dominant
     // bucket can't swallow 75% of the donut).
     const [categoryTopN, setCategoryTopN] = useState<5 | 10>(5);
+    const [monthOffset, setMonthOffset] = useState(0); // 0 = most recent 6-month window
     const scrollRef = useRef<ScrollView>(null);
 
     // Per-page measured heights. The carousel wrapper animates to the
@@ -218,7 +219,28 @@ export default function ProfilisScreen() {
         label: m.label, total: m.total, month: m.month,
     }));
 
-    const monthlyMax = Math.max(...barData.map(b => b.total), 0);
+    // Monthly chart shows a 6-month window; monthOffset pages back 6 at a time
+    // (0 = most recent). The API returns the full series (oldest→newest,
+    // zero-filled) so navigation is pure client-side windowing — no refetch.
+    const MONTH_WINDOW = 6;
+    const maxMonthOffset = Math.max(0, Math.ceil(barData.length / MONTH_WINDOW) - 1);
+    const effMonthOffset = Math.min(monthOffset, maxMonthOffset);
+    const monthEnd = Math.max(0, barData.length - MONTH_WINDOW * effMonthOffset);
+    const monthStart = Math.max(0, monthEnd - MONTH_WINDOW);
+    const windowedBars = barData.slice(monthStart, monthEnd);
+    const monthlyMax = Math.max(...windowedBars.map(b => b.total), 0);
+    const canOlderMonths = monthStart > 0;          // older months exist before the window
+    const canNewerMonths = effMonthOffset > 0;       // paged back → can return toward now
+    const monthRangeLabel = (() => {
+        if (windowedBars.length === 0) return '';
+        const first = windowedBars[0];
+        const last = windowedBars[windowedBars.length - 1];
+        const y1 = first.month?.slice(0, 4);
+        const y2 = last.month?.slice(0, 4);
+        return y1 === y2
+            ? `${first.label}–${last.label} ${y2}`
+            : `${first.label} ${y1} – ${last.label} ${y2}`;
+    })();
 
     const pages = [
         {
@@ -298,8 +320,29 @@ export default function ProfilisScreen() {
             title: t('profilis.carouselMonthly'),
             content: (
                 <View style={styles.barChartPage}>
+                    <View style={styles.monthNavRow}>
+                        <TouchableOpacity
+                            onPress={() => setMonthOffset(o => o + 1)}
+                            disabled={!canOlderMonths}
+                            hitSlop={10}
+                            style={styles.monthNavBtn}
+                        >
+                            <Ionicons name="chevron-back" size={20}
+                                color={canOlderMonths ? colors.textPrimary : colors.borderSubtle} />
+                        </TouchableOpacity>
+                        <Text style={styles.monthRangeLabel}>{monthRangeLabel}</Text>
+                        <TouchableOpacity
+                            onPress={() => setMonthOffset(o => Math.max(0, o - 1))}
+                            disabled={!canNewerMonths}
+                            hitSlop={10}
+                            style={styles.monthNavBtn}
+                        >
+                            <Ionicons name="chevron-forward" size={20}
+                                color={canNewerMonths ? colors.textPrimary : colors.borderSubtle} />
+                        </TouchableOpacity>
+                    </View>
                     {monthlyMax > 0 ? (
-                        <BarChart data={barData} color={colors.primary} height={220} />
+                        <BarChart data={windowedBars} color={colors.primary} height={220} />
                     ) : (
                         <Text style={styles.emptyChartText}>{t('profilis.noData')}</Text>
                     )}
@@ -602,6 +645,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         width: '100%',
     },
     emptyChartText: { fontSize: 14, color: c.textMuted, fontStyle: 'italic', marginVertical: 32, textAlign: 'center' },
+    monthNavRow: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        paddingHorizontal: 4, marginBottom: 4,
+    },
+    monthNavBtn: { padding: 6, borderRadius: 8 },
+    monthRangeLabel: { fontSize: 13, fontWeight: '700', color: c.textSecondary },
 
     dots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 16, marginBottom: 8 },
     dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: c.borderSubtle },
