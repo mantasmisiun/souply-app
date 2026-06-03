@@ -13,6 +13,7 @@ import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { EnvBanner } from '../components/EnvBanner';
+import { UsernameGate } from '../components/UsernameGate';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
@@ -239,6 +240,7 @@ export default function RootLayout() {
       <EnvBanner />
       <ShareHandler />
       <OfflineBanner />
+      <UsernameGate />
       <LevelUpModal />
       <Stack
         screenOptions={{
