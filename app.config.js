@@ -1,4 +1,6 @@
 const IS_DEV = process.env.APP_VARIANT === 'dev';
+const IS_STAGING = process.env.APP_VARIANT === 'staging';
+const APP_ENV = IS_DEV ? 'dev' : IS_STAGING ? 'staging' : 'prod';
 const ICON = IS_DEV ? './assets/images/DEV.png' : './assets/images/icon.png';
 // Universal/App Link host per environment. The dev build (testers) deep-links
 // against the test web stack; prod against souply.lt. localhost can't host
@@ -182,6 +184,7 @@ export default {
       reactCompiler: true,
     },
     extra: {
+      appEnv: APP_ENV,
       router: { notFound: false },
       eas: {
         projectId: 'd3053a04-a3bb-4dd2-81e5-d10ceddd06db',
