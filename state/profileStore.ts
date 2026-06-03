@@ -13,6 +13,17 @@ export interface ProfileData {
     showBurstWarning: boolean;
     isAdmin: boolean;
     role?: string | null;
+    // Identity (profile header)
+    firstName?: string | null;
+    lastName?: string | null;
+    displayName?: string | null;
+    username?: string | null;
+    avatarUrl?: string | null;
+    // Aggregate template stats (profile cards)
+    templateCount?: number;
+    totalVisits?: number;
+    totalUses?: number;
+    totalFollowerSavingsEur?: number;
 }
 
 export interface StoreSlice { chainName: string; total: number; color: string; miniLogoUrl?: string | null; }

@@ -84,11 +84,12 @@ export default {
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       package: IS_DEV ? 'lt.souply.app.dev' : 'lt.souply.app',
-      // COARSE only — the app requests Accuracy.Balanced (utils/location.ts)
-      // to find the nearest stores; precise (FINE) location is not needed and
-      // FINE triggers Google Play's sensitive-permission review.
+      // Precise + approximate location for accurate nearest-store results and
+      // map centering. FINE requires a Play Console "Location permissions"
+      // declaration + prominent in-app disclosure (handled at submission).
       permissions: [
         'ACCESS_COARSE_LOCATION',
+        'ACCESS_FINE_LOCATION',
       ],
     },
     web: {
@@ -172,6 +173,9 @@ export default {
           androidMultiIntentFilters: ['image/*', 'application/pdf'],
         },
       ],
+      // Must come last: strips unused permissions (mic / media-audio /
+      // draw-over) that the plugins above pull in. See the plugin file.
+      './plugins/withBlockedPermissions',
     ],
     experiments: {
       typedRoutes: true,

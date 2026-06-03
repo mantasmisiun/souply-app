@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, Image, TouchableOpacity, TextInput, Modal, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, Image, TouchableOpacity, TextInput, Modal, StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import * as ImagePicker from 'expo-image-picker';
@@ -161,8 +161,11 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
                 ))}
             </View>
 
-            <Modal visible={editOpen} transparent animationType="fade" onRequestClose={() => setEditOpen(false)}>
-                <View style={styles.modalBackdrop}>
+            <Modal visible={editOpen} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setEditOpen(false)}>
+                <KeyboardAvoidingView
+                    style={styles.modalBackdrop}
+                    behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+                >
                     <View style={styles.modalCard}>
                         <Text style={styles.modalTitle}>{t('basketTab.creatorProfile.editTitle')}</Text>
                         <Text style={styles.inputLabel}>{t('basketTab.creatorProfile.firstNameLabel')}</Text>
@@ -186,7 +189,7 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
                             </TouchableOpacity>
                         </View>
                     </View>
-                </View>
+                </KeyboardAvoidingView>
             </Modal>
         </View>
     );

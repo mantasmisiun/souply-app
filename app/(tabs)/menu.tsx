@@ -21,6 +21,8 @@ import { DonutChart, type DonutSlice } from '../../components/DonutChart';
 import { BarChart, type BarSlice } from '../../components/BarChart';
 import { useLevelStore } from '../../state/levelStore';
 import { useProfileStore, fetchProfileIfStale } from '../../state/profileStore';
+import { useAuthState } from '../../state/authState';
+import CreatorProfileHeader from '../../components/CreatorProfileHeader';
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { formatEuro } from '../../utils/formatCurrency';
 import { chainBrandColor } from '../../utils/chainBrandName';
@@ -101,72 +103,6 @@ const legendStyles = StyleSheet.create({
 });
 
 /**
- * Renders the creator-profile row in the Profilis quick-links section.
- * Hidden when the user is anonymous (no JWT yet) — surfaces the moment
- * they go through the publish wall.
- */
-function CreatorProfileRow({ styles, colors, router, t }: any) {
-    const { useAuthState } = require('../../state/authState');
-    const user = useAuthState((s: any) => s.user);
-    if (!user) return null;
-    return (
-        <TouchableOpacity style={styles.row} onPress={() => router.push('/profile/edit')}>
-            <Ionicons name="person-circle-outline" size={22} color={colors.textSecondary} />
-            <Text style={styles.rowText}>
-                {user.username ? `@${user.username}` : t('creatorProfile.title')}
-            </Text>
-            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-        </TouchableOpacity>
-    );
-}
-
-/**
- * Sign-out row — shown only when signed in (verified user present).
- * Clears the session AND resets the device's anonymous identity, then
- * reloads so every store rehydrates against a fresh user — i.e. this
- * phone's receipts / baskets / lists no longer appear. Confirmation
- * popup first since it's effectively "leave + start clean here".
- */
-function SignOutRow({ styles, colors, router, t }: any) {
-    const { useAuthState } = require('../../state/authState');
-    const user = useAuthState((s: any) => s.user);
-    if (!user) return null;
-
-    const doSignOut = async () => {
-        try {
-            await useAuthState.getState().clear();
-            const { resetUserId } = require('../../config/user');
-            await resetUserId();
-            try {
-                const Updates = await import('expo-updates');
-                await Updates.reloadAsync();
-            } catch {
-                router.replace('/(tabs)/receipts' as any);
-            }
-        } catch { /* best-effort */ }
-    };
-
-    const confirm = () => {
-        Alert.alert(
-            t('profilis.signOutConfirm.title'),
-            t('profilis.signOutConfirm.body'),
-            [
-                { text: t('profilis.signOutConfirm.cancel'), style: 'cancel' },
-                { text: t('profilis.signOutConfirm.confirm'), style: 'destructive', onPress: doSignOut },
-            ],
-        );
-    };
-
-    return (
-        <TouchableOpacity style={styles.row} onPress={confirm}>
-            <Ionicons name="log-out-outline" size={22} color={colors.textSecondary} />
-            <Text style={styles.rowText}>{t('profilis.signOut')}</Text>
-            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-        </TouchableOpacity>
-    );
-}
-
-/**
  * Standout CTA at the bottom of Profilis inviting non-creators to make a
  * Kūrėjo paskyra. Hidden once the user is a verified creator (token present)
  * — they get the CreatorProfileRow instead. Deliberately not a plain row:
@@ -203,6 +139,9 @@ export default function ProfilisScreen() {
 
     const profile = useProfileStore(s => s.profile);
     const stats = useProfileStore(s => s.stats);
+    const invalidateProfile = useProfileStore(s => s.invalidate);
+    const fetchProfile = useProfileStore(s => s.fetchProfile);
+    const authUser = useAuthState(s => s.user);
     const loading = useProfileStore(s => s.profile === null && s.fetching);
     const statsLoading = useProfileStore(s => s.stats === null && s.fetching);
     const [activePage, setActivePage] = useState(0);
@@ -378,6 +317,15 @@ export default function ProfilisScreen() {
         <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
         <TabHeader title={t('tabs.profilis')} rightAction={settingsGear} />
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+            {/* Creator header — avatar (tap to upload) + name + @handle +
+                aggregate template stats. Only once signed in as a creator. */}
+            {authUser && profile && (
+                <CreatorProfileHeader
+                    profile={profile}
+                    onAvatarChanged={() => { invalidateProfile(); fetchProfile(); }}
+                />
+            )}
+
             {/* Level card */}
             <View style={styles.levelCard}>
                 {loading ? (
@@ -497,10 +445,6 @@ export default function ProfilisScreen() {
 
             {/* Quick links */}
             <View style={{ marginTop: 8 }}>
-                {/* Creator profile editor — surfaces only after the user has
-                    been through the publish wall (token present). For
-                    unverified users this row stays hidden. */}
-                <CreatorProfileRow styles={styles} colors={colors} router={router} t={t} />
                 <TouchableOpacity
                     style={styles.row}
                     onPress={() => router.push('/profile/vote-history')}
@@ -540,9 +484,6 @@ export default function ProfilisScreen() {
                         <Ionicons name="chevron-forward" size={18} color={colors.primary} />
                     </TouchableOpacity>
                 )}
-
-                {/* Sign out — only when signed in. Resets to a fresh user. */}
-                <SignOutRow styles={styles} colors={colors} router={router} t={t} />
             </View>
 
             {/* Dev tools — visible in Metro dev mode AND in the EAS DEV variant.

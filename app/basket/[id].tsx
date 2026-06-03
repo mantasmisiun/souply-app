@@ -23,6 +23,7 @@ import { useTranslation } from 'react-i18next';
 import { GlassIconButton } from '../../components/GlassIconButton';
 import { coverEmoji } from '../../utils/templateCover';
 import { TemplateCoverEditor, type CoverDraft } from '../../components/TemplateCoverEditor';
+import { Toast, type ToastHandle } from '../../components/Toast';
 import { createTemplateFromBasket, instantiateTemplate } from '../../utils/basketTemplatesApi';
 import { CardActionBar } from '../../components/CardActionBar';
 import { getUserId } from '../../config/user';
@@ -95,13 +96,18 @@ export default function BasketDetailScreen() {
     // (prefilled with the basket name); on submit we create the template
     // from this basket with the chosen name/emoji/colour.
     const [saveTplVisible, setSaveTplVisible] = useState(false);
+    const toastRef = useRef<ToastHandle>(null);
 
     const handleSaveAsTemplate = useCallback(async (next: CoverDraft) => {
         try {
             await createTemplateFromBasket(Number(id), {
                 name: next.name, coverColor: next.coverColor, coverImage: next.coverImage,
             });
-            Alert.alert(t('basketTab.templates.savedToast', { name: next.name }));
+            toastRef.current?.show(t('basketTab.templates.savedToast', { name: next.name }));
+            // The basket is now this template's first instance (server linked
+            // sourceTemplateId) — refetch so the header inherits the cover
+            // (emoji/colour/name) + template-derived UI.
+            await fetchBasket();
         } catch {
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorInstantiate'));
         }
@@ -937,6 +943,8 @@ export default function BasketDetailScreen() {
                     );
                 }}
             />
+
+            <Toast ref={toastRef} />
         </>
     );
 }
