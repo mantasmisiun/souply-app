@@ -1,16 +1,21 @@
 const IS_DEV = process.env.APP_VARIANT === 'dev';
 const IS_STAGING = process.env.APP_VARIANT === 'staging';
 const APP_ENV = IS_DEV ? 'dev' : IS_STAGING ? 'staging' : 'prod';
+// One source for the per-variant identity. Distinct package/bundle ids let
+// dev + staging + prod coexist on one device; the name suffix + EnvBanner
+// make non-prod builds unmistakable. (Icon badge is dev-only for now.)
+const BUNDLE_ID = IS_DEV ? 'lt.souply.app.dev' : IS_STAGING ? 'lt.souply.app.staging' : 'lt.souply.app';
+const APP_NAME = IS_DEV ? 'Souply (DEV)' : IS_STAGING ? 'Souply (staging)' : 'Souply';
 const ICON = IS_DEV ? './assets/images/DEV.png' : './assets/images/icon.png';
 // Universal/App Link host per environment. The dev build (testers) deep-links
 // against the test web stack; prod against souply.lt. localhost can't host
 // universal links, so dev points at the reachable test domain. The matching
 // apple-app-site-association / assetlinks.json must be served from each host.
-const LINK_HOST = IS_DEV ? 'souply.manofoto.dpdns.org' : 'souply.lt';
+const LINK_HOST = (IS_DEV || IS_STAGING) ? 'souply.manofoto.dpdns.org' : 'souply.lt';
 
 export default {
   expo: {
-    name: IS_DEV ? 'Souply (DEV)' : 'Souply',
+    name: APP_NAME,
     slug: 'souply',
     version: '1.0.0',
     orientation: 'portrait',
@@ -20,7 +25,7 @@ export default {
     newArchEnabled: true,
     ios: {
       supportsTablet: true,
-      bundleIdentifier: IS_DEV ? 'lt.souply.app.dev' : 'lt.souply.app',
+      bundleIdentifier: BUNDLE_ID,
       buildNumber: '5',
       // Associated Domains — Universal Links for souply.lt/t/{slug} and
       // souply.lt/@{username}. The matching apple-app-site-association
@@ -85,7 +90,7 @@ export default {
       ],
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
-      package: IS_DEV ? 'lt.souply.app.dev' : 'lt.souply.app',
+      package: BUNDLE_ID,
       // Precise + approximate location for accurate nearest-store results and
       // map centering. FINE requires a Play Console "Location permissions"
       // declaration + prominent in-app disclosure (handled at submission).
@@ -166,10 +171,8 @@ export default {
             NSExtensionActivationSupportsImageWithMaxCount: 10,
             NSExtensionActivationSupportsFileWithMaxCount: 10,
           },
-          iosAppGroupIdentifier: IS_DEV ? 'group.lt.souply.app.dev' : 'group.lt.souply.app',
-          iosShareExtensionBundleIdentifier: IS_DEV
-            ? 'lt.souply.app.dev.ShareExtension'
-            : 'lt.souply.app.ShareExtension',
+          iosAppGroupIdentifier: `group.${BUNDLE_ID}`,
+          iosShareExtensionBundleIdentifier: `${BUNDLE_ID}.ShareExtension`,
           // Android — single and multi-file sharing
           androidIntentFilters: ['image/*', 'application/pdf', '*/*'],
           androidMultiIntentFilters: ['image/*', 'application/pdf'],

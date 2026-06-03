@@ -1,25 +1,21 @@
 import Constants from 'expo-constants';
+import { APP_ENV } from './env';
 
 /**
- * API endpoint the mobile app talks to.
+ * API endpoint the mobile app talks to, keyed off the single APP_ENV source.
  *
- * Three resolution paths in order:
- *   1. Metro debug build (`__DEV__=true`) → derive host from Metro's
- *      hostUri (Constants.expoConfig.hostUri). Whatever LAN IP Metro
- *      serves the JS bundle from, Express on :3000 lives at too.
- *   2. EAS internal-distribution DEV variant (Souply DEV, `__DEV__=false`
- *      because the bundle is minified release-style without Metro) →
- *      fall back to a hardcoded laptop LAN IP. Lets the dev build POST
- *      receipt-batch logs to the laptop instead of the production API.
- *      Change `DEV_VARIANT_LAN_HOST` when you move to a new network.
- *   3. Production build → Cloudflare-proxied API on OMV.
+ * Resolution order:
+ *   1. Metro (`__DEV__=true`) → derive host from Metro's hostUri, so the LAN
+ *      IP that serves the JS bundle is where Express on :3000 lives too.
+ *   2. APP_ENV 'dev' (EAS dev variant, no Metro) → hardcoded laptop LAN IP.
+ *   3. APP_ENV 'staging' (EAS staging variant) → api.souply.manofoto (souply_test).
+ *   4. Production → api.souply.lt (souply_production).
  */
 
-// Hardcoded laptop LAN IP for the EAS `ios-dev` build (no Metro = no
+// Hardcoded laptop LAN IP for the EAS dev variant (no Metro = no
 // auto-discovery). Update when you switch networks. Format: bare host,
 // no scheme, no port — the URL composer adds those.
 const DEV_VARIANT_LAN_HOST = '192.168.1.127';
-const IS_DEV_VARIANT = Constants.expoConfig?.name === 'Souply (DEV)';
 
 /**
  * Pulls Metro's host (e.g. "192.168.1.127:8081") from expo-constants and
@@ -46,19 +42,19 @@ const getDevHost = (): string => {
 
 const DEV_LAN_URL = `http://${getDevHost()}:3000`;
 const DEV_VARIANT_LAN_URL = `http://${DEV_VARIANT_LAN_HOST}:3000`;
-// Production API on souply.lt → souply-api → souply_production. This is the
-// permanent prod endpoint; release builds (preview/production profiles) hit it.
-// Staging (api.souply.manofoto → souply_test) is LAN-gated and validated via
-// the DEV-variant build pointing at the local/LAN souply-api instead.
+// Staging API (souply-api-staging → souply_staging). LAN-gated by Traefik, so
+// only reachable from the home network / WireGuard — fine for the staging app.
+const STAGING_URL = 'https://api.souply.manofoto.dpdns.org';
+// Permanent production endpoint (souply-api → souply_production).
 const PROD_URL = 'https://api.souply.lt';
 
-// Order matters:
-//   __DEV__ wins (Metro is the source of truth for the LAN host).
-//   DEV variant (Souply DEV without Metro) → hardcoded LAN.
-//   Everything else → prod.
+// __DEV__ (Metro) wins — it's the source of truth for the LAN host. Otherwise
+// resolve off APP_ENV (baked in from APP_VARIANT).
 export const API_BASE_URL = __DEV__
     ? DEV_LAN_URL
-    : IS_DEV_VARIANT
+    : APP_ENV === 'dev'
         ? DEV_VARIANT_LAN_URL
-        : PROD_URL;
-console.log('[API] BASE_URL=', API_BASE_URL, '__DEV__=', __DEV__, 'IS_DEV_VARIANT=', IS_DEV_VARIANT);
+        : APP_ENV === 'staging'
+            ? STAGING_URL
+            : PROD_URL;
+console.log('[API] BASE_URL=', API_BASE_URL, 'APP_ENV=', APP_ENV, '__DEV__=', __DEV__);

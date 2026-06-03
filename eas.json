@@ -33,6 +33,22 @@
         "GOOGLE_MAPS_API_KEY_ANDROID": "AIzaSyAUes7IPZzdfpYjroLMLjODP2FnlUYCmHg"
       }
     },
+    "android-staging": {
+      "distribution": "internal",
+      "channel": "staging",
+      "android": { "buildType": "apk" },
+      "env": {
+        "APP_VARIANT": "staging",
+        "GOOGLE_MAPS_API_KEY_ANDROID": "AIzaSyAUes7IPZzdfpYjroLMLjODP2FnlUYCmHg"
+      }
+    },
+    "ios-staging": {
+      "distribution": "internal",
+      "channel": "staging",
+      "env": {
+        "APP_VARIANT": "staging"
+      }
+    },
     "production": {
       "autoIncrement": true,
       "channel": "production",
