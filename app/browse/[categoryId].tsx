@@ -470,6 +470,32 @@ export default function CategoryScreen() {
         [products, userMergeMap]
     );
 
+    const productById = useMemo(() => {
+        const m = new Map<number, Product>();
+        for (const p of products) m.set(p.id, p);
+        return m;
+    }, [products]);
+
+    // Chain logos for a kept row = union of its own chains + the chains of the
+    // products the user personally merged into it — so a merged "Bananai" shows
+    // both Maxima + Rimi in the list, matching what the detail screen unions.
+    const mergedChainLogos = useCallback((product: Product) => {
+        const hideIds = mergedIntoMe[product.id];
+        if (!hideIds || hideIds.length === 0) return product.chainLogos;
+        const parse = (cl: Product['chainLogos']): { chainId: number; logoUrl: string | null }[] => {
+            if (!cl) return [];
+            if (typeof cl === 'string') { try { return JSON.parse(cl) || []; } catch { return []; } }
+            return cl;
+        };
+        const byChain = new Map<number, { chainId: number; logoUrl: string | null }>();
+        for (const cl of parse(product.chainLogos)) byChain.set(cl.chainId, cl);
+        for (const hid of hideIds) {
+            const hp = productById.get(hid);
+            if (hp) for (const cl of parse(hp.chainLogos)) if (!byChain.has(cl.chainId)) byChain.set(cl.chainId, cl);
+        }
+        return Array.from(byChain.values());
+    }, [mergedIntoMe, productById]);
+
     const onNavigate = useCallback((id: number) => {
         if (isTemplateMode) {
             router.push(`/product/${id}?templateId=${templateId}` as any);
@@ -583,7 +609,7 @@ export default function CategoryScreen() {
             <BasketProductCard
                 name={item.name}
                 imageUrls={item.imageUrls}
-                chainLogos={item.chainLogos}
+                chainLogos={mergedChainLogos(item)}
                 amountText={amountText}
                 quantity={cardQuantity}
                 isAdding={addingIds.has(item.id)}
