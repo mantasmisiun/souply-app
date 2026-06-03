@@ -13,7 +13,7 @@
     "build:apk": "npm run sync-shared && eas build --profile preview --platform android",
     "test": "jest",
     "postinstall": "patch-package",
-    "prepare": "husky"
+    "prepare": "node .husky/install.mjs"
   },
   "jest": {
     "preset": "jest-expo",
