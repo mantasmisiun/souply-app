@@ -13,6 +13,17 @@ const ICON = IS_DEV ? './assets/images/DEV.png' : './assets/images/icon.png';
 // apple-app-site-association / assetlinks.json must be served from each host.
 const LINK_HOST = (IS_DEV || IS_STAGING) ? 'souply.manofoto.dpdns.org' : 'souply.lt';
 
+// Google's native Android OAuth redirect comes back on the reversed-DNS scheme
+// of the Android client ID (com.googleusercontent.apps.<id>:/oauth2redirect).
+// Android only routes that deep link back into the app if the scheme is
+// registered — without it the sign-in tab lands on a google.com page and never
+// returns. Derived per-variant from the client-id env so dev/staging/prod each
+// register their own client's scheme.
+const GOOGLE_ANDROID_OAUTH = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
+const GOOGLE_REDIRECT_SCHEME = GOOGLE_ANDROID_OAUTH
+  ? `com.googleusercontent.apps.${GOOGLE_ANDROID_OAUTH.replace(/\.apps\.googleusercontent\.com$/, '')}`
+  : null;
+
 export default {
   expo: {
     name: APP_NAME,
@@ -20,7 +31,7 @@ export default {
     version: '1.0.0',
     orientation: 'portrait',
     icon: ICON,
-    scheme: 'souply',
+    scheme: ['souply', ...(GOOGLE_REDIRECT_SCHEME ? [GOOGLE_REDIRECT_SCHEME] : [])],
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
     ios: {
