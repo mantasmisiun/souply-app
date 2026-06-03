@@ -178,6 +178,19 @@ export default {
           androidMultiIntentFilters: ['image/*', 'application/pdf'],
         },
       ],
+      [
+        // Sentry crash reporting — wires the native crash handlers and the
+        // source-map upload step. Org + auth token come from the EAS build
+        // env (SENTRY_ORG, SENTRY_AUTH_TOKEN); until those are set, builds run
+        // with SENTRY_DISABLE_AUTO_UPLOAD=true so the upload step is skipped
+        // (JS + native crashes still report, stack traces just aren't
+        // symbolicated). EU region → de.sentry.io.
+        '@sentry/react-native',
+        {
+          project: 'souply-app',
+          url: 'https://de.sentry.io/',
+        },
+      ],
       // Must come last: strips unused permissions (mic / media-audio /
       // draw-over) that the plugins above pull in. See the plugin file.
       './plugins/withBlockedPermissions',
