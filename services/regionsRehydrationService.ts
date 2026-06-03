@@ -2,12 +2,6 @@ import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Image, Platform } from "react-native";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
-
-// iOS-only row-fragment merger for Maxima + Lidl parsers. See
-// receipt-process.tsx for the full rationale; same flag for the
-// rehydration path so a re-OCR of a legacy receipt on iOS produces
-// the same band layout as the original on-upload parse.
-const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
 import { ocrImageTiled } from "../utils/mlkitOcr";
 import { API_BASE_URL } from "../config/api";
 import { parseRimiReceipt, type LabeledRegion } from "@shared/parsers/rimiParser";
@@ -15,6 +9,12 @@ import { parseMaximaReceipt } from "@shared/parsers/maximaParser";
 import { parseIkiReceipt } from "@shared/parsers/ikiParser";
 import { parseNorfaReceipt } from "@shared/parsers/norfaParser";
 import { parseLidlReceipt } from "@shared/parsers/lidlParser";
+
+// iOS-only row-fragment merger for Maxima + Lidl parsers. See
+// receipt-process.tsx for the full rationale; same flag for the
+// rehydration path so a re-OCR of a legacy receipt on iOS produces
+// the same band layout as the original on-upload parse.
+const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
 
 /**
  * On-open region rehydration for legacy receipts.

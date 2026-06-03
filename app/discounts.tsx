@@ -125,6 +125,7 @@ const DiscountProductCard = memo(({
         </View>
     );
 });
+DiscountProductCard.displayName = 'DiscountProductCard';
 
 export default function DiscountsScreen() {
     const colors = useTheme();

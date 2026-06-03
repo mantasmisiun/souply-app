@@ -100,7 +100,7 @@ export async function createTemplate(opts: {
     autoUpdate?: boolean;
     coverColor?: string | null;
     coverImage?: TemplateCoverImage | null;
-    items?: Array<{ productId: number; quantity: number; unit?: string | null; sortOrder?: number }>;
+    items?: { productId: number; quantity: number; unit?: string | null; sortOrder?: number }[];
 }): Promise<{ id: number; userId: string; name: string; itemCount: number }> {
     const res = await tfetch(`${API_BASE_URL}/api/basket-templates`, {
         method: 'POST',
@@ -216,13 +216,13 @@ export interface SharedTemplate {
         mostExpensiveTotalEur: number | null;
         calculatedAt: string | null;
     };
-    items: Array<{
+    items: {
         productId: number;
         productName: string;
         quantity: number;
         unit: string | null;
         imageUrls: string[] | null;
-    }>;
+    }[];
 }
 
 export async function fetchSharedTemplate(slug: string): Promise<SharedTemplate> {

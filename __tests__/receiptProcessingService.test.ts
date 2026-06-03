@@ -1,6 +1,12 @@
 // The service transitively imports AsyncStorage (via config/user) and a
 // pile of native-only modules. We're only exercising pure helpers here,
 // so we stub the native surface to keep jest from blowing up on import.
+import {
+  isNetworkLikeError,
+  NetworkError,
+  ProcessingError,
+} from "../services/receiptProcessingService";
+
 jest.mock("@react-native-async-storage/async-storage", () => ({
   __esModule: true,
   default: {
@@ -20,12 +26,6 @@ jest.mock("expo-image-manipulator", () => ({
 jest.mock("expo-crypto", () => ({
   randomUUID: () => "test-uuid",
 }));
-
-import {
-  isNetworkLikeError,
-  NetworkError,
-  ProcessingError,
-} from "../services/receiptProcessingService";
 
 describe("ProcessingError", () => {
   it("preserves the reason on the instance", () => {

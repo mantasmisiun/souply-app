@@ -1,6 +1,8 @@
 // PendingSwipesBanner transitively imports the theme → settings store →
 // native AsyncStorage. Mock it before the import so the suite can load in
 // the node test environment (mirrors locationIntelligence.test.ts).
+import { pluralProduct } from "../components/PendingSwipesBanner";
+
 jest.mock("@react-native-async-storage/async-storage", () => ({
   getItem: jest.fn(() => Promise.resolve(null)),
   setItem: jest.fn(() => Promise.resolve()),
@@ -11,8 +13,6 @@ jest.mock("@react-native-async-storage/async-storage", () => ({
   clear: jest.fn(() => Promise.resolve()),
   getAllKeys: jest.fn(() => Promise.resolve([])),
 }));
-
-import { pluralProduct } from "../components/PendingSwipesBanner";
 
 /**
  * Lithuanian agreement is non-trivial — and the banner is one of the

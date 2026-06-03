@@ -10,10 +10,9 @@ import Animated, {
 } from 'react-native-reanimated';
 import { TabHeader } from '../../components/TabHeader';
 import { GlassIconButton } from '../../components/GlassIconButton';
-import { useRouter } from 'expo-router';
+import { useRouter , useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { getLevelData, getLevelName } from '../../constants/levels';
@@ -51,7 +50,7 @@ function Legend({
     items,
     selectedIndex,
 }: {
-    items: Array<{ label: string; color: string; value: number; logoUri?: string | null }>;
+    items: { label: string; color: string; value: number; logoUri?: string | null }[];
     selectedIndex?: number | null;
 }) {
     const colors = useTheme();
@@ -187,7 +186,7 @@ export default function ProfilisScreen() {
         fetchProfileIfStale();
     }, []));
 
-    const devItems: Array<{ label: string; icon: keyof typeof Ionicons.glyphMap; route: string }> = [
+    const devItems: { label: string; icon: keyof typeof Ionicons.glyphMap; route: string }[] = [
         { label: t('profilis.devReceiptBatch'), icon: 'flask-outline', route: '/dev/receipt-batch' },
         { label: 'Admin', icon: 'shield-outline', route: '/dev/admin' },
     ];

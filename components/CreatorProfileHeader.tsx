@@ -119,7 +119,7 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
         else Alert.alert(t('basketTab.errorGeneric'), t('basketTab.creatorProfile.saveFailed'));
     };
 
-    const cards: Array<{ label: string; value: string }> = [
+    const cards: { label: string; value: string }[] = [
         { label: t('profilis.statTemplates'), value: String(profile.templateCount ?? 0) },
         { label: t('profilis.statVisits'), value: String(profile.totalVisits ?? 0) },
         { label: t('profilis.statUses'), value: String(profile.totalUses ?? 0) },

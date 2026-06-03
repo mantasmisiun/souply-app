@@ -15,8 +15,7 @@ import {
     View,
 } from "react-native";
 import { API_BASE_URL } from "../config/api";
-import { useReceiptPickerState } from "../state/basketState";
-import { useBasketState } from '../state/basketState';
+import { useReceiptPickerState , useBasketState } from "../state/basketState";
 import { addProductToBasket } from '../utils/basketUtils';
 import BasketProductCard from '../components/browse/BasketProductCard';
 import { TemplateReturnBanner } from '../components/template/TemplateReturnBanner';

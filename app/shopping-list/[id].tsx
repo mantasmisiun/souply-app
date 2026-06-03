@@ -64,7 +64,7 @@ export default function UnifiedShoppingListScreen() {
             entries.map(e =>
                 fetch(`${API_BASE_URL}/api/shopping-lists/${e.listId}/items`)
                     .then(r => r.ok ? r.json() : [])
-                    .then((items: Array<{ isChecked: boolean }>) => {
+                    .then((items: { isChecked: boolean }[]) => {
                         const total = items.length;
                         const checked = items.filter(i => i.isChecked).length;
                         return [e.listId, { itemCount: total, checkedCount: checked }] as const;

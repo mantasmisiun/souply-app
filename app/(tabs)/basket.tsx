@@ -218,7 +218,7 @@ export default function BasketScreen() {
             const basketList: Basket[] = Array.isArray(basketRes) ? basketRes : [];
             setBaskets(basketList);
             setTemplates(templateRes);
-            const receipts: Array<{ chainName?: string | null }> = Array.isArray(receiptRes) ? receiptRes : [];
+            const receipts: { chainName?: string | null }[] = Array.isArray(receiptRes) ? receiptRes : [];
             setReceiptCount(receipts.length);
             const distinctChains = new Set(receipts.map(r => r.chainName).filter(c => !!c));
             setDistinctChainCount(distinctChains.size);

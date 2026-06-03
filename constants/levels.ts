@@ -6,7 +6,7 @@ import type { TFunction } from 'i18next';
  * for display strings so the UI follows the user's language; keep direct
  * `getLevelData(level).name` reads for non-display use (analytics, tests).
  */
-export const LEVELS: Array<{ name: string; emoji: string }> = [
+export const LEVELS: { name: string; emoji: string }[] = [
     { name: 'Svogūnas',    emoji: '🧅' },
     { name: 'Bulvė',       emoji: '🥔' },
     { name: 'Burokėlis',   emoji: '🫜' },

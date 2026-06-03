@@ -23,13 +23,6 @@ import {
     TouchableOpacity,
     View
 } from "react-native";
-
-// Toggle for the iOS-only row-fragment merger in the Maxima + Lidl
-// parsers. iOS MLKit splits each receipt row into multiple boxes at
-// near-same y-coords; the merger glues them back into one Android-
-// shaped line. Android emits one OCR line per row already, so the
-// option stays off and the existing pipeline is bit-for-bit identical.
-const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
 import { GlassIconButton } from "../components/GlassIconButton";
 import { ScreenBackButton } from "../components/ScreenBackButton";
 import ReceiptComparisonSection from "../components/receipt/ReceiptComparisonSection";
@@ -111,6 +104,13 @@ import {
 import { parseProductName } from "@shared/parsers/productNameParser";
 import { ocrImageTiled } from "../utils/mlkitOcr";
 import { useProfileStore } from '../state/profileStore';
+
+// Toggle for the iOS-only row-fragment merger in the Maxima + Lidl
+// parsers. iOS MLKit splits each receipt row into multiple boxes at
+// near-same y-coords; the merger glues them back into one Android-
+// shaped line. Android emits one OCR line per row already, so the
+// option stays off and the existing pipeline is bit-for-bit identical.
+const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
 
 interface ProductMatchOption {
   storeProductId: number;
@@ -427,7 +427,7 @@ function SegmentedControl({
   colors: AppTheme;
 }) {
   const { t } = useTranslation();
-  const tabs: Array<{ key: ReceiptTab; label: string }> = [
+  const tabs: { key: ReceiptTab; label: string }[] = [
     { key: "suvestine", label: t('receiptProcess.tabSummary') },
     { key: "prekes", label: t('receiptProcess.tabProducts', { count: productCount }) },
     { key: "kvitas", label: t('receiptProcess.tabReceipt') },
