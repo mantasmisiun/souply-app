@@ -274,18 +274,32 @@ export default function BasketScreen() {
         return map;
     }, [baskets]);
 
-    // On first non-empty load, open the priority section so the user
-    // lands on something meaningful. After that, expand/collapse is
-    // entirely manual — including the option to collapse everything.
+    // On first non-empty load, open the priority section so the user lands on
+    // something meaningful. After that, expand/collapse is manual — including
+    // the option to collapse everything — with ONE correction: a section that
+    // becomes empty (e.g. a draft just got compared) is dropped from the open
+    // set, and if that leaves nothing open we fall back to the topmost
+    // non-empty section. Otherwise the previously-expanded "Drafts" would stay
+    // open showing "0" while the populated "Compared" section sits collapsed.
     useEffect(() => {
-        if (autoExpandedRef.current) return;
         if (baskets.length === 0) return;
-        const first = STATUS_PRIORITY.find(s => grouped[s].length > 0);
-        if (first) {
-            setExpandedSet(new Set([first]));
-            autoExpandedRef.current = true;
-        }
-    }, [baskets.length, grouped]);
+        setExpandedSet(prev => {
+            if (!autoExpandedRef.current) {
+                autoExpandedRef.current = true;
+                const first = STATUS_PRIORITY.find(s => grouped[s].length > 0);
+                return first ? new Set([first]) : prev;
+            }
+            // Later loads: keep only sections that still have rows.
+            const pruned = new Set([...prev].filter(s => grouped[s].length > 0));
+            // If pruning emptied a set the user had open (a status transition,
+            // not a manual collapse-all), reopen the topmost non-empty section.
+            if (pruned.size === 0 && prev.size > 0) {
+                const first = STATUS_PRIORITY.find(s => grouped[s].length > 0);
+                if (first) pruned.add(first);
+            }
+            return pruned;
+        });
+    }, [baskets, grouped]);
 
     const hasAnyBaskets = baskets.length > 0;
 

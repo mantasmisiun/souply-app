@@ -84,7 +84,21 @@ export default function BasketDetailScreen() {
     // Inline calc state. `calcing` drives the bottom-bar progress UI;
     // `calcError` shows a retry banner above it if the POST fails.
     const [calcing, setCalcing] = useState(false);
+    // `calcInFlight` is set synchronously the moment "Rasti parduotuvę" is
+    // tapped, BEFORE the async location resolution (loadCachedCoords /
+    // tryGpsCoords). `calcing` only flips true *after* coords resolve (inside
+    // runCalcWithCoords), so without this the button stays enabled during the
+    // GPS-permission window and rapid taps each spawn a calc → multiple
+    // router.push → stacked results screens. The ref is a synchronous gate
+    // (state updates are async and can't block fast taps); `resolvingLocation`
+    // drives the disabled/spinner UI during that same window.
+    const calcInFlight = useRef(false);
+    const [resolvingLocation, setResolvingLocation] = useState(false);
     const [calcError, setCalcError] = useState<string | null>(null);
+    // Drives the find-store button's disabled + spinner state. Includes the
+    // location-resolution window so the button reacts the instant it is tapped
+    // (not only once the network calc starts).
+    const busy = calcing || resolvingLocation;
     // Location prompt state. Shown when GPS permission is denied and the
     // user hasn't previously cached an address. On resolve, we continue
     // the calc flow with the new coordinates.
@@ -424,19 +438,28 @@ export default function BasketDetailScreen() {
      *   3. address modal fallback (or Vilnius centre from inside the modal)
      */
     const handleCalculate = async () => {
-        if (calcing) return;
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        const cached = await loadCachedCoords();
-        if (cached) {
-            await runCalcWithCoords(cached);
-            return;
+        if (calcInFlight.current || calcing) return;
+        calcInFlight.current = true;
+        setResolvingLocation(true);
+        try {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+            const cached = await loadCachedCoords();
+            if (cached) {
+                await runCalcWithCoords(cached);
+                return;
+            }
+            const gps = await tryGpsCoords();
+            if (gps) {
+                await runCalcWithCoords(gps);
+                return;
+            }
+            // No coords resolvable without user input — hand off to the
+            // location prompt; the modal's resolver continues the calc.
+            setLocationPromptVisible(true);
+        } finally {
+            setResolvingLocation(false);
+            calcInFlight.current = false;
         }
-        const gps = await tryGpsCoords();
-        if (gps) {
-            await runCalcWithCoords(gps);
-            return;
-        }
-        setLocationPromptVisible(true);
     };
 
     const handleLocationResolved = async (coords: UserCoords) => {
@@ -770,7 +793,7 @@ export default function BasketDetailScreen() {
                                             && styles.settingsSquircleActive,
                                     ]}
                                     onPress={() => setLocationSettingsVisible(true)}
-                                    disabled={calcing}
+                                    disabled={busy}
                                     scaleTo={0.92}
                                 >
                                     <Ionicons
@@ -793,11 +816,11 @@ export default function BasketDetailScreen() {
                                     )}
                                 </ScalePressable>
                                 <ScalePressable
-                                    style={[styles.showResultsButton, calcing && styles.buttonCalcing]}
+                                    style={[styles.showResultsButton, busy && styles.buttonCalcing]}
                                     onPress={settingsChanged ? handleCalculate : () => router.push(`/basket/results/${id}`)}
-                                    disabled={calcing}
+                                    disabled={busy}
                                 >
-                                    {calcing ? (
+                                    {busy ? (
                                         <>
                                             <ActivityIndicator size="small" color={colors.onPrimary} />
                                             <Text style={styles.showResultsText}>{t('basketDetail.calculating')}</Text>
@@ -827,7 +850,7 @@ export default function BasketDetailScreen() {
                                     onPress={() => {
                                         setLocationSettingsVisible(true);
                                     }}
-                                    disabled={calcing}
+                                    disabled={busy}
                                     scaleTo={0.92}
                                 >
                                     <Ionicons
@@ -850,12 +873,12 @@ export default function BasketDetailScreen() {
                                     )}
                                 </ScalePressable>
                                 <ScalePressable
-                                    style={[styles.showResultsButton, calcing && styles.buttonCalcing]}
+                                    style={[styles.showResultsButton, busy && styles.buttonCalcing]}
                                     onPress={handleCalculate}
-                                    disabled={calcing}
-                                    scaleTo={calcing ? 1 : 0.95}
+                                    disabled={busy}
+                                    scaleTo={busy ? 1 : 0.95}
                                 >
-                                    {calcing ? (
+                                    {busy ? (
                                         <>
                                             <ActivityIndicator size="small" color={colors.onPrimary} />
                                             <Text style={styles.showResultsText}>{t('basketDetail.calculating')}</Text>
