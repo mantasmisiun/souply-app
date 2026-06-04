@@ -111,7 +111,7 @@ export default function CategoryScreen() {
                 const userId = await getUserId();
                 const [subRes, prodRes] = await Promise.all([
                     fetch(`${API_BASE_URL}/api/categories/${categoryId}/subcategories`),
-                    fetch(`${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts?mode=${mode}`),
+                    fetch(`${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts?mode=${mode}&userId=${userId}`),
                 ]);
                 const subData = await subRes.json();
                 setL3Categories(Array.isArray(subData) ? subData : []);
@@ -410,16 +410,16 @@ export default function CategoryScreen() {
         setSelectedL3(l3Id);
         setLoadingProducts(true);
         try {
+            const userId = await getUserId();
             const url = l3Id
-                ? `${API_BASE_URL}/api/categories/${l3Id}/products-with-amounts?mode=${mode}`
-                : `${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts?mode=${mode}`;
+                ? `${API_BASE_URL}/api/categories/${l3Id}/products-with-amounts?mode=${mode}&userId=${userId}`
+                : `${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts?mode=${mode}&userId=${userId}`;
             const res = await fetch(url);
             const data = await res.json();
             const prods: Product[] = Array.isArray(data) ? data : [];
             setProducts(prods);
 
             if (mode === 'base' && prods.length > 0) {
-                const userId = await getUserId();
                 const ids = prods.map(p => p.id).join(',');
                 const mergeRes = await fetch(
                     `${API_BASE_URL}/api/users/${userId}/product-merge-map?productIds=${ids}`
