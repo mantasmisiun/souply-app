@@ -1,4 +1,7 @@
 // Mock native modules before any imports that transitively require them
+import { haversineKm } from '../utils/locationStorage';
+import { scoreAllCombinations, type StoreResult } from '../utils/splitBasketScore';
+
 jest.mock('@react-native-async-storage/async-storage', () => ({
     getItem: jest.fn(() => Promise.resolve(null)),
     setItem: jest.fn(() => Promise.resolve()),
@@ -9,9 +12,6 @@ jest.mock('@react-native-async-storage/async-storage', () => ({
     clear: jest.fn(() => Promise.resolve()),
     getAllKeys: jest.fn(() => Promise.resolve([])),
 }));
-
-import { haversineKm } from '../utils/locationStorage';
-import { scoreAllCombinations, type StoreResult } from '../utils/splitBasketScore';
 
 // ---------------------------------------------------------------------------
 // haversineKm — used by candidate pool centroid/detour logic

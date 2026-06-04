@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import { useTheme, type AppTheme } from '../constants/theme';
 import { useSettingsStore, type AppLanguage, type ThemeMode } from '../state/settingsStore';
+import { useAuthState } from '../state/authState';
 import { getUserId, resetUserId } from '../config/user';
 import { API_BASE_URL } from '../config/api';
 import { GlassButton } from '../components/GlassButton';
@@ -38,6 +39,28 @@ export default function SettingsScreen() {
     const setShowNepriskirtaExplainer = useSettingsStore((s) => s.setShowNepriskirtaExplainer);
     const themeMode = useSettingsStore((s) => s.themeMode);
     const setThemeMode = useSettingsStore((s) => s.setThemeMode);
+
+    const authUser = useAuthState((s) => s.user);
+    const signOut = () => {
+        Alert.alert(
+            t('profilis.signOutConfirm.title'),
+            t('profilis.signOutConfirm.body'),
+            [
+                { text: t('profilis.signOutConfirm.cancel'), style: 'cancel' },
+                {
+                    text: t('profilis.signOutConfirm.confirm'), style: 'destructive',
+                    onPress: async () => {
+                        try {
+                            await useAuthState.getState().clear();
+                            await resetUserId();
+                            try { const Updates = await import('expo-updates'); await Updates.reloadAsync(); }
+                            catch { router.replace('/(tabs)/receipts' as any); }
+                        } catch { /* best-effort */ }
+                    },
+                },
+            ],
+        );
+    };
 
     const [langPickerOpen, setLangPickerOpen] = useState(false);
     const [themePickerOpen, setThemePickerOpen] = useState(false);
@@ -131,6 +154,17 @@ export default function SettingsScreen() {
 
             {/* ── Account ──────────────────────────────────────────────── */}
             <Section title={t('settings.account.section')} styles={styles}>
+                {authUser && (
+                    <>
+                        <TouchableOpacity style={styles.row} onPress={signOut} activeOpacity={0.7}>
+                            <View style={styles.rowMain}>
+                                <Text style={styles.rowLabel}>{t('profilis.signOut')}</Text>
+                            </View>
+                            <Ionicons name="log-out-outline" size={20} color={colors.textMuted} />
+                        </TouchableOpacity>
+                        <Divider styles={styles} />
+                    </>
+                )}
                 <TouchableOpacity
                     style={styles.row}
                     onPress={() => router.push('/profile/restore-account' as any)}

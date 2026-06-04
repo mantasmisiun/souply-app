@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main, staging]
+  pull_request:
+    branches: [main, staging]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# souply-app uses the sibling `shared` repo (normally synced via `sync-shared`
+# into ./shared). In CI we check it out directly into ./shared. Needs a
+# read-only PAT in the repo secret SHARED_REPO_TOKEN (Contents:read on `shared`).
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/checkout@v4
+        with:
+          repository: mantasmisiun/souply-shared
+          path: shared
+          token: ${{ secrets.SHARED_REPO_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - name: Typecheck
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Test
+        run: npm test

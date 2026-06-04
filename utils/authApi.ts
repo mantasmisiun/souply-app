@@ -1,5 +1,6 @@
 import { API_BASE_URL } from '../config/api';
 import { useAuthState, type VerifiedUser } from '../state/authState';
+import { getUserId } from '../config/user';
 
 type Provider = 'google' | 'apple';
 
@@ -38,6 +39,11 @@ export async function authedFetch(input: string, init: RequestInit = {}): Promis
     if (token && !headers.has('authorization')) {
         headers.set('authorization', `Bearer ${token}`);
     }
+    // X-User-Id lets endpoints that fall back to callerId (profile, avatar)
+    // authenticate the caller's OWN id even without a verified session (dev).
+    if (!headers.has('x-user-id')) {
+        try { headers.set('x-user-id', await getUserId()); } catch {}
+    }
     return fetch(input, { ...init, headers });
 }
 
@@ -56,7 +62,7 @@ export async function checkUsernameAvailability(candidate: string): Promise<{
     return res.json();
 }
 
-export async function patchProfileFields(opts: { displayName?: string; bio?: string }): Promise<boolean> {
+export async function patchProfileFields(opts: { displayName?: string; bio?: string; firstName?: string; lastName?: string }): Promise<boolean> {
     const res = await authedFetch(`${API_BASE_URL}/api/users/me/profile`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

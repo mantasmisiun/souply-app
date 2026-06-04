@@ -1,24 +1,42 @@
 const IS_DEV = process.env.APP_VARIANT === 'dev';
+const IS_STAGING = process.env.APP_VARIANT === 'staging';
+const APP_ENV = IS_DEV ? 'dev' : IS_STAGING ? 'staging' : 'prod';
+// One source for the per-variant identity. Distinct package/bundle ids let
+// dev + staging + prod coexist on one device; the name suffix + EnvBanner
+// make non-prod builds unmistakable. (Icon badge is dev-only for now.)
+const BUNDLE_ID = IS_DEV ? 'lt.souply.app.dev' : IS_STAGING ? 'lt.souply.app.staging' : 'lt.souply.app';
+const APP_NAME = IS_DEV ? 'Souply (DEV)' : IS_STAGING ? 'Souply (staging)' : 'Souply';
 const ICON = IS_DEV ? './assets/images/DEV.png' : './assets/images/icon.png';
 // Universal/App Link host per environment. The dev build (testers) deep-links
 // against the test web stack; prod against souply.lt. localhost can't host
 // universal links, so dev points at the reachable test domain. The matching
 // apple-app-site-association / assetlinks.json must be served from each host.
-const LINK_HOST = IS_DEV ? 'souply.manofoto.dpdns.org' : 'souply.lt';
+const LINK_HOST = (IS_DEV || IS_STAGING) ? 'souply.manofoto.dpdns.org' : 'souply.lt';
+
+// Google's native Android OAuth redirect comes back on the reversed-DNS scheme
+// of the Android client ID (com.googleusercontent.apps.<id>:/oauth2redirect).
+// Android only routes that deep link back into the app if the scheme is
+// registered — without it the sign-in tab lands on a google.com page and never
+// returns. Derived per-variant from the client-id env so dev/staging/prod each
+// register their own client's scheme.
+const GOOGLE_ANDROID_OAUTH = process.env.EXPO_PUBLIC_GOOGLE_ANDROID_CLIENT_ID ?? '';
+const GOOGLE_REDIRECT_SCHEME = GOOGLE_ANDROID_OAUTH
+  ? `com.googleusercontent.apps.${GOOGLE_ANDROID_OAUTH.replace(/\.apps\.googleusercontent\.com$/, '')}`
+  : null;
 
 export default {
   expo: {
-    name: IS_DEV ? 'Souply (DEV)' : 'Souply',
+    name: APP_NAME,
     slug: 'souply',
     version: '1.0.0',
     orientation: 'portrait',
     icon: ICON,
-    scheme: 'souply',
+    scheme: ['souply', ...(GOOGLE_REDIRECT_SCHEME ? [GOOGLE_REDIRECT_SCHEME] : [])],
     userInterfaceStyle: 'automatic',
     newArchEnabled: true,
     ios: {
       supportsTablet: true,
-      bundleIdentifier: IS_DEV ? 'lt.souply.app.dev' : 'lt.souply.app',
+      bundleIdentifier: BUNDLE_ID,
       buildNumber: '5',
       // Associated Domains — Universal Links for souply.lt/t/{slug} and
       // souply.lt/@{username}. The matching apple-app-site-association
@@ -83,12 +101,13 @@ export default {
       ],
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
-      package: IS_DEV ? 'lt.souply.app.dev' : 'lt.souply.app',
-      // COARSE only — the app requests Accuracy.Balanced (utils/location.ts)
-      // to find the nearest stores; precise (FINE) location is not needed and
-      // FINE triggers Google Play's sensitive-permission review.
+      package: BUNDLE_ID,
+      // Precise + approximate location for accurate nearest-store results and
+      // map centering. FINE requires a Play Console "Location permissions"
+      // declaration + prominent in-app disclosure (handled at submission).
       permissions: [
         'ACCESS_COARSE_LOCATION',
+        'ACCESS_FINE_LOCATION',
       ],
     },
     web: {
@@ -163,21 +182,40 @@ export default {
             NSExtensionActivationSupportsImageWithMaxCount: 10,
             NSExtensionActivationSupportsFileWithMaxCount: 10,
           },
-          iosAppGroupIdentifier: IS_DEV ? 'group.lt.souply.app.dev' : 'group.lt.souply.app',
-          iosShareExtensionBundleIdentifier: IS_DEV
-            ? 'lt.souply.app.dev.ShareExtension'
-            : 'lt.souply.app.ShareExtension',
+          iosAppGroupIdentifier: `group.${BUNDLE_ID}`,
+          iosShareExtensionBundleIdentifier: `${BUNDLE_ID}.ShareExtension`,
           // Android — single and multi-file sharing
           androidIntentFilters: ['image/*', 'application/pdf', '*/*'],
           androidMultiIntentFilters: ['image/*', 'application/pdf'],
         },
       ],
+      [
+        // Sentry crash reporting — wires the native crash handlers and the
+        // source-map upload step. Org + auth token come from the EAS build
+        // env (SENTRY_ORG, SENTRY_AUTH_TOKEN); until those are set, builds run
+        // with SENTRY_DISABLE_AUTO_UPLOAD=true so the upload step is skipped
+        // (JS + native crashes still report, stack traces just aren't
+        // symbolicated). EU region → de.sentry.io.
+        '@sentry/react-native',
+        {
+          project: 'souply-app',
+          url: 'https://de.sentry.io/',
+        },
+      ],
+      // Native Google Sign-In (Play Services). No options needed for Android —
+      // the Android OAuth client is matched by package + SHA-1 in GCP; the ID
+      // token's audience is the webClientId set in GoogleSignin.configure().
+      '@react-native-google-signin/google-signin',
+      // Must come last: strips unused permissions (mic / media-audio /
+      // draw-over) that the plugins above pull in. See the plugin file.
+      './plugins/withBlockedPermissions',
     ],
     experiments: {
       typedRoutes: true,
       reactCompiler: true,
     },
     extra: {
+      appEnv: APP_ENV,
       router: { notFound: false },
       eas: {
         projectId: 'd3053a04-a3bb-4dd2-81e5-d10ceddd06db',

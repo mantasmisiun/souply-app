@@ -10,10 +10,9 @@ import Animated, {
 } from 'react-native-reanimated';
 import { TabHeader } from '../../components/TabHeader';
 import { GlassIconButton } from '../../components/GlassIconButton';
-import { useRouter } from 'expo-router';
+import { useRouter , useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { getLevelData, getLevelName } from '../../constants/levels';
@@ -21,6 +20,8 @@ import { DonutChart, type DonutSlice } from '../../components/DonutChart';
 import { BarChart, type BarSlice } from '../../components/BarChart';
 import { useLevelStore } from '../../state/levelStore';
 import { useProfileStore, fetchProfileIfStale } from '../../state/profileStore';
+import { useAuthState } from '../../state/authState';
+import CreatorProfileHeader from '../../components/CreatorProfileHeader';
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { formatEuro } from '../../utils/formatCurrency';
 import { chainBrandColor } from '../../utils/chainBrandName';
@@ -49,7 +50,7 @@ function Legend({
     items,
     selectedIndex,
 }: {
-    items: Array<{ label: string; color: string; value: number; logoUri?: string | null }>;
+    items: { label: string; color: string; value: number; logoUri?: string | null }[];
     selectedIndex?: number | null;
 }) {
     const colors = useTheme();
@@ -101,72 +102,6 @@ const legendStyles = StyleSheet.create({
 });
 
 /**
- * Renders the creator-profile row in the Profilis quick-links section.
- * Hidden when the user is anonymous (no JWT yet) — surfaces the moment
- * they go through the publish wall.
- */
-function CreatorProfileRow({ styles, colors, router, t }: any) {
-    const { useAuthState } = require('../../state/authState');
-    const user = useAuthState((s: any) => s.user);
-    if (!user) return null;
-    return (
-        <TouchableOpacity style={styles.row} onPress={() => router.push('/profile/edit')}>
-            <Ionicons name="person-circle-outline" size={22} color={colors.textSecondary} />
-            <Text style={styles.rowText}>
-                {user.username ? `@${user.username}` : t('creatorProfile.title')}
-            </Text>
-            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-        </TouchableOpacity>
-    );
-}
-
-/**
- * Sign-out row — shown only when signed in (verified user present).
- * Clears the session AND resets the device's anonymous identity, then
- * reloads so every store rehydrates against a fresh user — i.e. this
- * phone's receipts / baskets / lists no longer appear. Confirmation
- * popup first since it's effectively "leave + start clean here".
- */
-function SignOutRow({ styles, colors, router, t }: any) {
-    const { useAuthState } = require('../../state/authState');
-    const user = useAuthState((s: any) => s.user);
-    if (!user) return null;
-
-    const doSignOut = async () => {
-        try {
-            await useAuthState.getState().clear();
-            const { resetUserId } = require('../../config/user');
-            await resetUserId();
-            try {
-                const Updates = await import('expo-updates');
-                await Updates.reloadAsync();
-            } catch {
-                router.replace('/(tabs)/receipts' as any);
-            }
-        } catch { /* best-effort */ }
-    };
-
-    const confirm = () => {
-        Alert.alert(
-            t('profilis.signOutConfirm.title'),
-            t('profilis.signOutConfirm.body'),
-            [
-                { text: t('profilis.signOutConfirm.cancel'), style: 'cancel' },
-                { text: t('profilis.signOutConfirm.confirm'), style: 'destructive', onPress: doSignOut },
-            ],
-        );
-    };
-
-    return (
-        <TouchableOpacity style={styles.row} onPress={confirm}>
-            <Ionicons name="log-out-outline" size={22} color={colors.textSecondary} />
-            <Text style={styles.rowText}>{t('profilis.signOut')}</Text>
-            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
-        </TouchableOpacity>
-    );
-}
-
-/**
  * Standout CTA at the bottom of Profilis inviting non-creators to make a
  * Kūrėjo paskyra. Hidden once the user is a verified creator (token present)
  * — they get the CreatorProfileRow instead. Deliberately not a plain row:
@@ -203,6 +138,9 @@ export default function ProfilisScreen() {
 
     const profile = useProfileStore(s => s.profile);
     const stats = useProfileStore(s => s.stats);
+    const invalidateProfile = useProfileStore(s => s.invalidate);
+    const fetchProfile = useProfileStore(s => s.fetchProfile);
+    const authUser = useAuthState(s => s.user);
     const loading = useProfileStore(s => s.profile === null && s.fetching);
     const statsLoading = useProfileStore(s => s.stats === null && s.fetching);
     const [activePage, setActivePage] = useState(0);
@@ -213,6 +151,7 @@ export default function ProfilisScreen() {
     // single "Kitos" legend row (not drawn on the ring, so one dominant
     // bucket can't swallow 75% of the donut).
     const [categoryTopN, setCategoryTopN] = useState<5 | 10>(5);
+    const [monthOffset, setMonthOffset] = useState(0); // 0 = most recent 6-month window
     const scrollRef = useRef<ScrollView>(null);
 
     // Per-page measured heights. The carousel wrapper animates to the
@@ -248,7 +187,7 @@ export default function ProfilisScreen() {
         fetchProfileIfStale();
     }, []));
 
-    const devItems: Array<{ label: string; icon: keyof typeof Ionicons.glyphMap; route: string }> = [
+    const devItems: { label: string; icon: keyof typeof Ionicons.glyphMap; route: string }[] = [
         { label: t('profilis.devReceiptBatch'), icon: 'flask-outline', route: '/dev/receipt-batch' },
         { label: 'Admin', icon: 'shield-outline', route: '/dev/admin' },
     ];
@@ -280,7 +219,28 @@ export default function ProfilisScreen() {
         label: m.label, total: m.total, month: m.month,
     }));
 
-    const monthlyMax = Math.max(...barData.map(b => b.total), 0);
+    // Monthly chart shows a 6-month window; monthOffset pages back 6 at a time
+    // (0 = most recent). The API returns the full series (oldest→newest,
+    // zero-filled) so navigation is pure client-side windowing — no refetch.
+    const MONTH_WINDOW = 6;
+    const maxMonthOffset = Math.max(0, Math.ceil(barData.length / MONTH_WINDOW) - 1);
+    const effMonthOffset = Math.min(monthOffset, maxMonthOffset);
+    const monthEnd = Math.max(0, barData.length - MONTH_WINDOW * effMonthOffset);
+    const monthStart = Math.max(0, monthEnd - MONTH_WINDOW);
+    const windowedBars = barData.slice(monthStart, monthEnd);
+    const monthlyMax = Math.max(...windowedBars.map(b => b.total), 0);
+    const canOlderMonths = monthStart > 0;          // older months exist before the window
+    const canNewerMonths = effMonthOffset > 0;       // paged back → can return toward now
+    const monthRangeLabel = (() => {
+        if (windowedBars.length === 0) return '';
+        const first = windowedBars[0];
+        const last = windowedBars[windowedBars.length - 1];
+        const y1 = first.month?.slice(0, 4);
+        const y2 = last.month?.slice(0, 4);
+        return y1 === y2
+            ? `${first.label}–${last.label} ${y2}`
+            : `${first.label} ${y1} – ${last.label} ${y2}`;
+    })();
 
     const pages = [
         {
@@ -360,8 +320,29 @@ export default function ProfilisScreen() {
             title: t('profilis.carouselMonthly'),
             content: (
                 <View style={styles.barChartPage}>
+                    <View style={styles.monthNavRow}>
+                        <TouchableOpacity
+                            onPress={() => setMonthOffset(o => o + 1)}
+                            disabled={!canOlderMonths}
+                            hitSlop={10}
+                            style={styles.monthNavBtn}
+                        >
+                            <Ionicons name="chevron-back" size={20}
+                                color={canOlderMonths ? colors.textPrimary : colors.borderSubtle} />
+                        </TouchableOpacity>
+                        <Text style={styles.monthRangeLabel}>{monthRangeLabel}</Text>
+                        <TouchableOpacity
+                            onPress={() => setMonthOffset(o => Math.max(0, o - 1))}
+                            disabled={!canNewerMonths}
+                            hitSlop={10}
+                            style={styles.monthNavBtn}
+                        >
+                            <Ionicons name="chevron-forward" size={20}
+                                color={canNewerMonths ? colors.textPrimary : colors.borderSubtle} />
+                        </TouchableOpacity>
+                    </View>
                     {monthlyMax > 0 ? (
-                        <BarChart data={barData} color={colors.primary} height={220} />
+                        <BarChart data={windowedBars} color={colors.primary} height={220} />
                     ) : (
                         <Text style={styles.emptyChartText}>{t('profilis.noData')}</Text>
                     )}
@@ -378,6 +359,15 @@ export default function ProfilisScreen() {
         <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
         <TabHeader title={t('tabs.profilis')} rightAction={settingsGear} />
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+            {/* Creator header — avatar (tap to upload) + name + @handle +
+                aggregate template stats. Only once signed in as a creator. */}
+            {authUser && profile && (
+                <CreatorProfileHeader
+                    profile={profile}
+                    onAvatarChanged={() => { invalidateProfile(); fetchProfile(); }}
+                />
+            )}
+
             {/* Level card */}
             <View style={styles.levelCard}>
                 {loading ? (
@@ -497,10 +487,6 @@ export default function ProfilisScreen() {
 
             {/* Quick links */}
             <View style={{ marginTop: 8 }}>
-                {/* Creator profile editor — surfaces only after the user has
-                    been through the publish wall (token present). For
-                    unverified users this row stays hidden. */}
-                <CreatorProfileRow styles={styles} colors={colors} router={router} t={t} />
                 <TouchableOpacity
                     style={styles.row}
                     onPress={() => router.push('/profile/vote-history')}
@@ -540,9 +526,6 @@ export default function ProfilisScreen() {
                         <Ionicons name="chevron-forward" size={18} color={colors.primary} />
                     </TouchableOpacity>
                 )}
-
-                {/* Sign out — only when signed in. Resets to a fresh user. */}
-                <SignOutRow styles={styles} colors={colors} router={router} t={t} />
             </View>
 
             {/* Dev tools — visible in Metro dev mode AND in the EAS DEV variant.
@@ -662,6 +645,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         width: '100%',
     },
     emptyChartText: { fontSize: 14, color: c.textMuted, fontStyle: 'italic', marginVertical: 32, textAlign: 'center' },
+    monthNavRow: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        paddingHorizontal: 4, marginBottom: 4,
+    },
+    monthNavBtn: { padding: 6, borderRadius: 8 },
+    monthRangeLabel: { fontSize: 13, fontWeight: '700', color: c.textSecondary },
 
     dots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 16, marginBottom: 8 },
     dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: c.borderSubtle },

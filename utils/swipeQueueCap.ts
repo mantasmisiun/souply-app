@@ -48,7 +48,7 @@ export interface CapResult<T extends CapCardLike> {
 const TOTAL_CAP = 10;
 const PER_SLOT_TARGET = 3;
 const RECEIPT_BUDGET = TOTAL_CAP - 1; // 9 — reserve 1 slot for global
-const SLOT_PRIORITY: ReadonlyArray<1 | 2 | 3> = [2, 1, 3] as const;
+const SLOT_PRIORITY: readonly (1 | 2 | 3)[] = [2, 1, 3] as const;
 
 const groupBySlot = <T extends CapCardLike>(cards: T[]): Map<number, T[]> => {
     const m = new Map<number, T[]>([

@@ -37,6 +37,7 @@ export const Toast = forwardRef<ToastHandle>((_, ref) => {
         </Animated.View>
     );
 });
+Toast.displayName = 'Toast';
 
 const styles = StyleSheet.create({
     toast: {

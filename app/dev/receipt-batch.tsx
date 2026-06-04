@@ -40,12 +40,6 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-
-// iOS MLKit splits each receipt row into 2-4 fragments at near-same
-// y-coords, so the Maxima + Lidl parsers need their row-defragmenter
-// turned on. Android emits one OCR line per row already, so the option
-// stays off and the existing behaviour is bit-for-bit identical.
-const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
 import { ocrImageTiled } from '../../utils/mlkitOcr';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
@@ -97,6 +91,12 @@ import {
     type TruthFile,
     type ParserComparison,
 } from '../../utils/compareToTruth';
+
+// iOS MLKit splits each receipt row into 2-4 fragments at near-same
+// y-coords, so the Maxima + Lidl parsers need their row-defragmenter
+// turned on. Android emits one OCR line per row already, so the option
+// stays off and the existing behaviour is bit-for-bit identical.
+const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
 
 // Why HTTP instead of reading staged files locally: every local-read
 // path (file:// URIs through expo-file-system, fetch(), MLKit) runs

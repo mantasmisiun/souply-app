@@ -212,7 +212,7 @@ export default function SwipeQueueScreen() {
     }
     if (receiptIdParam) return [receiptIdParam];
     return [];
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [receiptIdParam, receiptIdsParam]);
 
   const isMulti = receiptIdList.length > 1;

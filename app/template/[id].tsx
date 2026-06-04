@@ -22,10 +22,6 @@ import { StatsHelpModal } from '../../components/StatsHelpModal';
 import { StoreChipBar } from '../../components/StoreChipBar';
 import { authedFetch } from '../../utils/authApi';
 import { useAuthState, DEV_SESSION_TOKEN } from '../../state/authState';
-
-/** Result of a visibility change: ok = applied; wall = publish wall opened;
- *  dev = blocked because the DEV fake token can't publish; error = other. */
-type VisResult = 'ok' | 'wall' | 'dev' | 'error';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import {
@@ -38,6 +34,10 @@ import {
     deleteTemplateItem,
     type BasketTemplateDetail,
 } from '../../utils/basketTemplatesApi';
+
+/** Result of a visibility change: ok = applied; wall = publish wall opened;
+ *  dev = blocked because the DEV fake token can't publish; error = other. */
+type VisResult = 'ok' | 'wall' | 'dev' | 'error';
 
 export default function TemplateDetailScreen() {
     const colors = useTheme();

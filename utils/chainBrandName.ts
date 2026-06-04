@@ -17,7 +17,7 @@ export function getChainMiniLogoUrl(chainId: number, fullLogoUrl: string): strin
     }
 }
 
-const CHAIN_BRAND_NAMES: Array<{ match: RegExp; brand: string; miniFile?: string }> = [
+const CHAIN_BRAND_NAMES: { match: RegExp; brand: string; miniFile?: string }[] = [
     { match: /maxima/i,  brand: 'Maxima',  miniFile: 'maximaLogo_mini.webp' },
     { match: /rimi/i,    brand: 'Rimi',    miniFile: 'rimiLogo_mini.webp'   },
     { match: /\biki\b/i, brand: 'Iki',     miniFile: 'ikiLogo_mini.webp'    },
@@ -47,7 +47,7 @@ export function getMiniLogoUrl(chainName: string, logoUrl: string): string {
     return logoUrl;
 }
 
-const CHAIN_BRAND_COLORS: Array<{ match: RegExp; color: string }> = [
+const CHAIN_BRAND_COLORS: { match: RegExp; color: string }[] = [
     { match: /maxima/i,  color: '#003DA5' }, // blue
     { match: /rimi/i,    color: '#E2001A' }, // red
     { match: /\biki\b/i, color: '#1F8B3A' }, // green

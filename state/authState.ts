@@ -8,6 +8,8 @@
  */
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
+import * as Updates from 'expo-updates';
+import { setUserId, getUserId } from '../config/user';
 
 const TOKEN_KEY = 'souply_session_token';
 const USER_KEY = 'souply_verified_user';
@@ -49,11 +51,24 @@ export const useAuthState = create<AuthState>((set, get) => ({
                 SecureStore.getItemAsync(TOKEN_KEY),
                 SecureStore.getItemAsync(USER_KEY),
             ]);
-            set({
-                token: token ?? null,
-                user: userRaw ? JSON.parse(userRaw) as VerifiedUser : null,
-                hydrating: false,
-            });
+            const user = userRaw ? JSON.parse(userRaw) as VerifiedUser : null;
+            set({ token: token ?? null, user, hydrating: false });
+
+            // Self-heal the account-id adoption bug. Older builds stored the
+            // verified account but never adopted its id as the device userId,
+            // so receipts / templates / personal equivalences kept keying to
+            // the throwaway anonymous UUID generated on (re)install — making a
+            // signed-in user's own data look "gone". If we detect that mismatch
+            // now, adopt the account id and reload so every store re-fetches
+            // against the right identity. Guarded out of __DEV__ where the
+            // userId is a fixed constant (adoption there would loop forever).
+            if (!__DEV__ && user?.id) {
+                const current = await getUserId();
+                if (current !== user.id) {
+                    await setUserId(user.id);
+                    try { await Updates.reloadAsync(); } catch {}
+                }
+            }
         } catch {
             set({ hydrating: false });
         }
@@ -63,6 +78,13 @@ export const useAuthState = create<AuthState>((set, get) => ({
         try {
             await SecureStore.setItemAsync(TOKEN_KEY, token);
             await SecureStore.setItemAsync(USER_KEY, JSON.stringify(user));
+            // Adopt the verified account id as the device's userId so EVERY
+            // userId-keyed call (profile, templates, stats, the merge-map)
+            // targets the signed-in account — not the pre-sign-in anonymous id.
+            // Critical for `loginExisting`, where the account id differs from
+            // this device's anonymous id (the cause of "edits don't save" +
+            // "couldn't load template" after signing into an existing account).
+            if (user?.id) await setUserId(user.id);
         } catch {}
         set({ token, user });
     },

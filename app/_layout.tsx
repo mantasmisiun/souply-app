@@ -12,6 +12,8 @@ import { GlassIconButton } from '../components/GlassIconButton';
 import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
+import { EnvBanner } from '../components/EnvBanner';
+import { UsernameGate } from '../components/UsernameGate';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
@@ -21,6 +23,7 @@ import '../i18n';
 import { useTranslation } from 'react-i18next';
 import { installFetchInterceptor } from '../utils/installFetchInterceptor';
 import { installCrashReporter } from '../utils/installCrashReporter';
+import { Sentry } from '../config/sentry';
 import { QueryClient } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { createAsyncStoragePersister } from '@tanstack/query-async-storage-persister';
@@ -154,7 +157,7 @@ export const unstable_settings = {
   anchor: '(tabs)',
 };
 
-export default function RootLayout() {
+function RootLayout() {
   const colorScheme = useResolvedScheme();
   const colors = useTheme();
   const { t } = useTranslation();
@@ -235,8 +238,10 @@ export default function RootLayout() {
     <DisplayPreferenceProvider>
     <ThemeProvider value={navTheme}>
       <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
+      <EnvBanner />
       <ShareHandler />
       <OfflineBanner />
+      <UsernameGate />
       <LevelUpModal />
       <Stack
         screenOptions={{
@@ -325,3 +330,7 @@ export default function RootLayout() {
     </KeyboardProvider>
   );
 }
+
+// Sentry.wrap enables the React error boundary + touch/navigation context on
+// captured events. No-op behaviour-wise when Sentry is disabled (dev).
+export default Sentry.wrap(RootLayout);

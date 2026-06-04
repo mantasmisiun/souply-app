@@ -19,7 +19,7 @@ export function StatsHelpModal({ visible, onClose }: Props) {
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
 
-    const rows: Array<{ icon: keyof typeof Ionicons.glyphMap; label: string; body: string }> = [
+    const rows: { icon: keyof typeof Ionicons.glyphMap; label: string; body: string }[] = [
         { icon: 'eye-outline', label: t('basketTab.templates.metricVisits'), body: t('basketTab.templates.statsVisitsExplainer') },
         { icon: 'cart-outline', label: t('basketTab.templates.metricUses'), body: t('basketTab.templates.statsUsesExplainer') },
         { icon: 'trending-down-outline', label: t('basketTab.templates.metricSaved'), body: t('basketTab.templates.statsHelpedSaveExplainer') },

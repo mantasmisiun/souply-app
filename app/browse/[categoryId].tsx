@@ -111,7 +111,7 @@ export default function CategoryScreen() {
                 const userId = await getUserId();
                 const [subRes, prodRes] = await Promise.all([
                     fetch(`${API_BASE_URL}/api/categories/${categoryId}/subcategories`),
-                    fetch(`${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts?mode=${mode}`),
+                    fetch(`${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts?mode=${mode}&userId=${userId}`),
                 ]);
                 const subData = await subRes.json();
                 setL3Categories(Array.isArray(subData) ? subData : []);
@@ -410,16 +410,16 @@ export default function CategoryScreen() {
         setSelectedL3(l3Id);
         setLoadingProducts(true);
         try {
+            const userId = await getUserId();
             const url = l3Id
-                ? `${API_BASE_URL}/api/categories/${l3Id}/products-with-amounts?mode=${mode}`
-                : `${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts?mode=${mode}`;
+                ? `${API_BASE_URL}/api/categories/${l3Id}/products-with-amounts?mode=${mode}&userId=${userId}`
+                : `${API_BASE_URL}/api/categories/${categoryId}/all-products-with-amounts?mode=${mode}&userId=${userId}`;
             const res = await fetch(url);
             const data = await res.json();
             const prods: Product[] = Array.isArray(data) ? data : [];
             setProducts(prods);
 
             if (mode === 'base' && prods.length > 0) {
-                const userId = await getUserId();
                 const ids = prods.map(p => p.id).join(',');
                 const mergeRes = await fetch(
                     `${API_BASE_URL}/api/users/${userId}/product-merge-map?productIds=${ids}`
@@ -431,6 +431,15 @@ export default function CategoryScreen() {
         } finally {
             setLoadingProducts(false);
         }
+    };
+
+    // Chip taps: ignore a tap on the chip that's already active — its results
+    // are already loaded, so re-fetching would just flash the list for nothing.
+    // (The mode-toggle effect below still calls selectL3 directly to force a
+    // refresh when the granularity changes.)
+    const handleChipSelect = (l3Id: number | null) => {
+        if (l3Id === selectedL3) return;
+        selectL3(l3Id);
     };
 
     // When the user flips the detalumas toggle on this screen, re-run the
@@ -460,6 +469,32 @@ export default function CategoryScreen() {
         () => products.filter(p => !(p.id in userMergeMap)),
         [products, userMergeMap]
     );
+
+    const productById = useMemo(() => {
+        const m = new Map<number, Product>();
+        for (const p of products) m.set(p.id, p);
+        return m;
+    }, [products]);
+
+    // Chain logos for a kept row = union of its own chains + the chains of the
+    // products the user personally merged into it — so a merged "Bananai" shows
+    // both Maxima + Rimi in the list, matching what the detail screen unions.
+    const mergedChainLogos = useCallback((product: Product) => {
+        const hideIds = mergedIntoMe[product.id];
+        if (!hideIds || hideIds.length === 0) return product.chainLogos;
+        const parse = (cl: Product['chainLogos']): { chainId: number; logoUrl: string | null }[] => {
+            if (!cl) return [];
+            if (typeof cl === 'string') { try { return JSON.parse(cl) || []; } catch { return []; } }
+            return cl;
+        };
+        const byChain = new Map<number, { chainId: number; logoUrl: string | null }>();
+        for (const cl of parse(product.chainLogos)) byChain.set(cl.chainId, cl);
+        for (const hid of hideIds) {
+            const hp = productById.get(hid);
+            if (hp) for (const cl of parse(hp.chainLogos)) if (!byChain.has(cl.chainId)) byChain.set(cl.chainId, cl);
+        }
+        return Array.from(byChain.values());
+    }, [mergedIntoMe, productById]);
 
     const onNavigate = useCallback((id: number) => {
         if (isTemplateMode) {
@@ -574,7 +609,7 @@ export default function CategoryScreen() {
             <BasketProductCard
                 name={item.name}
                 imageUrls={item.imageUrls}
-                chainLogos={item.chainLogos}
+                chainLogos={mergedChainLogos(item)}
                 amountText={amountText}
                 quantity={cardQuantity}
                 isAdding={addingIds.has(item.id)}
@@ -673,7 +708,7 @@ export default function CategoryScreen() {
                 <CategoryBubbles
                     categories={l3Categories}
                     selectedId={selectedL3}
-                    onSelect={selectL3}
+                    onSelect={handleChipSelect}
                     allLabel={t('browse.allProducts')}
                 />
 

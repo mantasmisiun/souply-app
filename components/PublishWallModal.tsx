@@ -18,9 +18,10 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../constants/theme';
 import { useAuthState } from '../state/authState';
-import { useGoogleOauth, signInWithApple, isAppleSignInAvailable } from '../utils/oauthFlow';
+import { signInWithGoogle, signInWithApple, isAppleSignInAvailable } from '../utils/oauthFlow';
 import { exchangeOauthToken, setUsername, checkUsernameAvailability, type UsernameRejectReason } from '../utils/authApi';
 import { getUserId } from '../config/user';
+import * as Updates from 'expo-updates';
 
 interface Props {
     visible: boolean;
@@ -71,7 +72,14 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
             setBusy(true);
             const anonymousUserId = await getUserId();
             const res = await exchangeOauthToken({ provider: 'google', idToken, anonymousUserId });
-            await setSession(res.token, res.user);
+            await setSession(res.token, res.user); // adopts res.user.id as the device userId
+            // Signed into an existing account (id differs from this device's
+            // anonymous id) → reload so every userId-keyed store re-hydrates
+            // under the account (same pattern as account recovery).
+            if (res.user.id && res.user.id !== anonymousUserId) {
+                await Updates.reloadAsync();
+                return;
+            }
             setStage(res.user.username ? 'done' : 'username');
         } catch {
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
@@ -80,12 +88,15 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
         }
     }, [setSession, t]);
 
-    const { request, promptAsync } = useGoogleOauth(handleGoogleIdToken);
-
     const onGooglePress = useCallback(async () => {
-        if (busy || !request) return;
-        await promptAsync();
-    }, [busy, request, promptAsync]);
+        if (busy) return;
+        try {
+            const r = await signInWithGoogle();
+            if (r) await handleGoogleIdToken(r.idToken); // null = user cancelled
+        } catch {
+            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
+        }
+    }, [busy, handleGoogleIdToken, t]);
 
     const onApplePress = useCallback(async () => {
         if (busy) return;
@@ -94,7 +105,11 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
             const { idToken } = await signInWithApple();
             const anonymousUserId = await getUserId();
             const res = await exchangeOauthToken({ provider: 'apple', idToken, anonymousUserId });
-            await setSession(res.token, res.user);
+            await setSession(res.token, res.user); // adopts res.user.id as the device userId
+            if (res.user.id && res.user.id !== anonymousUserId) {
+                await Updates.reloadAsync();
+                return;
+            }
             setStage(res.user.username ? 'done' : 'username');
         } catch {
             // User likely cancelled — no toast.
@@ -185,7 +200,7 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
                             <TouchableOpacity
                                 style={[styles.providerBtn, styles.googleBtn]}
                                 onPress={onGooglePress}
-                                disabled={busy || !request}
+                                disabled={busy}
                             >
                                 <Ionicons name="logo-google" size={18} color="#fff" />
                                 <Text style={styles.providerBtnText}>{t('basketTab.templates.publishContinueGoogle')}</Text>

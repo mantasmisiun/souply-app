@@ -877,7 +877,19 @@ export function ShoppingListDetail({
                                     {shareLoading || !shareToken ? (
                                         <ActivityIndicator size="large" color={colors.primary} />
                                     ) : (
-                                        <QRCode value={shareToken} size={220} />
+                                        <QRCode
+                                            value={shareToken}
+                                            size={220}
+                                            // Branded centre mark; ecl="H" keeps it scannable
+                                            // with the logo over the middle, logoMargin adds a
+                                            // little padding around the mark.
+                                            ecl="H"
+                                            logo={require('../assets/images/icon.png')}
+                                            logoSize={46}
+                                            logoMargin={5}
+                                            logoBackgroundColor="#ffffff"
+                                            logoBorderRadius={10}
+                                        />
                                     )}
                                 </View>
                                 <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>

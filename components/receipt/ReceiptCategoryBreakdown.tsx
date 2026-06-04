@@ -32,10 +32,10 @@ export interface BreakdownProduct {
      *  ancestor) on altMatches[0] when matched. L2 is the display
      *  source of truth; leaf is the fallback for not-yet-rehydrated
      *  legacy receipts. */
-    altMatches: Array<{
+    altMatches: {
         categoryName?: string | null;
         categoryL2Name?: string | null;
-    }>;
+    }[];
     price: number;
     promoPrice: number | null;
     quantity: number;
