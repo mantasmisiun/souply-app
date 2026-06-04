@@ -21,6 +21,7 @@ import { useAuthState } from '../state/authState';
 import { signInWithGoogle, signInWithApple, isAppleSignInAvailable } from '../utils/oauthFlow';
 import { exchangeOauthToken, setUsername, checkUsernameAvailability, type UsernameRejectReason } from '../utils/authApi';
 import { getUserId } from '../config/user';
+import * as Updates from 'expo-updates';
 
 interface Props {
     visible: boolean;
@@ -71,7 +72,14 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
             setBusy(true);
             const anonymousUserId = await getUserId();
             const res = await exchangeOauthToken({ provider: 'google', idToken, anonymousUserId });
-            await setSession(res.token, res.user);
+            await setSession(res.token, res.user); // adopts res.user.id as the device userId
+            // Signed into an existing account (id differs from this device's
+            // anonymous id) → reload so every userId-keyed store re-hydrates
+            // under the account (same pattern as account recovery).
+            if (res.user.id && res.user.id !== anonymousUserId) {
+                await Updates.reloadAsync();
+                return;
+            }
             setStage(res.user.username ? 'done' : 'username');
         } catch {
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
@@ -97,7 +105,11 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
             const { idToken } = await signInWithApple();
             const anonymousUserId = await getUserId();
             const res = await exchangeOauthToken({ provider: 'apple', idToken, anonymousUserId });
-            await setSession(res.token, res.user);
+            await setSession(res.token, res.user); // adopts res.user.id as the device userId
+            if (res.user.id && res.user.id !== anonymousUserId) {
+                await Updates.reloadAsync();
+                return;
+            }
             setStage(res.user.username ? 'done' : 'username');
         } catch {
             // User likely cancelled — no toast.

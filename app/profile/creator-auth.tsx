@@ -10,6 +10,7 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { getUserId } from '../../config/user';
+import * as Updates from 'expo-updates';
 import { signInWithGoogle, signInWithApple, isAppleSignInAvailable } from '../../utils/oauthFlow';
 import { exchangeOauthToken } from '../../utils/authApi';
 import { useAuthState, DEV_SESSION_TOKEN } from '../../state/authState';
@@ -66,7 +67,16 @@ export default function CreatorAuthScreen() {
             setBusy(true);
             const anonymousUserId = await getUserId();
             const res = await exchangeOauthToken({ provider, idToken, anonymousUserId });
-            await setSession(res.token, res.user);
+            await setSession(res.token, res.user); // adopts res.user.id as the device userId
+            // Signed into an EXISTING account whose id differs from this device's
+            // anonymous id → reload so every userId-keyed store (profile,
+            // templates, stats) re-hydrates under the account. Same pattern as
+            // account recovery; otherwise edits hit the account while the
+            // screens still show the stale anonymous identity.
+            if (res.user.id && res.user.id !== anonymousUserId) {
+                await Updates.reloadAsync();
+                return;
+            }
             // First sign-in (no username yet) → require a @handle before
             // leaving. Returning users go straight back.
             if (!res.user.username) {

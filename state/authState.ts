@@ -8,6 +8,7 @@
  */
 import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
+import { setUserId } from '../config/user';
 
 const TOKEN_KEY = 'souply_session_token';
 const USER_KEY = 'souply_verified_user';
@@ -63,6 +64,13 @@ export const useAuthState = create<AuthState>((set, get) => ({
         try {
             await SecureStore.setItemAsync(TOKEN_KEY, token);
             await SecureStore.setItemAsync(USER_KEY, JSON.stringify(user));
+            // Adopt the verified account id as the device's userId so EVERY
+            // userId-keyed call (profile, templates, stats, the merge-map)
+            // targets the signed-in account — not the pre-sign-in anonymous id.
+            // Critical for `loginExisting`, where the account id differs from
+            // this device's anonymous id (the cause of "edits don't save" +
+            // "couldn't load template" after signing into an existing account).
+            if (user?.id) await setUserId(user.id);
         } catch {}
         set({ token, user });
     },
