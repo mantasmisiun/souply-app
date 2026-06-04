@@ -347,6 +347,16 @@ export function TemplateShareSheet({
                                                 size={180}
                                                 color={colors.textPrimary}
                                                 backgroundColor={colors.cardBackground}
+                                                // Branded centre mark. ecl="H" (30% error
+                                                // correction) keeps the code scannable with the
+                                                // logo covering the middle; logoMargin leaves a
+                                                // little breathing room around the mark.
+                                                ecl="H"
+                                                logo={require('../assets/images/icon.png')}
+                                                logoSize={40}
+                                                logoMargin={5}
+                                                logoBackgroundColor={colors.cardBackground}
+                                                logoBorderRadius={9}
                                             />
                                         );
                                     })()}
