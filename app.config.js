@@ -38,6 +38,11 @@ export default {
       supportsTablet: true,
       bundleIdentifier: BUNDLE_ID,
       buildNumber: '5',
+      // Sign in with Apple — adds the entitlement so AppleAuthentication
+      // (utils/oauthFlow.ts) works. Required by App Store rule 4.8 because we
+      // also offer Google sign-in. EAS auto-provisions the capability on the
+      // App ID at build time.
+      usesAppleSignIn: true,
       // Associated Domains — Universal Links for souply.lt/t/{slug} and
       // souply.lt/@{username}. The matching apple-app-site-association
       // file must be served from https://souply.lt/.well-known/
@@ -202,10 +207,15 @@ export default {
           url: 'https://de.sentry.io/',
         },
       ],
-      // Native Google Sign-In (Play Services). No options needed for Android —
-      // the Android OAuth client is matched by package + SHA-1 in GCP; the ID
-      // token's audience is the webClientId set in GoogleSignin.configure().
-      '@react-native-google-signin/google-signin',
+      // Native Google Sign-In. Android needs no options (the Android OAuth
+      // client is matched by package + SHA-1 in GCP; the ID token's audience is
+      // the webClientId in GoogleSignin.configure()). iOS needs the reversed
+      // iOS-client URL scheme so Google can redirect back into the app — set
+      // GOOGLE_IOS_URL_SCHEME (the iOS profile env in eas.json) to it.
+      [
+        '@react-native-google-signin/google-signin',
+        { iosUrlScheme: process.env.GOOGLE_IOS_URL_SCHEME || 'com.googleusercontent.apps.placeholder' },
+      ],
       // Must come last: strips unused permissions (mic / media-audio /
       // draw-over) that the plugins above pull in. See the plugin file.
       './plugins/withBlockedPermissions',
