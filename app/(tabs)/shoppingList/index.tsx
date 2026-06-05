@@ -7,8 +7,10 @@ import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
 import { getUserId } from '../../../config/user';
 import { useTheme, type AppTheme } from '../../../constants/theme';
+import Animated from 'react-native-reanimated';
 import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatDate } from '../../../utils/formatCurrency';
 import { chainBrandName, getMiniLogoUrl, chainBrandColor } from '../../../utils/chainBrandName';
@@ -204,6 +206,7 @@ function SplitGroupCard({ group, onPress, onLongPress, selectionMode, selected, 
 
 export default function ShoppingListScreen() {
     const colors = useTheme();
+    const header = useCollapsingHeader();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const tabBarHeight = useSafeBottomTabBarHeight();
@@ -431,19 +434,23 @@ export default function ShoppingListScreen() {
     return (
         <View style={styles.container}>
             <Stack.Screen options={glassHeaderOptions()} />
-            <ScreenHeading title={t('tabs.shoppingList')} />
+            {/* Title collapses on scroll; chain filter stays pinned. */}
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                collapsing={<ScreenHeading title={t('tabs.shoppingList')} />}
+                pinned={allChains.length >= 2 ? (
+                    <StoreChipBar
+                        chips={allChains}
+                        selectedId={chainFilter}
+                        onSelect={id => setChainFilter(id as string | null)}
+                        allLabel={t('shoppingListTab.filterAll')}
+                    />
+                ) : undefined}
+            />
 
-            {/* Chain filter — only when 2+ distinct chains */}
-            {allChains.length >= 2 && (
-                <StoreChipBar
-                    chips={allChains}
-                    selectedId={chainFilter}
-                    onSelect={id => setChainFilter(id as string | null)}
-                    allLabel={t('shoppingListTab.filterAll')}
-                />
-            )}
-
-            <FlatList
+            <Animated.FlatList
+                ref={header.scrollRef as any}
                 data={[]}
                 keyExtractor={() => ''}
                 renderItem={null}
@@ -549,7 +556,7 @@ export default function ShoppingListScreen() {
                         )}
                     </>
                 }
-                contentContainerStyle={[styles.list, { paddingBottom: tabBarHeight + 16 }]}
+                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 16 }]}
             />
 
             {!selectionMode && (

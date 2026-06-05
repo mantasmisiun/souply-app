@@ -25,6 +25,7 @@ import { GlassButton } from '../../components/GlassButton';
 import { GlassIconButton } from '../../components/GlassIconButton';
 import { glassHeaderOptions } from '../../constants/navHeader';
 import { ScreenHeading } from '../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { resolveCanonicalStep } from '../../utils/canonicalStep';
 
 interface Category {
@@ -56,6 +57,8 @@ export default function CategoryScreen() {
     const { t, i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
+    // Collapsing header: category title hides on scroll; mode toggle + L3 filter stay pinned.
+    const header = useCollapsingHeader();
     const { categoryId, name, templateId: rawTemplateId } =
         useLocalSearchParams<{ categoryId: string; name: string; templateId?: string }>();
     const templateId = rawTemplateId != null && rawTemplateId.length > 0 ? Number(rawTemplateId) : null;
@@ -686,36 +689,44 @@ export default function CategoryScreen() {
                     headerShadowVisible: false,
                 }}
             />
-            <ScreenHeading title={decodeURIComponent(name || '')} />
+            {/* Category title collapses on scroll; mode toggle + L3 filter pin. */}
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                collapsing={<ScreenHeading title={decodeURIComponent(name || '')} />}
+                pinned={
+                    <>
+                        <View style={styles.modeToggleRow}>
+                            <Text style={styles.modeToggleLabel}>{t('browse.combineAlternatives')}</Text>
+                            <TouchableOpacity
+                                onPress={() => setHelpOpen(true)}
+                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            >
+                                <Ionicons name="help-circle-outline" size={18} color={colors.textMuted} />
+                            </TouchableOpacity>
+                            <View style={{ flex: 1 }} />
+                            <Switch
+                                value={mode === 'base'}
+                                onValueChange={handleModeSwitchRequest}
+                                trackColor={{ false: colors.border, true: colors.primary }}
+                                thumbColor={colors.cardBackground}
+                                disabled={converting}
+                            />
+                        </View>
+                        <CategoryBubbles
+                            categories={l3Categories}
+                            selectedId={selectedL3}
+                            onSelect={handleChipSelect}
+                            allLabel={t('browse.allProducts')}
+                        />
+                    </>
+                }
+            />
             <View style={{ flex: 1 }}>
             <View style={styles.container}>
-                <View style={styles.modeToggleRow}>
-                    <Text style={styles.modeToggleLabel}>{t('browse.combineAlternatives')}</Text>
-                    <TouchableOpacity
-                        onPress={() => setHelpOpen(true)}
-                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                    >
-                        <Ionicons name="help-circle-outline" size={18} color={colors.textMuted} />
-                    </TouchableOpacity>
-                    <View style={{ flex: 1 }} />
-                    <Switch
-                        value={mode === 'base'}
-                        onValueChange={handleModeSwitchRequest}
-                        trackColor={{ false: colors.border, true: colors.primary }}
-                        thumbColor={colors.cardBackground}
-                        disabled={converting}
-                    />
-                </View>
-                <CategoryBubbles
-                    categories={l3Categories}
-                    selectedId={selectedL3}
-                    onSelect={handleChipSelect}
-                    allLabel={t('browse.allProducts')}
-                />
-
                 <View style={{ flex: 1 }}>
                     {loadingProducts ? (
-                        <View style={{ padding: 12 }}>
+                        <View style={{ padding: 12, paddingTop: header.paddingTop + 12 }}>
                             {Array.from({ length: 3 }).map((_, row) => (
                                 <View key={row} style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
                                     {[0, 1].map(col => (
@@ -730,11 +741,14 @@ export default function CategoryScreen() {
                             ))}
                         </View>
                     ) : (
-                        <FlatList
+                        <Animated.FlatList
+                            ref={header.scrollRef as any}
                             data={visibleProducts}
-                            keyExtractor={item => item.id.toString()}
+                            keyExtractor={(item: any) => item.id.toString()}
                             contentContainerStyle={[
                                 styles.list,
+                                // + 12 = small gap below the pinned filter (matches product).
+                                { paddingTop: header.paddingTop + 12 },
                                 // Reserve room for the absolute "Šablonas"
                                 // banner so the last row's "Į šabloną" CTA
                                 // isn't hidden under it.

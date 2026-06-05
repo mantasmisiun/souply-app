@@ -12,6 +12,7 @@ import { GlassIconButton } from '../../../components/GlassIconButton';
 import { Stack, useRouter , useFocusEffect } from 'expo-router';
 import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -135,6 +136,8 @@ export default function ProfilisScreen() {
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
+    // Collapsing header: "Profilis" title hides on scroll (no pinned filter).
+    const header = useCollapsingHeader();
     const triggerIfNewLevel = useLevelStore(s => s.triggerIfNewLevel);
 
     const profile = useProfileStore(s => s.profile);
@@ -359,8 +362,16 @@ export default function ProfilisScreen() {
     return (
         <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
         <Stack.Screen options={glassHeaderOptions({ right: settingsGear })} />
-        <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-            <ScreenHeading title={t('tabs.profilis')} bleed={16} />
+        <CollapsingHeader
+            controller={header}
+            background={colors.cardBackground}
+            collapsing={<ScreenHeading title={t('tabs.profilis')} />}
+        />
+        <Animated.ScrollView
+            ref={header.scrollRef}
+            style={styles.container}
+            contentContainerStyle={[styles.content, { paddingTop: header.paddingTop + 16 }]}
+        >
             {/* Creator header — avatar (tap to upload) + name + @handle +
                 aggregate template stats. Only once signed in as a creator. */}
             {authUser && profile && (
@@ -551,7 +562,7 @@ export default function ProfilisScreen() {
 
             {/* Creator-account CTA — bottom of the profile, non-creators only. */}
             <CreatorAccountCTA styles={styles} router={router} t={t} />
-        </ScrollView>
+        </Animated.ScrollView>
 
         </View>
     );

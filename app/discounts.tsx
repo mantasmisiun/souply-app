@@ -8,6 +8,7 @@ import { ScreenBackButton } from '../components/ScreenBackButton';
 import { GlassIconButton } from '../components/GlassIconButton';
 import { glassHeaderOptions } from '../constants/navHeader';
 import { ScreenHeading } from '../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../components/CollapsingHeader';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -134,6 +135,8 @@ export default function DiscountsScreen() {
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
+    // Collapsing header: "Nuolaidos" title hides on scroll, L2 filter stays pinned.
+    const header = useCollapsingHeader();
     const router = useRouter();
     const { templateId: rawTemplateId } = useLocalSearchParams<{ templateId?: string }>();
     const templateId = rawTemplateId != null && rawTemplateId.length > 0 ? Number(rawTemplateId) : null;
@@ -478,21 +481,54 @@ export default function DiscountsScreen() {
                 headerStyle: { backgroundColor: colors.cardBackground },
                 headerShadowVisible: false,
             }} />
+            {/* "Nuolaidos" collapses on scroll; the L2 filter stays pinned. In
+                search mode the title drops (the bar shows the input) but the
+                filter bubbles stay so you can narrow results while searching. */}
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                collapsing={searchOpen ? null : (
+                    <ScreenHeading
+                        title="Nuolaidos"
+                        subtitle={dataUpdatedAt > 0 && allProducts.length > 0
+                            ? formatFreshness(dataUpdatedAt, t)
+                            : undefined}
+                    />
+                )}
+                pinned={activeL2Ids.size > 0 ? (
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.bubblesContainer}
+                            style={styles.bubblesRow}
+                        >
+                            <TouchableOpacity
+                                style={[styles.bubble, selectedL2 === null && styles.bubbleActive]}
+                                onPress={() => setSelectedL2(null)}
+                            >
+                                <Text style={[styles.bubbleText, selectedL2 === null && styles.bubbleTextActive]}>
+                                    Visos kategorijos
+                                </Text>
+                            </TouchableOpacity>
+                            {l2Categories.filter(cat => activeL2Ids.has(cat.id)).map(cat => (
+                                <TouchableOpacity
+                                    key={cat.id}
+                                    style={[styles.bubble, selectedL2 === cat.id && styles.bubbleActive]}
+                                    onPress={() => setSelectedL2(selectedL2 === cat.id ? null : cat.id)}
+                                >
+                                    <Text style={[styles.bubbleText, selectedL2 === cat.id && styles.bubbleTextActive]}>
+                                        {cat.name}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    ) : undefined}
+            />
             <View style={{ flex: 1 }}>
                 <View style={styles.container}>
-                    {isError && allProducts.length > 0 && (
-                        <TouchableOpacity style={styles.errorBanner} onPress={() => refetch()} activeOpacity={0.7}>
-                            <Ionicons name="warning-outline" size={16} color={colors.onPrimary} style={{ marginRight: 6 }} />
-                            <Text style={styles.errorBannerText} numberOfLines={2}>
-                                {t('discounts.loadFailedWithCache')}
-                            </Text>
-                            <Text style={styles.errorBannerRetry}>{t('discounts.retry')}</Text>
-                        </TouchableOpacity>
-                    )}
-
                     <View style={{ flex: 1 }}>
                         {isLoading ? (
-                            <View style={{ flex: 1, padding: 12, gap: 12 }}>
+                            <View style={{ flex: 1, padding: 12, gap: 12, paddingTop: header.paddingTop + 12 }}>
                                 {Array.from({ length: 6 }).map((_, i) => (
                                     <View key={i} style={{ flexDirection: 'row', gap: 12 }}>
                                         {[0, 1].map(j => (
@@ -507,7 +543,7 @@ export default function DiscountsScreen() {
                                 ))}
                             </View>
                         ) : isError && allProducts.length === 0 ? (
-                            <View style={styles.coldError}>
+                            <View style={[styles.coldError, { paddingTop: header.paddingTop }]}>
                                 <Ionicons name="cloud-offline-outline" size={48} color={colors.textMuted} />
                                 <Text style={styles.coldErrorTitle}>{t('discounts.loadFailed')}</Text>
                                 <ScalePressable style={styles.coldErrorButton} onPress={() => refetch()}>
@@ -515,11 +551,15 @@ export default function DiscountsScreen() {
                                 </ScalePressable>
                             </View>
                         ) : (
-                            <FlatList
+                            <Animated.FlatList
+                                ref={header.scrollRef as any}
                                 data={products}
-                                keyExtractor={item => item.id.toString()}
+                                keyExtractor={(item: any) => item.id.toString()}
                                 contentContainerStyle={[
                                     styles.list,
+                                    // + 12 restores the list's natural top padding (styles.list)
+                                    // as a small gap below the pinned filter, matching product.
+                                    { paddingTop: header.paddingTop + 12 },
                                     // Reserve space for the absolute "Šablonas"
                                     // banner so the last row's "Į šabloną" CTA
                                     // isn't hidden under it.
@@ -529,45 +569,15 @@ export default function DiscountsScreen() {
                                 columnWrapperStyle={styles.row}
                                 keyboardDismissMode="on-drag"
                                 ListHeaderComponent={
-                                    <>
-                                        {!searchOpen && (
-                                            <ScreenHeading
-                                                title="Nuolaidos"
-                                                bleed={12}
-                                                subtitle={dataUpdatedAt > 0 && allProducts.length > 0
-                                                    ? formatFreshness(dataUpdatedAt, t)
-                                                    : undefined}
-                                            />
-                                        )}
-                                        {activeL2Ids.size > 0 && (
-                                            <ScrollView
-                                                horizontal
-                                                showsHorizontalScrollIndicator={false}
-                                                contentContainerStyle={styles.bubblesContainer}
-                                                style={[styles.bubblesRow, { marginHorizontal: -12 }]}
-                                            >
-                                                <TouchableOpacity
-                                                    style={[styles.bubble, selectedL2 === null && styles.bubbleActive]}
-                                                    onPress={() => setSelectedL2(null)}
-                                                >
-                                                    <Text style={[styles.bubbleText, selectedL2 === null && styles.bubbleTextActive]}>
-                                                        Visos kategorijos
-                                                    </Text>
-                                                </TouchableOpacity>
-                                                {l2Categories.filter(cat => activeL2Ids.has(cat.id)).map(cat => (
-                                                    <TouchableOpacity
-                                                        key={cat.id}
-                                                        style={[styles.bubble, selectedL2 === cat.id && styles.bubbleActive]}
-                                                        onPress={() => setSelectedL2(selectedL2 === cat.id ? null : cat.id)}
-                                                    >
-                                                        <Text style={[styles.bubbleText, selectedL2 === cat.id && styles.bubbleTextActive]}>
-                                                            {cat.name}
-                                                        </Text>
-                                                    </TouchableOpacity>
-                                                ))}
-                                            </ScrollView>
-                                        )}
-                                    </>
+                                    isError && allProducts.length > 0 ? (
+                                        <TouchableOpacity style={styles.errorBanner} onPress={() => refetch()} activeOpacity={0.7}>
+                                            <Ionicons name="warning-outline" size={16} color={colors.onPrimary} style={{ marginRight: 6 }} />
+                                            <Text style={styles.errorBannerText} numberOfLines={2}>
+                                                {t('discounts.loadFailedWithCache')}
+                                            </Text>
+                                            <Text style={styles.errorBannerRetry}>{t('discounts.retry')}</Text>
+                                        </TouchableOpacity>
+                                    ) : null
                                 }
                                 refreshControl={
                                     <RefreshControl

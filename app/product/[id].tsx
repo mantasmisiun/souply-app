@@ -1,4 +1,6 @@
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Modal, Dimensions, ActivityIndicator } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { ProductImage } from '../../components/ProductImage';
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
@@ -235,6 +237,8 @@ export default function ProductDetailScreen() {
     );
     const templateQuantity = templateEntry?.quantity ?? 0;
     const { bottom: bottomInset } = useSafeAreaInsets();
+    // Collapsing header: title+breadcrumb hide on scroll, store filter stays pinned.
+    const header = useCollapsingHeader();
     const draftBasketIdRef = useRef(draftBasketId);
     useEffect(() => { draftBasketIdRef.current = draftBasketId; }, [draftBasketId]);
 
@@ -461,30 +465,40 @@ export default function ProductDetailScreen() {
                 headerTintColor: colors.primary,
                 headerLeft: () => <ScreenBackButton />,
             }} />
-            {/* Fixed header zone — pinned under the nav bar, never scrolls. */}
-            <ScreenHeading
-                title={product.name}
-                subtitle={categoryParts.length > 0 ? (
-                    <View style={styles.breadcrumbRow}>
-                        {categoryParts.map((part, i) => (
-                            <React.Fragment key={i}>
-                                {i > 0 && <Text style={styles.navBreadcrumbSep}>›</Text>}
-                                <Text style={styles.navBreadcrumbPart} numberOfLines={1}>{part}</Text>
-                            </React.Fragment>
-                        ))}
-                    </View>
-                ) : undefined}
+            {/* Title + breadcrumb collapse on scroll; store filter stays pinned. */}
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                collapsing={
+                    <ScreenHeading
+                        title={product.name}
+                        subtitle={categoryParts.length > 0 ? (
+                            <View style={styles.breadcrumbRow}>
+                                {categoryParts.map((part, i) => (
+                                    <React.Fragment key={i}>
+                                        {i > 0 && <Text style={styles.navBreadcrumbSep}>›</Text>}
+                                        <Text style={styles.navBreadcrumbPart} numberOfLines={1}>{part}</Text>
+                                    </React.Fragment>
+                                ))}
+                            </View>
+                        ) : undefined}
+                    />
+                }
+                pinned={
+                    <ChainFilterBar
+                        chains={chains}
+                        selectedId={selectedChainId}
+                        onSelect={setSelectedChainId}
+                        allLabel={t('product.allStores')}
+                    />
+                }
             />
-            <ChainFilterBar
-                chains={chains}
-                selectedId={selectedChainId}
-                onSelect={setSelectedChainId}
-                allLabel={t('product.allStores')}
-            />
-            {/* Only the SP list scrolls / rubber-bands. */}
-            <ScrollView
+            {/* Only the SP list scrolls / rubber-bands; paddingTop reserves the
+                overlay's space (the opaque overlay hides the brief measure jump). */}
+            <Animated.ScrollView
+                ref={header.scrollRef}
                 style={styles.container}
-                contentContainerStyle={{ paddingBottom: BAR_HEIGHT + 16 }}
+                contentContainerStyle={{ paddingTop: header.paddingTop, paddingBottom: BAR_HEIGHT + 16 }}
             >
 
                 {/* StoreProduct list */}
@@ -546,7 +560,7 @@ export default function ProductDetailScreen() {
                     })
                 )}
                 <View style={{ height: 40 }} />
-            </ScrollView>
+            </Animated.ScrollView>
 
             {/* Sticky add-to bar. Template mode shows a +/− stepper for
                 products already in the template (so users tweak amount

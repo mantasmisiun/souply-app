@@ -24,8 +24,10 @@ import {
 import { API_BASE_URL } from "../../../config/api";
 import { getUserId } from "../../../config/user";
 import { useTheme, type AppTheme } from "../../../constants/theme";
+import Animated from "react-native-reanimated";
 import { glassHeaderOptions } from "../../../constants/navHeader";
 import { ScreenHeading } from "../../../components/ScreenHeading";
+import { useCollapsingHeader, CollapsingHeader } from "../../../components/CollapsingHeader";
 import { chainBrandName, chainBrandColor } from "../../../utils/chainBrandName";
 import { SkeletonBox } from "../../../components/SkeletonBox";
 import { PendingSwipesBanner } from "../../../components/PendingSwipesBanner";
@@ -108,6 +110,7 @@ const hasPendingSwipes = (item: Receipt) =>
 
 export default function ReceiptsScreen() {
   const colors = useTheme();
+  const header = useCollapsingHeader();
   const { t } = useTranslation();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const tabBarHeight = useSafeBottomTabBarHeight();
@@ -585,27 +588,33 @@ export default function ReceiptsScreen() {
   return (
     <View style={styles.container}>
       <Stack.Screen options={glassHeaderOptions()} />
-      <ScreenHeading title={t('tabs.receipts')} />
-      {chainFilters.length > 1 && (
-        <StoreChipBar
-          chips={chainFilters.map(f => ({
-            id: f.name,
-            label: chainBrandName(f.name),
-            logoUrl: f.logoUrl,
-          }))}
-          selectedId={selectedChain}
-          onSelect={id => setSelectedChain(id as string | null)}
-          allLabel={t('receipts.filterAll')}
-        />
-      )}
-      <FlatList
+      {/* "Kvitai" collapses on scroll; the store filter stays pinned. */}
+      <CollapsingHeader
+        controller={header}
+        background={colors.cardBackground}
+        collapsing={<ScreenHeading title={t('tabs.receipts')} />}
+        pinned={chainFilters.length > 1 ? (
+          <StoreChipBar
+            chips={chainFilters.map(f => ({
+              id: f.name,
+              label: chainBrandName(f.name),
+              logoUrl: f.logoUrl,
+            }))}
+            selectedId={selectedChain}
+            onSelect={id => setSelectedChain(id as string | null)}
+            allLabel={t('receipts.filterAll')}
+          />
+        ) : undefined}
+      />
+      <Animated.FlatList
+        ref={header.scrollRef as any}
         data={listData}
-        keyExtractor={(it) =>
+        keyExtractor={(it: any) =>
           it.kind === "queue" ? `q-${it.data.id}` :
           it.kind === "section" ? it.id :
           `r-${it.data.id}`
         }
-        contentContainerStyle={[styles.list, { paddingBottom: tabBarHeight + 16 }]}
+        contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 16 }]}
         ListHeaderComponent={
           showBanner ? (
             <PendingSwipesBanner

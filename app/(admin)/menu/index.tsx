@@ -6,8 +6,10 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { useAdminModeStore } from '../../../state/adminModeStore';
 import { useProfileStore } from '../../../state/profileStore';
+import Animated from 'react-native-reanimated';
 import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 
 /**
  * Admin Profilis tab.
@@ -23,6 +25,7 @@ import { ScreenHeading } from '../../../components/ScreenHeading';
  */
 export default function AdminMenu() {
     const colors = useTheme();
+    const header = useCollapsingHeader();
     const router = useRouter();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -75,8 +78,12 @@ export default function AdminMenu() {
     return (
         <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
         <Stack.Screen options={glassHeaderOptions({ right: settingsGear })} />
-        <ScreenHeading title={t('tabs.profilis')} />
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <CollapsingHeader
+            controller={header}
+            background={colors.cardBackground}
+            collapsing={<ScreenHeading title={t('tabs.profilis')} />}
+        />
+        <Animated.ScrollView ref={header.scrollRef} contentContainerStyle={[styles.scroll, { paddingTop: header.paddingTop + 20 }]}>
             <View style={styles.header}>
                 <Ionicons name="shield-checkmark" size={48} color={colors.primary} />
                 <Text style={styles.title}>{t('admin.title')}</Text>
@@ -98,7 +105,7 @@ export default function AdminMenu() {
                 </Text>
                 <Ionicons name="chevron-forward" size={18} color={colors.onPrimary} />
             </TouchableOpacity>
-        </ScrollView>
+        </Animated.ScrollView>
         </View>
     );
 }

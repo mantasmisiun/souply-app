@@ -8,12 +8,15 @@ import { GlassIconButton } from '../../../components/GlassIconButton';
 import { CategoriesList, type Category } from '../../../components/browse/CategoriesList';
 import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 
 export default function BrowseIndex() {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
+    // Collapsing header: "Naršyti" title hides on scroll (no pinned filter here).
+    const header = useCollapsingHeader();
 
     // Tap-debounce so a quick double-tap doesn't push /search twice.
     const lastSearchPushAt = useRef(0);
@@ -56,10 +59,17 @@ export default function BrowseIndex() {
     return (
         <View style={{ flex: 1 }}>
             <Stack.Screen options={glassHeaderOptions({ right: searchAction })} />
-            {/* Heading lives in the list header so it scrolls away like product. */}
+            {/* "Naršyti" collapses on scroll; the discounts shortcut scrolls with the list. */}
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                collapsing={<ScreenHeading title={t('browse.title')} />}
+            />
             <CategoriesList
                 onSelectL2={handleSelectL2}
-                header={<><ScreenHeading title={t('browse.title')} bleed={16} />{discountsHeader}</>}
+                scrollRef={header.scrollRef}
+                contentPaddingTop={header.paddingTop}
+                header={discountsHeader}
             />
         </View>
     );

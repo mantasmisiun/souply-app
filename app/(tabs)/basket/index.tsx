@@ -6,6 +6,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, mem
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
@@ -156,6 +157,7 @@ export default function BasketScreen() {
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
+    const header = useCollapsingHeader();
     const tabBarHeight = useSafeBottomTabBarHeight();
     const { setDraftBasketId } = useBasketState();
     // Own/private-template baskets attribute to the current user's handle when
@@ -395,6 +397,24 @@ export default function BasketScreen() {
         }
     }, [router, t]);
 
+    // Pinned header for both views: the view chips + (when refetching) the
+    // refreshing banner. The "Krepšelis" title collapses above it on scroll.
+    const pinnedFilter = (
+        <>
+            <StoreChipBar
+                chips={chips}
+                selectedId={view}
+                onSelect={id => id != null && setView(id as ViewMode)}
+            />
+            {refreshing && (
+                <View style={styles.refreshingBanner}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
+                </View>
+            )}
+        </>
+    );
+
     if (loading) return (
         <View style={styles.container}>
             <Stack.Screen options={glassHeaderOptions()} />
@@ -417,22 +437,17 @@ export default function BasketScreen() {
         return (
             <View style={styles.container}>
                 <Stack.Screen options={glassHeaderOptions()} />
-                <ScreenHeading title={t('tabs.basket')} />
-                <StoreChipBar
-                    chips={chips}
-                    selectedId={view}
-                    onSelect={id => id != null && setView(id as ViewMode)}
+                <CollapsingHeader
+                    controller={header}
+                    background={colors.cardBackground}
+                    collapsing={<ScreenHeading title={t('tabs.basket')} />}
+                    pinned={pinnedFilter}
                 />
-                {refreshing && (
-                    <View style={styles.refreshingBanner}>
-                        <ActivityIndicator size="small" color={colors.primary} />
-                        <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
-                    </View>
-                )}
-                <FlatList
+                <Animated.FlatList
+                    ref={header.scrollRef as any}
                     data={templates}
-                    keyExtractor={item => `t-${item.id}`}
-                    contentContainerStyle={[styles.list, { paddingBottom: tabBarHeight + 16 }]}
+                    keyExtractor={(item: any) => `t-${item.id}`}
+                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 16 }]}
                     refreshControl={
                         <RefreshControl
                             refreshing={pullRefreshing}
@@ -594,20 +609,15 @@ export default function BasketScreen() {
     return (
         <View style={styles.container}>
             <Stack.Screen options={glassHeaderOptions()} />
-            <ScreenHeading title={t('tabs.basket')} />
-            <StoreChipBar
-                chips={chips}
-                selectedId={view}
-                onSelect={id => id != null && setView(id as ViewMode)}
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                collapsing={<ScreenHeading title={t('tabs.basket')} />}
+                pinned={pinnedFilter}
             />
-            {refreshing && (
-                <View style={styles.refreshingBanner}>
-                    <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
-                </View>
-            )}
-            <ScrollView
-                contentContainerStyle={[styles.list, { paddingBottom: tabBarHeight + 16 }]}
+            <Animated.ScrollView
+                ref={header.scrollRef}
+                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 16 }]}
                 refreshControl={
                     <RefreshControl
                         refreshing={pullRefreshing}
@@ -730,7 +740,7 @@ export default function BasketScreen() {
                         );
                     })
                 )}
-            </ScrollView>
+            </Animated.ScrollView>
         </View>
     );
 }
