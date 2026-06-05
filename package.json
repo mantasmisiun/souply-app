@@ -10,7 +10,12 @@
     "web": "expo start --web",
     "lint": "expo lint",
     "sync-shared": "rm -rf ./shared && cp -r ../shared ./shared && rm -rf ./shared/.git",
-    "build:apk": "npm run sync-shared && eas build --profile preview --platform android",
+    "build:dev:ios": "node scripts/require-branch.js dev && npm run sync-shared && eas build --profile development -p ios",
+    "build:dev:android": "node scripts/require-branch.js dev && npm run sync-shared && eas build --profile development -p android",
+    "build:staging:ios": "node scripts/require-branch.js staging && npm run sync-shared && eas build --profile staging -p ios",
+    "build:staging:android": "node scripts/require-branch.js staging && npm run sync-shared && eas build --profile staging -p android",
+    "build:prod:ios": "node scripts/require-branch.js main && npm run sync-shared && eas build --profile production -p ios",
+    "build:prod:android": "node scripts/require-branch.js main && npm run sync-shared && eas build --profile production -p android",
     "test": "jest",
     "postinstall": "patch-package",
     "prepare": "node .husky/install.mjs"
