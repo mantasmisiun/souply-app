@@ -1,1 +1,12 @@
+# Never commit directly on staging/main — work on dev, promote via PR.
+branch=$(git rev-parse --abbrev-ref HEAD)
+if [ "$branch" = "staging" ] || [ "$branch" = "main" ]; then
+  echo ""
+  echo "🚫 You're on '$branch' — don't commit here."
+  echo "   Commit on dev, then promote via PR (dev → $branch)."
+  echo "   Fix:  git switch dev"
+  echo ""
+  exit 1
+fi
+
 npx lint-staged
