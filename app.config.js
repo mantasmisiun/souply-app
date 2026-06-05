@@ -250,7 +250,7 @@ export default {
     updates: {
       url: 'https://u.expo.dev/d3053a04-a3bb-4dd2-81e5-d10ceddd06db',
       requestHeaders: {
-        'expo-channel-name': IS_DEV ? 'dev' : 'production',
+        'expo-channel-name': IS_DEV ? 'dev' : IS_STAGING ? 'staging' : 'production',
       },
     },
   },

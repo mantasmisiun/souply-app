@@ -7,8 +7,11 @@
     "development": {
       "developmentClient": true,
       "distribution": "internal",
-      "channel": "development",
+      "channel": "dev",
+      "android": { "buildType": "apk" },
       "env": {
+        "APP_VARIANT": "dev",
+        "GOOGLE_MAPS_API_KEY_ANDROID": "AIzaSyAUes7IPZzdfpYjroLMLjODP2FnlUYCmHg",
         "SENTRY_DISABLE_AUTO_UPLOAD": "true"
       }
     },
