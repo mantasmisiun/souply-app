@@ -11,7 +11,12 @@ export function getChainMiniLogoUrl(chainId: number, fullLogoUrl: string): strin
     if (!filename) return fullLogoUrl;
     try {
         const url = new URL(fullLogoUrl);
-        return `${url.protocol}//${url.host}/chain-logos/${filename}`;
+        // Swap only the filename, keeping the URL's existing path. This works for
+        // both R2 custom domains (objects at root: …/maxima.png → …/maxima_mini.webp)
+        // and MinIO path-style (…/chain-logos/maxima.png → …/chain-logos/maxima_mini.webp).
+        // Hardcoding "/chain-logos/" assumed MinIO and 404'd on R2.
+        url.pathname = url.pathname.replace(/[^/]*$/, filename);
+        return url.toString();
     } catch {
         return fullLogoUrl;
     }
@@ -38,7 +43,10 @@ export function getMiniLogoUrl(chainName: string, logoUrl: string): string {
         if (entry.match.test(chainName) && entry.miniFile) {
             try {
                 const url = new URL(logoUrl);
-                return `${url.protocol}//${url.host}/chain-logos/${entry.miniFile}`;
+                // Swap only the filename (keep the path) so it works on both R2
+                // (root) and MinIO (/chain-logos/) — see getChainMiniLogoUrl.
+                url.pathname = url.pathname.replace(/[^/]*$/, entry.miniFile);
+                return url.toString();
             } catch {
                 return logoUrl;
             }
