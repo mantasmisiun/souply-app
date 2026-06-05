@@ -109,6 +109,18 @@ export default {
         'ACCESS_COARSE_LOCATION',
         'ACCESS_FINE_LOCATION',
       ],
+      // Strip permissions that bundled native modules (expo-media-library /
+      // expo-camera) inject but we never use. READ_MEDIA_IMAGES/VIDEO trigger
+      // Google Play's Photo & Video Permissions policy — we pick via the system
+      // Photo Picker and only SAVE the QR, so we read no media. This is the
+      // documented `tools:node="remove"` mechanism, applied by Expo core.
+      blockedPermissions: [
+        'android.permission.RECORD_AUDIO',
+        'android.permission.READ_MEDIA_AUDIO',
+        'android.permission.READ_MEDIA_IMAGES',
+        'android.permission.READ_MEDIA_VIDEO',
+        'android.permission.SYSTEM_ALERT_WINDOW',
+      ],
     },
     web: {
       output: 'static',
