@@ -17,11 +17,15 @@ import { useTheme } from '../constants/theme';
 export function ScreenHeading({
     title,
     subtitle,
+    topInset,
     bleed,
 }: {
     title: string;
     /** Optional second line — a plain string or custom JSX (e.g. a breadcrumb). */
     subtitle?: ReactNode;
+    /** Status-bar inset to reserve when this heading sits at the very top with
+     *  no native bar above it (e.g. loading states of bar-less screens). */
+    topInset?: number;
     /**
      * Only when rendered as the first item INSIDE a padded scroll/list: the
      * parent content padding to cancel so the band stays flush + full-width.
@@ -36,6 +40,7 @@ export function ScreenHeading({
                 styles.wrap,
                 { backgroundColor: colors.cardBackground },
                 bleed ? { marginHorizontal: -bleed, marginTop: -bleed } : null,
+                topInset ? { paddingTop: topInset + 6 } : null,
             ]}
         >
             <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={2}>

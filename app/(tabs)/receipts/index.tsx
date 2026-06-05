@@ -25,6 +25,7 @@ import { API_BASE_URL } from "../../../config/api";
 import { getUserId } from "../../../config/user";
 import { useTheme, type AppTheme } from "../../../constants/theme";
 import Animated from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { glassHeaderOptions } from "../../../constants/navHeader";
 import { ScreenHeading } from "../../../components/ScreenHeading";
 import { useCollapsingHeader, CollapsingHeader } from "../../../components/CollapsingHeader";
@@ -111,6 +112,7 @@ const hasPendingSwipes = (item: Receipt) =>
 export default function ReceiptsScreen() {
   const colors = useTheme();
   const header = useCollapsingHeader();
+  const insets = useSafeAreaInsets();
   const { t } = useTranslation();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const tabBarHeight = useSafeBottomTabBarHeight();
@@ -402,7 +404,7 @@ export default function ReceiptsScreen() {
     return (
       <View style={styles.container}>
         <Stack.Screen options={glassHeaderOptions()} />
-        <ScreenHeading title={t('tabs.receipts')} />
+        <ScreenHeading title={t('tabs.receipts')} topInset={insets.top} />
         <View style={{
           backgroundColor: colors.cardBackground,
           borderBottomWidth: 0.5, borderBottomColor: colors.border,
@@ -587,8 +589,7 @@ export default function ReceiptsScreen() {
 
   return (
     <View style={styles.container}>
-      <Stack.Screen options={glassHeaderOptions()} />
-      {/* "Kvitai" collapses on scroll; the store filter stays pinned. */}
+      {/* No bar action → the empty bar is hidden; this header takes the inset. */}
       <CollapsingHeader
         controller={header}
         background={colors.cardBackground}
@@ -607,14 +608,15 @@ export default function ReceiptsScreen() {
         ) : undefined}
       />
       <Animated.FlatList
-        ref={header.scrollRef as any}
+        {...header.scroll}
         data={listData}
         keyExtractor={(it: any) =>
           it.kind === "queue" ? `q-${it.data.id}` :
           it.kind === "section" ? it.id :
           `r-${it.data.id}`
         }
-        contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 16 }]}
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
         ListHeaderComponent={
           showBanner ? (
             <PendingSwipesBanner

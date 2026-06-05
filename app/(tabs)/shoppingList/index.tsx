@@ -8,6 +8,7 @@ import { API_BASE_URL } from '../../../config/api';
 import { getUserId } from '../../../config/user';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import Animated from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
@@ -207,6 +208,7 @@ function SplitGroupCard({ group, onPress, onLongPress, selectionMode, selected, 
 export default function ShoppingListScreen() {
     const colors = useTheme();
     const header = useCollapsingHeader();
+    const insets = useSafeAreaInsets();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const tabBarHeight = useSafeBottomTabBarHeight();
@@ -412,7 +414,7 @@ export default function ShoppingListScreen() {
     if (loading) return (
         <View style={styles.container}>
             <Stack.Screen options={glassHeaderOptions()} />
-            <ScreenHeading title={t('tabs.shoppingList')} />
+            <ScreenHeading title={t('tabs.shoppingList')} topInset={insets.top} />
             <View style={{ padding: 16 }}>
                 <SkeletonBox width={70} height={13} borderRadius={6} style={{ marginBottom: 12 }} />
                 {Array.from({ length: 5 }).map((_, i) => (
@@ -433,8 +435,7 @@ export default function ShoppingListScreen() {
 
     return (
         <View style={styles.container}>
-            <Stack.Screen options={glassHeaderOptions()} />
-            {/* Title collapses on scroll; chain filter stays pinned. */}
+            {/* No bar action → the empty bar is hidden; this header takes the inset. */}
             <CollapsingHeader
                 controller={header}
                 background={colors.cardBackground}
@@ -450,7 +451,7 @@ export default function ShoppingListScreen() {
             />
 
             <Animated.FlatList
-                ref={header.scrollRef as any}
+                {...header.scroll}
                 data={[]}
                 keyExtractor={() => ''}
                 renderItem={null}
@@ -556,7 +557,8 @@ export default function ShoppingListScreen() {
                         )}
                     </>
                 }
-                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 16 }]}
+                contentInsetAdjustmentBehavior="never"
+                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
             />
 
             {!selectionMode && (

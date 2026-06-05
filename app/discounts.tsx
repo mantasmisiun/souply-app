@@ -3,10 +3,8 @@ import {
     StyleSheet, ActivityIndicator, RefreshControl, Keyboard
 } from 'react-native';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
-import { useRouter, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { ScreenBackButton } from '../components/ScreenBackButton';
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { GlassIconButton } from '../components/GlassIconButton';
-import { glassHeaderOptions } from '../constants/navHeader';
 import { ScreenHeading } from '../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../components/CollapsingHeader';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -445,48 +443,17 @@ export default function DiscountsScreen() {
 
     return (
         <>
-            <Stack.Screen options={searchOpen ? {
-                // Search mode: a centred text input replaces the title; the
-                // glass back button stays leading, the close button trailing.
-                headerShown: true,
-                headerStyle: { backgroundColor: colors.cardBackground },
-                headerShadowVisible: false,
-                headerLeft: () => <ScreenBackButton />,
-                headerTitle: () => (
-                    <TextInput
-                        ref={searchInputRef}
-                        autoFocus
-                        value={search}
-                        onChangeText={setSearch}
-                        placeholder={t('browse.searchPlaceholder')}
-                        placeholderTextColor={colors.textMuted}
-                        returnKeyType="search"
-                        onSubmitEditing={() => Keyboard.dismiss()}
-                        style={{
-                            fontSize: 17, fontWeight: '500',
-                            color: colors.textPrimary, minWidth: 220,
-                            paddingVertical: 2,
-                            borderBottomWidth: 1, borderBottomColor: colors.primary,
-                        }}
-                    />
-                ),
-                headerRight: () => <GlassIconButton icon="close" onPress={closeSearch} />,
-            } : {
-                // Title state: glass back + search; "Nuolaidos" renders as the
-                // left-aligned <ScreenHeading/> below.
-                ...glassHeaderOptions({
-                    back: true,
-                    right: <GlassIconButton icon="search" onPress={() => setSearchOpen(true)} />,
-                }),
-                headerStyle: { backgroundColor: colors.cardBackground },
-                headerShadowVisible: false,
-            }} />
-            {/* "Nuolaidos" collapses on scroll; the L2 filter stays pinned. In
-                search mode the title drops (the bar shows the input) but the
-                filter bubbles stay so you can narrow results while searching. */}
+            {/* "Nuolaidos" collapses on scroll; the L2 filter stays pinned. The
+                bar keeps its glass back + search/close buttons; in search mode
+                the input is a pinned field in the body (a TextInput in the bar
+                title strips the iOS-26 glass off the bar buttons). */}
             <CollapsingHeader
                 controller={header}
                 background={colors.cardBackground}
+                back
+                right={searchOpen
+                    ? <GlassIconButton icon="close" onPress={closeSearch} />
+                    : <GlassIconButton icon="search" onPress={() => setSearchOpen(true)} />}
                 collapsing={searchOpen ? null : (
                     <ScreenHeading
                         title="Nuolaidos"
@@ -495,7 +462,24 @@ export default function DiscountsScreen() {
                             : undefined}
                     />
                 )}
-                pinned={activeL2Ids.size > 0 ? (
+                pinned={(searchOpen || activeL2Ids.size > 0) ? (
+                    <>
+                        {searchOpen && (
+                            <View style={styles.searchFieldWrap}>
+                                <TextInput
+                                    ref={searchInputRef}
+                                    autoFocus
+                                    value={search}
+                                    onChangeText={setSearch}
+                                    placeholder={t('browse.searchPlaceholder')}
+                                    placeholderTextColor={colors.textMuted}
+                                    returnKeyType="search"
+                                    onSubmitEditing={() => Keyboard.dismiss()}
+                                    style={styles.searchField}
+                                />
+                            </View>
+                        )}
+                        {activeL2Ids.size > 0 && (
                         <ScrollView
                             horizontal
                             showsHorizontalScrollIndicator={false}
@@ -522,7 +506,9 @@ export default function DiscountsScreen() {
                                 </TouchableOpacity>
                             ))}
                         </ScrollView>
-                    ) : undefined}
+                        )}
+                    </>
+                ) : undefined}
             />
             <View style={{ flex: 1 }}>
                 <View style={styles.container}>
@@ -552,7 +538,7 @@ export default function DiscountsScreen() {
                             </View>
                         ) : (
                             <Animated.FlatList
-                                ref={header.scrollRef as any}
+                                {...header.scroll}
                                 data={products}
                                 keyExtractor={(item: any) => item.id.toString()}
                                 contentContainerStyle={[
@@ -699,6 +685,15 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         fontSize: 14,
         color: c.textPrimary,
         padding: 0,
+    },
+    searchFieldWrap: {
+        backgroundColor: c.cardBackground,
+        paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10,
+    },
+    searchField: {
+        borderWidth: 1, borderColor: c.border, borderRadius: 10,
+        paddingHorizontal: 12, paddingVertical: 9,
+        fontSize: 16, color: c.textPrimary,
     },
     bubblesRow: {
         backgroundColor: c.cardBackground,

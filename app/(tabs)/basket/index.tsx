@@ -7,6 +7,7 @@ import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
@@ -158,6 +159,7 @@ export default function BasketScreen() {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
     const header = useCollapsingHeader();
+    const insets = useSafeAreaInsets();
     const tabBarHeight = useSafeBottomTabBarHeight();
     const { setDraftBasketId } = useBasketState();
     // Own/private-template baskets attribute to the current user's handle when
@@ -418,7 +420,7 @@ export default function BasketScreen() {
     if (loading) return (
         <View style={styles.container}>
             <Stack.Screen options={glassHeaderOptions()} />
-            <ScreenHeading title={t('tabs.basket')} />
+            <ScreenHeading title={t('tabs.basket')} topInset={insets.top} />
             <View style={styles.skelChipRow}>
                 {Array.from({ length: 2 }).map((_, i) => (
                     <SkeletonBox key={i} width={96} height={32} borderRadius={20} />
@@ -436,7 +438,6 @@ export default function BasketScreen() {
     if (view === 'templates') {
         return (
             <View style={styles.container}>
-                <Stack.Screen options={glassHeaderOptions()} />
                 <CollapsingHeader
                     controller={header}
                     background={colors.cardBackground}
@@ -444,10 +445,11 @@ export default function BasketScreen() {
                     pinned={pinnedFilter}
                 />
                 <Animated.FlatList
-                    ref={header.scrollRef as any}
+                    {...header.scroll}
                     data={templates}
                     keyExtractor={(item: any) => `t-${item.id}`}
-                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 16 }]}
+                    contentInsetAdjustmentBehavior="never"
+                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
                     refreshControl={
                         <RefreshControl
                             refreshing={pullRefreshing}
@@ -608,7 +610,6 @@ export default function BasketScreen() {
     // ─── Krepšeliai view (accordion) ──────────────────────────────────────
     return (
         <View style={styles.container}>
-            <Stack.Screen options={glassHeaderOptions()} />
             <CollapsingHeader
                 controller={header}
                 background={colors.cardBackground}
@@ -616,8 +617,9 @@ export default function BasketScreen() {
                 pinned={pinnedFilter}
             />
             <Animated.ScrollView
-                ref={header.scrollRef}
-                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 16 }]}
+                {...header.scroll}
+                contentInsetAdjustmentBehavior="never"
+                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
                 refreshControl={
                     <RefreshControl
                         refreshing={pullRefreshing}

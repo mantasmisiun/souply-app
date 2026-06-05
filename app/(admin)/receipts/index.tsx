@@ -3,12 +3,11 @@ import {
     RefreshControl, ScrollView, Image,
 } from 'react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Stack, useFocusEffect, useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import Animated from 'react-native-reanimated';
-import { glassHeaderOptions } from '../../../constants/navHeader';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import {
@@ -118,7 +117,6 @@ export default function ReceiptsScreen() {
 
     return (
         <View style={styles.root}>
-            <Stack.Screen options={glassHeaderOptions()} />
             <CollapsingHeader
                 controller={header}
                 background={colors.cardBackground}
@@ -151,7 +149,7 @@ export default function ReceiptsScreen() {
                 </View>
             ) : (
                 <Animated.FlatList
-                    ref={header.scrollRef as any}
+                    {...header.scroll}
                     data={receipts}
                     keyExtractor={(r: any) => r.id}
                     renderItem={renderItem}

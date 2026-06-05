@@ -679,20 +679,12 @@ export default function CategoryScreen() {
 
     return (
         <>
-            <Stack.Screen
-                options={{
-                    ...glassHeaderOptions({
-                        back: true,
-                        right: <GlassIconButton icon="search" onPress={pushSearch} />,
-                    }),
-                    headerStyle: { backgroundColor: colors.cardBackground },
-                    headerShadowVisible: false,
-                }}
-            />
             {/* Category title collapses on scroll; mode toggle + L3 filter pin. */}
             <CollapsingHeader
                 controller={header}
                 background={colors.cardBackground}
+                back
+                right={<GlassIconButton icon="search" onPress={pushSearch} />}
                 collapsing={<ScreenHeading title={decodeURIComponent(name || '')} />}
                 pinned={
                     <>
@@ -742,7 +734,7 @@ export default function CategoryScreen() {
                         </View>
                     ) : (
                         <Animated.FlatList
-                            ref={header.scrollRef as any}
+                            {...header.scroll}
                             data={visibleProducts}
                             keyExtractor={(item: any) => item.id.toString()}
                             contentContainerStyle={[

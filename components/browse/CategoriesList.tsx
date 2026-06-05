@@ -1,7 +1,7 @@
 import { View, FlatList, TouchableOpacity, Text, StyleSheet, ActivityIndicator } from 'react-native';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing, type AnimatedRef } from 'react-native-reanimated';
+import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { useTheme, type AppTheme } from '../../constants/theme';
@@ -129,14 +129,14 @@ interface Props {
      *  the list (e.g. the Nuolaidos shortcut), so it isn't pinned above
      *  the categories. */
     header?: ReactElement | null;
-    /** Animated scroll ref from useCollapsingHeader (lets a collapsing header
-     *  track this list's scroll). Optional — omit for a plain list. */
-    scrollRef?: AnimatedRef<Animated.ScrollView>;
+    /** Scroll handler props from useCollapsingHeader().scroll, so a collapsing
+     *  header can track this list's scroll. Optional — omit for a plain list. */
+    scroll?: { onScroll?: any; scrollEventThrottle?: number };
     /** Top padding to reserve for an overlaying collapsing header. */
     contentPaddingTop?: number;
 }
 
-export function CategoriesList({ onSelectL2, header, scrollRef, contentPaddingTop = 0 }: Props) {
+export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop = 0 }: Props) {
     const colors = useTheme();
     const { i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -210,11 +210,12 @@ export function CategoriesList({ onSelectL2, header, scrollRef, contentPaddingTo
 
     return (
         <Animated.FlatList
-            ref={scrollRef as any}
+            {...scroll}
             style={styles.container}
             data={l1Categories}
             keyExtractor={(item: any) => item.id.toString()}
-            contentContainerStyle={[styles.list, { paddingTop: contentPaddingTop + 16, paddingBottom: tabBarHeight + 16 }]}
+            contentInsetAdjustmentBehavior="never"
+            contentContainerStyle={[styles.list, { paddingTop: contentPaddingTop + 16, paddingBottom: tabBarHeight + 24 }]}
             scrollIndicatorInsets={{ bottom: tabBarHeight }}
             ListHeaderComponent={header ?? undefined}
             renderItem={({ item }) => (

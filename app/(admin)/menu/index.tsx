@@ -1,13 +1,12 @@
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { useMemo } from 'react';
-import { Stack, useRouter } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { useAdminModeStore } from '../../../state/adminModeStore';
 import { useProfileStore } from '../../../state/profileStore';
 import Animated from 'react-native-reanimated';
-import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 
@@ -77,13 +76,13 @@ export default function AdminMenu() {
 
     return (
         <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
-        <Stack.Screen options={glassHeaderOptions({ right: settingsGear })} />
         <CollapsingHeader
             controller={header}
             background={colors.cardBackground}
+            right={settingsGear}
             collapsing={<ScreenHeading title={t('tabs.profilis')} />}
         />
-        <Animated.ScrollView ref={header.scrollRef} contentContainerStyle={[styles.scroll, { paddingTop: header.paddingTop + 20 }]}>
+        <Animated.ScrollView {...header.scroll} contentContainerStyle={[styles.scroll, { paddingTop: header.paddingTop + 20 }]}>
             <View style={styles.header}>
                 <Ionicons name="shield-checkmark" size={48} color={colors.primary} />
                 <Text style={styles.title}>{t('admin.title')}</Text>

@@ -33,15 +33,26 @@ export const tabStackOptions = (colors: AppTheme): NativeStackNavigationOptions 
  * Per-screen native bar: titleless, with an optional glass back chevron and an
  * optional right-side action. Pair with a <ScreenHeading/> in the body for the
  * actual (left-aligned) title.
+ *
+ * THE RULE: a bar with no back button AND no action is empty — so it's hidden
+ * entirely (`headerShown: false`) and <CollapsingHeader/> takes the status-bar
+ * inset instead, reclaiming the otherwise-empty bar height.
  */
 export const glassHeaderOptions = (
-    opts: { back?: boolean; right?: ReactNode } = {},
-): NativeStackNavigationOptions => ({
-    headerShown: true,
-    // No bar title — it would render centred (and route-name fallback shows
-    // "product/[id]"). The title lives in <ScreenHeading/>.
-    title: '',
-    headerTitle: () => null,
-    ...(opts.back ? { headerLeft: () => <ScreenBackButton /> } : {}),
-    ...(opts.right ? { headerRight: () => opts.right } : {}),
-});
+    opts: { back?: boolean; right?: ReactNode; background?: string } = {},
+): NativeStackNavigationOptions => {
+    if (!opts.back && !opts.right) {
+        return { headerShown: false };
+    }
+    return {
+        headerShown: true,
+        // No bar title — it would render centred (and route-name fallback shows
+        // "product/[id]"). The title lives in <ScreenHeading/>.
+        title: '',
+        headerTitle: () => null,
+        headerShadowVisible: false,
+        ...(opts.background ? { headerStyle: { backgroundColor: opts.background } } : {}),
+        ...(opts.back ? { headerLeft: () => <ScreenBackButton /> } : {}),
+        ...(opts.right ? { headerRight: () => opts.right } : {}),
+    };
+};

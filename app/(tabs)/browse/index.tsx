@@ -1,12 +1,11 @@
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { useMemo, useRef } from 'react';
-import { useRouter, Stack } from 'expo-router';
+import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { GlassIconButton } from '../../../components/GlassIconButton';
 import { CategoriesList, type Category } from '../../../components/browse/CategoriesList';
-import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 
@@ -58,16 +57,16 @@ export default function BrowseIndex() {
 
     return (
         <View style={{ flex: 1 }}>
-            <Stack.Screen options={glassHeaderOptions({ right: searchAction })} />
             {/* "Naršyti" collapses on scroll; the discounts shortcut scrolls with the list. */}
             <CollapsingHeader
                 controller={header}
                 background={colors.cardBackground}
+                right={searchAction}
                 collapsing={<ScreenHeading title={t('browse.title')} />}
             />
             <CategoriesList
                 onSelectL2={handleSelectL2}
-                scrollRef={header.scrollRef}
+                scroll={header.scroll}
                 contentPaddingTop={header.paddingTop}
                 header={discountsHeader}
             />

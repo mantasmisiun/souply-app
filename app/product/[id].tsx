@@ -4,7 +4,7 @@ import { useCollapsingHeader, CollapsingHeader } from '../../components/Collapsi
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { ProductImage } from '../../components/ProductImage';
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
-import { useLocalSearchParams, Stack, useFocusEffect } from 'expo-router';
+import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
@@ -24,7 +24,6 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import AmountPickerModal from '../../components/AmountPickerModal';
 import { QuantityControl } from '../../components/QuantityControl';
-import { ScreenBackButton } from '../../components/ScreenBackButton';
 import { ScreenHeading } from '../../components/ScreenHeading';
 import { resolveCanonicalStep, resolveDisplayUnit } from '../../utils/canonicalStep';
 
@@ -452,23 +451,11 @@ export default function ProductDetailScreen() {
 
     return (
         <>
-            <Stack.Screen options={{
-                // Titleless glass bar — just the back chevron. The title,
-                // breadcrumb and store filter form a FIXED header below it (see
-                // ScreenHeading + ChainFilterBar outside the scroll), so they
-                // stay pinned under the bar while only the SP list scrolls.
-                headerShown: true,
-                title: '',
-                headerTitle: () => null,
-                headerStyle: { backgroundColor: colors.cardBackground },
-                headerShadowVisible: false,
-                headerTintColor: colors.primary,
-                headerLeft: () => <ScreenBackButton />,
-            }} />
-            {/* Title + breadcrumb collapse on scroll; store filter stays pinned. */}
+            {/* Glass back bar; title + breadcrumb collapse on scroll; filter pinned. */}
             <CollapsingHeader
                 controller={header}
                 background={colors.cardBackground}
+                back
                 collapsing={
                     <ScreenHeading
                         title={product.name}
@@ -496,7 +483,7 @@ export default function ProductDetailScreen() {
             {/* Only the SP list scrolls / rubber-bands; paddingTop reserves the
                 overlay's space (the opaque overlay hides the brief measure jump). */}
             <Animated.ScrollView
-                ref={header.scrollRef}
+                {...header.scroll}
                 style={styles.container}
                 contentContainerStyle={{ paddingTop: header.paddingTop, paddingBottom: BAR_HEIGHT + 16 }}
             >

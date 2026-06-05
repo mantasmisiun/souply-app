@@ -4,6 +4,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Stack, useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
@@ -20,6 +21,7 @@ const PRIORITY: QueueType[] = ['flags', 'uncategorised', 'images', 'amounts'];
 
 export default function QueueScreen() {
     const colors = useTheme();
+    const insets = useSafeAreaInsets();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
 
@@ -100,7 +102,7 @@ export default function QueueScreen() {
     return (
         <View style={styles.root}>
             <Stack.Screen options={glassHeaderOptions()} />
-            <ScreenHeading title={t('admin.tabQueue')} />
+            <ScreenHeading title={t('admin.tabQueue')} topInset={insets.top} />
             <View style={styles.chipBar}>
                 <ScrollView
                     horizontal
