@@ -6,6 +6,8 @@ import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useRouter, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ScreenBackButton } from '../components/ScreenBackButton';
 import { GlassIconButton } from '../components/GlassIconButton';
+import { glassHeaderOptions } from '../constants/navHeader';
+import { ScreenHeading } from '../components/ScreenHeading';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -440,82 +442,44 @@ export default function DiscountsScreen() {
 
     return (
         <>
-            <Stack.Screen options={{
-                title: 'Nuolaidos',
+            <Stack.Screen options={searchOpen ? {
+                // Search mode: a centred text input replaces the title; the
+                // glass back button stays leading, the close button trailing.
+                headerShown: true,
                 headerStyle: { backgroundColor: colors.cardBackground },
                 headerShadowVisible: false,
                 headerLeft: () => <ScreenBackButton />,
-                headerTitle: searchOpen
-                    ? () => (
-                        <TextInput
-                            ref={searchInputRef}
-                            autoFocus
-                            value={search}
-                            onChangeText={setSearch}
-                            placeholder={t('browse.searchPlaceholder')}
-                            placeholderTextColor={colors.textMuted}
-                            returnKeyType="search"
-                            onSubmitEditing={() => Keyboard.dismiss()}
-                            style={{
-                                fontSize: 17, fontWeight: '500',
-                                color: colors.textPrimary, minWidth: 220,
-                                paddingVertical: 2,
-                                borderBottomWidth: 1, borderBottomColor: colors.primary,
-                            }}
-                        />
-                    )
-                    : () => (
-                        // Title + freshness sit in a 2-line stack so the
-                        // "Atnaujinta dabar" indicator costs zero vertical
-                        // space in the list area. Mirrors the product
-                        // detail nav-bar (title + breadcrumb).
-                        <View style={{ alignItems: 'flex-start' }}>
-                            <Text style={{ fontSize: 17, fontWeight: '600', color: colors.textPrimary }}>
-                                Nuolaidos
-                            </Text>
-                            {dataUpdatedAt > 0 && allProducts.length > 0 && (
-                                <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 1 }} numberOfLines={1}>
-                                    {formatFreshness(dataUpdatedAt, t)}
-                                </Text>
-                            )}
-                        </View>
-                    ),
-                headerRight: () =>
-                    searchOpen
-                        ? <GlassIconButton icon="close" onPress={closeSearch} />
-                        : <GlassIconButton icon="search" onPress={() => setSearchOpen(true)} />,
+                headerTitle: () => (
+                    <TextInput
+                        ref={searchInputRef}
+                        autoFocus
+                        value={search}
+                        onChangeText={setSearch}
+                        placeholder={t('browse.searchPlaceholder')}
+                        placeholderTextColor={colors.textMuted}
+                        returnKeyType="search"
+                        onSubmitEditing={() => Keyboard.dismiss()}
+                        style={{
+                            fontSize: 17, fontWeight: '500',
+                            color: colors.textPrimary, minWidth: 220,
+                            paddingVertical: 2,
+                            borderBottomWidth: 1, borderBottomColor: colors.primary,
+                        }}
+                    />
+                ),
+                headerRight: () => <GlassIconButton icon="close" onPress={closeSearch} />,
+            } : {
+                // Title state: glass back + search; "Nuolaidos" renders as the
+                // left-aligned <ScreenHeading/> below.
+                ...glassHeaderOptions({
+                    back: true,
+                    right: <GlassIconButton icon="search" onPress={() => setSearchOpen(true)} />,
+                }),
+                headerStyle: { backgroundColor: colors.cardBackground },
+                headerShadowVisible: false,
             }} />
             <View style={{ flex: 1 }}>
                 <View style={styles.container}>
-                    {activeL2Ids.size > 0 && (
-                        <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            contentContainerStyle={styles.bubblesContainer}
-                            style={styles.bubblesRow}
-                        >
-                            <TouchableOpacity
-                                style={[styles.bubble, selectedL2 === null && styles.bubbleActive]}
-                                onPress={() => setSelectedL2(null)}
-                            >
-                                <Text style={[styles.bubbleText, selectedL2 === null && styles.bubbleTextActive]}>
-                                    Visos kategorijos
-                                </Text>
-                            </TouchableOpacity>
-                            {l2Categories.filter(cat => activeL2Ids.has(cat.id)).map(cat => (
-                                <TouchableOpacity
-                                    key={cat.id}
-                                    style={[styles.bubble, selectedL2 === cat.id && styles.bubbleActive]}
-                                    onPress={() => setSelectedL2(selectedL2 === cat.id ? null : cat.id)}
-                                >
-                                    <Text style={[styles.bubbleText, selectedL2 === cat.id && styles.bubbleTextActive]}>
-                                        {cat.name}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
-                        </ScrollView>
-                    )}
-
                     {isError && allProducts.length > 0 && (
                         <TouchableOpacity style={styles.errorBanner} onPress={() => refetch()} activeOpacity={0.7}>
                             <Ionicons name="warning-outline" size={16} color={colors.onPrimary} style={{ marginRight: 6 }} />
@@ -564,6 +528,47 @@ export default function DiscountsScreen() {
                                 numColumns={2}
                                 columnWrapperStyle={styles.row}
                                 keyboardDismissMode="on-drag"
+                                ListHeaderComponent={
+                                    <>
+                                        {!searchOpen && (
+                                            <ScreenHeading
+                                                title="Nuolaidos"
+                                                bleed={12}
+                                                subtitle={dataUpdatedAt > 0 && allProducts.length > 0
+                                                    ? formatFreshness(dataUpdatedAt, t)
+                                                    : undefined}
+                                            />
+                                        )}
+                                        {activeL2Ids.size > 0 && (
+                                            <ScrollView
+                                                horizontal
+                                                showsHorizontalScrollIndicator={false}
+                                                contentContainerStyle={styles.bubblesContainer}
+                                                style={[styles.bubblesRow, { marginHorizontal: -12 }]}
+                                            >
+                                                <TouchableOpacity
+                                                    style={[styles.bubble, selectedL2 === null && styles.bubbleActive]}
+                                                    onPress={() => setSelectedL2(null)}
+                                                >
+                                                    <Text style={[styles.bubbleText, selectedL2 === null && styles.bubbleTextActive]}>
+                                                        Visos kategorijos
+                                                    </Text>
+                                                </TouchableOpacity>
+                                                {l2Categories.filter(cat => activeL2Ids.has(cat.id)).map(cat => (
+                                                    <TouchableOpacity
+                                                        key={cat.id}
+                                                        style={[styles.bubble, selectedL2 === cat.id && styles.bubbleActive]}
+                                                        onPress={() => setSelectedL2(selectedL2 === cat.id ? null : cat.id)}
+                                                    >
+                                                        <Text style={[styles.bubbleText, selectedL2 === cat.id && styles.bubbleTextActive]}>
+                                                            {cat.name}
+                                                        </Text>
+                                                    </TouchableOpacity>
+                                                ))}
+                                            </ScrollView>
+                                        )}
+                                    </>
+                                }
                                 refreshControl={
                                     <RefreshControl
                                         refreshing={refreshing}

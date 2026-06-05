@@ -1,12 +1,13 @@
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { useMemo, useRef } from 'react';
-import { useRouter } from 'expo-router';
+import { useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../../constants/theme';
-import { TabHeader } from '../../../components/TabHeader';
 import { GlassIconButton } from '../../../components/GlassIconButton';
 import { CategoriesList, type Category } from '../../../components/browse/CategoriesList';
+import { glassHeaderOptions } from '../../../constants/navHeader';
+import { ScreenHeading } from '../../../components/ScreenHeading';
 
 export default function BrowseIndex() {
     const colors = useTheme();
@@ -54,8 +55,12 @@ export default function BrowseIndex() {
 
     return (
         <View style={{ flex: 1 }}>
-            <TabHeader title={t('browse.title')} rightAction={searchAction} />
-            <CategoriesList onSelectL2={handleSelectL2} header={discountsHeader} />
+            <Stack.Screen options={glassHeaderOptions({ right: searchAction })} />
+            {/* Heading lives in the list header so it scrolls away like product. */}
+            <CategoriesList
+                onSelectL2={handleSelectL2}
+                header={<><ScreenHeading title={t('browse.title')} bleed={16} />{discountsHeader}</>}
+            />
         </View>
     );
 }

@@ -1,12 +1,13 @@
 import { View, Text, StyleSheet, TouchableOpacity, ScrollView } from 'react-native';
 import { useMemo } from 'react';
-import { useRouter } from 'expo-router';
+import { Stack, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../../constants/theme';
-import { useAdminModeStore } from '../../state/adminModeStore';
-import { useProfileStore } from '../../state/profileStore';
-import { TabHeader } from '../../components/TabHeader';
+import { useTheme, type AppTheme } from '../../../constants/theme';
+import { useAdminModeStore } from '../../../state/adminModeStore';
+import { useProfileStore } from '../../../state/profileStore';
+import { glassHeaderOptions } from '../../../constants/navHeader';
+import { ScreenHeading } from '../../../components/ScreenHeading';
 
 /**
  * Admin Profilis tab.
@@ -41,7 +42,7 @@ export default function AdminMenu() {
         // Release any in-flight image leases so abandoned cards don't
         // wait the full 2h before another admin can claim them.
         try {
-            const { releaseAdminImageBatch } = await import('../../services/adminClient');
+            const { releaseAdminImageBatch } = await import('../../../services/adminClient');
             await releaseAdminImageBatch();
         } catch {
             /* non-fatal — release is a nice-to-have */
@@ -73,7 +74,8 @@ export default function AdminMenu() {
 
     return (
         <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
-        <TabHeader title={t('tabs.profilis')} rightAction={settingsGear} />
+        <Stack.Screen options={glassHeaderOptions({ right: settingsGear })} />
+        <ScreenHeading title={t('tabs.profilis')} />
         <ScrollView contentContainerStyle={styles.scroll}>
             <View style={styles.header}>
                 <Ionicons name="shield-checkmark" size={48} color={colors.primary} />

@@ -93,10 +93,9 @@ export default function TabLayout() {
                     backgroundColor: colors.cardBackground,
                     borderTopColor: colors.borderSubtle,
                 },
-                // Every tab screen renders its own <TabHeader/> for visual
-                // parity with the iOS NativeTabs path (which never gets a
-                // native nav bar). Disable the JS Tabs header globally so
-                // we don't stack two bars on Android.
+                // Each tab is a folder with its own nested Stack (see
+                // tabStackOptions), which provides the native glass header.
+                // Disable the JS Tabs header so Android doesn't stack two bars.
                 headerShown: false,
             }}
         >

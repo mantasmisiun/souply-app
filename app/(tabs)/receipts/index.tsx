@@ -24,6 +24,8 @@ import {
 import { API_BASE_URL } from "../../../config/api";
 import { getUserId } from "../../../config/user";
 import { useTheme, type AppTheme } from "../../../constants/theme";
+import { glassHeaderOptions } from "../../../constants/navHeader";
+import { ScreenHeading } from "../../../components/ScreenHeading";
 import { chainBrandName, chainBrandColor } from "../../../utils/chainBrandName";
 import { SkeletonBox } from "../../../components/SkeletonBox";
 import { PendingSwipesBanner } from "../../../components/PendingSwipesBanner";
@@ -396,7 +398,8 @@ export default function ReceiptsScreen() {
   if (loading) {
     return (
       <View style={styles.container}>
-        <Stack.Screen options={{ title: t('tabs.receipts') }} />
+        <Stack.Screen options={glassHeaderOptions()} />
+        <ScreenHeading title={t('tabs.receipts')} />
         <View style={{
           backgroundColor: colors.cardBackground,
           borderBottomWidth: 0.5, borderBottomColor: colors.border,
@@ -581,7 +584,8 @@ export default function ReceiptsScreen() {
 
   return (
     <View style={styles.container}>
-      <Stack.Screen options={{ title: t('tabs.receipts') }} />
+      <Stack.Screen options={glassHeaderOptions()} />
+      <ScreenHeading title={t('tabs.receipts')} />
       {chainFilters.length > 1 && (
         <StoreChipBar
           chips={chainFilters.map(f => ({

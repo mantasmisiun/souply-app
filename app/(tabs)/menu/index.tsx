@@ -8,23 +8,24 @@ import Animated, {
     useSharedValue,
     withTiming,
 } from 'react-native-reanimated';
-import { TabHeader } from '../../components/TabHeader';
-import { GlassIconButton } from '../../components/GlassIconButton';
-import { useRouter , useFocusEffect } from 'expo-router';
+import { GlassIconButton } from '../../../components/GlassIconButton';
+import { Stack, useRouter , useFocusEffect } from 'expo-router';
+import { glassHeaderOptions } from '../../../constants/navHeader';
+import { ScreenHeading } from '../../../components/ScreenHeading';
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../../constants/theme';
-import { getLevelData, getLevelName } from '../../constants/levels';
-import { DonutChart, type DonutSlice } from '../../components/DonutChart';
-import { BarChart, type BarSlice } from '../../components/BarChart';
-import { useLevelStore } from '../../state/levelStore';
-import { useProfileStore, fetchProfileIfStale } from '../../state/profileStore';
-import { useAuthState } from '../../state/authState';
-import CreatorProfileHeader from '../../components/CreatorProfileHeader';
-import { SkeletonBox } from '../../components/SkeletonBox';
-import { formatEuro } from '../../utils/formatCurrency';
-import { chainBrandColor } from '../../utils/chainBrandName';
+import { useTheme, type AppTheme } from '../../../constants/theme';
+import { getLevelData, getLevelName } from '../../../constants/levels';
+import { DonutChart, type DonutSlice } from '../../../components/DonutChart';
+import { BarChart, type BarSlice } from '../../../components/BarChart';
+import { useLevelStore } from '../../../state/levelStore';
+import { useProfileStore, fetchProfileIfStale } from '../../../state/profileStore';
+import { useAuthState } from '../../../state/authState';
+import CreatorProfileHeader from '../../../components/CreatorProfileHeader';
+import { SkeletonBox } from '../../../components/SkeletonBox';
+import { formatEuro } from '../../../utils/formatCurrency';
+import { chainBrandColor } from '../../../utils/chainBrandName';
 import * as Haptics from 'expo-haptics';
 import Constants from 'expo-constants';
 
@@ -108,7 +109,7 @@ const legendStyles = StyleSheet.create({
  * filled brand card + emoji + description so it reads as the primary action.
  */
 function CreatorAccountCTA({ styles, router, t }: any) {
-    const { useAuthState } = require('../../state/authState');
+    const { useAuthState } = require('../../../state/authState');
     const user = useAuthState((s: any) => s.user);
     if (user) return null;
     return (
@@ -357,8 +358,9 @@ export default function ProfilisScreen() {
 
     return (
         <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
-        <TabHeader title={t('tabs.profilis')} rightAction={settingsGear} />
+        <Stack.Screen options={glassHeaderOptions({ right: settingsGear })} />
         <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+            <ScreenHeading title={t('tabs.profilis')} bleed={16} />
             {/* Creator header — avatar (tap to upload) + name + @handle +
                 aggregate template stats. Only once signed in as a creator. */}
             {authUser && profile && (
@@ -503,7 +505,7 @@ export default function ProfilisScreen() {
                     <TouchableOpacity
                         style={styles.row}
                         onPress={async () => {
-                            const { useAdminModeStore } = await import('../../state/adminModeStore');
+                            const { useAdminModeStore } = await import('../../../state/adminModeStore');
                             await useAdminModeStore.getState().setMode('admin');
                             // Full reload — cross-group navigation
                             // doesn't always cleanly tear down the

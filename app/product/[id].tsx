@@ -22,6 +22,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import AmountPickerModal from '../../components/AmountPickerModal';
 import { QuantityControl } from '../../components/QuantityControl';
+import { ScreenBackButton } from '../../components/ScreenBackButton';
+import { ScreenHeading } from '../../components/ScreenHeading';
 import { resolveCanonicalStep, resolveDisplayUnit } from '../../utils/canonicalStep';
 
 interface StoreProduct {
@@ -447,32 +449,43 @@ export default function ProductDetailScreen() {
     return (
         <>
             <Stack.Screen options={{
+                // Titleless glass bar — just the back chevron. The title,
+                // breadcrumb and store filter form a FIXED header below it (see
+                // ScreenHeading + ChainFilterBar outside the scroll), so they
+                // stay pinned under the bar while only the SP list scrolls.
+                headerShown: true,
+                title: '',
+                headerTitle: () => null,
                 headerStyle: { backgroundColor: colors.cardBackground },
                 headerShadowVisible: false,
-                headerTitle: () => (
-                    <View style={styles.navHeaderWrap}>
-                        <Text style={styles.navTitle} numberOfLines={1}>{product.name}</Text>
-                        {categoryParts.length > 0 && (
-                            <View style={styles.navBreadcrumb}>
-                                {categoryParts.map((part, i) => (
-                                    <React.Fragment key={i}>
-                                        {i > 0 && <Text style={styles.navBreadcrumbSep}>›</Text>}
-                                        <Text style={styles.navBreadcrumbPart} numberOfLines={1}>{part}</Text>
-                                    </React.Fragment>
-                                ))}
-                            </View>
-                        )}
-                    </View>
-                ),
+                headerTintColor: colors.primary,
+                headerLeft: () => <ScreenBackButton />,
             }} />
-            <ScrollView style={styles.container} stickyHeaderIndices={[0]} contentContainerStyle={{ paddingBottom: BAR_HEIGHT + 16 }}>
-                {/* Chain filter */}
-                <ChainFilterBar
-                    chains={chains}
-                    selectedId={selectedChainId}
-                    onSelect={setSelectedChainId}
-                    allLabel={t('product.allStores')}
-                />
+            {/* Fixed header zone — pinned under the nav bar, never scrolls. */}
+            <ScreenHeading
+                title={product.name}
+                subtitle={categoryParts.length > 0 ? (
+                    <View style={styles.breadcrumbRow}>
+                        {categoryParts.map((part, i) => (
+                            <React.Fragment key={i}>
+                                {i > 0 && <Text style={styles.navBreadcrumbSep}>›</Text>}
+                                <Text style={styles.navBreadcrumbPart} numberOfLines={1}>{part}</Text>
+                            </React.Fragment>
+                        ))}
+                    </View>
+                ) : undefined}
+            />
+            <ChainFilterBar
+                chains={chains}
+                selectedId={selectedChainId}
+                onSelect={setSelectedChainId}
+                allLabel={t('product.allStores')}
+            />
+            {/* Only the SP list scrolls / rubber-bands. */}
+            <ScrollView
+                style={styles.container}
+                contentContainerStyle={{ paddingBottom: BAR_HEIGHT + 16 }}
+            >
 
                 {/* StoreProduct list */}
                 {filteredStoreProducts.length === 0 ? (
@@ -673,9 +686,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-    navHeaderWrap: { alignItems: 'flex-start' },
-    navTitle: { fontSize: 16, fontWeight: '600', color: c.textPrimary },
-    navBreadcrumb: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 1 },
+    breadcrumbRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
     navBreadcrumbSep: { fontSize: 10, color: c.textMuted },
     navBreadcrumbPart: { fontSize: 11, color: c.textMuted, flexShrink: 1, minWidth: 16 },
 

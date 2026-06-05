@@ -23,7 +23,8 @@ import { useTranslation } from 'react-i18next';
 import { ScalePressable } from '../../components/ScalePressable';
 import { GlassButton } from '../../components/GlassButton';
 import { GlassIconButton } from '../../components/GlassIconButton';
-import { ScreenBackButton } from '../../components/ScreenBackButton';
+import { glassHeaderOptions } from '../../constants/navHeader';
+import { ScreenHeading } from '../../components/ScreenHeading';
 import { resolveCanonicalStep } from '../../utils/canonicalStep';
 
 interface Category {
@@ -639,11 +640,11 @@ export default function CategoryScreen() {
     if (loading) return (
         <>
         <Stack.Screen options={{
-            title: decodeURIComponent((name as string) || ''),
+            ...glassHeaderOptions({ back: true }),
             headerStyle: { backgroundColor: colors.cardBackground },
             headerShadowVisible: false,
-            headerLeft: () => <ScreenBackButton />,
         }} />
+        <ScreenHeading title={decodeURIComponent((name as string) || '')} />
         <View style={styles.container}>
             <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, gap: 6, backgroundColor: colors.cardBackground }}>
                 <SkeletonBox width={170} height={13} borderRadius={6} />
@@ -677,15 +678,15 @@ export default function CategoryScreen() {
         <>
             <Stack.Screen
                 options={{
-                    title: decodeURIComponent(name || ''),
+                    ...glassHeaderOptions({
+                        back: true,
+                        right: <GlassIconButton icon="search" onPress={pushSearch} />,
+                    }),
                     headerStyle: { backgroundColor: colors.cardBackground },
                     headerShadowVisible: false,
-                    headerLeft: () => <ScreenBackButton />,
-                    headerRight: () => (
-                        <GlassIconButton icon="search" onPress={pushSearch} />
-                    ),
                 }}
             />
+            <ScreenHeading title={decodeURIComponent(name || '')} />
             <View style={{ flex: 1 }}>
             <View style={styles.container}>
                 <View style={styles.modeToggleRow}>

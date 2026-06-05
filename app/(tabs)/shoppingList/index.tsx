@@ -7,6 +7,8 @@ import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
 import { getUserId } from '../../../config/user';
 import { useTheme, type AppTheme } from '../../../constants/theme';
+import { glassHeaderOptions } from '../../../constants/navHeader';
+import { ScreenHeading } from '../../../components/ScreenHeading';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatDate } from '../../../utils/formatCurrency';
 import { chainBrandName, getMiniLogoUrl, chainBrandColor } from '../../../utils/chainBrandName';
@@ -406,7 +408,8 @@ export default function ShoppingListScreen() {
 
     if (loading) return (
         <View style={styles.container}>
-            <Stack.Screen options={{ title: t('tabs.shoppingList') }} />
+            <Stack.Screen options={glassHeaderOptions()} />
+            <ScreenHeading title={t('tabs.shoppingList')} />
             <View style={{ padding: 16 }}>
                 <SkeletonBox width={70} height={13} borderRadius={6} style={{ marginBottom: 12 }} />
                 {Array.from({ length: 5 }).map((_, i) => (
@@ -427,7 +430,8 @@ export default function ShoppingListScreen() {
 
     return (
         <View style={styles.container}>
-            <Stack.Screen options={{ title: t('tabs.shoppingList') }} />
+            <Stack.Screen options={glassHeaderOptions()} />
+            <ScreenHeading title={t('tabs.shoppingList')} />
 
             {/* Chain filter — only when 2+ distinct chains */}
             {allChains.length >= 2 && (

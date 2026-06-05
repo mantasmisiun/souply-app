@@ -2,15 +2,16 @@ import {
     View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator,
 } from 'react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { useFocusEffect } from 'expo-router';
+import { Stack, useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../../constants/theme';
-import { TabHeader } from '../../components/TabHeader';
-import { getQueueCounts, type QueueCounts } from '../../services/adminClient';
-import { FlagsQueue } from '../../components/admin/queue/FlagsQueue';
-import { UncategorisedQueue } from '../../components/admin/queue/UncategorisedQueue';
-import { ImagesQueue } from '../../components/admin/queue/ImagesQueue';
-import { AmountsQueue } from '../../components/admin/queue/AmountsQueue';
+import { useTheme, type AppTheme } from '../../../constants/theme';
+import { glassHeaderOptions } from '../../../constants/navHeader';
+import { ScreenHeading } from '../../../components/ScreenHeading';
+import { getQueueCounts, type QueueCounts } from '../../../services/adminClient';
+import { FlagsQueue } from '../../../components/admin/queue/FlagsQueue';
+import { UncategorisedQueue } from '../../../components/admin/queue/UncategorisedQueue';
+import { ImagesQueue } from '../../../components/admin/queue/ImagesQueue';
+import { AmountsQueue } from '../../../components/admin/queue/AmountsQueue';
 
 type ChipId = 'all' | 'flags' | 'uncategorised' | 'images' | 'amounts';
 type QueueType = Exclude<ChipId, 'all'>;
@@ -98,7 +99,8 @@ export default function QueueScreen() {
 
     return (
         <View style={styles.root}>
-            <TabHeader title={t('admin.tabQueue')} />
+            <Stack.Screen options={glassHeaderOptions()} />
+            <ScreenHeading title={t('admin.tabQueue')} />
             <View style={styles.chipBar}>
                 <ScrollView
                     horizontal

@@ -1,16 +1,8 @@
 import { Stack } from 'expo-router';
 import { useTheme } from '../../../constants/theme';
+import { tabStackOptions } from '../../../constants/navHeader';
 
 export default function ReceiptsLayout() {
     const colors = useTheme();
-    return (
-        <Stack
-            screenOptions={{
-                headerStyle: { backgroundColor: colors.cardBackground },
-                headerTintColor: colors.textPrimary,
-                headerShadowVisible: false,
-                contentStyle: { backgroundColor: colors.pageBackground },
-            }}
-        />
-    );
+    return <Stack screenOptions={tabStackOptions(colors)} />;
 }
