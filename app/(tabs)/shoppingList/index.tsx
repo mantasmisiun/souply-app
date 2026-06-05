@@ -545,7 +545,7 @@ export default function ShoppingListScreen() {
                         )}
                     </>
                 }
-                contentContainerStyle={styles.list}
+                contentContainerStyle={[styles.list, { paddingBottom: tabBarHeight + 16 }]}
             />
 
             {!selectionMode && (

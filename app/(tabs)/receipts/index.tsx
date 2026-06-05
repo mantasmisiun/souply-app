@@ -601,7 +601,7 @@ export default function ReceiptsScreen() {
           it.kind === "section" ? it.id :
           `r-${it.data.id}`
         }
-        contentContainerStyle={styles.list}
+        contentContainerStyle={[styles.list, { paddingBottom: tabBarHeight + 16 }]}
         ListHeaderComponent={
           showBanner ? (
             <PendingSwipesBanner
@@ -723,7 +723,7 @@ export default function ReceiptsScreen() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: c.pageBackground },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  list: { padding: 16, paddingBottom: 80 },
+  list: { padding: 16 },
 
   card: {
     backgroundColor: c.cardBackground,

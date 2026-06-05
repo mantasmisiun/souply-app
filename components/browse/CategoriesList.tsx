@@ -5,6 +5,7 @@ import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from '
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { useSafeBottomTabBarHeight } from '../../hooks/useSafeBottomTabBarHeight';
 import { SkeletonBox } from '../SkeletonBox';
 
 export interface Category {
@@ -134,43 +135,42 @@ export function CategoriesList({ onSelectL2, header }: Props) {
     const colors = useTheme();
     const { i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    // Clear the bottom tab bar (iOS liquid-glass NativeTabs ≈ 49 + safe area,
+    // Android JS Tabs from context) so the last L1 row is reachable on first
+    // mount — don't rely on iOS's flaky auto content-inset, which only kicks in
+    // after a re-layout (hence "works after switching tabs").
+    const tabBarHeight = useSafeBottomTabBarHeight();
     const [l1Categories, setL1Categories] = useState<Category[]>([]);
     const [l2Map, setL2Map] = useState<Record<number, Category[]>>({});
     const [expandedL1, setExpandedL1] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
 
-    // Re-fetch on language change. First launch boots at 'lt' and flips to
-    // the persisted language once settingsStore.hydrate() resolves; aborting
-    // the in-flight request on cleanup keeps the late 'lt' response from
-    // overwriting fresh 'en' data.
+    // Load L1 + ALL L2 in two parallel requests (was 1 + N: one subcategory
+    // call per L1). `/api/categories/l2` returns every L2 with its
+    // parentCategoryId, so we group client-side. Both finish before `loading`
+    // clears, so every L1 already has its L2 in hand → expanding is instant,
+    // never a spinner. Re-fetch on language change; the AbortController keeps a
+    // late 'lt' response (first launch boots 'lt', then flips to the persisted
+    // language) from overwriting fresh 'en' data.
     useEffect(() => {
         let cancelled = false;
         const ctrl = new AbortController();
-        fetch(`${API_BASE_URL}/api/categories`, { signal: ctrl.signal })
-            .then(r => r.json())
-            .then((data: Category[]) => {
+        Promise.all([
+            fetch(`${API_BASE_URL}/api/categories`, { signal: ctrl.signal }).then(r => r.json()),
+            fetch(`${API_BASE_URL}/api/categories/l2`, { signal: ctrl.signal }).then(r => r.json()),
+        ])
+            .then(([l1, l2]: [Category[], Category[]]) => {
                 if (cancelled) return;
-                const cats = Array.isArray(data) ? data : [];
-                setL1Categories(cats);
-                return Promise.all(
-                    cats.map(cat =>
-                        fetch(`${API_BASE_URL}/api/categories/${cat.id}/subcategories`, { signal: ctrl.signal })
-                            .then(r => r.json())
-                            .then(sub => ({ id: cat.id, sub: Array.isArray(sub) ? sub : [] as Category[] }))
-                            .catch((err: any) => {
-                                if (err?.name === 'AbortError') throw err;
-                                return { id: cat.id, sub: [] as Category[] };
-                            })
-                    )
-                ).then(results => {
-                    if (cancelled) return;
-                    const map: Record<number, Category[]> = {};
-                    results.forEach(({ id, sub }) => { map[id] = sub; });
-                    setL2Map(map);
+                setL1Categories(Array.isArray(l1) ? l1 : []);
+                const map: Record<number, Category[]> = {};
+                (Array.isArray(l2) ? l2 : []).forEach(cat => {
+                    if (cat.parentCategoryId == null) return;
+                    (map[cat.parentCategoryId] ??= []).push(cat);
                 });
+                setL2Map(map);
             })
             .catch((err: any) => {
-                if (err?.name !== 'AbortError') console.warn('[browse] L1 fetch failed:', err);
+                if (err?.name !== 'AbortError') console.warn('[browse] categories fetch failed:', err);
             })
             .finally(() => { if (!cancelled) setLoading(false); });
         return () => { cancelled = true; ctrl.abort(); };
@@ -208,7 +208,8 @@ export function CategoriesList({ onSelectL2, header }: Props) {
             style={styles.container}
             data={l1Categories}
             keyExtractor={item => item.id.toString()}
-            contentContainerStyle={styles.list}
+            contentContainerStyle={[styles.list, { paddingBottom: tabBarHeight + 16 }]}
+            scrollIndicatorInsets={{ bottom: tabBarHeight }}
             ListHeaderComponent={header ?? undefined}
             renderItem={({ item }) => (
                 <L1Item
@@ -227,7 +228,7 @@ export function CategoriesList({ onSelectL2, header }: Props) {
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
-    list: { padding: 16, gap: 10 },
+    list: { paddingHorizontal: 16, paddingTop: 16, gap: 10 },
     l1Container: {
         backgroundColor: c.cardBackground,
         borderRadius: 12,
