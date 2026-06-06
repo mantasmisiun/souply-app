@@ -12,7 +12,6 @@
  * Client IDs come from EXPO_PUBLIC_* env (eas.json profile env).
  */
 import * as AppleAuthentication from 'expo-apple-authentication';
-import { GoogleSignin, statusCodes } from '@react-native-google-signin/google-signin';
 import { Platform } from 'react-native';
 
 // webClientId = the audience of the ID token Google returns (must be in the
@@ -32,11 +31,29 @@ const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
 export const isGoogleSignInConfigured =
     Platform.OS === 'ios' ? !!GOOGLE_IOS_CLIENT_ID : !!GOOGLE_WEB_CLIENT_ID;
 
-if (isGoogleSignInConfigured) {
-    GoogleSignin.configure({
-        webClientId: GOOGLE_WEB_CLIENT_ID,
-        ...(GOOGLE_IOS_CLIENT_ID ? { iosClientId: GOOGLE_IOS_CLIENT_ID } : {}),
-    });
+// Load the native module LAZILY (require at call time, not a top-level import).
+// A static import evaluates the package at module-load, which calls
+// `TurboModuleRegistry.getEnforcing('RNGoogleSignin')` — and on a build whose
+// native binary lacks that module (e.g. an older DEV APK) that throws an
+// Invariant Violation that hard-crashes *any* route which transitively imports
+// this file (the publish wall, template editor, etc.). Deferring the require to
+// the moment sign-in is actually invoked keeps those routes loading, and the
+// try/catch turns a missing module into a catchable JS error.
+let _gsi: typeof import('@react-native-google-signin/google-signin') | null = null;
+let _gsiConfigured = false;
+function loadGoogleSignin() {
+    if (!_gsi) {
+        // require (not import) so the native lookup happens here, not at load.
+        _gsi = require('@react-native-google-signin/google-signin');
+    }
+    if (isGoogleSignInConfigured && !_gsiConfigured) {
+        _gsi!.GoogleSignin.configure({
+            webClientId: GOOGLE_WEB_CLIENT_ID,
+            ...(GOOGLE_IOS_CLIENT_ID ? { iosClientId: GOOGLE_IOS_CLIENT_ID } : {}),
+        });
+        _gsiConfigured = true;
+    }
+    return _gsi!;
 }
 
 export interface OauthTokenResult {
@@ -53,6 +70,14 @@ export async function signInWithGoogle(): Promise<OauthTokenResult | null> {
     // No client in this build (e.g. DEV) → fail with a catchable JS error
     // instead of the native module crashing. Callers already catch + toast.
     if (!isGoogleSignInConfigured) {
+        throw new Error('Google sign-in is not available in this build');
+    }
+    let GoogleSignin: typeof import('@react-native-google-signin/google-signin').GoogleSignin;
+    let statusCodes: typeof import('@react-native-google-signin/google-signin').statusCodes;
+    try {
+        ({ GoogleSignin, statusCodes } = loadGoogleSignin());
+    } catch {
+        // Native module absent from this build → catchable error, not a crash.
         throw new Error('Google sign-in is not available in this build');
     }
     try {

@@ -11,6 +11,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { TemplateCoverEditor } from '../../components/TemplateCoverEditor';
 import { coverEmoji } from '../../utils/templateCover';
+import { isWeighableDisplay } from '../../utils/weighable';
 import { formatEuro } from '../../utils/formatCurrency';
 import { ScreenBackButton } from '../../components/ScreenBackButton';
 import { GlassIconButton } from '../../components/GlassIconButton';
@@ -144,7 +145,7 @@ export default function TemplateDetailScreen() {
         // Round to integer for piece-counted items, 1 decimal place for
         // weighable. Mirrors the basket detail UX so the template editor
         // behaves the same way for the same product class.
-        const isWeighable = item?.isWeighable === 1;
+        const isWeighable = isWeighableDisplay(item?.isWeighable, item?.quantity ?? raw);
         let rounded = isWeighable
             ? Math.round(raw * 10) / 10
             : Math.round(raw);
@@ -433,8 +434,8 @@ export default function TemplateDetailScreen() {
                         // Format the displayed quantity by class. Weighable
                         // items (kg) show one decimal; piece items strip the
                         // trailing ".0" the DB stores (DECIMAL(10,3)).
-                        const isWeighable = item.isWeighable === 1;
                         const numeric = Number(item.quantity);
+                        const isWeighable = isWeighableDisplay(item.isWeighable, numeric);
                         const fallbackQty = isWeighable
                             ? numeric.toFixed(1).replace('.', ',')
                             : String(Math.round(numeric));
