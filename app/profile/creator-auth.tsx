@@ -1,6 +1,6 @@
 import {
     View, Text, ScrollView, TouchableOpacity, StyleSheet,
-    Modal, Platform, ActivityIndicator, Alert,
+    Modal, Platform, Alert,
 } from 'react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
@@ -17,6 +17,7 @@ import { signInWithGoogle, signInWithApple, isAppleSignInAvailable } from '../..
 import { exchangeOauthToken } from '../../utils/authApi';
 import { useAuthState, DEV_SESSION_TOKEN } from '../../state/authState';
 import { CreateUsernameModal } from '../../components/CreateUsernameModal';
+import { OAuthButton } from '../../components/OAuthButton';
 
 const INTRO_SEEN_KEY = 'creator_intro_seen_v1';
 
@@ -148,30 +149,21 @@ export default function CreatorAuthScreen() {
                 </View>
 
                 <View style={styles.buttons}>
-                    <TouchableOpacity
-                        style={[styles.oauthBtn, styles.googleBtn]}
+                    <OAuthButton
+                        provider="google"
+                        label={t('creatorAuth.google')}
                         onPress={onGooglePress}
                         disabled={busy}
-                        activeOpacity={0.85}
-                    >
-                        {busy
-                            ? <ActivityIndicator color="#fff" />
-                            : <>
-                                <Ionicons name="logo-google" size={18} color="#fff" />
-                                <Text style={styles.oauthBtnText}>{t('creatorAuth.google')}</Text>
-                              </>}
-                    </TouchableOpacity>
+                        loading={busy}
+                    />
 
                     {isAppleSignInAvailable && (
-                        <TouchableOpacity
-                            style={[styles.oauthBtn, styles.appleBtn]}
+                        <OAuthButton
+                            provider="apple"
+                            label={t('creatorAuth.apple')}
                             onPress={onApplePress}
                             disabled={busy}
-                            activeOpacity={0.85}
-                        >
-                            <Ionicons name="logo-apple" size={18} color="#fff" />
-                            <Text style={styles.oauthBtnText}>{t('creatorAuth.apple')}</Text>
-                        </TouchableOpacity>
+                        />
                     )}
 
                     {IS_DEV_BUILD && (

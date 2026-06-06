@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../constants/theme';
 import { useAuthState } from '../state/authState';
 import { signInWithGoogle, signInWithApple, isAppleSignInAvailable } from '../utils/oauthFlow';
+import { OAuthButton } from './OAuthButton';
 import { exchangeOauthToken, setUsername, checkUsernameAvailability, type UsernameRejectReason } from '../utils/authApi';
 import { getUserId } from '../config/user';
 import * as Updates from 'expo-updates';
@@ -197,24 +198,20 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
                             <Text style={styles.title}>{t('basketTab.templates.publishWallTitle')}</Text>
                             <Text style={styles.body}>{t('basketTab.templates.publishWallBody')}</Text>
 
-                            <TouchableOpacity
-                                style={[styles.providerBtn, styles.googleBtn]}
+                            <OAuthButton
+                                provider="google"
+                                label={t('basketTab.templates.publishContinueGoogle')}
                                 onPress={onGooglePress}
                                 disabled={busy}
-                            >
-                                <Ionicons name="logo-google" size={18} color="#fff" />
-                                <Text style={styles.providerBtnText}>{t('basketTab.templates.publishContinueGoogle')}</Text>
-                            </TouchableOpacity>
+                            />
 
                             {isAppleSignInAvailable && (
-                                <TouchableOpacity
-                                    style={[styles.providerBtn, styles.appleBtn]}
+                                <OAuthButton
+                                    provider="apple"
+                                    label={t('basketTab.templates.publishContinueApple')}
                                     onPress={onApplePress}
                                     disabled={busy}
-                                >
-                                    <Ionicons name="logo-apple" size={20} color="#fff" />
-                                    <Text style={styles.providerBtnText}>{t('basketTab.templates.publishContinueApple')}</Text>
-                                </TouchableOpacity>
+                                />
                             )}
 
                             <TouchableOpacity style={styles.cancelBtn} onPress={onClose} disabled={busy}>
