@@ -4,6 +4,9 @@ import {
 } from 'react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
+import Animated from 'react-native-reanimated';
+import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
+import { ScreenHeading } from '../../components/ScreenHeading';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import Constants from 'expo-constants';
@@ -42,6 +45,7 @@ const CARDS: { key: string; icon: keyof typeof Ionicons.glyphMap; disclaimer?: b
  */
 export default function CreatorAuthScreen() {
     const colors = useTheme();
+    const header = useCollapsingHeader();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
     const { t } = useTranslation();
@@ -130,7 +134,13 @@ export default function CreatorAuthScreen() {
 
     return (
         <View style={styles.container}>
-            <ScrollView contentContainerStyle={styles.scroll}>
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                back
+                collapsing={<ScreenHeading title={t('creatorAuth.title')} />}
+            />
+            <Animated.ScrollView {...header.scroll} contentContainerStyle={[styles.scroll, { paddingTop: header.paddingTop + 20 }]}>
                 <View style={styles.hero}>
                     <View style={styles.heroBadge}>
                         <Text style={styles.heroEmoji}>✨</Text>
@@ -183,7 +193,7 @@ export default function CreatorAuthScreen() {
                     <Ionicons name="information-circle-outline" size={16} color={colors.textSecondary} />
                     <Text style={styles.whoLinkText}>{t('creatorAuth.introSubtitle')}</Text>
                 </TouchableOpacity>
-            </ScrollView>
+            </Animated.ScrollView>
 
             {/* First-open benefits modal */}
             <Modal visible={showIntro} transparent animationType="slide" onRequestClose={dismissIntro}>

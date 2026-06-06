@@ -1,8 +1,10 @@
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Modal, Dimensions, ActivityIndicator } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { ProductImage } from '../../components/ProductImage';
 import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
-import { useLocalSearchParams, Stack, useFocusEffect } from 'expo-router';
+import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
@@ -22,6 +24,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import AmountPickerModal from '../../components/AmountPickerModal';
 import { QuantityControl } from '../../components/QuantityControl';
+import { ScreenHeading } from '../../components/ScreenHeading';
 import { resolveCanonicalStep, resolveDisplayUnit } from '../../utils/canonicalStep';
 
 interface StoreProduct {
@@ -58,7 +61,9 @@ interface Product {
     canonicalFamily: 'fluid' | 'count' | null;
 }
 
-const MINI_CHART_WIDTH = 140;
+// Fixed chart footprint — never scales with the system font, so large-font
+// devices keep the same graph width and the text gets the rest of the card.
+const MINI_CHART_WIDTH = 70;
 const MINI_CHART_HEIGHT = 64;
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -233,6 +238,8 @@ export default function ProductDetailScreen() {
     );
     const templateQuantity = templateEntry?.quantity ?? 0;
     const { bottom: bottomInset } = useSafeAreaInsets();
+    // Collapsing header: title+breadcrumb hide on scroll, store filter stays pinned.
+    const header = useCollapsingHeader();
     const draftBasketIdRef = useRef(draftBasketId);
     useEffect(() => { draftBasketIdRef.current = draftBasketId; }, [draftBasketId]);
 
@@ -446,14 +453,16 @@ export default function ProductDetailScreen() {
 
     return (
         <>
-            <Stack.Screen options={{
-                headerStyle: { backgroundColor: colors.cardBackground },
-                headerShadowVisible: false,
-                headerTitle: () => (
-                    <View style={styles.navHeaderWrap}>
-                        <Text style={styles.navTitle} numberOfLines={1}>{product.name}</Text>
-                        {categoryParts.length > 0 && (
-                            <View style={styles.navBreadcrumb}>
+            {/* Glass back bar; title + breadcrumb collapse on scroll; filter pinned. */}
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                back
+                collapsing={
+                    <ScreenHeading
+                        title={product.name}
+                        subtitle={categoryParts.length > 0 ? (
+                            <View style={styles.breadcrumbRow}>
                                 {categoryParts.map((part, i) => (
                                     <React.Fragment key={i}>
                                         {i > 0 && <Text style={styles.navBreadcrumbSep}>›</Text>}
@@ -461,18 +470,25 @@ export default function ProductDetailScreen() {
                                     </React.Fragment>
                                 ))}
                             </View>
-                        )}
-                    </View>
-                ),
-            }} />
-            <ScrollView style={styles.container} stickyHeaderIndices={[0]} contentContainerStyle={{ paddingBottom: BAR_HEIGHT + 16 }}>
-                {/* Chain filter */}
-                <ChainFilterBar
-                    chains={chains}
-                    selectedId={selectedChainId}
-                    onSelect={setSelectedChainId}
-                    allLabel={t('product.allStores')}
-                />
+                        ) : undefined}
+                    />
+                }
+                pinned={
+                    <ChainFilterBar
+                        chains={chains}
+                        selectedId={selectedChainId}
+                        onSelect={setSelectedChainId}
+                        allLabel={t('product.allStores')}
+                    />
+                }
+            />
+            {/* Only the SP list scrolls / rubber-bands; paddingTop reserves the
+                overlay's space (the opaque overlay hides the brief measure jump). */}
+            <Animated.ScrollView
+                {...header.scroll}
+                style={styles.container}
+                contentContainerStyle={{ paddingTop: header.paddingTop, paddingBottom: BAR_HEIGHT + 16 }}
+            >
 
                 {/* StoreProduct list */}
                 {filteredStoreProducts.length === 0 ? (
@@ -521,6 +537,8 @@ export default function ProductDetailScreen() {
                                 <View style={styles.spRight}>
                                     <MiniPriceChart
                                         prices={prices}
+                                        width={MINI_CHART_WIDTH}
+                                        height={MINI_CHART_HEIGHT}
                                         onTap={() => setChartModalSp(sp)}
                                     />
                                 </View>
@@ -533,7 +551,7 @@ export default function ProductDetailScreen() {
                     })
                 )}
                 <View style={{ height: 40 }} />
-            </ScrollView>
+            </Animated.ScrollView>
 
             {/* Sticky add-to bar. Template mode shows a +/− stepper for
                 products already in the template (so users tweak amount
@@ -673,9 +691,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
-    navHeaderWrap: { alignItems: 'flex-start' },
-    navTitle: { fontSize: 16, fontWeight: '600', color: c.textPrimary },
-    navBreadcrumb: { flexDirection: 'row', alignItems: 'center', gap: 2, marginTop: 1 },
+    breadcrumbRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
     navBreadcrumbSep: { fontSize: 10, color: c.textMuted },
     navBreadcrumbPart: { fontSize: 11, color: c.textMuted, flexShrink: 1, minWidth: 16 },
 
@@ -695,6 +711,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     spLeft: {
         flex: 1,
+        minWidth: 0,
         flexDirection: 'row',
         gap: 10,
     },
@@ -717,6 +734,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     spInfo: {
         flex: 1,
+        minWidth: 0,
         justifyContent: 'center',
     },
     spName: {
@@ -732,6 +750,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     priceRow: {
         flexDirection: 'row',
+        flexWrap: 'wrap',
         gap: 6,
         alignItems: 'center',
         marginTop: 3,
@@ -753,6 +772,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         color: c.primary,
     },
     spRight: {
+        width: MINI_CHART_WIDTH,
+        flexShrink: 0,
         justifyContent: 'center',
         alignItems: 'center',
     },

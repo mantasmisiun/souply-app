@@ -129,9 +129,14 @@ interface Props {
      *  the list (e.g. the Nuolaidos shortcut), so it isn't pinned above
      *  the categories. */
     header?: ReactElement | null;
+    /** Scroll handler props from useCollapsingHeader().scroll, so a collapsing
+     *  header can track this list's scroll. Optional — omit for a plain list. */
+    scroll?: { onScroll?: any; scrollEventThrottle?: number };
+    /** Top padding to reserve for an overlaying collapsing header. */
+    contentPaddingTop?: number;
 }
 
-export function CategoriesList({ onSelectL2, header }: Props) {
+export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop = 0 }: Props) {
     const colors = useTheme();
     const { i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -182,7 +187,7 @@ export function CategoriesList({ onSelectL2, header }: Props) {
 
     if (loading) {
         return (
-            <View style={[styles.container, { padding: 16, gap: 10 }]}>
+            <View style={[styles.container, { padding: 16, gap: 10, paddingTop: contentPaddingTop + 16 }]}>
                 {header}
                 {Array.from({ length: 8 }).map((_, i) => (
                     <View
@@ -204,11 +209,13 @@ export function CategoriesList({ onSelectL2, header }: Props) {
     }
 
     return (
-        <FlatList
+        <Animated.FlatList
+            {...scroll}
             style={styles.container}
             data={l1Categories}
-            keyExtractor={item => item.id.toString()}
-            contentContainerStyle={[styles.list, { paddingBottom: tabBarHeight + 16 }]}
+            keyExtractor={(item: any) => item.id.toString()}
+            contentInsetAdjustmentBehavior="never"
+            contentContainerStyle={[styles.list, { paddingTop: contentPaddingTop + 16, paddingBottom: tabBarHeight + 24 }]}
             scrollIndicatorInsets={{ bottom: tabBarHeight }}
             ListHeaderComponent={header ?? undefined}
             renderItem={({ item }) => (

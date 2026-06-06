@@ -6,18 +6,21 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../../constants/theme';
-import { TabHeader } from '../../components/TabHeader';
+import { useTheme, type AppTheme } from '../../../constants/theme';
+import Animated from 'react-native-reanimated';
+import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
+import { ScreenHeading } from '../../../components/ScreenHeading';
 import {
     getAdminReceiptList,
     type AdminReceiptRow,
     type ReceiptFilter,
-} from '../../services/adminClient';
+} from '../../../services/adminClient';
 
 const PAGE_SIZE = 20;
 
 export default function ReceiptsScreen() {
     const colors = useTheme();
+    const header = useCollapsingHeader();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
@@ -114,39 +117,46 @@ export default function ReceiptsScreen() {
 
     return (
         <View style={styles.root}>
-            <TabHeader title={t('admin.tabReceipts')} />
-            <View style={styles.chipBar}>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipBarContent}>
-                    {chips.map(chip => {
-                        const active = chip.id === filter;
-                        return (
-                            <TouchableOpacity
-                                key={chip.id}
-                                style={[styles.chip, active && styles.chipActive]}
-                                onPress={() => onFilterChange(chip.id)}
-                            >
-                                <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                                    {chip.label}
-                                </Text>
-                            </TouchableOpacity>
-                        );
-                    })}
-                </ScrollView>
-            </View>
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                collapsing={<ScreenHeading title={t('admin.tabReceipts')} />}
+                pinned={
+                    <View style={styles.chipBar}>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipBarContent}>
+                            {chips.map(chip => {
+                                const active = chip.id === filter;
+                                return (
+                                    <TouchableOpacity
+                                        key={chip.id}
+                                        style={[styles.chip, active && styles.chipActive]}
+                                        onPress={() => onFilterChange(chip.id)}
+                                    >
+                                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                                            {chip.label}
+                                        </Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </ScrollView>
+                    </View>
+                }
+            />
 
             {loading ? (
                 <View style={styles.centered}>
                     <ActivityIndicator size="large" color={colors.primary} />
                 </View>
             ) : (
-                <FlatList
+                <Animated.FlatList
+                    {...header.scroll}
                     data={receipts}
-                    keyExtractor={r => r.id}
+                    keyExtractor={(r: any) => r.id}
                     renderItem={renderItem}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
                     onEndReached={onLoadMore}
                     onEndReachedThreshold={0.3}
-                    contentContainerStyle={receipts.length === 0 ? styles.emptyContainer : undefined}
+                    contentContainerStyle={[{ paddingTop: header.paddingTop + 8 }, receipts.length === 0 ? styles.emptyContainer : null]}
                     ListEmptyComponent={
                         <View style={styles.centered}>
                             <Ionicons name="receipt-outline" size={48} color={colors.textMuted} />

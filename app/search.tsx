@@ -469,7 +469,7 @@ export default function SearchScreen() {
     <>
       <Stack.Screen options={{ headerShown: false }} />
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <GlassIconButton icon="chevron-back" onPress={closeAndBack} size={24} />
+        <GlassIconButton icon="chevron-back" onPress={closeAndBack} size={24} glass />
         <TextInput
           ref={searchInputRef}
           key={inputKey}
@@ -483,7 +483,7 @@ export default function SearchScreen() {
           autoCapitalize="none"
         />
         {query.length > 0 ? (
-          <GlassIconButton icon="close" onPress={clearQuery} size={22} />
+          <GlassIconButton icon="close" onPress={clearQuery} size={22} glass />
         ) : null}
       </View>
       {effectiveMode === 'products' && categoryChips.length > 1 && (

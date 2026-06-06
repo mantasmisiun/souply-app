@@ -20,3 +20,14 @@ export const APP_ENV: AppEnv = (() => {
 })();
 
 export const IS_PROD = APP_ENV === 'prod';
+
+/**
+ * Visual marker for non-production builds, consumed by <EnvBadge />.
+ * Null in prod (no marker shown). DEV → blue · STAGING → amber
+ * (red stays reserved for danger). Single source of truth for both the
+ * label and the colour so the badge is identical on iOS and Android.
+ */
+export const ENV_BADGE: { label: string; color: string } | null =
+    APP_ENV === 'dev' ? { label: 'DEV', color: '#2563EB' }
+    : APP_ENV === 'staging' ? { label: 'STAGING', color: '#D97706' }
+    : null;

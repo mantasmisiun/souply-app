@@ -1,5 +1,6 @@
 import { Stack } from 'expo-router';
 import { useTheme } from '../../../constants/theme';
+import { tabStackOptions } from '../../../constants/navHeader';
 
 /**
  * The browse tab only contains its root (index.tsx). Pushed screens —
@@ -9,19 +10,9 @@ import { useTheme } from '../../../constants/theme';
  */
 export default function BrowseLayout() {
     const colors = useTheme();
-
     return (
-        <Stack
-            screenOptions={{
-                headerStyle: { backgroundColor: colors.pageBackground },
-                headerTintColor: colors.textPrimary,
-                headerShadowVisible: false,
-                contentStyle: { backgroundColor: colors.pageBackground },
-                headerBackTitle: '',
-                headerBackButtonDisplayMode: 'minimal',
-            }}
-        >
-            <Stack.Screen name="index" options={{ headerShown: false }} />
+        <Stack screenOptions={tabStackOptions(colors)}>
+            <Stack.Screen name="index" />
         </Stack>
     );
 }

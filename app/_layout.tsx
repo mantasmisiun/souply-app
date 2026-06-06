@@ -12,7 +12,7 @@ import { GlassIconButton } from '../components/GlassIconButton';
 import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
-import { EnvBanner } from '../components/EnvBanner';
+import { EnvBadge } from '../components/EnvBadge';
 import { UsernameGate } from '../components/UsernameGate';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
@@ -238,7 +238,6 @@ function RootLayout() {
     <DisplayPreferenceProvider>
     <ThemeProvider value={navTheme}>
       <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
-      <EnvBanner />
       <ShareHandler />
       <OfflineBanner />
       <UsernameGate />
@@ -268,10 +267,18 @@ function RootLayout() {
           headerBackButtonDisplayMode: 'minimal',
         }}
       >
-        <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+        {/* gestureEnabled:false — the tab group is the app root (reached via the
+            app/index.tsx <Redirect>). Without this, an edge-swipe-back pops to
+            `index`, which re-fires the Redirect and mounts a SECOND (tabs) group
+            → a duplicate Naršyti with a clipped/offset NativeTabs bar. */}
+        <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="(admin)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-        <Stack.Screen name="product" options={{ headerShown: false }} />
+        {/* product/[id] lives at the root (no nested stack) so iOS shows a real
+            back item — the native bar reserves the leading area, so the glass
+            back button no longer overlaps the left-aligned title. Same pattern
+            as discounts + browse/[categoryId]. */}
+        <Stack.Screen name="product/[id]" options={{ headerLeft: () => <ScreenBackButton /> }} />
         {/* discounts + browse/[categoryId] live at the root so the iOS
             NativeTabs tab bar hides on push (it stays visible when a
             screen is inside a tab's nested stack). Each screen sets its
@@ -321,6 +328,9 @@ function RootLayout() {
           }}
         />
       </Stack>
+      {/* Top-layer overlay (last child = highest paint order) so it sits above
+          the navigator without ever altering its frame. */}
+      <EnvBadge />
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
       </View>
     </ThemeProvider>

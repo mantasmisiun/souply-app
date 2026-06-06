@@ -4,15 +4,18 @@ import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../../constants/theme';
-import { TabHeader } from '../../../components/TabHeader';
 import { GlassIconButton } from '../../../components/GlassIconButton';
 import { CategoriesList, type Category } from '../../../components/browse/CategoriesList';
+import { ScreenHeading } from '../../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 
 export default function BrowseIndex() {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
+    // Collapsing header: "Naršyti" title hides on scroll (no pinned filter here).
+    const header = useCollapsingHeader();
 
     // Tap-debounce so a quick double-tap doesn't push /search twice.
     const lastSearchPushAt = useRef(0);
@@ -54,8 +57,19 @@ export default function BrowseIndex() {
 
     return (
         <View style={{ flex: 1 }}>
-            <TabHeader title={t('browse.title')} rightAction={searchAction} />
-            <CategoriesList onSelectL2={handleSelectL2} header={discountsHeader} />
+            {/* "Naršyti" collapses on scroll; the discounts shortcut scrolls with the list. */}
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                right={searchAction}
+                collapsing={<ScreenHeading title={t('browse.title')} />}
+            />
+            <CategoriesList
+                onSelectL2={handleSelectL2}
+                scroll={header.scroll}
+                contentPaddingTop={header.paddingTop}
+                header={discountsHeader}
+            />
         </View>
     );
 }

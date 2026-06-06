@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useRef } from 'react';
-import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, type AppTheme } from '../../constants/theme';
-import { ScreenBackButton } from '../../components/ScreenBackButton';
 import { GlassIconButton } from '../../components/GlassIconButton';
 import { CategoriesList, type Category } from '../../components/browse/CategoriesList';
+import { ScreenHeading } from '../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { TemplateReturnBanner } from '../../components/template/TemplateReturnBanner';
 import { useTemplateAddState } from '../../state/templateAddState';
 
@@ -26,6 +27,7 @@ export default function TemplateAddScreen() {
     const { templateId: rawId } = useLocalSearchParams<{ templateId: string }>();
     const templateId = Number(rawId);
     const colors = useTheme();
+    const header = useCollapsingHeader();
     const { t } = useTranslation();
     const router = useRouter();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -55,33 +57,36 @@ export default function TemplateAddScreen() {
 
     return (
         <>
-            <Stack.Screen options={{
-                title: t('basketTab.templates.addItemTitle'),
-                headerStyle: { backgroundColor: colors.cardBackground },
-                headerShadowVisible: false,
-                headerLeft: () => <ScreenBackButton />,
-                headerRight: () => <GlassIconButton icon="search" onPress={pushSearch} />,
-            }} />
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                back
+                right={<GlassIconButton icon="search" onPress={pushSearch} />}
+                collapsing={<ScreenHeading title={t('basketTab.templates.addItemTitle')} />}
+            />
             <View style={{ flex: 1 }}>
-                {/* Nuolaidos shortcut mirrors the Narsyti tab so users
-                    can dive into discounts directly while building a
-                    template — the templateId is forwarded so the
-                    discount cards add to the template, not the basket. */}
-                <View style={styles.discountsWrap}>
-                    <TouchableOpacity
-                        style={styles.discountsCard}
-                        onPress={() => router.push(`/discounts?templateId=${templateId}` as any)}
-                        activeOpacity={0.8}
-                    >
-                        <Text style={styles.discountsIcon}>🔥</Text>
-                        <View style={styles.discountsTextWrap}>
-                            <Text style={styles.discountsTitle}>{t('browse.discountsCardTitle')}</Text>
-                            <Text style={styles.discountsSub}>{t('browse.discountsSub')}</Text>
-                        </View>
-                        <Ionicons name="chevron-forward" size={20} color={colors.onPrimary} />
-                    </TouchableOpacity>
-                </View>
-                <CategoriesList onSelectL2={handleSelectL2} />
+                <CategoriesList
+                    onSelectL2={handleSelectL2}
+                    scroll={header.scroll}
+                    contentPaddingTop={header.paddingTop}
+                    header={
+                        // Nuolaidos shortcut (mirrors the Narsyti tab) — scrolls
+                        // with the list; templateId forwarded so discounts add to
+                        // the template, not the basket.
+                        <TouchableOpacity
+                            style={styles.discountsCard}
+                            onPress={() => router.push(`/discounts?templateId=${templateId}` as any)}
+                            activeOpacity={0.8}
+                        >
+                            <Text style={styles.discountsIcon}>🔥</Text>
+                            <View style={styles.discountsTextWrap}>
+                                <Text style={styles.discountsTitle}>{t('browse.discountsCardTitle')}</Text>
+                                <Text style={styles.discountsSub}>{t('browse.discountsSub')}</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={20} color={colors.onPrimary} />
+                        </TouchableOpacity>
+                    }
+                />
                 {Number.isFinite(templateId) && (
                     <TemplateReturnBanner templateId={templateId} />
                 )}
@@ -99,6 +104,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     discountsCard: {
         backgroundColor: c.primary,
         borderRadius: 14,
+        marginBottom: 10,
         paddingHorizontal: 16,
         paddingVertical: 18,
         flexDirection: 'row',

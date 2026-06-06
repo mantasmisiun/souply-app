@@ -1,4 +1,5 @@
-import { Pressable, View } from 'react-native';
+import { Pressable, View, StyleSheet, useColorScheme } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../constants/theme';
 
@@ -11,19 +12,22 @@ interface Props {
     color?: string;
     accessibilityLabel?: string;
     disabled?: boolean;
+    /**
+     * Render the icon inside a self-contained liquid-glass pill. Use ONLY when
+     * the button is NOT a native nav-bar item (e.g. an in-screen header like the
+     * search bar) — a native bar already provides its own glass, so leaving this
+     * off in headers avoids a double-glass artifact.
+     */
+    glass?: boolean;
 }
 
 /**
- * Plain icon button for nav-bar headers. Centers the icon in a small
- * container with generous hit-slop so the touch target stays >= 44pt
- * even though the visible bounds are tight.
+ * Icon button for nav-bar headers and in-screen header bars.
  *
- * NOTE: This used to wrap the icon in a `BlurView` disc, but on iOS 26
- * the native nav bar already provides its own liquid-glass background
- * — adding another BlurView produced a visible double-glass artifact
- * (smaller glass disc inside the bar's glass). The icon now sits
- * directly on whatever surface the nav bar provides, matching the
- * iOS 26 native Apple-app look.
+ * In a native nav bar (headerLeft/headerRight) leave `glass` off: iOS 26 gives
+ * the bar item its own liquid-glass capsule. For an in-screen bar with no native
+ * header (e.g. the search screen) pass `glass` so the button carries its own
+ * pill and matches the native look.
  */
 export function GlassIconButton({
     icon,
@@ -32,10 +36,13 @@ export function GlassIconButton({
     color,
     accessibilityLabel,
     disabled,
+    glass,
 }: Props) {
     const colors = useTheme();
+    const scheme = useColorScheme();
     const tint = disabled ? colors.textMuted : (color ?? colors.primary);
     const disc = size + 14;
+    const iconEl = <Ionicons name={icon} size={size} color={tint} />;
 
     return (
         <Pressable
@@ -49,16 +56,28 @@ export function GlassIconButton({
                 marginHorizontal: 4,
             })}
         >
-            <View
-                style={{
-                    width: disc,
-                    height: disc,
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                }}
-            >
-                <Ionicons name={icon} size={size} color={tint} />
-            </View>
+            {glass ? (
+                <BlurView
+                    intensity={50}
+                    tint={scheme === 'dark' ? 'dark' : 'light'}
+                    style={[styles.disc, styles.glassDisc, { width: disc, height: disc, borderRadius: disc / 2 }]}
+                >
+                    {iconEl}
+                </BlurView>
+            ) : (
+                <View style={[styles.disc, { width: disc, height: disc }]}>
+                    {iconEl}
+                </View>
+            )}
         </Pressable>
     );
 }
+
+const styles = StyleSheet.create({
+    disc: { alignItems: 'center', justifyContent: 'center' },
+    glassDisc: {
+        overflow: 'hidden',
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: 'rgba(120,120,128,0.24)',
+    },
+});
