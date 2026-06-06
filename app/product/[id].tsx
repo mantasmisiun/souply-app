@@ -61,7 +61,9 @@ interface Product {
     canonicalFamily: 'fluid' | 'count' | null;
 }
 
-const MINI_CHART_WIDTH = 140;
+// Fixed chart footprint — never scales with the system font, so large-font
+// devices keep the same graph width and the text gets the rest of the card.
+const MINI_CHART_WIDTH = 70;
 const MINI_CHART_HEIGHT = 64;
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -535,6 +537,8 @@ export default function ProductDetailScreen() {
                                 <View style={styles.spRight}>
                                     <MiniPriceChart
                                         prices={prices}
+                                        width={MINI_CHART_WIDTH}
+                                        height={MINI_CHART_HEIGHT}
                                         onTap={() => setChartModalSp(sp)}
                                     />
                                 </View>
@@ -707,6 +711,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     spLeft: {
         flex: 1,
+        minWidth: 0,
         flexDirection: 'row',
         gap: 10,
     },
@@ -729,6 +734,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     spInfo: {
         flex: 1,
+        minWidth: 0,
         justifyContent: 'center',
     },
     spName: {
@@ -744,6 +750,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     priceRow: {
         flexDirection: 'row',
+        flexWrap: 'wrap',
         gap: 6,
         alignItems: 'center',
         marginTop: 3,
@@ -765,6 +772,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         color: c.primary,
     },
     spRight: {
+        width: MINI_CHART_WIDTH,
+        flexShrink: 0,
         justifyContent: 'center',
         alignItems: 'center',
     },

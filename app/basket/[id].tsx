@@ -788,12 +788,6 @@ export default function BasketDetailScreen() {
                             </ScalePressable>
                         ) : basket?.status === 'compared' ? (
                             <>
-                                <ScalePressable
-                                    style={[styles.showResultsButton, styles.secondaryButton]}
-                                    onPress={handleRevertToDraft}
-                                >
-                                    <Text style={styles.secondaryButtonText}>{t('basketDetail.draft')}</Text>
-                                </ScalePressable>
                                 {/* Settings squircle stays available while compared
                                     so the user can tweak storeCount / location
                                     and have the main button retarget to "Rasti
@@ -829,6 +823,12 @@ export default function BasketDetailScreen() {
                                     )}
                                 </ScalePressable>
                                 <ScalePressable
+                                    style={[styles.showResultsButton, styles.secondaryButton]}
+                                    onPress={handleRevertToDraft}
+                                >
+                                    <Text style={styles.secondaryButtonText}>{t('basketDetail.draft')}</Text>
+                                </ScalePressable>
+                                <ScalePressable
                                     style={[styles.showResultsButton, busy && styles.buttonCalcing]}
                                     onPress={settingsChanged ? handleCalculate : () => router.push(`/basket/results/${id}`)}
                                     disabled={busy}
@@ -838,17 +838,17 @@ export default function BasketDetailScreen() {
                                             <ActivityIndicator size="small" color={colors.onPrimary} />
                                             <Text style={styles.showResultsText}>{t('basketDetail.calculating')}</Text>
                                         </>
-                                    ) : (
+                                    ) : settingsChanged ? (
                                         <>
                                             <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
                                             <Text style={styles.showResultsText}>
-                                                {settingsChanged
-                                                    ? ((activeSettings?.storeCount ?? 1) > 1
-                                                        ? 'Rasti parduotuves'
-                                                        : 'Rasti parduotuvę')
-                                                    : 'Rodyti parduotuves'}
+                                                {(activeSettings?.storeCount ?? 1) > 1
+                                                    ? 'Rasti parduotuves'
+                                                    : 'Rasti parduotuvę'}
                                             </Text>
                                         </>
+                                    ) : (
+                                        <Ionicons name="chevron-forward" size={24} color={colors.onPrimary} />
                                     )}
                                 </ScalePressable>
                             </>

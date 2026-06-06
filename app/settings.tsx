@@ -2,6 +2,9 @@ import {
     View, Text, StyleSheet, ScrollView, TouchableOpacity, Switch,
     Modal, Pressable, TextInput, ActivityIndicator, Alert, Linking,
 } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { useCollapsingHeader, CollapsingHeader } from '../components/CollapsingHeader';
+import { ScreenHeading } from '../components/ScreenHeading';
 import { useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -27,6 +30,7 @@ const THEME_MODES: ThemeMode[] = ['system', 'light', 'dark'];
 
 export default function SettingsScreen() {
     const router = useRouter();
+    const header = useCollapsingHeader();
     const { t } = useTranslation();
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -100,7 +104,18 @@ export default function SettingsScreen() {
     };
 
     return (
-        <ScrollView style={styles.page} contentContainerStyle={styles.pageContent}>
+        <>
+        <CollapsingHeader
+            controller={header}
+            background={colors.cardBackground}
+            back
+            collapsing={<ScreenHeading title={t('settings.title')} />}
+        />
+        <Animated.ScrollView
+            {...header.scroll}
+            style={styles.page}
+            contentContainerStyle={[styles.pageContent, { paddingTop: header.paddingTop + 16 }]}
+        >
             {/* ── Language ─────────────────────────────────────────────── */}
             <Section title={t('settings.language.section')} styles={styles}>
                 <TouchableOpacity
@@ -426,7 +441,8 @@ export default function SettingsScreen() {
                     />
                 </View>
             </Modal>
-        </ScrollView>
+        </Animated.ScrollView>
+        </>
     );
 }
 

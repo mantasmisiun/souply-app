@@ -2,7 +2,10 @@ import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
+import Animated from 'react-native-reanimated';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
+import { ScreenHeading } from '../../components/ScreenHeading';
 import { getAdminAuditLog, revertImageChange, type AuditLogRow } from '../../services/adminClient';
 
 /**
@@ -47,6 +50,7 @@ const REVERTABLE_ACTIONS = new Set([
 
 export default function AuditLogScreen() {
     const colors = useTheme();
+    const header = useCollapsingHeader();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
 
@@ -102,45 +106,52 @@ export default function AuditLogScreen() {
 
     return (
         <View style={styles.page}>
-            {/* Filter chips — placed on a white surface to match the
-                rest of the app's filter bars (Receipts tab pattern). */}
-            <View style={styles.chipsSurface}>
-                <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.chipsRow}
-                >
-                    {FAMILY_ORDER.map(key => {
-                        const selected = family === key;
-                        return (
-                            <TouchableOpacity
-                                key={key}
-                                style={[styles.chip, selected && styles.chipSelected]}
-                                onPress={() => setFamily(key)}
-                            >
-                                <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
-                                    {t(`admin.audit.filter.${key}`)}
-                                </Text>
-                            </TouchableOpacity>
-                        );
-                    })}
-                </ScrollView>
-            </View>
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                back
+                collapsing={<ScreenHeading title={t('admin.auditLogTitle')} />}
+                pinned={
+                    <View style={styles.chipsSurface}>
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            contentContainerStyle={styles.chipsRow}
+                        >
+                            {FAMILY_ORDER.map(key => {
+                                const selected = family === key;
+                                return (
+                                    <TouchableOpacity
+                                        key={key}
+                                        style={[styles.chip, selected && styles.chipSelected]}
+                                        onPress={() => setFamily(key)}
+                                    >
+                                        <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                                            {t(`admin.audit.filter.${key}`)}
+                                        </Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </ScrollView>
+                    </View>
+                }
+            />
 
             {loading && rows.length === 0 ? (
-                <View style={styles.centered}>
+                <View style={[styles.centered, { paddingTop: header.paddingTop }]}>
                     <ActivityIndicator size="large" color={colors.primary} />
                 </View>
             ) : rows.length === 0 ? (
-                <View style={styles.centered}>
+                <View style={[styles.centered, { paddingTop: header.paddingTop }]}>
                     <Ionicons name="document-text-outline" size={48} color={colors.textMuted} />
                     <Text style={styles.emptyText}>{t('admin.audit.empty')}</Text>
                 </View>
             ) : (
-                <FlatList
+                <Animated.FlatList
+                    {...header.scroll}
                     data={rows}
-                    keyExtractor={r => String(r.id)}
-                    contentContainerStyle={styles.list}
+                    keyExtractor={(r: any) => String(r.id)}
+                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12 }]}
                     onEndReachedThreshold={0.4}
                     onEndReached={() => {
                         if (done || loading) return;

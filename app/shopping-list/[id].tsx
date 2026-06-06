@@ -1,6 +1,5 @@
 import { View, ActivityIndicator, StyleSheet } from 'react-native';
-import { useLocalSearchParams, Stack, useFocusEffect } from 'expo-router';
-import { ScreenBackButton } from '../../components/ScreenBackButton';
+import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme } from '../../constants/theme';
@@ -91,7 +90,13 @@ export default function UnifiedShoppingListScreen() {
         };
     }), [entries, listSummaries]);
 
-    const headerTitle = useMemo(
+    // Title row = the short chain names; breadcrumb under it = the addresses.
+    // Single store derives these from the list itself inside ShoppingListDetail.
+    const storeNames = useMemo(
+        () => isMulti ? entries.map(e => chainBrandName(e.chainName)).filter(Boolean).join(' · ') : undefined,
+        [isMulti, entries]
+    );
+    const storeAddresses = useMemo(
         () => isMulti ? entries.map(e => formatStoreStreet(e.storeAddress) || e.storeName).filter(Boolean).join(' · ') : undefined,
         [isMulti, entries]
     );
@@ -107,29 +112,20 @@ export default function UnifiedShoppingListScreen() {
 
     return (
         <View style={{ flex: 1 }}>
-            {isMulti && (
-                <Stack.Screen options={{
-                    title: headerTitle ?? 'Pirkimų sąrašai',
-                    headerStyle: { backgroundColor: colors.cardBackground },
-                    headerShadowVisible: false,
-                    headerLeft: () => <ScreenBackButton />,
-                }} />
-            )}
-
-            {isMulti && (
-                <StoreChipBar
-                    chips={chips}
-                    selectedId={activeListId}
-                    onSelect={listId => setActiveListId(listId as number)}
-                />
-            )}
-
             <ShoppingListDetail
                 key={activeListId}
                 listId={activeListId}
                 expectedCount={expectedCount ? parseInt(expectedCount) : undefined}
-                showHeader={!isMulti}
                 isPartOfBasket={isMulti}
+                headerTitle={storeNames}
+                headerSubtitle={storeAddresses}
+                pinnedHeader={isMulti ? (
+                    <StoreChipBar
+                        chips={chips}
+                        selectedId={activeListId}
+                        onSelect={listId => setActiveListId(listId as number)}
+                    />
+                ) : undefined}
             />
         </View>
     );

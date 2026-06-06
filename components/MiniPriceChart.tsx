@@ -76,12 +76,24 @@ export function PriceChartSvg({
     const maxPrice = Math.max(...allPriceValues);
     const range = maxPrice - minPrice;
 
-    const paddedMin = range === 0 ? minPrice : minPrice - range * SCALE_PAD_RATIO;
-    const paddedRange = range === 0 ? 1 : range * (1 + 2 * SCALE_PAD_RATIO);
-    const ypos = (v: number) => {
-        if (range === 0) return padding.top + chartH / 2;
-        return padding.top + chartH - ((v - paddedMin) / paddedRange) * chartH;
-    };
+    // Mini chart baselines at 0 so a small dip reads small against the full
+    // price (overall perspective of the discount); the modal keeps its zoomed
+    // auto-scale to show fine variation.
+    const zeroBased = !isModal;
+    let lo: number;
+    let hi: number;
+    if (zeroBased) {
+        lo = 0;
+        hi = maxPrice > 0 ? maxPrice * 1.12 : 1;
+    } else if (range === 0) {
+        lo = minPrice - 0.5;
+        hi = minPrice + 0.5;
+    } else {
+        lo = minPrice - range * SCALE_PAD_RATIO;
+        hi = maxPrice + range * SCALE_PAD_RATIO;
+    }
+    const span = hi - lo || 1;
+    const ypos = (v: number) => padding.top + chartH - ((v - lo) / span) * chartH;
 
     const points = data.map((d, i) => {
         const tail = isModal ? 0 : MINI_TAIL;

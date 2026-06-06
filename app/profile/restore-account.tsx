@@ -4,6 +4,9 @@ import {
 } from 'react-native';
 import { useCallback, useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
+import Animated from 'react-native-reanimated';
+import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
+import { ScreenHeading } from '../../components/ScreenHeading';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
@@ -41,6 +44,7 @@ const EMPTY_SLOTS: Slot[] = [{ state: 'empty' }, { state: 'empty' }, { state: 'e
 
 export default function RestoreAccountScreen() {
     const router = useRouter();
+    const header = useCollapsingHeader();
     const { t } = useTranslation();
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -156,7 +160,13 @@ export default function RestoreAccountScreen() {
 
     return (
         <View style={styles.page}>
-            <ScrollView contentContainerStyle={styles.scroll}>
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                back
+                collapsing={<ScreenHeading title={t('restore.title')} />}
+            />
+            <Animated.ScrollView {...header.scroll} contentContainerStyle={[styles.scroll, { paddingTop: header.paddingTop + 20 }]}>
                 <Text style={styles.intro}>{t('restore.intro')}</Text>
 
                 {slots.map((slot, idx) => (
@@ -180,7 +190,7 @@ export default function RestoreAccountScreen() {
                         {t('restore.addFiles')}
                     </Text>
                 </TouchableOpacity>
-            </ScrollView>
+            </Animated.ScrollView>
 
             <View style={styles.footer}>
                 <TouchableOpacity
