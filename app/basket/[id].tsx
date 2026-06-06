@@ -3,6 +3,9 @@ import { SkeletonBox } from '../../components/SkeletonBox';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
+import Animated from 'react-native-reanimated';
+import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
+import { ScreenHeading } from '../../components/ScreenHeading';
 import { Ionicons } from '@expo/vector-icons';
 import { ScreenBackButton } from '../../components/ScreenBackButton';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -56,6 +59,7 @@ interface Basket {
 
 export default function BasketDetailScreen() {
     const colors = useTheme();
+    const header = useCollapsingHeader();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
@@ -546,23 +550,55 @@ export default function BasketDetailScreen() {
 
     return (
         <>
-            <Stack.Screen options={{
-                title: editingName ? '' : (fromTemplate ? inheritedName : titleText),
-                headerTitle: fromTemplate
-                    ? () => (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                            <View style={{
-                                width: 32, height: 32, borderRadius: 9,
+            <CollapsingHeader
+                controller={header}
+                background={headerColor}
+                back
+                headerOptions={{
+                    headerShown: true,
+                    title: '',
+                    headerTitle: () => null,
+                    headerStyle: { backgroundColor: headerColor },
+                    headerTintColor: onCover,
+                    headerShadowVisible: false,
+                    headerLeft: () => <ScreenBackButton color={fromTemplate && basket?.templateCoverColor ? '#FFFFFF' : colors.primary} />,
+                    // Bookmark icon → save-as-template modal. Only meaningful
+                    // when the basket has at least one item; hide otherwise
+                    // so the user isn't prompted to save an empty template.
+                    // Template-derived baskets get a 3-dots menu (copy / copy
+                    // original); manual + plain baskets keep the save-as-template
+                    // bookmark.
+                    headerRight: items.length === 0
+                        ? undefined
+                        : fromTemplate
+                        ? () => (
+                            <GlassIconButton
+                                icon="ellipsis-horizontal"
+                                color={onCover}
+                                onPress={() => setActionsOpen(true)}
+                            />
+                        )
+                        : () => (
+                            <GlassIconButton
+                                icon="bookmark-outline"
+                                color={onCover}
+                                onPress={() => setSaveTplVisible(true)}
+                            />
+                        ),
+                }}
+                collapsing={
+                    fromTemplate ? (
+                        <View style={styles.titleRow}>
+                            <View style={[styles.titleEmoji, {
                                 backgroundColor: basket?.templateCoverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
-                                alignItems: 'center', justifyContent: 'center',
-                            }}>
-                                <Text style={{ fontSize: 17 }}>{basketEmoji ?? '🫜'}</Text>
+                            }]}>
+                                <Text style={{ fontSize: 20 }}>{basketEmoji ?? '🫜'}</Text>
                             </View>
-                            <View>
+                            <View style={{ flex: 1, minWidth: 0 }}>
                                 {/* "Redaguota" sits next to the name (this basket diverged
                                     from the creator's original), not next to the @handle. */}
                                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                    <Text style={{ fontSize: 16, fontWeight: '700', color: onCover, flexShrink: 1 }} numberOfLines={1}>
+                                    <Text style={{ fontSize: 20, fontWeight: '700', color: onCover, flexShrink: 1 }} numberOfLines={2}>
                                         {inheritedName}
                                     </Text>
                                     {edited && (
@@ -575,78 +611,55 @@ export default function BasketDetailScreen() {
                                 </View>
                                 {/* Attribution = the template owner's @handle; falls back to
                                     the creation date when the owner isn't a creator (no handle). */}
-                                <Text style={{ fontSize: 11, fontWeight: '600', color: onCover, opacity: 0.85 }} numberOfLines={1}>
+                                <Text style={{ fontSize: 12, fontWeight: '600', color: onCover, opacity: 0.85 }} numberOfLines={1}>
                                     {attribHandle ? `@${attribHandle}` : formatDate(basket?.createdAt || '')}
                                 </Text>
                             </View>
                         </View>
-                    )
-                    : editingName
-                    ? () => (
-                        <TextInput
-                            ref={nameInputRef}
-                            defaultValue={basketName}
-                            onChangeText={text => { nameTextRef.current = text; }}
-                            onEndEditing={e => saveBasketName(e.nativeEvent.text)}
-                            onSubmitEditing={e => saveBasketName(e.nativeEvent.text)}
-                            onBlur={() => saveBasketName(nameTextRef.current)}
-                            placeholder={fallbackTitle}
-                            placeholderTextColor={colors.textMuted}
-                            style={{
-                                fontSize: 17,
-                                fontWeight: '600',
-                                color: colors.textPrimary,
-                                minWidth: 200,
-                                paddingVertical: 2,
-                                borderBottomWidth: 1,
-                                borderBottomColor: colors.primary,
-                            }}
-                        />
-                    )
-                    : () => (
+                    ) : editingName ? (
+                        <View style={styles.titleRow}>
+                            <TextInput
+                                ref={nameInputRef}
+                                defaultValue={basketName}
+                                onChangeText={text => { nameTextRef.current = text; }}
+                                onEndEditing={e => saveBasketName(e.nativeEvent.text)}
+                                onSubmitEditing={e => saveBasketName(e.nativeEvent.text)}
+                                onBlur={() => saveBasketName(nameTextRef.current)}
+                                placeholder={fallbackTitle}
+                                placeholderTextColor={colors.textMuted}
+                                autoFocus
+                                style={{
+                                    flex: 1,
+                                    fontSize: 22,
+                                    fontWeight: '700',
+                                    color: colors.textPrimary,
+                                    paddingVertical: 2,
+                                    borderBottomWidth: 1,
+                                    borderBottomColor: colors.primary,
+                                }}
+                            />
+                        </View>
+                    ) : (
                         <TouchableOpacity
+                            style={styles.titleRow}
                             onPress={() => basket?.status === 'draft' && setEditingName(true)}
                             disabled={basket?.status !== 'draft'}
                             activeOpacity={0.6}
                         >
-                            <Text style={{ fontSize: 17, fontWeight: '600', color: colors.textPrimary }} numberOfLines={1}>
+                            <Text style={[styles.titleText, { color: colors.textPrimary }]} numberOfLines={2}>
                                 {titleText}
                             </Text>
                         </TouchableOpacity>
-                    ),
-                headerStyle: { backgroundColor: headerColor },
-                headerTintColor: onCover,
-                headerShadowVisible: false,
-                headerLeft: () => <ScreenBackButton color={fromTemplate && basket?.templateCoverColor ? '#FFFFFF' : colors.primary} />,
-                // Bookmark icon → save-as-template modal. Only meaningful
-                // when the basket has at least one item; hide otherwise
-                // so the user isn't prompted to save an empty template.
-                // Template-derived baskets get a 3-dots menu (copy / copy
-                // original); manual + plain baskets keep the save-as-template
-                // bookmark.
-                headerRight: items.length === 0
-                    ? undefined
-                    : fromTemplate
-                    ? () => (
-                        <GlassIconButton
-                            icon="ellipsis-horizontal"
-                            color={onCover}
-                            onPress={() => setActionsOpen(true)}
-                        />
                     )
-                    : () => (
-                        <GlassIconButton
-                            icon="bookmark-outline"
-                            color={onCover}
-                            onPress={() => setSaveTplVisible(true)}
-                        />
-                    ),
-            }} />
+                }
+            />
             <View style={styles.container}>
-                <FlatList
+                <Animated.FlatList
+                    {...header.scroll}
+                    style={{ flex: 1 }}
                     data={items}
-                    keyExtractor={item => item.id.toString()}
-                    contentContainerStyle={styles.list}
+                    keyExtractor={(item: any) => item.id.toString()}
+                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12 }]}
                     ListHeaderComponent={
                         basket?.status === 'draft' ? (
                             <TouchableOpacity
@@ -976,6 +989,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
     list: { padding: 16 },
+    titleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10 },
+    titleEmoji: { width: 40, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
+    titleText: { fontSize: 22, fontWeight: '700' },
     addItemBtn: {
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
         gap: 6, paddingVertical: 12, borderRadius: 10, marginBottom: 12,
