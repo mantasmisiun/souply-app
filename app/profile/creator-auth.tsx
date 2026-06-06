@@ -13,7 +13,6 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { getUserId } from '../../config/user';
-import * as Updates from 'expo-updates';
 import { signInWithGoogle, signInWithApple, isAppleSignInAvailable } from '../../utils/oauthFlow';
 import { exchangeOauthToken } from '../../utils/authApi';
 import { useAuthState, DEV_SESSION_TOKEN } from '../../state/authState';
@@ -71,23 +70,17 @@ export default function CreatorAuthScreen() {
             setBusy(true);
             const anonymousUserId = await getUserId();
             const res = await exchangeOauthToken({ provider, idToken, anonymousUserId });
-            await setSession(res.token, res.user); // adopts res.user.id as the device userId
-            // Signed into an EXISTING account whose id differs from this device's
-            // anonymous id → reload so every userId-keyed store (profile,
-            // templates, stats) re-hydrates under the account. Same pattern as
-            // account recovery; otherwise edits hit the account while the
-            // screens still show the stale anonymous identity.
-            //
-            // NOTE: do NOT early-return on reloadAsync — in some builds it's a
-            // no-op / unavailable and resolves WITHOUT restarting, which used to
-            // strand the user on this login screen. A successful reload restarts
-            // the app before the lines below run; if it didn't, we fall through
-            // and navigate so we always leave the auth screen.
-            if (res.user.id && res.user.id !== anonymousUserId) {
-                try { await Updates.reloadAsync(); } catch { /* fall through to navigate */ }
-            }
-            // First sign-in (no username yet) → require a @handle before
-            // leaving. Returning users go straight back to Profilis.
+            // setSession adopts res.user.id as the device userId, so from here on
+            // EVERY userId-keyed call (profile, templates, stats, mutations)
+            // targets the signed-in account — correctness no longer needs a hard
+            // reload. We deliberately do NOT call Updates.reloadAsync() on sign-in:
+            // it restarts the app to the default tab (or no-ops and strands this
+            // screen), which is exactly the "didn't go back to Profilis" bug.
+            // Lists cached under the old anonymous id refresh on focus, and
+            // authState.hydrate() self-heals any id mismatch on the next cold start.
+            await setSession(res.token, res.user);
+            // First sign-in (no @handle yet) → pick a username before leaving;
+            // returning users go straight back to Profilis.
             if (!res.user.username) {
                 setNeedUsername(true);
             } else {
