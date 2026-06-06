@@ -14,7 +14,7 @@ import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { getLevelData, getLevelName } from '../../../constants/levels';
@@ -157,7 +157,7 @@ export default function ProfilisScreen() {
     // bucket can't swallow 75% of the donut).
     const [categoryTopN, setCategoryTopN] = useState<5 | 10>(5);
     const [monthOffset, setMonthOffset] = useState(0); // 0 = most recent 6-month window
-    const scrollRef = useRef<ScrollView>(null);
+    const scrollRef = useRef<ComponentRef<typeof Animated.ScrollView>>(null);
 
     // Per-page measured heights. The carousel wrapper animates to the
     // active page's natural height so the card shrinks when content is
@@ -170,6 +170,18 @@ export default function ProfilisScreen() {
     useEffect(() => {
         if (profile?.level) triggerIfNewLevel(profile.level);
     }, [profile?.level]);
+
+    // Just signed in (authUser went null → set) → snap Profilis back to the top
+    // so the now-visible signed-in / creator state is unmistakable after the
+    // sign-in screen pops back here.
+    const wasAuthedRef = useRef(!!authUser);
+    useEffect(() => {
+        const isAuthed = !!authUser;
+        if (isAuthed && !wasAuthedRef.current) {
+            scrollRef.current?.scrollTo({ y: 0, animated: true });
+        }
+        wasAuthedRef.current = isAuthed;
+    }, [authUser]);
 
     useEffect(() => {
         const target = pageHeights[activePage];
@@ -369,6 +381,7 @@ export default function ProfilisScreen() {
             collapsing={<ScreenHeading title={t('tabs.profilis')} />}
         />
         <Animated.ScrollView
+            ref={scrollRef}
             {...header.scroll}
             style={styles.container}
             contentContainerStyle={[styles.content, { paddingTop: header.paddingTop + 16, paddingBottom: tabBarHeight + 24 }]}

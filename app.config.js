@@ -62,6 +62,10 @@ export default {
           'Souply saves shared shopping-list QR codes to your photo library.',
         NSLocationWhenInUseUsageDescription:
           'Souply uses your approximate location to show the nearest stores with the best prices.',
+        // Documents (receipts/QRs) are imported as a copy, not edited in their
+        // original location — required alongside CFBundleDocumentTypes or Apple
+        // flags ITMS-90737 on upload.
+        LSSupportsOpeningDocumentsInPlace: false,
         // "Open In Souply" — appears when user taps a PDF/image in Files or Mail
         CFBundleDocumentTypes: [
           {

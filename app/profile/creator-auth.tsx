@@ -1,6 +1,6 @@
 import {
     View, Text, ScrollView, TouchableOpacity, StyleSheet,
-    Modal, Platform, ActivityIndicator, Alert,
+    Modal, Platform, Alert,
 } from 'react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
@@ -13,11 +13,11 @@ import Constants from 'expo-constants';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { getUserId } from '../../config/user';
-import * as Updates from 'expo-updates';
 import { signInWithGoogle, signInWithApple, isAppleSignInAvailable } from '../../utils/oauthFlow';
 import { exchangeOauthToken } from '../../utils/authApi';
 import { useAuthState, DEV_SESSION_TOKEN } from '../../state/authState';
 import { CreateUsernameModal } from '../../components/CreateUsernameModal';
+import { OAuthButton } from '../../components/OAuthButton';
 
 const INTRO_SEEN_KEY = 'creator_intro_seen_v1';
 
@@ -51,7 +51,10 @@ export default function CreatorAuthScreen() {
     const { t } = useTranslation();
     const setSession = useAuthState((s) => s.setSession);
 
-    const [busy, setBusy] = useState(false);
+    // Which provider is mid-sign-in — so the spinner renders on the button the
+    // user actually tapped (not always Google). `busy` = either in flight.
+    const [pending, setPending] = useState<'google' | 'apple' | null>(null);
+    const busy = pending !== null;
     const [showIntro, setShowIntro] = useState(false);
     const [needUsername, setNeedUsername] = useState(false);
 
@@ -68,21 +71,20 @@ export default function CreatorAuthScreen() {
 
     const onSignedIn = useCallback(async (provider: 'google' | 'apple', idToken: string) => {
         try {
-            setBusy(true);
+            // `pending` is already set by the press handler that called us.
             const anonymousUserId = await getUserId();
             const res = await exchangeOauthToken({ provider, idToken, anonymousUserId });
-            await setSession(res.token, res.user); // adopts res.user.id as the device userId
-            // Signed into an EXISTING account whose id differs from this device's
-            // anonymous id → reload so every userId-keyed store (profile,
-            // templates, stats) re-hydrates under the account. Same pattern as
-            // account recovery; otherwise edits hit the account while the
-            // screens still show the stale anonymous identity.
-            if (res.user.id && res.user.id !== anonymousUserId) {
-                await Updates.reloadAsync();
-                return;
-            }
-            // First sign-in (no username yet) → require a @handle before
-            // leaving. Returning users go straight back.
+            // setSession adopts res.user.id as the device userId, so from here on
+            // EVERY userId-keyed call (profile, templates, stats, mutations)
+            // targets the signed-in account — correctness no longer needs a hard
+            // reload. We deliberately do NOT call Updates.reloadAsync() on sign-in:
+            // it restarts the app to the default tab (or no-ops and strands this
+            // screen), which is exactly the "didn't go back to Profilis" bug.
+            // Lists cached under the old anonymous id refresh on focus, and
+            // authState.hydrate() self-heals any id mismatch on the next cold start.
+            await setSession(res.token, res.user);
+            // First sign-in (no @handle yet) → pick a username before leaving;
+            // returning users go straight back to Profilis.
             if (!res.user.username) {
                 setNeedUsername(true);
             } else {
@@ -91,26 +93,32 @@ export default function CreatorAuthScreen() {
         } catch {
             Alert.alert(t('creatorAuth.title'), t('basketTab.errorGeneric'));
         } finally {
-            setBusy(false);
+            setPending(null);
         }
     }, [setSession, router, t]);
 
     const onGooglePress = useCallback(async () => {
         if (busy) return;
+        setPending('google');
         try {
             const r = await signInWithGoogle();
             if (r) await onSignedIn('google', r.idToken); // null = user cancelled
+            else setPending(null);
         } catch {
+            setPending(null);
             Alert.alert(t('creatorAuth.title'), t('basketTab.errorGeneric'));
         }
     }, [busy, onSignedIn, t]);
 
     const onApplePress = useCallback(async () => {
         if (busy) return;
+        setPending('apple');
         try {
             const { idToken } = await signInWithApple();
             await onSignedIn('apple', idToken);
-        } catch { /* user cancelled — no toast */ }
+        } catch {
+            setPending(null); // user cancelled — no toast
+        }
     }, [busy, onSignedIn]);
 
     // DEV-ONLY bypass — skips OAuth and sets a simulated creator session so
@@ -150,30 +158,22 @@ export default function CreatorAuthScreen() {
                 </View>
 
                 <View style={styles.buttons}>
-                    <TouchableOpacity
-                        style={[styles.oauthBtn, styles.googleBtn]}
+                    <OAuthButton
+                        provider="google"
+                        label={t('creatorAuth.google')}
                         onPress={onGooglePress}
                         disabled={busy}
-                        activeOpacity={0.85}
-                    >
-                        {busy
-                            ? <ActivityIndicator color="#fff" />
-                            : <>
-                                <Ionicons name="logo-google" size={18} color="#fff" />
-                                <Text style={styles.oauthBtnText}>{t('creatorAuth.google')}</Text>
-                              </>}
-                    </TouchableOpacity>
+                        loading={pending === 'google'}
+                    />
 
                     {isAppleSignInAvailable && (
-                        <TouchableOpacity
-                            style={[styles.oauthBtn, styles.appleBtn]}
+                        <OAuthButton
+                            provider="apple"
+                            label={t('creatorAuth.apple')}
                             onPress={onApplePress}
                             disabled={busy}
-                            activeOpacity={0.85}
-                        >
-                            <Ionicons name="logo-apple" size={18} color="#fff" />
-                            <Text style={styles.oauthBtnText}>{t('creatorAuth.apple')}</Text>
-                        </TouchableOpacity>
+                            loading={pending === 'apple'}
+                        />
                     )}
 
                     {IS_DEV_BUILD && (
