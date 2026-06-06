@@ -29,11 +29,11 @@ function store(storeId: number, total: number, opts: { missing?: number; chainId
     };
 }
 
-function combo(storeIds: number[], splitTotal: number, opts: { extraDistanceKm?: number; isViable?: boolean; saving?: number } = {}): ScoredCombo {
+function combo(storeIds: number[], splitTotal: number, opts: { extraDistanceKm?: number; isViable?: boolean; saving?: number; chainIds?: number[] } = {}): ScoredCombo {
     return {
         storeIds,
-        stores: storeIds.map(id => ({
-            storeId: id, storeName: `Store ${id}`, chainName: `Chain ${id}`, chainId: id,
+        stores: storeIds.map((id, i) => ({
+            storeId: id, storeName: `Store ${id}`, chainName: `Chain ${id}`, chainId: opts.chainIds?.[i] ?? id,
             chainLogoUrl: null, storeAddress: `Addr ${id}`, latitude: 54, longitude: 25,
             distance: 1, total: splitTotal, isApproximated: false, missingItemNames: [], items: [],
         })),
@@ -110,6 +110,18 @@ describe('buildSplitOptions', () => {
         const multis = opts.filter(o => o.combo);
         expect(multis).toHaveLength(2); // [1,2] and [1,3], the duplicate dropped
         expect(opts[opts.length - 1].combo).toBeNull(); // single baseline last
+    });
+
+    it('collapses same-chain same-total splits to the closest, dropping further duplicates', () => {
+        const res = [store(10, 30), store(20, 34), store(21, 34)];
+        // Both are Maxima(1)+Rimi(2) at €28 and include the tapped store 10; the
+        // second uses a further Rimi (more extra travel) → must be dropped.
+        const near = combo([10, 20], 28, { extraDistanceKm: 3, chainIds: [1, 2] });
+        const far = combo([10, 21], 28, { extraDistanceKm: 8, chainIds: [1, 2] });
+        const opts = buildSplitOptions([near, far], res, [], 10);
+        const multis = opts.filter(o => o.combo);
+        expect(multis).toHaveLength(1);
+        expect(multis[0].storeIds).toEqual([10, 20]); // the closer variant kept
     });
 
     it('only returns combos that include the tapped store', () => {

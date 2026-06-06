@@ -248,15 +248,20 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
     const stageRef = useRef(safeStage); stageRef.current = safeStage;
     const sheetStyle = useAnimatedStyle(() => ({ height: height.value }));
 
-    // Settle to the current stage height when measurements/stage change (never
-    // mid-drag). withTiming → no spring bounce.
+    // Stage changes animate via the drag handlers / collapse below. Here we only
+    // SETTLE INSTANTLY on a measurement-driven snaps change (`full` depends on
+    // content height) — animating those would re-fire toward a moving target and
+    // make the sheet "drag on" instead of sticking. Never mid-drag.
     useEffect(() => {
         if (dragging.current) return;
-        height.value = withTiming(snaps[safeStage], { duration: 220 });
-    }, [safeStage, snaps, height]);
+        height.value = snaps[Math.min(stageRef.current, snaps.length - 1)];
+    }, [snaps, height]);
 
-    // New store's options → collapse back to peek.
-    useEffect(() => { setStage(0); }, [options]);
+    // New store's options → collapse back to peek (animated, like a snap).
+    useEffect(() => {
+        setStage(0);
+        if (!dragging.current) height.value = withTiming(snapsRef.current[0], { duration: 220 });
+    }, [options, height]);
 
     // Report the settled stage height so the map can frame content above us.
     useEffect(() => { onHeightChange?.(snaps[safeStage]); }, [safeStage, snaps, onHeightChange]);

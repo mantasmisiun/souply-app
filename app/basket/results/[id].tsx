@@ -19,7 +19,7 @@ import { orderStopsNearestFirst, orderStopsAlongRoute, buildGoogleMapsRouteUrl }
 import { getPresets } from '../../../utils/locationStorage';
 import StoreResultsMap, { type MapPin } from '../../../components/results/StoreResultsMap';
 import ResultsBottomSheet from '../../../components/results/ResultsBottomSheet';
-import { buildSplitOptions, type SheetOption } from '../../../utils/splitOptions';
+import { buildSplitOptions, TRIP_RADIUS_KM, type SheetOption } from '../../../utils/splitOptions';
 
 // StoreResult / ItemResult now live in utils/basketPricing (shared with the
 // lazy /store-prices fetch) — imported above.
@@ -286,15 +286,51 @@ export default function BasketResultsScreen() {
     const selectedStore = selectedOption && selectedOption.stores.length === 1 ? selectedOption.stores[0] : null;
     const selectedCombo = selectedOption?.combo ?? null;
 
-    // Stores shown as pills = the priced set, plus any member of the selected
-    // option (so a chosen split's stores always have a pill, even if one ranked
-    // outside the top-N).
+    // Per store: the price of the CHEAPEST option it belongs to — its own
+    // basket total, or the best in-radius split it's part of (then the pin shows
+    // the combo's price). Plus the globally cheapest option's stores = the
+    // recommended set (one store if a single wins, 2-3 if a split wins).
+    const { pinPriceByStore, recommendedStoreIds, recommendedStores } = useMemo(() => {
+        const richById = new Map<number, StoreResult>();
+        for (const r of results) richById.set(r.storeId, r);
+        for (const r of lazyResults) if (!richById.has(r.storeId)) richById.set(r.storeId, r);
+
+        const priceByStore = new Map<number, number>();
+        for (const [, r] of richById) priceByStore.set(r.storeId, r.total);
+
+        // Global best starts as the recommended single store; a cheaper in-radius
+        // split takes over.
+        let best: { price: number; ids: number[]; stores: StoreResult[] } | null =
+            results[0] ? { price: results[0].total, ids: [results[0].storeId], stores: [results[0]] } : null;
+
+        for (const c of combos) {
+            if (c.stores.length <= 1 || c.extraDistanceKm > TRIP_RADIUS_KM) continue;
+            for (const sid of c.storeIds) {
+                const cur = priceByStore.get(sid);
+                if (cur == null || c.splitTotal < cur) priceByStore.set(sid, c.splitTotal);
+            }
+            if (!best || c.splitTotal < best.price) {
+                const stores = c.storeIds.map(id => richById.get(id)).filter((s): s is StoreResult => !!s);
+                if (stores.length === c.storeIds.length) best = { price: c.splitTotal, ids: c.storeIds, stores };
+            }
+        }
+        return {
+            pinPriceByStore: priceByStore,
+            recommendedStoreIds: new Set(best?.ids ?? []),
+            recommendedStores: best?.stores ?? [],
+        };
+    }, [results, lazyResults, combos]);
+
+    // Stores shown as pills = the priced set, plus the recommended option's
+    // stores and any member of the selected option (so a recommended/chosen
+    // split's stores always have a pill, even if one ranked outside the top-N).
     const pinStores = useMemo(() => {
         const byId = new Map<number, StoreResult>();
         for (const s of singlePriced) byId.set(s.storeId, s);
+        for (const s of recommendedStores) if (!byId.has(s.storeId)) byId.set(s.storeId, s);
         if (selectedOption) for (const s of selectedOption.stores) if (!byId.has(s.storeId)) byId.set(s.storeId, s);
         return [...byId.values()];
-    }, [singlePriced, selectedOption]);
+    }, [singlePriced, recommendedStores, selectedOption]);
 
     const activeIds = useMemo(() => new Set(selectedOption?.storeIds ?? []), [selectedOption]);
     const pins: MapPin[] = useMemo(() =>
@@ -304,20 +340,20 @@ export default function BasketResultsScreen() {
                 storeId: s.storeId, chainId: s.chainId, chainName: s.chainName,
                 miniLogoUrl: s.chainMiniLogoUrl ?? s.chainLogoUrl ?? null,
                 latitude: s.latitude as number, longitude: s.longitude as number,
-                euro: s.total, // every pin shows its own standalone basket price
+                euro: pinPriceByStore.get(s.storeId) ?? s.total, // cheapest option for this store
                 active: activeIds.has(s.storeId),
-                recommended: s.storeId === cheapestStoreId,
+                recommended: recommendedStoreIds.has(s.storeId), // all stores of the best option
             })),
-        [pinStores, activeIds, cheapestStoreId]);
+        [pinStores, activeIds, pinPriceByStore, recommendedStoreIds]);
 
-    // The recommended (cheapest, pink-border) store — the map centers here on
-    // load instead of auto-opening a sheet.
+    // The recommended option's representative point — the map centers here on
+    // load (a single store, or the first store of a recommended split).
     const recommendedCoords = useMemo(() => {
-        const s = singlePriced.find(x => x.storeId === cheapestStoreId);
+        const s = recommendedStores[0] ?? singlePriced.find(x => x.storeId === cheapestStoreId);
         return s && s.latitude != null && s.longitude != null
             ? { latitude: s.latitude as number, longitude: s.longitude as number }
             : null;
-    }, [singlePriced, cheapestStoreId]);
+    }, [recommendedStores, singlePriced, cheapestStoreId]);
 
     // Coords the map zooms to: the selected option's store(s), or null = fit all.
     const focusCoords = useMemo(() => {

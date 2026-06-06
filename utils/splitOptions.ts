@@ -84,15 +84,25 @@ export function buildSplitOptions(
     };
 
     const matching = combos.filter(c => c.storeIds.includes(storeId)); // pre-sorted: viable, then saving
-    const seen = new Set<string>();
-    const multis: SheetOption[] = [];
+    // Collapse repetitive "same offer" splits: a Maxima+Rimi split at €X is the
+    // same deal regardless of WHICH physical Maxima/Rimi, so keyed by chain set
+    // + total we keep only the CLOSEST variant (least extra travel) and drop the
+    // further duplicates. First-seen order is preserved (combos are pre-ranked).
+    const bestByOffer = new Map<string, ScoredCombo>();
+    const offerOrder: string[] = [];
     for (const c of matching) {
         if (c.stores.length <= 1) continue;
         if (c.extraDistanceKm > tripRadiusKm) continue; // one-trip cap (replaces the viability gate)
-        const opt = toMulti(c);
-        if (!opt || seen.has(opt.key)) continue;
-        seen.add(opt.key);
-        multis.push(opt);
+        const chainSig = [...new Set(c.stores.map(s => s.chainId))].sort((a, b) => a - b).join('-');
+        const key = `${chainSig}|${Math.round(c.splitTotal * 100)}`;
+        const prev = bestByOffer.get(key);
+        if (!prev) { bestByOffer.set(key, c); offerOrder.push(key); }
+        else if (c.extraDistanceKm < prev.extraDistanceKm) bestByOffer.set(key, c);
+    }
+    const multis: SheetOption[] = [];
+    for (const key of offerOrder) {
+        const opt = toMulti(bestByOffer.get(key)!);
+        if (opt) multis.push(opt);
         if (multis.length >= MAX_OPTIONS) break;
     }
 
