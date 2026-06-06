@@ -3,9 +3,10 @@ import {
     StyleSheet, ActivityIndicator, RefreshControl, Keyboard
 } from 'react-native';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
-import { useRouter, Stack, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { ScreenBackButton } from '../components/ScreenBackButton';
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { GlassIconButton } from '../components/GlassIconButton';
+import { ScreenHeading } from '../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../components/CollapsingHeader';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -132,6 +133,8 @@ export default function DiscountsScreen() {
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
+    // Collapsing header: "Nuolaidos" title hides on scroll, L2 filter stays pinned.
+    const header = useCollapsingHeader();
     const router = useRouter();
     const { templateId: rawTemplateId } = useLocalSearchParams<{ templateId?: string }>();
     const templateId = rawTemplateId != null && rawTemplateId.length > 0 ? Number(rawTemplateId) : null;
@@ -440,54 +443,43 @@ export default function DiscountsScreen() {
 
     return (
         <>
-            <Stack.Screen options={{
-                title: 'Nuolaidos',
-                headerStyle: { backgroundColor: colors.cardBackground },
-                headerShadowVisible: false,
-                headerLeft: () => <ScreenBackButton />,
-                headerTitle: searchOpen
-                    ? () => (
-                        <TextInput
-                            ref={searchInputRef}
-                            autoFocus
-                            value={search}
-                            onChangeText={setSearch}
-                            placeholder={t('browse.searchPlaceholder')}
-                            placeholderTextColor={colors.textMuted}
-                            returnKeyType="search"
-                            onSubmitEditing={() => Keyboard.dismiss()}
-                            style={{
-                                fontSize: 17, fontWeight: '500',
-                                color: colors.textPrimary, minWidth: 220,
-                                paddingVertical: 2,
-                                borderBottomWidth: 1, borderBottomColor: colors.primary,
-                            }}
-                        />
-                    )
-                    : () => (
-                        // Title + freshness sit in a 2-line stack so the
-                        // "Atnaujinta dabar" indicator costs zero vertical
-                        // space in the list area. Mirrors the product
-                        // detail nav-bar (title + breadcrumb).
-                        <View style={{ alignItems: 'flex-start' }}>
-                            <Text style={{ fontSize: 17, fontWeight: '600', color: colors.textPrimary }}>
-                                Nuolaidos
-                            </Text>
-                            {dataUpdatedAt > 0 && allProducts.length > 0 && (
-                                <Text style={{ fontSize: 11, color: colors.textMuted, marginTop: 1 }} numberOfLines={1}>
-                                    {formatFreshness(dataUpdatedAt, t)}
-                                </Text>
-                            )}
-                        </View>
-                    ),
-                headerRight: () =>
-                    searchOpen
-                        ? <GlassIconButton icon="close" onPress={closeSearch} />
-                        : <GlassIconButton icon="search" onPress={() => setSearchOpen(true)} />,
-            }} />
-            <View style={{ flex: 1 }}>
-                <View style={styles.container}>
-                    {activeL2Ids.size > 0 && (
+            {/* "Nuolaidos" collapses on scroll; the L2 filter stays pinned. The
+                bar keeps its glass back + search/close buttons; in search mode
+                the input is a pinned field in the body (a TextInput in the bar
+                title strips the iOS-26 glass off the bar buttons). */}
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                back
+                right={searchOpen
+                    ? <GlassIconButton icon="close" onPress={closeSearch} />
+                    : <GlassIconButton icon="search" onPress={() => setSearchOpen(true)} />}
+                collapsing={searchOpen ? null : (
+                    <ScreenHeading
+                        title="Nuolaidos"
+                        subtitle={dataUpdatedAt > 0 && allProducts.length > 0
+                            ? formatFreshness(dataUpdatedAt, t)
+                            : undefined}
+                    />
+                )}
+                pinned={(searchOpen || activeL2Ids.size > 0) ? (
+                    <>
+                        {searchOpen && (
+                            <View style={styles.searchFieldWrap}>
+                                <TextInput
+                                    ref={searchInputRef}
+                                    autoFocus
+                                    value={search}
+                                    onChangeText={setSearch}
+                                    placeholder={t('browse.searchPlaceholder')}
+                                    placeholderTextColor={colors.textMuted}
+                                    returnKeyType="search"
+                                    onSubmitEditing={() => Keyboard.dismiss()}
+                                    style={styles.searchField}
+                                />
+                            </View>
+                        )}
+                        {activeL2Ids.size > 0 && (
                         <ScrollView
                             horizontal
                             showsHorizontalScrollIndicator={false}
@@ -514,21 +506,15 @@ export default function DiscountsScreen() {
                                 </TouchableOpacity>
                             ))}
                         </ScrollView>
-                    )}
-
-                    {isError && allProducts.length > 0 && (
-                        <TouchableOpacity style={styles.errorBanner} onPress={() => refetch()} activeOpacity={0.7}>
-                            <Ionicons name="warning-outline" size={16} color={colors.onPrimary} style={{ marginRight: 6 }} />
-                            <Text style={styles.errorBannerText} numberOfLines={2}>
-                                {t('discounts.loadFailedWithCache')}
-                            </Text>
-                            <Text style={styles.errorBannerRetry}>{t('discounts.retry')}</Text>
-                        </TouchableOpacity>
-                    )}
-
+                        )}
+                    </>
+                ) : undefined}
+            />
+            <View style={{ flex: 1 }}>
+                <View style={styles.container}>
                     <View style={{ flex: 1 }}>
                         {isLoading ? (
-                            <View style={{ flex: 1, padding: 12, gap: 12 }}>
+                            <View style={{ flex: 1, padding: 12, gap: 12, paddingTop: header.paddingTop + 12 }}>
                                 {Array.from({ length: 6 }).map((_, i) => (
                                     <View key={i} style={{ flexDirection: 'row', gap: 12 }}>
                                         {[0, 1].map(j => (
@@ -543,7 +529,7 @@ export default function DiscountsScreen() {
                                 ))}
                             </View>
                         ) : isError && allProducts.length === 0 ? (
-                            <View style={styles.coldError}>
+                            <View style={[styles.coldError, { paddingTop: header.paddingTop }]}>
                                 <Ionicons name="cloud-offline-outline" size={48} color={colors.textMuted} />
                                 <Text style={styles.coldErrorTitle}>{t('discounts.loadFailed')}</Text>
                                 <ScalePressable style={styles.coldErrorButton} onPress={() => refetch()}>
@@ -551,11 +537,15 @@ export default function DiscountsScreen() {
                                 </ScalePressable>
                             </View>
                         ) : (
-                            <FlatList
+                            <Animated.FlatList
+                                {...header.scroll}
                                 data={products}
-                                keyExtractor={item => item.id.toString()}
+                                keyExtractor={(item: any) => item.id.toString()}
                                 contentContainerStyle={[
                                     styles.list,
+                                    // + 12 restores the list's natural top padding (styles.list)
+                                    // as a small gap below the pinned filter, matching product.
+                                    { paddingTop: header.paddingTop + 12 },
                                     // Reserve space for the absolute "Šablonas"
                                     // banner so the last row's "Į šabloną" CTA
                                     // isn't hidden under it.
@@ -564,6 +554,17 @@ export default function DiscountsScreen() {
                                 numColumns={2}
                                 columnWrapperStyle={styles.row}
                                 keyboardDismissMode="on-drag"
+                                ListHeaderComponent={
+                                    isError && allProducts.length > 0 ? (
+                                        <TouchableOpacity style={styles.errorBanner} onPress={() => refetch()} activeOpacity={0.7}>
+                                            <Ionicons name="warning-outline" size={16} color={colors.onPrimary} style={{ marginRight: 6 }} />
+                                            <Text style={styles.errorBannerText} numberOfLines={2}>
+                                                {t('discounts.loadFailedWithCache')}
+                                            </Text>
+                                            <Text style={styles.errorBannerRetry}>{t('discounts.retry')}</Text>
+                                        </TouchableOpacity>
+                                    ) : null
+                                }
                                 refreshControl={
                                     <RefreshControl
                                         refreshing={refreshing}
@@ -684,6 +685,15 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         fontSize: 14,
         color: c.textPrimary,
         padding: 0,
+    },
+    searchFieldWrap: {
+        backgroundColor: c.cardBackground,
+        paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10,
+    },
+    searchField: {
+        borderWidth: 1, borderColor: c.border, borderRadius: 10,
+        paddingHorizontal: 12, paddingVertical: 9,
+        fontSize: 16, color: c.textPrimary,
     },
     bubblesRow: {
         backgroundColor: c.cardBackground,

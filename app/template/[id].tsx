@@ -2,6 +2,8 @@ import {
     View, Text, FlatList, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
     Alert, TextInput, RefreshControl, Switch,
 } from 'react-native';
+import Animated from 'react-native-reanimated';
+import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -41,6 +43,7 @@ type VisResult = 'ok' | 'wall' | 'dev' | 'error';
 
 export default function TemplateDetailScreen() {
     const colors = useTheme();
+    const header = useCollapsingHeader();
     const { t } = useTranslation();
     const router = useRouter();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -312,62 +315,59 @@ export default function TemplateDetailScreen() {
 
     return (
         <>
-            <Stack.Screen options={{
-                title: titleText,
-                // Emoji + name both open the identity sheet (name/emoji/colour).
-                headerTitle: () => (
+            {/* Unified header: cover-coloured bar (back + share + more), the
+                tappable emoji/name title collapses on scroll, the Items/Stats
+                tabs stay pinned. Title in the body → never under the buttons. */}
+            <CollapsingHeader
+                controller={header}
+                background={headerColor}
+                headerOptions={{
+                    headerShown: true,
+                    title: '',
+                    headerTitle: () => null,
+                    headerStyle: { backgroundColor: headerColor },
+                    headerTintColor: onCover,
+                    headerShadowVisible: false,
+                    headerLeft: () => <ScreenBackButton color={template.coverColor ? '#FFFFFF' : colors.primary} />,
+                    headerRight: () => (
+                        <View style={{ flexDirection: 'row' }}>
+                            {!isDefault && (
+                                <GlassIconButton
+                                    icon="share-social-outline"
+                                    color={onCover}
+                                    onPress={() => template.items.length > 0 && setShareSheetOpen(true)}
+                                    disabled={template.items.length === 0}
+                                />
+                            )}
+                            <GlassIconButton
+                                icon="ellipsis-horizontal"
+                                color={onCover}
+                                onPress={() => setActionBarOpen(true)}
+                            />
+                        </View>
+                    ),
+                }}
+                collapsing={
                     <TouchableOpacity
                         onPress={isDefault ? undefined : () => setCoverEditorOpen(true)}
                         activeOpacity={isDefault ? 1 : 0.7}
                         disabled={isDefault}
-                        style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}
+                        style={styles.titleRow}
                     >
-                        <View style={{
-                            width: 34, height: 34, borderRadius: 10,
+                        <View style={[styles.titleEmoji, {
                             backgroundColor: template.coverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
-                            alignItems: 'center', justifyContent: 'center',
-                        }}>
+                        }]}>
                             {isDefault
-                                ? <Ionicons name="sparkles" size={18} color={colors.primary} />
-                                : <Text style={{ fontSize: 18 }}>{headerEmoji}</Text>}
+                                ? <Ionicons name="sparkles" size={20} color={colors.primary} />
+                                : <Text style={{ fontSize: 20 }}>{headerEmoji}</Text>}
                         </View>
-                        <Text style={{ fontSize: 17, fontWeight: '600', color: onCover }} numberOfLines={1}>
+                        <Text style={[styles.titleText, { color: onCover }]} numberOfLines={2}>
                             {titleText}
                         </Text>
                     </TouchableOpacity>
-                ),
-                headerStyle: { backgroundColor: headerColor },
-                headerTintColor: onCover,
-                headerShadowVisible: false,
-                headerLeft: () => <ScreenBackButton color={template.coverColor ? '#FFFFFF' : colors.primary} />,
-                headerRight: () => (
-                    <View style={{ flexDirection: 'row' }}>
-                        {/* Share — not for the personal auto template. Disabled
-                            when empty (sharing an item-less template is moot). */}
-                        {!isDefault && (
-                            <GlassIconButton
-                                icon="share-social-outline"
-                                color={onCover}
-                                onPress={() => template.items.length > 0 && setShareSheetOpen(true)}
-                                disabled={template.items.length === 0}
-                            />
-                        )}
-                        <GlassIconButton
-                            icon="ellipsis-horizontal"
-                            color={onCover}
-                            onPress={() => setActionBarOpen(true)}
-                        />
-                    </View>
-                ),
-            }} />
-
-            <View style={styles.container}>
-                {/* Tabs only for signed-in creators — anonymous users just see
-                    the items list (Statistika holds creator-only data). The
-                    Smart template hides them entirely: it can't be shared and
-                    has no creator metrics, so only its item list is shown. */}
-                {authedUser && !isDefault && (
-                    <View style={styles.tabBar}>
+                }
+                pinned={authedUser && !isDefault ? (
+                    <View style={[styles.tabBar, { backgroundColor: colors.cardBackground }]}>
                         <StoreChipBar
                             chips={[
                                 { id: 'items', label: t('basketTab.templates.tabItems') },
@@ -376,8 +376,6 @@ export default function TemplateDetailScreen() {
                             selectedId={tab}
                             onSelect={id => { if (id != null) setTab(id as 'items' | 'stats'); }}
                         />
-                        {/* Overlaid on the chip bar's right edge so it shares the
-                            banner's surface background (not the page wash). */}
                         {tab === 'stats' && (
                             <TouchableOpacity
                                 onPress={() => setStatsHelpOpen(true)}
@@ -388,13 +386,18 @@ export default function TemplateDetailScreen() {
                             </TouchableOpacity>
                         )}
                     </View>
-                )}
+                ) : undefined}
+            />
+
+            <View style={styles.container}>
                 {!(authedUser && tab === 'stats') ? (
                 <>
-                <FlatList
+                <Animated.FlatList
+                    {...header.scroll}
+                    style={{ flex: 1 }}
                     data={template.items}
-                    keyExtractor={item => `i-${item.id}`}
-                    contentContainerStyle={styles.list}
+                    keyExtractor={(item: any) => `i-${item.id}`}
+                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12 }]}
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
@@ -541,7 +544,7 @@ export default function TemplateDetailScreen() {
                     // Statistika — real creator metrics. Same data the website
                     // shows on the template card. Only reachable when signed in
                     // (tabs are hidden otherwise).
-                    <ScrollView contentContainerStyle={styles.statsScroll}>
+                    <Animated.ScrollView {...header.scroll} contentContainerStyle={[styles.statsScroll, { paddingTop: header.paddingTop + 16 }]}>
                         <View style={styles.metricsGrid}>
                             <View style={styles.metricTile}>
                                 <Text style={styles.metricValue}>{Number(template.visitCount ?? 0).toLocaleString('lt-LT')}</Text>
@@ -575,7 +578,7 @@ export default function TemplateDetailScreen() {
                                 })()}
                             </View>
                         </View>
-                    </ScrollView>
+                    </Animated.ScrollView>
                 )}
             </View>
 
@@ -664,6 +667,16 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
 
     // ── Statistika tab — creator-account explainer ────────────────────────
     statsScroll: { padding: 16, paddingBottom: 32 },
+    // Title band (emoji + name), collapses on scroll. Sits on the cover colour.
+    titleRow: {
+        flexDirection: 'row', alignItems: 'center', gap: 10,
+        paddingHorizontal: 16, paddingTop: 4, paddingBottom: 12,
+    },
+    titleEmoji: {
+        width: 34, height: 34, borderRadius: 10,
+        alignItems: 'center', justifyContent: 'center',
+    },
+    titleText: { flex: 1, fontSize: 18, fontWeight: '700' },
     tabBar: { position: 'relative' },
     tabHelpBtn: {
         position: 'absolute', right: 0, top: 0, bottom: 0,

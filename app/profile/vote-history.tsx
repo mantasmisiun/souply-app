@@ -3,7 +3,11 @@ import {
     Modal, ActivityIndicator, Pressable, TextInput,
 } from 'react-native';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useFocusEffect, useNavigation } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
+import Animated from 'react-native-reanimated';
+import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
+import { ScreenHeading } from '../../components/ScreenHeading';
+import { GlassIconButton } from '../../components/GlassIconButton';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Ionicons } from '@expo/vector-icons';
@@ -70,7 +74,7 @@ export default function VoteHistoryScreen() {
     const { t } = useTranslation();
     const FILTERS = useMemo(() => buildFilters(t), [t]);
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const navigation = useNavigation();
+    const header = useCollapsingHeader();
 
     const [showHelp, setShowHelp] = useState(false);
     const [votes, setVotes] = useState<VoteRow[]>([]);
@@ -83,15 +87,6 @@ export default function VoteHistoryScreen() {
     const [editing, setEditing] = useState<VoteRow | null>(null);
     const [saving, setSaving] = useState(false);
 
-    useLayoutEffect(() => {
-        navigation.setOptions({
-            headerRight: () => (
-                <TouchableOpacity onPress={() => setShowHelp(true)} style={{ marginRight: 4, padding: 4 }}>
-                    <Ionicons name="help-circle-outline" size={24} color={colors.textSecondary} />
-                </TouchableOpacity>
-            ),
-        });
-    }, [navigation, colors]);
 
     const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -218,55 +213,71 @@ export default function VoteHistoryScreen() {
 
     return (
         <View style={styles.container}>
-            {/* Search box */}
-            <View style={styles.searchRow}>
-                <Ionicons name="search-outline" size={18} color={colors.textMuted} style={styles.searchIcon} />
-                <TextInput
-                    style={styles.searchInput}
-                    placeholder={t('voteHistory.searchPlaceholder')}
-                    placeholderTextColor={colors.textMuted}
-                    value={search}
-                    onChangeText={setSearch}
-                    returnKeyType="search"
-                    clearButtonMode="while-editing"
-                />
-            </View>
-
-            {/* Filter chips */}
-            <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={styles.bubblesRow}
-                contentContainerStyle={styles.bubblesContainer}
-            >
-                {FILTERS.map(f => (
-                    <TouchableOpacity
-                        key={f.key}
-                        style={[styles.bubble, filter === f.key && styles.bubbleActive]}
-                        onPress={() => setFilter(f.key)}
-                    >
-                        <Text style={[styles.bubbleText, filter === f.key && styles.bubbleTextActive]}>
-                            {f.label}
-                        </Text>
-                    </TouchableOpacity>
-                ))}
-            </ScrollView>
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                back
+                right={
+                    <GlassIconButton
+                        icon="help-circle-outline"
+                        size={24}
+                        color={colors.textSecondary}
+                        onPress={() => setShowHelp(true)}
+                    />
+                }
+                collapsing={<ScreenHeading title={t('screens.voteHistory')} />}
+                pinned={
+                    <>
+                        <View style={styles.searchRow}>
+                            <Ionicons name="search-outline" size={18} color={colors.textMuted} style={styles.searchIcon} />
+                            <TextInput
+                                style={styles.searchInput}
+                                placeholder={t('voteHistory.searchPlaceholder')}
+                                placeholderTextColor={colors.textMuted}
+                                value={search}
+                                onChangeText={setSearch}
+                                returnKeyType="search"
+                                clearButtonMode="while-editing"
+                            />
+                        </View>
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            style={styles.bubblesRow}
+                            contentContainerStyle={styles.bubblesContainer}
+                        >
+                            {FILTERS.map(f => (
+                                <TouchableOpacity
+                                    key={f.key}
+                                    style={[styles.bubble, filter === f.key && styles.bubbleActive]}
+                                    onPress={() => setFilter(f.key)}
+                                >
+                                    <Text style={[styles.bubbleText, filter === f.key && styles.bubbleTextActive]}>
+                                        {f.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            ))}
+                        </ScrollView>
+                    </>
+                }
+            />
 
             {loading ? (
-                <ActivityIndicator color={colors.primary} style={{ marginTop: 48 }} />
+                <ActivityIndicator color={colors.primary} style={{ marginTop: header.paddingTop + 48 }} />
             ) : votes.length === 0 ? (
-                <View style={styles.empty}>
+                <View style={[styles.empty, { paddingTop: header.paddingTop }]}>
                     <Ionicons name="layers-outline" size={48} color={colors.textMuted} />
                     <Text style={styles.emptyText}>
                         {debouncedSearch || filter !== 'all' ? t('voteHistory.emptyFiltered') : t('voteHistory.emptyNone')}
                     </Text>
                 </View>
             ) : (
-                <FlatList
+                <Animated.FlatList
+                    {...header.scroll}
                     data={votes}
-                    keyExtractor={v => `${v.spIdA}-${v.spIdB}`}
+                    keyExtractor={(v: any) => `${v.spIdA}-${v.spIdB}`}
                     renderItem={renderItem}
-                    contentContainerStyle={styles.list}
+                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12 }]}
                     onEndReached={loadMore}
                     onEndReachedThreshold={0.3}
                     ListFooterComponent={listFooter}

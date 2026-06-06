@@ -3,10 +3,12 @@ import { useMemo } from 'react';
 import { useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../../constants/theme';
-import { useAdminModeStore } from '../../state/adminModeStore';
-import { useProfileStore } from '../../state/profileStore';
-import { TabHeader } from '../../components/TabHeader';
+import { useTheme, type AppTheme } from '../../../constants/theme';
+import { useAdminModeStore } from '../../../state/adminModeStore';
+import { useProfileStore } from '../../../state/profileStore';
+import Animated from 'react-native-reanimated';
+import { ScreenHeading } from '../../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 
 /**
  * Admin Profilis tab.
@@ -22,6 +24,7 @@ import { TabHeader } from '../../components/TabHeader';
  */
 export default function AdminMenu() {
     const colors = useTheme();
+    const header = useCollapsingHeader();
     const router = useRouter();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -41,7 +44,7 @@ export default function AdminMenu() {
         // Release any in-flight image leases so abandoned cards don't
         // wait the full 2h before another admin can claim them.
         try {
-            const { releaseAdminImageBatch } = await import('../../services/adminClient');
+            const { releaseAdminImageBatch } = await import('../../../services/adminClient');
             await releaseAdminImageBatch();
         } catch {
             /* non-fatal — release is a nice-to-have */
@@ -73,8 +76,13 @@ export default function AdminMenu() {
 
     return (
         <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
-        <TabHeader title={t('tabs.profilis')} rightAction={settingsGear} />
-        <ScrollView contentContainerStyle={styles.scroll}>
+        <CollapsingHeader
+            controller={header}
+            background={colors.cardBackground}
+            right={settingsGear}
+            collapsing={<ScreenHeading title={t('tabs.profilis')} />}
+        />
+        <Animated.ScrollView {...header.scroll} contentContainerStyle={[styles.scroll, { paddingTop: header.paddingTop + 20 }]}>
             <View style={styles.header}>
                 <Ionicons name="shield-checkmark" size={48} color={colors.primary} />
                 <Text style={styles.title}>{t('admin.title')}</Text>
@@ -96,7 +104,7 @@ export default function AdminMenu() {
                 </Text>
                 <Ionicons name="chevron-forward" size={18} color={colors.onPrimary} />
             </TouchableOpacity>
-        </ScrollView>
+        </Animated.ScrollView>
         </View>
     );
 }

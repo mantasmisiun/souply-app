@@ -22,10 +22,22 @@ import { Platform } from 'react-native';
 const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
 const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
 
-GoogleSignin.configure({
-    webClientId: GOOGLE_WEB_CLIENT_ID,
-    ...(GOOGLE_IOS_CLIENT_ID ? { iosClientId: GOOGLE_IOS_CLIENT_ID } : {}),
-});
+// Whether this build can actually use Google Sign-In. iOS REQUIRES an
+// iosClientId (or a GoogleService-Info.plist) — calling configure()/signIn()
+// without one throws "failed to determine clientID" and crashes the app.
+// Android resolves via package + SHA-1, so it tolerates an empty config. DEV
+// builds intentionally ship without Google clients (dev-auth bypass is used
+// instead), so iOS must degrade gracefully here exactly like Android already
+// does — never crash.
+export const isGoogleSignInConfigured =
+    Platform.OS === 'ios' ? !!GOOGLE_IOS_CLIENT_ID : !!GOOGLE_WEB_CLIENT_ID;
+
+if (isGoogleSignInConfigured) {
+    GoogleSignin.configure({
+        webClientId: GOOGLE_WEB_CLIENT_ID,
+        ...(GOOGLE_IOS_CLIENT_ID ? { iosClientId: GOOGLE_IOS_CLIENT_ID } : {}),
+    });
+}
 
 export interface OauthTokenResult {
     provider: 'google' | 'apple';
@@ -38,6 +50,11 @@ export interface OauthTokenResult {
  * error so the caller can surface it.
  */
 export async function signInWithGoogle(): Promise<OauthTokenResult | null> {
+    // No client in this build (e.g. DEV) → fail with a catchable JS error
+    // instead of the native module crashing. Callers already catch + toast.
+    if (!isGoogleSignInConfigured) {
+        throw new Error('Google sign-in is not available in this build');
+    }
     try {
         await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
         const res: any = await GoogleSignin.signIn();

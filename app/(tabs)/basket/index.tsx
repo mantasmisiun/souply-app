@@ -1,32 +1,35 @@
 import { View, Text, FlatList, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, RefreshControl, Modal, TextInput } from 'react-native';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { TabHeader } from '../../components/TabHeader';
-import { StoreChipBar } from '../../components/StoreChipBar';
+import { StoreChipBar } from '../../../components/StoreChipBar';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, memo } from 'react';
-import { useRouter, useFocusEffect } from 'expo-router';
+import { Stack, useRouter, useFocusEffect } from 'expo-router';
+import { glassHeaderOptions } from '../../../constants/navHeader';
+import { ScreenHeading } from '../../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { API_BASE_URL } from '../../config/api';
-import { coverEmoji } from '../../utils/templateCover';
-import { useSafeBottomTabBarHeight } from '../../hooks/useSafeBottomTabBarHeight';
-import { TemplateCoverEditor, type CoverDraft } from '../../components/TemplateCoverEditor';
-import { useAuthState } from '../../state/authState';
-import { ltPluralSuffix } from '../../utils/ltPlural';
-import { getUserId } from '../../config/user';
-import { useBasketState } from '../../state/basketState';
-import { useTheme, type AppTheme } from '../../constants/theme';
-import { ScalePressable } from '../../components/ScalePressable';
-import { SkeletonBox } from '../../components/SkeletonBox';
-import { formatDate, formatEuro } from '../../utils/formatCurrency';
+import { API_BASE_URL } from '../../../config/api';
+import { coverEmoji } from '../../../utils/templateCover';
+import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
+import { TemplateCoverEditor, type CoverDraft } from '../../../components/TemplateCoverEditor';
+import { useAuthState } from '../../../state/authState';
+import { ltPluralSuffix } from '../../../utils/ltPlural';
+import { getUserId } from '../../../config/user';
+import { useBasketState } from '../../../state/basketState';
+import { useTheme, type AppTheme } from '../../../constants/theme';
+import { ScalePressable } from '../../../components/ScalePressable';
+import { SkeletonBox } from '../../../components/SkeletonBox';
+import { formatDate, formatEuro } from '../../../utils/formatCurrency';
 import {
     listTemplates,
     createTemplate,
     buildDefaultTemplate,
     type BasketTemplate,
-} from '../../utils/basketTemplatesApi';
-import { SystemNoticeCard } from '../../components/SystemNoticeCard';
-import { BuildingTemplateCard } from '../../components/BuildingTemplateCard';
+} from '../../../utils/basketTemplatesApi';
+import { SystemNoticeCard } from '../../../components/SystemNoticeCard';
+import { BuildingTemplateCard } from '../../../components/BuildingTemplateCard';
 
 interface Basket {
     id: number;
@@ -155,6 +158,8 @@ export default function BasketScreen() {
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
+    const header = useCollapsingHeader();
+    const insets = useSafeAreaInsets();
     const tabBarHeight = useSafeBottomTabBarHeight();
     const { setDraftBasketId } = useBasketState();
     // Own/private-template baskets attribute to the current user's handle when
@@ -394,9 +399,28 @@ export default function BasketScreen() {
         }
     }, [router, t]);
 
+    // Pinned header for both views: the view chips + (when refetching) the
+    // refreshing banner. The "Krepšelis" title collapses above it on scroll.
+    const pinnedFilter = (
+        <>
+            <StoreChipBar
+                chips={chips}
+                selectedId={view}
+                onSelect={id => id != null && setView(id as ViewMode)}
+            />
+            {refreshing && (
+                <View style={styles.refreshingBanner}>
+                    <ActivityIndicator size="small" color={colors.primary} />
+                    <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
+                </View>
+            )}
+        </>
+    );
+
     if (loading) return (
         <View style={styles.container}>
-            <TabHeader title={t('tabs.basket')} />
+            <Stack.Screen options={glassHeaderOptions()} />
+            <ScreenHeading title={t('tabs.basket')} topInset={insets.top} />
             <View style={styles.skelChipRow}>
                 {Array.from({ length: 2 }).map((_, i) => (
                     <SkeletonBox key={i} width={96} height={32} borderRadius={20} />
@@ -414,22 +438,18 @@ export default function BasketScreen() {
     if (view === 'templates') {
         return (
             <View style={styles.container}>
-                <TabHeader title={t('tabs.basket')} />
-                <StoreChipBar
-                    chips={chips}
-                    selectedId={view}
-                    onSelect={id => id != null && setView(id as ViewMode)}
+                <CollapsingHeader
+                    controller={header}
+                    background={colors.cardBackground}
+                    collapsing={<ScreenHeading title={t('tabs.basket')} />}
+                    pinned={pinnedFilter}
                 />
-                {refreshing && (
-                    <View style={styles.refreshingBanner}>
-                        <ActivityIndicator size="small" color={colors.primary} />
-                        <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
-                    </View>
-                )}
-                <FlatList
+                <Animated.FlatList
+                    {...header.scroll}
                     data={templates}
-                    keyExtractor={item => `t-${item.id}`}
-                    contentContainerStyle={styles.list}
+                    keyExtractor={(item: any) => `t-${item.id}`}
+                    contentInsetAdjustmentBehavior="never"
+                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
                     refreshControl={
                         <RefreshControl
                             refreshing={pullRefreshing}
@@ -590,20 +610,16 @@ export default function BasketScreen() {
     // ─── Krepšeliai view (accordion) ──────────────────────────────────────
     return (
         <View style={styles.container}>
-            <TabHeader title={t('tabs.basket')} />
-            <StoreChipBar
-                chips={chips}
-                selectedId={view}
-                onSelect={id => id != null && setView(id as ViewMode)}
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                collapsing={<ScreenHeading title={t('tabs.basket')} />}
+                pinned={pinnedFilter}
             />
-            {refreshing && (
-                <View style={styles.refreshingBanner}>
-                    <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
-                </View>
-            )}
-            <ScrollView
-                contentContainerStyle={styles.list}
+            <Animated.ScrollView
+                {...header.scroll}
+                contentInsetAdjustmentBehavior="never"
+                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
                 refreshControl={
                     <RefreshControl
                         refreshing={pullRefreshing}
@@ -726,7 +742,7 @@ export default function BasketScreen() {
                         );
                     })
                 )}
-            </ScrollView>
+            </Animated.ScrollView>
         </View>
     );
 }
@@ -734,7 +750,7 @@ export default function BasketScreen() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
-    list: { padding: 16, paddingBottom: 80 },
+    list: { padding: 16 },
 
     // ── Skeleton ──────────────────────────────────────────────────────────
     skelChipRow: {

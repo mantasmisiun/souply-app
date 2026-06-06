@@ -1,13 +1,16 @@
 import {
-    View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
-    Alert, TextInput, Image, Platform, Modal, KeyboardAvoidingView, Keyboard,
+    View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
+    Alert, TextInput, Platform, Modal, KeyboardAvoidingView, Keyboard,
 } from 'react-native';
+import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
 import { SkeletonBox } from './SkeletonBox';
-import { ScreenBackButton } from './ScreenBackButton';
-import { Stack, useRouter, useFocusEffect } from 'expo-router';
-import { useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { useCollapsingHeader, CollapsingHeader } from './CollapsingHeader';
+import { ScreenHeading } from './ScreenHeading';
+import { GlassIconButton } from './GlassIconButton';
+import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import QRCode from 'react-native-qrcode-svg';
@@ -18,13 +21,15 @@ import { useTheme, type AppTheme } from '../constants/theme';
 import * as Haptics from 'expo-haptics';
 import { formatEuro } from '../utils/formatCurrency';
 import { formatStoreStreet } from '../utils/formatAddress';
+import { chainBrandName } from '../utils/chainBrandName';
 import { useTranslation } from 'react-i18next';
 
 interface ShoppingList {
     id: number;
     storeId: number;
     storeName: string;
-    storeAddress: string;
+    // API (getShoppingListById) returns Store.address aliased as `address`.
+    address: string;
     chainName: string;
     chainId: number;
     chainLogoUrl: string | null;
@@ -131,10 +136,16 @@ interface Props {
     listId: number;
     /** Passed from the basket creation flow to know how many items to wait for */
     expectedCount?: number;
-    /** When false, Stack.Screen header is not rendered (parent controls it) */
-    showHeader?: boolean;
     /** When true (multi-store mode), the all-items-checked completion prompt is suppressed */
     isPartOfBasket?: boolean;
+    /** Title row override — multi-store passes the joined chain short names
+     *  (e.g. "Maxima · Rimi"). Single store derives it from the list. */
+    headerTitle?: string;
+    /** Breadcrumb override — multi-store passes the joined addresses. */
+    headerSubtitle?: string;
+    /** Extra pinned content shown above the progress bar (multi-store: the store
+     *  chip selector). */
+    pinnedHeader?: ReactNode;
 }
 
 const PIECE_PRESETS = ['1', '2', '3', '5', '10'];
@@ -143,12 +154,18 @@ const WEIGHT_PRESETS = ['0.1', '0.2', '0.5', '1'];
 export function ShoppingListDetail({
     listId,
     expectedCount,
-    showHeader = true,
     isPartOfBasket = false,
+    headerTitle,
+    headerSubtitle,
+    pinnedHeader,
 }: Props) {
     const colors = useTheme();
     const insets = useSafeAreaInsets();
     const { t } = useTranslation();
+
+    // Single owner of the header for both single- and multi-store lists. The
+    // store chip selector (multi) is fed in via `pinnedHeader`.
+    const header = useCollapsingHeader();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
     const id = String(listId);
@@ -514,14 +531,13 @@ export function ShoppingListDetail({
 
     if (loading) return (
         <>
-            {showHeader && (
-                <Stack.Screen options={{
-                    title: t('shoppingListDetail.fallbackTitle'),
-                    headerStyle: { backgroundColor: colors.cardBackground },
-                    headerShadowVisible: false,
-                }} />
-            )}
-            <View style={[styles.container, { padding: 16, gap: 10 }]}>
+            <CollapsingHeader
+                controller={header}
+                back
+                collapsing={<ScreenHeading title={headerTitle ?? t('shoppingListDetail.fallbackTitle')} subtitle={headerSubtitle} />}
+                pinned={pinnedHeader}
+            />
+            <View style={[styles.container, { paddingTop: header.paddingTop + 16, paddingHorizontal: 16, gap: 10 }]}>
                 {Array.from({ length: 8 }).map((_, i) => (
                     <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                         <SkeletonBox width={22} height={22} borderRadius={6} />
@@ -542,47 +558,51 @@ export function ShoppingListDetail({
 
     return (
         <>
-            {showHeader && (
-                <Stack.Screen options={{
-                    title: formatStoreStreet(list?.storeAddress) || list?.storeName || t('shoppingListDetail.fallbackTitle'),
-                    headerStyle: { backgroundColor: colors.cardBackground },
-                    headerShadowVisible: false,
-                    headerLeft: () => list?.chainLogoUrl ? (
-                        <Image source={{ uri: list.chainLogoUrl }} style={styles.headerLogo} resizeMode="contain" />
-                    ) : <ScreenBackButton />,
-                    headerRight: () => (
-                        <View style={{ flexDirection: 'row', alignItems: 'center', marginRight: 8 }}>
-                            {list?.status === 'active' && (
-                                <TouchableOpacity style={{ paddingHorizontal: 8 }} onPress={openShare}>
-                                    <Ionicons name="share-social-outline" size={22} color={colors.textPrimary} />
-                                </TouchableOpacity>
-                            )}
-                            {list?.status === 'completed' && (
-                                <TouchableOpacity style={{ paddingHorizontal: 8 }} onPress={() => setMenuVisible(true)}>
-                                    <Ionicons name="ellipsis-vertical" size={22} color={colors.textMuted} />
-                                </TouchableOpacity>
-                            )}
+            <CollapsingHeader
+                controller={header}
+                back
+                right={
+                    list?.status === 'active' ? (
+                        <GlassIconButton icon="share-social-outline" color={colors.textPrimary} onPress={openShare} />
+                    ) : list?.status === 'completed' ? (
+                        <GlassIconButton icon="ellipsis-vertical" color={colors.textMuted} onPress={() => setMenuVisible(true)} />
+                    ) : undefined
+                }
+                collapsing={
+                    <ScreenHeading
+                        title={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
+                        subtitle={headerSubtitle ?? (formatStoreStreet(list?.address) || list?.storeName || undefined)}
+                    />
+                }
+                pinned={
+                    <>
+                        {pinnedHeader}
+                        <View style={styles.progressContainer}>
+                            <View style={styles.progressBar}>
+                                <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+                            </View>
+                            <Text style={styles.progressText}>{t('shoppingListDetail.progress', { checked: checkedCount, total: totalCount })}</Text>
                         </View>
-                    ),
-                }} />
-            )}
+                    </>
+                }
+            />
 
             <View style={styles.container}>
                     {pendingDeleteRef.current && (
-                        <TouchableOpacity style={styles.undoToast} onPress={undoItemDelete} activeOpacity={0.85}>
-                            <Ionicons name="arrow-undo" size={14} color={colors.onPrimary} />
-                            <Text style={styles.undoToastText}>{t('shoppingListDetail.deletedUndo')}</Text>
-                        </TouchableOpacity>
+                        <View style={[styles.undoToastWrap, { top: header.paddingTop }]} pointerEvents="box-none">
+                            <TouchableOpacity style={styles.undoToast} onPress={undoItemDelete} activeOpacity={0.85}>
+                                <Ionicons name="arrow-undo" size={14} color={colors.onPrimary} />
+                                <Text style={styles.undoToastText}>{t('shoppingListDetail.deletedUndo')}</Text>
+                            </TouchableOpacity>
+                        </View>
                     )}
 
-                    <View style={styles.progressContainer}>
-                        <View style={styles.progressBar}>
-                            <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
-                        </View>
-                        <Text style={styles.progressText}>{t('shoppingListDetail.progress', { checked: checkedCount, total: totalCount })}</Text>
-                    </View>
-
-                    <ScrollView contentContainerStyle={styles.list}>
+                    <Animated.ScrollView
+                        {...header.scroll}
+                        style={{ flex: 1 }}
+                        contentContainerStyle={[styles.scrollContent, { paddingTop: header.paddingTop }]}
+                    >
+                        <View style={styles.listInner}>
                         {uncheckedGroups.map(group => (
                             <View key={group.name ?? '__no_category__'}>
                                 {group.name && <Text style={styles.sectionHeader}>{group.name}</Text>}
@@ -611,7 +631,8 @@ export function ShoppingListDetail({
                                 <Text style={styles.emptyText}>{t('shoppingListDetail.empty')}</Text>
                             </View>
                         )}
-                    </ScrollView>
+                        </View>
+                    </Animated.ScrollView>
 
                     {/* Bottom bar group — KeyboardStickyView lifts it above the
                         keyboard reliably (manual padding under-lifts in Android
@@ -917,7 +938,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: 4 },
     progressText: { fontSize: 13, color: c.textSecondary, minWidth: 50, textAlign: 'right' },
 
-    list: { paddingTop: 16, paddingBottom: 40, paddingHorizontal: 12 },
+    scrollContent: { paddingBottom: 40 },
+    listInner: { paddingTop: 16, paddingHorizontal: 12 },
 
     sectionHeader: {
         fontSize: 12, fontWeight: '700', color: c.textMuted,
@@ -986,6 +1008,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     addBarInput: { flex: 1, fontSize: 14, color: c.textPrimary, paddingVertical: 2 },
 
     // ── Undo toast ────────────────────────────────────────────────────────────
+    undoToastWrap: { position: 'absolute', left: 0, right: 0, zIndex: 60, alignItems: 'center' },
     undoToast: {
         flexDirection: 'row', alignItems: 'center', gap: 8,
         backgroundColor: c.textPrimary,

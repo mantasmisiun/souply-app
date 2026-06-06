@@ -7,6 +7,11 @@ import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
 import { getUserId } from '../../../config/user';
 import { useTheme, type AppTheme } from '../../../constants/theme';
+import Animated from 'react-native-reanimated';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { glassHeaderOptions } from '../../../constants/navHeader';
+import { ScreenHeading } from '../../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatDate } from '../../../utils/formatCurrency';
 import { chainBrandName, getMiniLogoUrl, chainBrandColor } from '../../../utils/chainBrandName';
@@ -202,6 +207,8 @@ function SplitGroupCard({ group, onPress, onLongPress, selectionMode, selected, 
 
 export default function ShoppingListScreen() {
     const colors = useTheme();
+    const header = useCollapsingHeader();
+    const insets = useSafeAreaInsets();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const tabBarHeight = useSafeBottomTabBarHeight();
@@ -406,7 +413,8 @@ export default function ShoppingListScreen() {
 
     if (loading) return (
         <View style={styles.container}>
-            <Stack.Screen options={{ title: t('tabs.shoppingList') }} />
+            <Stack.Screen options={glassHeaderOptions()} />
+            <ScreenHeading title={t('tabs.shoppingList')} topInset={insets.top} />
             <View style={{ padding: 16 }}>
                 <SkeletonBox width={70} height={13} borderRadius={6} style={{ marginBottom: 12 }} />
                 {Array.from({ length: 5 }).map((_, i) => (
@@ -427,19 +435,23 @@ export default function ShoppingListScreen() {
 
     return (
         <View style={styles.container}>
-            <Stack.Screen options={{ title: t('tabs.shoppingList') }} />
+            {/* No bar action → the empty bar is hidden; this header takes the inset. */}
+            <CollapsingHeader
+                controller={header}
+                background={colors.cardBackground}
+                collapsing={<ScreenHeading title={t('tabs.shoppingList')} />}
+                pinned={allChains.length >= 2 ? (
+                    <StoreChipBar
+                        chips={allChains}
+                        selectedId={chainFilter}
+                        onSelect={id => setChainFilter(id as string | null)}
+                        allLabel={t('shoppingListTab.filterAll')}
+                    />
+                ) : undefined}
+            />
 
-            {/* Chain filter — only when 2+ distinct chains */}
-            {allChains.length >= 2 && (
-                <StoreChipBar
-                    chips={allChains}
-                    selectedId={chainFilter}
-                    onSelect={id => setChainFilter(id as string | null)}
-                    allLabel={t('shoppingListTab.filterAll')}
-                />
-            )}
-
-            <FlatList
+            <Animated.FlatList
+                {...header.scroll}
                 data={[]}
                 keyExtractor={() => ''}
                 renderItem={null}
@@ -545,7 +557,8 @@ export default function ShoppingListScreen() {
                         )}
                     </>
                 }
-                contentContainerStyle={styles.list}
+                contentInsetAdjustmentBehavior="never"
+                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
             />
 
             {!selectionMode && (
