@@ -13,6 +13,7 @@ import { loadCachedCoords, tryGpsCoords, persistCoords, type UserCoords } from '
 import LocationPromptModal from '../../../components/LocationPromptModal';
 import { formatEuro } from '../../../utils/formatCurrency';
 import { scoreAllCombinations, type ScoredCombo } from '../../../utils/splitBasketScore';
+import { type StoreResult, type ItemResult } from '../../../utils/basketPricing';
 import { ScreenBackButton } from '../../../components/ScreenBackButton';
 import { chainBrandColorById } from '../../../utils/chainBrandName';
 import ViewToggle, { type ResultsView } from '../../../components/results/ViewToggle';
@@ -38,42 +39,8 @@ function pluralizePrekes(n: number): string {
     return 'prekių';
 }
 
-interface ItemResult {
-    productId: number;
-    productName: string;
-    quantity: number;
-    matchMode: 'sku' | 'base';
-    price: number | null;
-    promoPrice: number | null;
-    effectivePrice: number | null;
-    isMissing: boolean;
-    isFallback: boolean;
-    isWeighable: boolean;
-    isSubstituted: boolean;
-    isCrossChainAverage: boolean;
-    packsNeeded: number | null;
-    totalPrice: number | null;
-    storeProductName: string | null;
-    storeProductId: number | null;
-    resolvedProductId: number | null;
-}
-
-interface StoreResult {
-    storeId: number;
-    storeName: string;
-    chainName: string;
-    chainId: number;
-    chainLogoUrl: string | null;
-    chainMiniLogoUrl?: string | null;
-    storeAddress: string;
-    latitude: number | null;
-    longitude: number | null;
-    distance: number;
-    total: number;
-    isApproximated: boolean;
-    missingItemNames: string[];
-    items: ItemResult[];
-}
+// StoreResult / ItemResult now live in utils/basketPricing (shared with the
+// lazy /store-prices fetch) — imported above.
 
 /** Hard cap on the single-store list — near a city centre the calc can return
  *  hundreds of stores; we only ever show the top 10 ranked options. */
@@ -309,7 +276,7 @@ export default function BasketResultsScreen() {
                 storeId: s.storeId, chainId: s.chainId, chainName: s.chainName,
                 miniLogoUrl: s.chainMiniLogoUrl ?? s.chainLogoUrl ?? null,
                 latitude: s.latitude as number, longitude: s.longitude as number,
-                euro: s.storeId === selectedStoreId ? s.total : null,
+                euro: s.total, // price shown on every pin now, not just the selected one
                 active: s.storeId === selectedStoreId,
                 recommended: s.storeId === cheapestStoreId,
             }));
