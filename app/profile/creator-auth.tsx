@@ -77,12 +77,17 @@ export default function CreatorAuthScreen() {
             // templates, stats) re-hydrates under the account. Same pattern as
             // account recovery; otherwise edits hit the account while the
             // screens still show the stale anonymous identity.
+            //
+            // NOTE: do NOT early-return on reloadAsync — in some builds it's a
+            // no-op / unavailable and resolves WITHOUT restarting, which used to
+            // strand the user on this login screen. A successful reload restarts
+            // the app before the lines below run; if it didn't, we fall through
+            // and navigate so we always leave the auth screen.
             if (res.user.id && res.user.id !== anonymousUserId) {
-                await Updates.reloadAsync();
-                return;
+                try { await Updates.reloadAsync(); } catch { /* fall through to navigate */ }
             }
             // First sign-in (no username yet) → require a @handle before
-            // leaving. Returning users go straight back.
+            // leaving. Returning users go straight back to Profilis.
             if (!res.user.username) {
                 setNeedUsername(true);
             } else {
