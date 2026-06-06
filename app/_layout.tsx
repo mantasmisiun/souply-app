@@ -13,6 +13,7 @@ import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { EnvBadge } from '../components/EnvBadge';
+import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { UsernameGate } from '../components/UsernameGate';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
@@ -238,6 +239,7 @@ function RootLayout() {
     <DisplayPreferenceProvider>
     <ThemeProvider value={navTheme}>
       <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
+      <DevUpdateBanner />
       <ShareHandler />
       <OfflineBanner />
       <UsernameGate />

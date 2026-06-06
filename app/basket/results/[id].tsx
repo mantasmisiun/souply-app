@@ -1,4 +1,4 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, RefreshControl, InteractionManager } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, InteractionManager } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect, useNavigation, Stack } from 'expo-router';
 import React, { useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
@@ -16,7 +16,6 @@ import { scoreAllCombinations, type ScoredCombo } from '../../../utils/splitBask
 import { type StoreResult, type ItemResult } from '../../../utils/basketPricing';
 import { ScreenBackButton } from '../../../components/ScreenBackButton';
 import { chainBrandColorById } from '../../../utils/chainBrandName';
-import ViewToggle, { type ResultsView } from '../../../components/results/ViewToggle';
 import StoreResultsMap, { type MapPin } from '../../../components/results/StoreResultsMap';
 import ResultsWheel, { type WheelItem } from '../../../components/results/ResultsWheel';
 
@@ -50,25 +49,18 @@ export default function BasketResultsScreen() {
     const colors = useTheme();
     const { clearSessionBasket } = useBasketState();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const { bottom: bottomInset } = useSafeAreaInsets();
+    const { bottom: bottomInset, top: topInset } = useSafeAreaInsets();
     const { id } = useLocalSearchParams();
     const router = useRouter();
     const navigation = useNavigation();
     const [results, setResults] = useState<StoreResult[]>([]);
     const [loading, setLoading] = useState(true);
     const [pullRefreshing, setPullRefreshing] = useState(false);
-    const [visibleCount, setVisibleCount] = useState(0);
     const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
     const [locationPromptVisible, setLocationPromptVisible] = useState(false);
     const [combos, setCombos] = useState<ScoredCombo[]>([]);
     const [storeCount, setStoreCount] = useState<1 | 2 | 3>(1);
-    const [showAllCombos, setShowAllCombos] = useState(false);
-    // Single-store list: show only the recommended (cheapest) row by
-    // default, with a "Daugiau" reveal for the rest. Keeps the results
-    // screen focused on the action — "go here" — instead of the spread.
-    const [showAllSingleStores, setShowAllSingleStores] = useState(false);
     const [selectedCombo, setSelectedCombo] = useState<ScoredCombo | null>(null);
-    const [view, setView] = useState<ResultsView>('stores');
     const [mapMounted, setMapMounted] = useState(false);
     const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
 
@@ -76,10 +68,10 @@ export default function BasketResultsScreen() {
     // switching to Žemėlapis feels instant (the capsule animates immediately,
     // the map appears a frame later).
     useEffect(() => {
-        if (view !== 'map' || mapMounted) return;
+        if (loading || mapMounted) return;
         const task = InteractionManager.runAfterInteractions(() => setMapMounted(true));
         return () => task.cancel();
-    }, [view, mapMounted]);
+    }, [loading, mapMounted]);
 
     const loadResults = async () => {
         // Detail screen now awaits the calc before pushing to this route,
@@ -89,11 +81,8 @@ export default function BasketResultsScreen() {
         // (e.g., the user reverted the basket to draft from a parallel
         // stack, wiping this key), render the empty state immediately.
         setLoading(true);
-        setVisibleCount(0);
         setSelectedStoreId(null);
         setSelectedCombo(null);
-        setShowAllCombos(false);
-        setShowAllSingleStores(false);
         setCombos([]);
 
         const [stored, metaRaw] = await Promise.all([
@@ -104,10 +93,6 @@ export default function BasketResultsScreen() {
         if (stored) {
             const parsed: StoreResult[] = JSON.parse(stored);
             setResults(parsed);
-            const animCount = Math.min(parsed.length, MAX_SINGLE_STORES);
-            for (let i = 0; i <= animCount; i++) {
-                setTimeout(() => setVisibleCount(i), i * 150);
-            }
 
             const meta = metaRaw ? JSON.parse(metaRaw) : null;
             const sc: 1 | 2 | 3 = meta?.storeCount ?? 1;
@@ -134,7 +119,6 @@ export default function BasketResultsScreen() {
 
     const runRecalcWithCoords = useCallback(async (coords: UserCoords, isPull = false) => {
         if (!isPull) setLoading(true);
-        setVisibleCount(0);
         setSelectedStoreId(null);
         try {
             const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
@@ -148,10 +132,6 @@ export default function BasketResultsScreen() {
             setUserCoords({ lat: coords.lat, lng: coords.lng });
             setResults(newResults);
             setLoading(false);
-            const animCount = Math.min(newResults.length, MAX_SINGLE_STORES);
-            for (let i = 0; i <= animCount; i++) {
-                setTimeout(() => setVisibleCount(i), i * 150);
-            }
         } catch {
             Alert.alert('Klaida', 'Nepavyko perskaičiuoti');
             setLoading(false);
@@ -195,16 +175,10 @@ export default function BasketResultsScreen() {
     // `view` (which would re-run loadResults on every toggle).
     const headerCfgRef = useRef<() => void>(() => {});
     headerCfgRef.current = () => {
-        navigation.setOptions({
-            title: storeCount > 1 ? 'Parduotuvės' : 'Parduotuvė',
-            headerTitleAlign: 'center',
-            headerLeft: () => <ScreenBackButton />,
-            headerTitle: () => <ViewToggle value={view} onChange={setView} colors={colors} />,
-            headerRight: undefined,
-        });
+        // Results is map-only now → full-bleed map, no native header.
+        navigation.setOptions({ headerShown: false });
     };
-    // Re-apply when the toggle flips (and on mount).
-    useLayoutEffect(() => { headerCfgRef.current(); }, [view, storeCount, colors]);
+    useLayoutEffect(() => { headerCfgRef.current(); }, [storeCount, colors]);
 
     useFocusEffect(useCallback(() => {
         // Re-assert the header here — after expo-router's own focus event —
@@ -218,9 +192,6 @@ export default function BasketResultsScreen() {
         loadCachedCoords().then(c => { if (c) setUserCoords({ lat: c.lat, lng: c.lng }); });
     }, [id, navigation, handleRecalculate, colors.primary]));
 
-    const closestStoreId = results.length > 0
-        ? [...results].sort((a, b) => a.distance - b.distance)[0].storeId
-        : null;
     // Results arrive pre-sorted by the calc service (fewest missing →
     // fewest CCA → fewest substituted → lowest total). results[0] is
     // therefore always the recommended option, even on price ties — the
@@ -562,24 +533,18 @@ export default function BasketResultsScreen() {
                 useLayoutEffect above so re-renders keep the button
                 attached even if expo-router's initial push timing hides
                 it briefly. */}
-            <Stack.Screen options={{
-                title: storeCount > 1 ? 'Parduotuvės' : 'Parduotuvė',
-                headerLeft: () => <ScreenBackButton />,
-                headerTitleAlign: 'center',
-                headerTitle: () => <ViewToggle value={view} onChange={setView} colors={colors} />,
-            }} />
+            <Stack.Screen options={{ headerShown: false }} />
             <View style={styles.container}>
                 {loading && !pullRefreshing ? (
                     <Animated.View entering={FadeIn} style={styles.loadingContainer}>
                         <ActivityIndicator size="large" color={colors.primary} />
                         <Text style={styles.loadingText}>Skaičiuojamos kainos...</Text>
                     </Animated.View>
-                ) : view === 'map' ? (
-                    // Full-bleed backdrop — fills the whole content region; the
-                    // wheel + action bar float over it at the bottom. The heavy
-                    // MapView mount is deferred past the toggle tap so switching
-                    // feels instant (a spinner shows for the one frame).
-                    mapMounted ? (
+                ) : mapMounted ? (
+                    // Full-bleed map fills the content region; wheel + action bar
+                    // float over it at the bottom. The heavy MapView mount is
+                    // deferred a frame past entry so the screen paints instantly.
+                    <>
                         <StoreResultsMap
                             pins={pins}
                             userCoords={userCoords}
@@ -587,175 +552,34 @@ export default function BasketResultsScreen() {
                             onSelectStore={handlePinTap}
                             colors={colors}
                         />
-                    ) : (
-                        <View style={styles.loadingContainer}>
-                            <ActivityIndicator size="large" color={colors.primary} />
+                        {/* Full-bleed map → floating back circle, top-left. */}
+                        <View style={[styles.mapTopLeft, { top: topInset + 10 }]} pointerEvents="box-none">
+                            <TouchableOpacity style={styles.mapBackBtn} onPress={() => router.back()} activeOpacity={0.8}>
+                                <Ionicons name="chevron-back" size={24} color={colors.primary} />
+                            </TouchableOpacity>
                         </View>
-                    )
+                    </>
                 ) : (
-                    <FlatList
-                        data={
-                            storeCount > 1 && combos.length > 0
-                                ? []
-                                : (() => {
-                                    const allVisible = results.slice(0, Math.min(visibleCount, MAX_SINGLE_STORES));
-                                    if (showAllSingleStores || !cheapestStoreId) return allVisible;
-                                    // Default state: collapse everything to just the
-                                    // recommended store. The "Daugiau" footer reveals
-                                    // the remaining options on demand.
-                                    return allVisible.filter(r => r.storeId === cheapestStoreId);
-                                })()
-                        }
-                        keyExtractor={item => item.storeId.toString()}
-                        contentContainerStyle={styles.list}
-                        refreshControl={
-                            <RefreshControl
-                                refreshing={pullRefreshing}
-                                onRefresh={handlePullRefresh}
-                                colors={[colors.primary]}
-                                tintColor={colors.primary}
-                            />
-                        }
-                        ListHeaderComponent={combos.length > 0 ? (
-                            <SplitCombosHeader
-                                combos={combos}
-                                miniLogoByChainId={Object.fromEntries(results.map(r => [r.chainId, r.chainMiniLogoUrl ?? r.chainLogoUrl]))}
-                                showAll={showAllCombos}
-                                onToggleShowAll={() => setShowAllCombos(v => !v)}
-                                selectedCombo={selectedCombo}
-                                onSelectCombo={c => {
-                                    setSelectedCombo(prev => prev?.storeIds.join() === c.storeIds.join() ? null : c);
-                                    setSelectedStoreId(null); // clear single-store selection
-                                }}
-                                styles={styles}
+                    <View style={styles.loadingContainer}>
+                        <ActivityIndicator size="large" color={colors.primary} />
+                    </View>
+                )}
+                {/* Wheel + action bar float over the full-bleed map. */}
+                {!loading && mapMounted ? (
+                    <View style={styles.mapBottomStack}>
+                        {/* Inset below the wheel clears the Android nav bar
+                            when no action bar is shown (Visi / nothing selected). */}
+                        <View style={{ backgroundColor: colors.cardBackground, paddingBottom: (selectedStore || selectedCombo) ? 0 : bottomInset }}>
+                            <ResultsWheel
+                                items={wheelItems}
+                                selectedIndex={wheelSelectedIndex}
+                                onSelectIndex={handleWheelSelect}
                                 colors={colors}
                             />
-                        ) : null}
-                        ListEmptyComponent={
-                            storeCount > 1 && combos.length > 0 ? null : (
-                                <View style={styles.centered}>
-                                    <Text style={styles.emptyText}>Parduotuvių nerasta</Text>
-                                </View>
-                            )
-                        }
-                        ListFooterComponent={
-                            // Show the reveal/collapse footer only when (a) we're on
-                            // the single-store list (not the combos view) and (b)
-                            // there's more than the recommended one to show.
-                            // Styling matches the SplitCombosHeader's internal
-                            // showMore button so the two paths look identical.
-                            !(storeCount > 1 && combos.length > 0) && results.length > 1
-                                ? (
-                                    <TouchableOpacity
-                                        style={styles.showMoreBtn}
-                                        onPress={() => setShowAllSingleStores(v => !v)}
-                                        activeOpacity={0.7}
-                                    >
-                                        <Text style={styles.showMoreBtnText}>
-                                            {showAllSingleStores ? 'Mažiau' : 'Daugiau'}
-                                        </Text>
-                                        <Ionicons
-                                            name={showAllSingleStores ? 'chevron-up' : 'chevron-down'}
-                                            size={14}
-                                            color={colors.primary}
-                                        />
-                                    </TouchableOpacity>
-                                )
-                                : null
-                        }
-                        renderItem={({ item, index }) => {
-                            const isCheapest = item.storeId === cheapestStoreId;
-                            const isClosest = item.storeId === closestStoreId;
-                            const isSelected = item.storeId === selectedStoreId;
-
-                            return (
-                                <Animated.View entering={FadeInDown.delay(index * 50).springify()}>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.card,
-                                            isCheapest && styles.cardCheapest,
-                                            isClosest && !isCheapest && styles.cardClosest,
-                                            isSelected && styles.cardSelected,
-                                        ]}
-                                        onPress={() => setSelectedStoreId(isSelected ? null : item.storeId)}
-                                    >
-                                        {isCheapest && (
-                                            // Matches the multi-store SplitCombosHeader
-                                            // recommended ribbon — consistent recommendation
-                                            // language across single + multi paths.
-                                            <View style={styles.recommendedBadge}>
-                                                <Text style={styles.recommendedBadgeText}>Rekomenduojama</Text>
-                                            </View>
-                                        )}
-                                        <View style={styles.cardLeft}>
-                                            <View style={[styles.logo, { backgroundColor: chainBrandColorById(item.chainId) }]}>
-                                                {item.chainLogoUrl ? (
-                                                    <Image source={{ uri: item.chainMiniLogoUrl ?? item.chainLogoUrl }} style={styles.logoImage} resizeMode="contain" />
-                                                ) : (
-                                                    <Text style={styles.logoPlaceholderText}>{item.chainName[0]}</Text>
-                                                )}
-                                            </View>
-                                        </View>
-                                        <View style={styles.cardContent}>
-                                            <Text style={styles.storeName}>{item.storeAddress}</Text>
-                                            <View style={styles.metaRow}>
-                                                <Ionicons name="location-outline" size={12} color={colors.textMuted} />
-                                                <Text style={styles.distance}>{item.distance} km</Text>
-                                                {item.missingItemNames && item.missingItemNames.length > 0 && (
-                                                    <View style={styles.missingBadge}>
-                                                        <Text style={styles.missingBadgeText}>{item.missingItemNames.length}</Text>
-                                                        <Ionicons name="bag-remove-outline" size={12} color={colors.warning} />
-                                                    </View>
-                                                )}
-                                                {(() => { const n = item.items.filter(i => i.isSubstituted).length; return n > 0 && (
-                                                    <View style={styles.substitutedBadge}>
-                                                        <Text style={styles.substitutedBadgeText}>{n}</Text>
-                                                        <Ionicons name="swap-horizontal-outline" size={12} color={colors.info} />
-                                                    </View>
-                                                ); })()}
-                                                {(() => { const n = item.items.filter(i => i.isCrossChainAverage).length; return n > 0 && (
-                                                    <View style={styles.approxBadge}>
-                                                        <Text style={styles.approxBadgeText}>{n}</Text>
-                                                        <Ionicons name="help-circle-outline" size={12} color={colors.textMuted} />
-                                                    </View>
-                                                ); })()}
-                                            </View>
-                                            {isSelected && item.missingItemNames && item.missingItemNames.length > 0 && (
-                                                <Text style={styles.missingList} numberOfLines={3}>
-                                                    Nėra: {item.missingItemNames.join(', ')}
-                                                </Text>
-                                            )}
-                                        </View>
-                                        <Text style={styles.price}>{formatEuro(item.total)}</Text>
-                                    </TouchableOpacity>
-                                </Animated.View>
-                            );
-                        }}
-                    />
-                )}
-
-                {/* Bottom controls. In map view the wheel + action bar float in
-                    an absolute stack over the full-bleed map; in list view the
-                    action bar sits in-flow under the list. */}
-                {view === 'map' ? (
-                    !loading && mapMounted ? (
-                        <View style={styles.mapBottomStack}>
-                            {/* Inset below the wheel clears the Android nav bar
-                                when no action bar is shown (Visi / nothing selected). */}
-                            <View style={{ backgroundColor: colors.cardBackground, paddingBottom: (selectedStore || selectedCombo) ? 0 : bottomInset }}>
-                                <ResultsWheel
-                                    items={wheelItems}
-                                    selectedIndex={wheelSelectedIndex}
-                                    onSelectIndex={handleWheelSelect}
-                                    colors={colors}
-                                />
-                            </View>
-                            {bottomBarNode}
                         </View>
-                    ) : null
-                ) : (
-                    bottomBarNode
-                )}
+                        {bottomBarNode}
+                    </View>
+                ) : null}
             </View>
             <LocationPromptModal
                 visible={locationPromptVisible}
@@ -769,151 +593,18 @@ export default function BasketResultsScreen() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// SplitCombosHeader — shown as ListHeaderComponent when storeCount > 1
-// ---------------------------------------------------------------------------
-
-interface SplitCombosHeaderProps {
-    combos: ScoredCombo[];
-    miniLogoByChainId: Record<number, string | null | undefined>;
-    showAll: boolean;
-    onToggleShowAll: () => void;
-    selectedCombo: ScoredCombo | null;
-    onSelectCombo: (c: ScoredCombo) => void;
-    styles: ReturnType<typeof makeStyles>;
-    colors: AppTheme;
-}
-
-function SplitCombosHeader({
-    combos,
-    miniLogoByChainId,
-    showAll,
-    onToggleShowAll,
-    selectedCombo,
-    onSelectCombo,
-    styles,
-    colors,
-}: SplitCombosHeaderProps) {
-    // Deduplicate: keep first occurrence of each (sorted chainIds + price) combination
-    const dedupedCombos = (() => {
-        const seen = new Set<string>();
-        return combos.filter(combo => {
-            const chainKey = combo.stores.map(s => s.chainId).sort((a, b) => a - b).join('-');
-            const key = `${chainKey}:${Math.round(combo.splitTotal * 100)}`;
-            if (seen.has(key)) return false;
-            seen.add(key);
-            return true;
-        });
-    })();
-
-    const MAX_TOTAL = 5;
-    const displayCombos = showAll ? dedupedCombos.slice(0, MAX_TOTAL) : dedupedCombos.slice(0, 1);
-    const hasMore = dedupedCombos.length > 1;
-    const recommendedTotal = dedupedCombos[0]?.splitTotal ?? 0;
-
-    return (
-        <View>
-            {displayCombos.map((combo, idx) => {
-                const isSelected = selectedCombo?.storeIds.join() === combo.storeIds.join();
-                const isRecommended = idx === 0;
-                const totalRouteKm = combo.stores.reduce((sum, s) => sum + s.distance, 0);
-                const delta = isRecommended ? 0 : combo.splitTotal - recommendedTotal;
-
-                return (
-                    <TouchableOpacity
-                        key={combo.storeIds.join('-')}
-                        style={[
-                            styles.comboCard,
-                            isRecommended && styles.comboCardRecommended,
-                            isSelected && styles.comboCardSelected,
-                            combo.hasMissingCritical && styles.comboCardDimmed,
-                        ]}
-                        onPress={() => onSelectCombo(combo)}
-                        activeOpacity={0.75}
-                    >
-                        {isRecommended && (
-                            <View style={styles.recommendedBadge}>
-                                <Text style={styles.recommendedBadgeText}>Rekomenduojama</Text>
-                            </View>
-                        )}
-                        {combo.hasMissingCritical && (
-                            <View style={styles.criticalWarning}>
-                                <Ionicons name="alert-circle-outline" size={13} color={colors.warning} />
-                                <Text style={styles.criticalWarningText}>Trūksta svarbių prekių</Text>
-                            </View>
-                        )}
-
-                        <View style={styles.comboCardRow}>
-                            {/* Left: mini logos + counts + distance */}
-                            <View style={styles.comboCardLeft}>
-                                <View style={styles.comboStoreDetails}>
-                                    {(() => {
-                                        const rows: React.ReactNode[] = [];
-                                        combo.stores.forEach((store, si) => {
-                                            const count = Object.values(combo.itemAssignments).filter(sid => sid === store.storeId).length;
-                                            const logoUri = miniLogoByChainId[store.chainId] || store.chainLogoUrl;
-                                            if (si > 0) {
-                                                rows.push(
-                                                    <Text key={`sep-${si}`} style={styles.comboPlusSep}>+</Text>
-                                                );
-                                            }
-                                            rows.push(
-                                                <View key={store.storeId} style={styles.comboStoreDetailRow}>
-                                                    <View style={[styles.comboMiniLogo, { backgroundColor: chainBrandColorById(store.chainId) }]}>
-                                                        {logoUri ? (
-                                                            <Image source={{ uri: logoUri }} style={styles.comboMiniLogoImage} resizeMode="contain" />
-                                                        ) : (
-                                                            <Text style={styles.comboMiniLogoText}>{store.chainName[0]}</Text>
-                                                        )}
-                                                    </View>
-                                                    <View>
-                                                        <Text style={styles.comboItemCount}>{count} {pluralizePrekes(count)}</Text>
-                                                        <Text style={styles.comboStoreAddress} numberOfLines={1}>{store.storeAddress}</Text>
-                                                    </View>
-                                                </View>
-                                            );
-                                        });
-                                        return rows;
-                                    })()}
-                                </View>
-                                <View style={styles.comboDistRow}>
-                                    <Ionicons name="location-outline" size={12} color={colors.textMuted} />
-                                    <Text style={styles.comboDistText}>{totalRouteKm.toFixed(1)} km</Text>
-                                </View>
-                            </View>
-
-                            {/* Right: price + delta vs recommended */}
-                            <View style={styles.comboCardRight}>
-                                <Text style={styles.comboTotal}>{formatEuro(combo.splitTotal)}</Text>
-                                {delta !== 0 && (
-                                    <Text style={[styles.comboDelta, delta < 0 && styles.comboDeltaGood]}>
-                                        {delta > 0 ? '+' : '−'}{formatEuro(Math.abs(delta))}
-                                    </Text>
-                                )}
-                            </View>
-                        </View>
-                    </TouchableOpacity>
-                );
-            })}
-
-            {hasMore && (
-                <TouchableOpacity style={styles.showMoreBtn} onPress={onToggleShowAll}>
-                    <Text style={styles.showMoreBtnText}>
-                        {showAll ? 'Mažiau' : 'Daugiau'}
-                    </Text>
-                    <Ionicons
-                        name={showAll ? 'chevron-up' : 'chevron-down'}
-                        size={14}
-                        color={colors.primary}
-                    />
-                </TouchableOpacity>
-            )}
-        </View>
-    );
-}
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
+    // Floating map header (map view is full-bleed): back circle + toggle, left.
+    mapTopLeft: { position: 'absolute', left: 12, alignItems: 'flex-start', gap: 10, zIndex: 20 },
+    mapBackBtn: {
+        width: 42, height: 42, borderRadius: 21,
+        backgroundColor: c.cardBackground,
+        alignItems: 'center', justifyContent: 'center',
+        elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4,
+        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+    },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
     loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, backgroundColor: c.pageBackground },
     loadingText: { fontSize: 15, color: c.textSecondary },
