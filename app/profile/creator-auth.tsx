@@ -51,7 +51,10 @@ export default function CreatorAuthScreen() {
     const { t } = useTranslation();
     const setSession = useAuthState((s) => s.setSession);
 
-    const [busy, setBusy] = useState(false);
+    // Which provider is mid-sign-in — so the spinner renders on the button the
+    // user actually tapped (not always Google). `busy` = either in flight.
+    const [pending, setPending] = useState<'google' | 'apple' | null>(null);
+    const busy = pending !== null;
     const [showIntro, setShowIntro] = useState(false);
     const [needUsername, setNeedUsername] = useState(false);
 
@@ -68,7 +71,7 @@ export default function CreatorAuthScreen() {
 
     const onSignedIn = useCallback(async (provider: 'google' | 'apple', idToken: string) => {
         try {
-            setBusy(true);
+            // `pending` is already set by the press handler that called us.
             const anonymousUserId = await getUserId();
             const res = await exchangeOauthToken({ provider, idToken, anonymousUserId });
             // setSession adopts res.user.id as the device userId, so from here on
@@ -90,26 +93,32 @@ export default function CreatorAuthScreen() {
         } catch {
             Alert.alert(t('creatorAuth.title'), t('basketTab.errorGeneric'));
         } finally {
-            setBusy(false);
+            setPending(null);
         }
     }, [setSession, router, t]);
 
     const onGooglePress = useCallback(async () => {
         if (busy) return;
+        setPending('google');
         try {
             const r = await signInWithGoogle();
             if (r) await onSignedIn('google', r.idToken); // null = user cancelled
+            else setPending(null);
         } catch {
+            setPending(null);
             Alert.alert(t('creatorAuth.title'), t('basketTab.errorGeneric'));
         }
     }, [busy, onSignedIn, t]);
 
     const onApplePress = useCallback(async () => {
         if (busy) return;
+        setPending('apple');
         try {
             const { idToken } = await signInWithApple();
             await onSignedIn('apple', idToken);
-        } catch { /* user cancelled — no toast */ }
+        } catch {
+            setPending(null); // user cancelled — no toast
+        }
     }, [busy, onSignedIn]);
 
     // DEV-ONLY bypass — skips OAuth and sets a simulated creator session so
@@ -154,7 +163,7 @@ export default function CreatorAuthScreen() {
                         label={t('creatorAuth.google')}
                         onPress={onGooglePress}
                         disabled={busy}
-                        loading={busy}
+                        loading={pending === 'google'}
                     />
 
                     {isAppleSignInAvailable && (
@@ -163,6 +172,7 @@ export default function CreatorAuthScreen() {
                             label={t('creatorAuth.apple')}
                             onPress={onApplePress}
                             disabled={busy}
+                            loading={pending === 'apple'}
                         />
                     )}
 
