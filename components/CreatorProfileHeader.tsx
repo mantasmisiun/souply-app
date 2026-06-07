@@ -41,9 +41,12 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
         (username ? `@${username}` : t('basketTab.creatorProfile.title'));
     const handle = username ? `@${username}` : null;
     // Fall back to the session avatar (carried by the OAuth response) so the
-    // photo shows even when the /profile fetch hasn't landed or predates the
-    // avatar fix — mirrors the name/username fallbacks above.
-    const avatarSrc = localUri ?? profile.avatarUrl ?? authUser?.avatarUrl ?? null;
+    // photo shows even when the /profile fetch hasn't landed — mirrors the
+    // name/username fallbacks above. Only accept an absolute http(s) URL: the
+    // session value can be a bare storage KEY (uploaded avatars) which renders
+    // as a broken/gray circle, so never hand that to <Image>.
+    const sessionAvatar = /^https?:\/\//i.test(authUser?.avatarUrl ?? '') ? authUser!.avatarUrl : null;
+    const avatarSrc = localUri ?? profile.avatarUrl ?? sessionAvatar ?? null;
     const initials = (() => {
         const fl = `${(profile.firstName ?? '').trim()[0] ?? ''}${(profile.lastName ?? '').trim()[0] ?? ''}`.toUpperCase();
         if (fl) return fl;
