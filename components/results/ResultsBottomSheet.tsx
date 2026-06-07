@@ -312,35 +312,37 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
     }), [height]);
 
     return (
-        <Animated.View entering={SlideInDown.duration(240)} exiting={SlideOutDown.duration(180)} style={[styles.sheet, sheetStyle]}>
-            <View style={styles.handleArea} {...pan.panHandlers}>
-                <View style={styles.handle} />
-            </View>
+        <Animated.View entering={SlideInDown.duration(240)} exiting={SlideOutDown.duration(180)} style={styles.sheetWrap}>
+            <Animated.View style={[styles.sheetInner, sheetStyle]}>
+                <View style={styles.handleArea} {...pan.panHandlers}>
+                    <View style={styles.handle} />
+                </View>
 
-            <ScrollView
-                style={styles.list}
-                contentContainerStyle={styles.listContent}
-                showsVerticalScrollIndicator={safeStage > 0}
-                scrollEnabled={safeStage > 0}
-                onContentSizeChange={(_, h) => setContentH(h)}
-            >
-                {options.map((opt, i) => (
-                    <OptionCard
-                        key={opt.key}
-                        option={opt}
-                        selected={selectedKey === opt.key}
-                        styles={styles}
-                        colors={colors}
-                        onPress={() => onSelect(opt.key)}
-                        onLayout={i === 0 ? setFirstCardH : undefined}
-                    />
-                ))}
-            </ScrollView>
+                <ScrollView
+                    style={styles.list}
+                    contentContainerStyle={styles.listContent}
+                    showsVerticalScrollIndicator={safeStage > 0}
+                    scrollEnabled={safeStage > 0}
+                    onContentSizeChange={(_, h) => setContentH(h)}
+                >
+                    {options.map((opt, i) => (
+                        <OptionCard
+                            key={opt.key}
+                            option={opt}
+                            selected={selectedKey === opt.key}
+                            styles={styles}
+                            colors={colors}
+                            onPress={() => onSelect(opt.key)}
+                            onLayout={i === 0 ? setFirstCardH : undefined}
+                        />
+                    ))}
+                </ScrollView>
 
-            <View onLayout={e => setActionsH(e.nativeEvent.layout.height)}>
-                <Actions styles={styles} colors={colors} creatingList={creatingList}
-                    onNavigate={onNavigate} onCreateList={onCreateList} bottomInset={bottomInset} />
-            </View>
+                <View onLayout={e => setActionsH(e.nativeEvent.layout.height)}>
+                    <Actions styles={styles} colors={colors} creatingList={creatingList}
+                        onNavigate={onNavigate} onCreateList={onCreateList} bottomInset={bottomInset} />
+                </View>
+            </Animated.View>
         </Animated.View>
     );
 }
@@ -348,6 +350,18 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     sheet: {
         position: 'absolute', left: 0, right: 0, bottom: 0,
+        backgroundColor: c.cardBackground,
+        borderTopLeftRadius: 20, borderTopRightRadius: 20,
+        overflow: 'hidden',
+        elevation: 16, shadowColor: '#000', shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.18, shadowRadius: 10,
+    },
+    // Multi sheet: the slide-in `entering` animation lives on this positioning
+    // wrapper, kept SEPARATE from the inner view's animated height. On Fabric a
+    // layout animation + an animated-height style on the SAME node fight — the
+    // entering snapshot pins the height, so height-value updates are swallowed
+    // until something animates after it finishes (the "clipped until tap" bug).
+    sheetWrap: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+    sheetInner: {
         backgroundColor: c.cardBackground,
         borderTopLeftRadius: 20, borderTopRightRadius: 20,
         overflow: 'hidden',
