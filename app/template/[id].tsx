@@ -27,6 +27,7 @@ import { authedFetch } from '../../utils/authApi';
 import { useAuthState, DEV_SESSION_TOKEN } from '../../state/authState';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
+import { dbg } from '../../utils/debugLog';
 import {
     getTemplate,
     patchTemplate,
@@ -127,9 +128,12 @@ export default function TemplateDetailScreen() {
         if (!Number.isFinite(templateId)) return;
         if (!silent) setLoading(true);
         try {
+            dbg(`DETAIL fetch: templateId=${templateId} userId=${await getUserId()} authUser=${useAuthState.getState().user?.id ?? 'null'}`);
             const data = await getTemplate(templateId);
+            dbg(`DETAIL ok: id=${data.id} owner=${(data as any).userId}`);
             setTemplate(data);
-        } catch {
+        } catch (e) {
+            dbg(`DETAIL error: ${String(e)}`);
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorLoad'));
         } finally {
             setLoading(false);

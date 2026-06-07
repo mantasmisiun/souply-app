@@ -17,6 +17,7 @@ import { TemplateCoverEditor, type CoverDraft } from '../../../components/Templa
 import { useAuthState } from '../../../state/authState';
 import { ltPluralSuffix } from '../../../utils/ltPlural';
 import { getUserId } from '../../../config/user';
+import { dbg } from '../../../utils/debugLog';
 import { useBasketState } from '../../../state/basketState';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { ScalePressable } from '../../../components/ScalePressable';
@@ -215,6 +216,7 @@ export default function BasketScreen() {
         if (silent) setRefreshing(true);
         try {
             const userId = await getUserId();
+            dbg(`LIST: userId=${userId} authUser=${useAuthState.getState().user?.id ?? 'null'}`);
             const [basketRes, templateRes, receiptRes] = await Promise.all([
                 fetch(`${API_BASE_URL}/api/baskets/user/${userId}`).then(r => r.json()).catch(() => []),
                 listTemplates(userId).catch(() => []),
@@ -392,9 +394,12 @@ export default function BasketScreen() {
     const handleCreateTemplate = useCallback(async (next: CoverDraft) => {
         try {
             const userId = await getUserId();
+            dbg(`CREATE: userId=${userId} authUser=${useAuthState.getState().user?.id ?? 'null'}`);
             const created = await createTemplate({ userId, name: next.name, coverColor: next.coverColor, coverImage: next.coverImage });
+            dbg(`CREATE done: created.id=${created.id} created.userId=${created.userId}`);
             router.push(`/template/${created.id}` as any);
-        } catch {
+        } catch (e) {
+            dbg(`CREATE error: ${String(e)}`);
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
         }
     }, [router, t]);
