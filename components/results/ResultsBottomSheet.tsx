@@ -224,6 +224,9 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
     const [contentH, setContentH] = useState(0);
     const [actionsH, setActionsH] = useState(90);
     const [stage, setStage] = useState(0);
+    // Bumped on each user snap so the settle effect animates even to the SAME
+    // stage (a small drag that releases back).
+    const [settleTick, setSettleTick] = useState(0);
 
     // Snap points, ascending sheet heights: peek (top card + a sliver), an
     // optional MIDDLE stage (scroll the list while the map stays visible so
@@ -248,20 +251,26 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
     const stageRef = useRef(safeStage); stageRef.current = safeStage;
     const sheetStyle = useAnimatedStyle(() => ({ height: height.value }));
 
-    // Stage changes animate via the drag handlers / collapse below. Here we only
-    // SETTLE INSTANTLY on a measurement-driven snaps change (`full` depends on
-    // content height) — animating those would re-fire toward a moving target and
-    // make the sheet "drag on" instead of sticking. Never mid-drag.
+    // ANIMATE to the current stage on a user action (snap / tap / collapse) —
+    // tracked by safeStage + a settle tick so even a same-stage release snaps
+    // back. Reads snaps via ref, so a measurement-only change does NOT re-fire
+    // here (re-animating toward a settling `full` is what made it "drag on").
+    useEffect(() => {
+        if (dragging.current) return;
+        const s = snapsRef.current;
+        height.value = withTiming(s[Math.min(stageRef.current, s.length - 1)], { duration: 220 });
+    }, [safeStage, settleTick, height]);
+
+    // SETTLE INSTANTLY when measurements change the snap heights (first card /
+    // actions / content height land a frame after mount). Instant → fixes the
+    // "opens clipped, tap to fix" case without animating toward a moving target.
     useEffect(() => {
         if (dragging.current) return;
         height.value = snaps[Math.min(stageRef.current, snaps.length - 1)];
     }, [snaps, height]);
 
-    // New store's options → collapse back to peek (animated, like a snap).
-    useEffect(() => {
-        setStage(0);
-        if (!dragging.current) height.value = withTiming(snapsRef.current[0], { duration: 220 });
-    }, [options, height]);
+    // New store's options → collapse back to peek (the animate effect runs it).
+    useEffect(() => { setStage(0); }, [options]);
 
     // Report the settled stage height so the map can frame content above us.
     useEffect(() => { onHeightChange?.(snaps[safeStage]); }, [safeStage, snaps, onHeightChange]);
@@ -281,9 +290,8 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
             const s = snapsRef.current;
             const tap = Math.abs(g.dy) < 5 && Math.abs(g.dx) < 5;
             if (tap) { // cycle peek → mid → full → peek
-                const next = (stageRef.current + 1) % s.length;
-                setStage(next);
-                height.value = withTiming(s[next], { duration: 220 });
+                setStage((stageRef.current + 1) % s.length);
+                setSettleTick(t => t + 1);
                 return;
             }
             // Snap to the nearest height, nudged one stage by a flick's direction.
@@ -293,10 +301,11 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
             if (g.vy < -0.5 && idx < s.length - 1) idx++;
             else if (g.vy > 0.5 && idx > 0) idx--;
             setStage(idx);
-            height.value = withTiming(s[idx], { duration: 220 });
+            setSettleTick(t => t + 1);
         },
         onPanResponderTerminate: () => {
             dragging.current = false;
+            setSettleTick(t => t + 1);
             const s = snapsRef.current;
             height.value = withTiming(s[Math.min(stageRef.current, s.length - 1)], { duration: 220 });
         },
