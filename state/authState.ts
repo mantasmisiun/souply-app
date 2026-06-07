@@ -10,6 +10,7 @@ import { create } from 'zustand';
 import * as SecureStore from 'expo-secure-store';
 import * as Updates from 'expo-updates';
 import { setUserId, getUserId } from '../config/user';
+import { API_BASE_URL } from '../config/api';
 
 const TOKEN_KEY = 'souply_session_token';
 const USER_KEY = 'souply_verified_user';
@@ -97,6 +98,15 @@ export const useAuthState = create<AuthState>((set, get) => ({
     },
 
     clear: async () => {
+        // End the SERVER session, not just the local token. The OAuth exchange
+        // set an httpOnly session cookie that the native cookie store keeps
+        // sending — so without this the server still resolves `verifiedUser` to
+        // the account after "logout", and anonymous template create (device id)
+        // mismatches that cookie-account on the ownership check → 403. Hitting
+        // the logout endpoint returns a Set-Cookie that expires it.
+        try {
+            await fetch(`${API_BASE_URL}/api/auth/logout`, { method: 'POST' });
+        } catch {}
         try {
             await SecureStore.deleteItemAsync(TOKEN_KEY);
             await SecureStore.deleteItemAsync(USER_KEY);

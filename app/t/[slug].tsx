@@ -15,7 +15,7 @@ import {
     View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator,
     Alert, Image, Modal,
 } from 'react-native';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -35,12 +35,17 @@ export default function SharedTemplatePreviewScreen() {
     const { t } = useTranslation();
     const router = useRouter();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const { slug } = useLocalSearchParams<{ slug: string }>();
+    // `instantiate=1` is set by the web hand-off: the visitor already reviewed
+    // the template on the web page, so skip the (redundant) preview here and go
+    // straight to the basket. A direct App-Link/QR open has no flag → preview.
+    const { slug, instantiate } = useLocalSearchParams<{ slug: string; instantiate?: string }>();
+    const autoInstantiate = instantiate === '1';
 
     const [data, setData] = useState<SharedTemplate | null>(null);
     const [loading, setLoading] = useState(true);
     const [notFound, setNotFound] = useState(false);
     const [busy, setBusy] = useState(false);
+    const [autoFailed, setAutoFailed] = useState(false);
     const [helpOpen, setHelpOpen] = useState(false);
 
     useEffect(() => {
@@ -56,7 +61,7 @@ export default function SharedTemplatePreviewScreen() {
             .finally(() => setLoading(false));
     }, [slug]);
 
-    const handleInstantiate = async () => {
+    const handleInstantiate = async (opts: { auto?: boolean } = {}) => {
         if (!data || busy) return;
         try {
             setBusy(true);
@@ -64,11 +69,27 @@ export default function SharedTemplatePreviewScreen() {
             const result = await instantiateTemplate(data.template.id, userId);
             router.replace(`/basket/${result.basketId}` as any);
         } catch {
-            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorInstantiate'));
+            // On auto-mode failure, fall back to the preview so the user can
+            // retry manually rather than being stuck on a spinner.
+            if (opts.auto) setAutoFailed(true);
+            else Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorInstantiate'));
         } finally {
             setBusy(false);
         }
     };
+
+    // Auto-instantiate (web hand-off) once the template has resolved to a valid,
+    // public one. Fires a single time; falls back to the preview on failure.
+    const autoFiredRef = useRef(false);
+    const canAuto = autoInstantiate && !autoFailed && !loading && !notFound
+        && !!data && data.template.visibility !== 'private';
+    useEffect(() => {
+        if (canAuto && !autoFiredRef.current) {
+            autoFiredRef.current = true;
+            handleInstantiate({ auto: true });
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [canAuto]);
 
     if (loading) {
         return (
@@ -127,6 +148,25 @@ export default function SharedTemplatePreviewScreen() {
                     <Ionicons name="lock-closed-outline" size={56} color={colors.textMuted} />
                     <Text style={styles.errorTitle}>{t('basketTab.templates.previewPrivateTitle')}</Text>
                     <Text style={styles.errorBody}>{t('basketTab.templates.previewPrivateBody')}</Text>
+                </View>
+            </>
+        );
+    }
+
+    // Web hand-off: skip the redundant preview and show a brief "creating
+    // basket" state while we instantiate straight through to the basket.
+    if (autoInstantiate && !autoFailed) {
+        return (
+            <>
+                <Stack.Screen options={{
+                    title: '',
+                    headerStyle: { backgroundColor: colors.cardBackground },
+                    headerShadowVisible: false,
+                    headerLeft: () => <ScreenBackButton />,
+                }} />
+                <View style={styles.errorWrap}>
+                    <ActivityIndicator size="large" color={colors.primary} />
+                    <Text style={styles.errorTitle}>{t('basketTab.templates.sharePreviewCta')}…</Text>
                 </View>
             </>
         );
@@ -224,7 +264,7 @@ export default function SharedTemplatePreviewScreen() {
                 <View style={styles.footer}>
                     <TouchableOpacity
                         style={[styles.cta, busy && styles.ctaDisabled]}
-                        onPress={handleInstantiate}
+                        onPress={() => handleInstantiate()}
                         disabled={busy}
                     >
                         {busy

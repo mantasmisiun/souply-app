@@ -187,7 +187,7 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
                                 styles={styles}
                             />
                             <SegmentBtn
-                                label="Maršrutas"
+                                label="Kelias"
                                 icon="git-commit-outline"
                                 active={settings.mode === 'route'}
                                 onPress={() => handleMode('route')}

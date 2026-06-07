@@ -6,7 +6,7 @@ const APP_ENV = IS_DEV ? 'dev' : IS_STAGING ? 'staging' : 'prod';
 // make non-prod builds unmistakable. (Icon badge is dev-only for now.)
 const BUNDLE_ID = IS_DEV ? 'lt.souply.app.dev' : IS_STAGING ? 'lt.souply.app.staging' : 'lt.souply.app';
 const APP_NAME = IS_DEV ? 'Souply (DEV)' : IS_STAGING ? 'Souply (staging)' : 'Souply';
-const ICON = IS_DEV ? './assets/images/DEV.png' : './assets/images/icon.png';
+const ICON = IS_DEV ? './assets/images/DEV.png' : IS_STAGING ? './assets/images/STAGING.png' : './assets/images/icon.png';
 // Universal/App Link host per environment. The dev build (testers) deep-links
 // against the test web stack; prod against souply.lt. localhost can't host
 // universal links, so dev points at the reachable test domain. The matching
@@ -62,6 +62,10 @@ export default {
           'Souply saves shared shopping-list QR codes to your photo library.',
         NSLocationWhenInUseUsageDescription:
           'Souply uses your approximate location to show the nearest stores with the best prices.',
+        // Documents (receipts/QRs) are imported as a copy, not edited in their
+        // original location — required alongside CFBundleDocumentTypes or Apple
+        // flags ITMS-90737 on upload.
+        LSSupportsOpeningDocumentsInPlace: false,
         // "Open In Souply" — appears when user taps a PDF/image in Files or Mail
         CFBundleDocumentTypes: [
           {
@@ -87,7 +91,7 @@ export default {
         // whatever launcher mask shape clips the corners. Pink matches the
         // baked-in tile for the DEV variant; cream matches the production icon.
         backgroundColor: '#F16F8B',
-        foregroundImage: IS_DEV ? './assets/images/DEV-foreground.png' : './assets/images/android-icon-foreground.png',
+        foregroundImage: IS_DEV ? './assets/images/DEV-foreground.png' : IS_STAGING ? './assets/images/STAGING-foreground.png' : './assets/images/android-icon-foreground.png',
       },
       // App Links — autoVerify=true asks Android to fetch the
       // assetlinks.json from souply.lt/.well-known and skip the chooser

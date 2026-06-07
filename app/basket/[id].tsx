@@ -1,5 +1,6 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Modal } from 'react-native';
 import { SkeletonBox } from '../../components/SkeletonBox';
+import { isWeighableDisplay } from '../../utils/weighable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
@@ -43,6 +44,10 @@ interface BasketItem {
     isWeighable: boolean;
     imageUrls?: (string | null | undefined)[] | string | null;
 }
+
+/** Render an item as weighable (kg) vs pieces (vnt) — see utils/weighable. */
+const isWeighableItem = (it: { isWeighable: boolean; quantity: number }): boolean =>
+    isWeighableDisplay(it.isWeighable, it.quantity);
 
 interface Basket {
     id: number;
@@ -108,6 +113,10 @@ export default function BasketDetailScreen() {
     // the calc flow with the new coordinates.
     const [locationPromptVisible, setLocationPromptVisible] = useState(false);
     const [locationSettingsVisible, setLocationSettingsVisible] = useState(false);
+    // Set when we leave the settings sheet to add a preset on the map; the
+    // focus effect re-opens the sheet on return so the setup flow continues
+    // (the sheet reloads presets on open, so the new address is already there).
+    const reopenSettingsRef = useRef(false);
     // Save-as-template flow: bookmark icon in the nav bar opens a name
     // prompt → POST /api/basket-templates/from-basket/:id → toast.
     // Save-as-template: the bookmark opens the shared identity sheet
@@ -196,7 +205,9 @@ export default function BasketDetailScreen() {
             const parsedItems = Array.isArray(itemsData) ? itemsData.map((item: any) => ({
                 ...item,
                 quantity: parseFloat(item.quantity),
-                isWeighable: item.isWeighable === 1,
+                // Robust coerce: the API may send 1 | "1" | true depending on the
+                // driver/aggregation; Number() normalises all of them.
+                isWeighable: Number(item.isWeighable) === 1,
             })) : [];
             setItems(parsedItems);
 
@@ -239,6 +250,12 @@ export default function BasketDetailScreen() {
         fetchBasket();
         setSettingsRefreshKey(k => k + 1);
         getLocationSettings().then(setActiveSettings);
+        // Returning from the preset map (opened from the settings sheet) →
+        // re-open the sheet so the user keeps configuring where they left off.
+        if (reopenSettingsRef.current) {
+            reopenSettingsRef.current = false;
+            setLocationSettingsVisible(true);
+        }
         // Hydrate the calc-time settings snapshot for the
         // "settings changed" branch. Missing key → leave null and the
         // button falls back to "Rodyti parduotuves".
@@ -304,11 +321,23 @@ export default function BasketDetailScreen() {
      *  it show the amount picker, and new items add without a basket prompt —
      *  then switch to that tab. Drafts are singletons, so this is always the
      *  basket the user is looking at. */
-    const handleAddItem = () => {
+    const handleAddItem = async () => {
         Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+        // Adding an item is an edit → a compared basket reverts to draft so the
+        // user must re-run the comparison before viewing results again.
+        await revertToDraftIfCompared();
         setDraftBasketId(Number(id));
         router.navigate('/(tabs)/browse' as any);
     };
+
+    // Changing location/store-count settings while compared is also an edit:
+    // drop back to draft so the bottom button retargets to "Rasti parduotuves".
+    useEffect(() => {
+        if (basket?.status === 'compared' && settingsChanged) {
+            void revertToDraftIfCompared();
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [basket?.status, settingsChanged]);
 
     // Mirror the server's userEditedAfterCreation flag locally so the
     // "Redaguota" chip and the "Copy original" action appear together the
@@ -321,7 +350,7 @@ export default function BasketDetailScreen() {
         const rounded = Math.round(newQuantity * 100) / 100;
         const existing = items.find(i => i.id === itemId);
         if (!existing) return;
-        if (rounded < 1 && !existing.isWeighable) {
+        if (rounded < 1 && !isWeighableItem(existing)) {
             removeItem(itemId);
             return;
         }
@@ -471,33 +500,6 @@ export default function BasketDetailScreen() {
         await runCalcWithCoords(coords);
     };
 
-    const handleRevertToDraft = async () => {
-        Alert.alert(
-            t('basketDetail.revertTitle'),
-            t('basketDetail.revertBody'),
-            [
-                { text: t('common.cancel'), style: 'cancel' },
-                {
-                    text: t('basketDetail.revertConfirm'),
-                    onPress: async () => {
-                        try {
-                            await fetch(`${API_BASE_URL}/api/baskets/${id}/status`, {
-                                method: 'PATCH',
-                                headers: { 'Content-Type': 'application/json' },
-                                body: JSON.stringify({ status: 'draft' }),
-                            });
-                            await AsyncStorage.removeItem(`basket_results_${id}`);
-                            setDraftBasketId(Number(id));
-                            fetchBasket();
-                        } catch {
-                            Alert.alert(t('basketTab.errorGeneric'), t('basketDetail.errorRevert'));
-                        }
-                    }
-                }
-            ]
-        );
-    };
-
     if (loading) return (
         <View style={styles.container}>
             {/* Match the loaded header: white bg + pink back chevron + an
@@ -547,6 +549,10 @@ export default function BasketDetailScreen() {
     // Attribution = template owner's @handle; fall back to the current user's
     // handle for own/private templates (DB username not populated yet).
     const attribHandle = basket?.templateCreatorHandle ?? (fromTemplate ? authUsername : null);
+    // Draft and compared are both editable; any edit reverts compared → draft.
+    // (inProgress/completed are locked.) The only user-facing difference is the
+    // bottom button: "Rasti parduotuves" (draft) vs "Parduotuvės" (compared).
+    const isEditable = basket?.status === 'draft' || basket?.status === 'compared';
 
     return (
         <>
@@ -642,8 +648,8 @@ export default function BasketDetailScreen() {
                     ) : (
                         <TouchableOpacity
                             style={styles.titleRow}
-                            onPress={() => basket?.status === 'draft' && setEditingName(true)}
-                            disabled={basket?.status !== 'draft'}
+                            onPress={() => isEditable && setEditingName(true)}
+                            disabled={!isEditable}
                             activeOpacity={0.6}
                         >
                             <Text style={[styles.titleText, { color: colors.textPrimary }]} numberOfLines={2}>
@@ -661,7 +667,7 @@ export default function BasketDetailScreen() {
                     keyExtractor={(item: any) => item.id.toString()}
                     contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12 }]}
                     ListHeaderComponent={
-                        basket?.status === 'draft' ? (
+                        isEditable ? (
                             <TouchableOpacity
                                 style={styles.addItemBtn}
                                 onPress={handleAddItem}
@@ -695,14 +701,15 @@ export default function BasketDetailScreen() {
                                 <Text style={styles.itemName}>{item.productName}</Text>
                                 {readOnly ? (
                                     <Text style={styles.readOnlyQty}>
-                                        {item.quantity}{item.isWeighable ? ' kg' : ' vnt.'}
+                                        {item.quantity}{isWeighableItem(item) ? ' kg' : ' vnt.'}
                                     </Text>
                                 ) : (() => {
                                     // Weighable rows step in 0.1 kg; piece rows
                                     // step in whole units. Mirrors the template
                                     // editor so the two surfaces feel identical.
-                                    const step = item.isWeighable ? 0.1 : 1;
-                                    const inputValueDefault = item.isWeighable
+                                    const weighable = isWeighableItem(item);
+                                    const step = weighable ? 0.1 : 1;
+                                    const inputValueDefault = weighable
                                         ? Number(item.quantity).toFixed(1).replace('.', ',')
                                         : String(item.quantity);
                                     return (
@@ -717,7 +724,7 @@ export default function BasketDetailScreen() {
                                             style={styles.quantityInput}
                                             value={quantityInputs[item.id] ?? inputValueDefault}
                                             onChangeText={v => {
-                                                if (!item.isWeighable && (v.includes('.') || v.includes(','))) return;
+                                                if (!weighable && (v.includes('.') || v.includes(','))) return;
                                                 const dotIndex = v.indexOf('.');
                                                 const commaIndex = v.indexOf(',');
                                                 const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
@@ -733,12 +740,12 @@ export default function BasketDetailScreen() {
                                                 await updateQuantity(item.id, val);
                                                 setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
                                             }}
-                                            keyboardType={item.isWeighable ? 'decimal-pad' : 'number-pad'}
+                                            keyboardType={weighable ? 'decimal-pad' : 'number-pad'}
                                             selectTextOnFocus
                                             underlineColorAndroid="transparent"
                                         />
                                         <Text style={styles.unitLabel}>
-                                            {item.isWeighable ? 'kg' : 'vnt.'}
+                                            {weighable ? 'kg' : 'vnt.'}
                                         </Text>
                                         <TouchableOpacity
                                             style={styles.controlButton}
@@ -823,33 +830,13 @@ export default function BasketDetailScreen() {
                                     )}
                                 </ScalePressable>
                                 <ScalePressable
-                                    style={[styles.showResultsButton, styles.secondaryButton]}
-                                    onPress={handleRevertToDraft}
+                                    style={styles.showResultsButton}
+                                    onPress={() => router.push(`/basket/results/${id}`)}
                                 >
-                                    <Text style={styles.secondaryButtonText}>{t('basketDetail.draft')}</Text>
-                                </ScalePressable>
-                                <ScalePressable
-                                    style={[styles.showResultsButton, busy && styles.buttonCalcing]}
-                                    onPress={settingsChanged ? handleCalculate : () => router.push(`/basket/results/${id}`)}
-                                    disabled={busy}
-                                >
-                                    {busy ? (
-                                        <>
-                                            <ActivityIndicator size="small" color={colors.onPrimary} />
-                                            <Text style={styles.showResultsText}>{t('basketDetail.calculating')}</Text>
-                                        </>
-                                    ) : settingsChanged ? (
-                                        <>
-                                            <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
-                                            <Text style={styles.showResultsText}>
-                                                {(activeSettings?.storeCount ?? 1) > 1
-                                                    ? 'Rasti parduotuves'
-                                                    : 'Rasti parduotuvę'}
-                                            </Text>
-                                        </>
-                                    ) : (
-                                        <Ionicons name="chevron-forward" size={24} color={colors.onPrimary} />
-                                    )}
+                                    <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
+                                    <Text style={styles.showResultsText}>
+                                        {(activeSettings?.storeCount ?? 1) > 1 ? 'Parduotuvės' : 'Parduotuvė'}
+                                    </Text>
                                 </ScalePressable>
                             </>
                         ) : (
@@ -920,10 +907,12 @@ export default function BasketDetailScreen() {
             </View>
 
             {/* Full-screen calc progress modal so rapid back-taps can't
-                leave the user with a half-calculated basket. Modal
-                dismisses when calcing flips off and we navigate. */}
+                leave the user with a half-calculated basket. Shown for the
+                WHOLE busy window (location resolving + calculating), not just
+                `calcing` — otherwise GPS acquisition (seconds) passes with no
+                modal and the press feels dead. */}
             <Modal
-                visible={calcing}
+                visible={busy}
                 transparent
                 animationType="fade"
                 statusBarTranslucent
@@ -974,6 +963,11 @@ export default function BasketDetailScreen() {
                 }}
                 refreshKey={settingsRefreshKey}
                 onOpenPresetMap={(key, label, existing) => {
+                    // Dismiss the sheet first so the pushed map isn't covered by
+                    // it; mark for re-open so the focus effect restores the sheet
+                    // (with the new address) when we navigate back.
+                    reopenSettingsRef.current = true;
+                    setLocationSettingsVisible(false);
                     router.push(
                         `/preset/${key}/map?label=${encodeURIComponent(label)}${existing ? `&lat=${existing.lat}&lng=${existing.lng}` : ''}` as any,
                     );

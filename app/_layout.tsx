@@ -13,6 +13,7 @@ import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { EnvBadge } from '../components/EnvBadge';
+import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { UsernameGate } from '../components/UsernameGate';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
@@ -238,6 +239,7 @@ function RootLayout() {
     <DisplayPreferenceProvider>
     <ThemeProvider value={navTheme}>
       <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
+      <DevUpdateBanner />
       <ShareHandler />
       <OfflineBanner />
       <UsernameGate />
@@ -290,14 +292,14 @@ function RootLayout() {
         <Stack.Screen name="browse/[categoryId]" options={{ headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="admin/catalog/[categoryId]" options={{ headerShown: false }} />
         <Stack.Screen name="basket/[id]" options={{ title: t('screens.basket') }} />
-        {/* basket/results/[id] MUST be registered here. Unregistered pushed
-            screens have their options reset to defaults on focus, which blanked
-            the Parduotuvės/Žemėlapis header on every (re)calculation until a
-            back-gesture re-triggered focus. Registering it makes the route's
-            options persist (the screen still injects the dynamic toggle via its
-            own <Stack.Screen>/setOptions). No headerRight stub here, so nothing
-            overrides the screen's header. */}
-        <Stack.Screen name="basket/results/[id]" options={{ headerLeft: () => <ScreenBackButton />, headerTitleAlign: 'center' }} />
+        {/* basket/results/[id] is the map-only results screen → full-bleed,
+            no native header (a floating circular back button sits over the
+            map instead). Declaring headerShown:false HERE (not just inline in
+            the screen) is what actually keeps the header from reserving a
+            top strip — relying on the screen's inline override alone left an
+            empty header bar pushing the map down (the "black bar at the top").
+            Mirrors receipt/capture, the other full-bleed screen. */}
+        <Stack.Screen name="basket/results/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="shopping-list/[id]" options={{ title: t('screens.shoppingList'), headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
         <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess'), headerLeft: () => <ScreenBackButton /> }} />
