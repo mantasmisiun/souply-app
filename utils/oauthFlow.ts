@@ -13,13 +13,36 @@
  */
 import * as AppleAuthentication from 'expo-apple-authentication';
 import { Platform } from 'react-native';
+import { APP_ENV, type AppEnv } from '../config/env';
+
+// Per-environment PUBLIC OAuth client IDs, used as a fallback when the
+// EXPO_PUBLIC_* env isn't present in the bundle. These are NOT secrets — OAuth
+// client IDs are origin/package+SHA-bound and safe to commit (see the stack
+// notes). The fallback is essential because `eas update` does NOT inject
+// eas.json build-profile env, so an OTA bundle ships EMPTY client ids → real
+// Google sign-in throws "not available in this build" the moment the update
+// applies (the staging "Creator login Error" after an OTA). dev stays empty on
+// purpose — it uses the dev-auth bypass and has no Android OAuth client. Values
+// mirror eas.json's build profiles; keep them in sync.
+const PUBLIC_GOOGLE_CLIENT_IDS: Record<AppEnv, { web: string; ios: string }> = {
+    dev: { web: '', ios: '' },
+    staging: {
+        web: '554949767682-oqvvbc2a3klc1tedqvbdotmg4uqkj5s3.apps.googleusercontent.com',
+        ios: '554949767682-mj1u8aerkucav1ta6igk7pnhq3lf0m73.apps.googleusercontent.com',
+    },
+    prod: {
+        web: '554949767682-oqvvbc2a3klc1tedqvbdotmg4uqkj5s3.apps.googleusercontent.com',
+        ios: '554949767682-1qh4cuvfsj9ud7vha658cv8dmedepue4.apps.googleusercontent.com',
+    },
+};
 
 // webClientId = the audience of the ID token Google returns (must be in the
 // server's accepted-audience list — GOOGLE_OAUTH_CLIENT_ID is comma-separated).
 // On Android the sign-in itself authenticates via the app's package + SHA-1
 // against the Android OAuth client in GCP — no google-services.json required.
-const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ?? '';
-const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID ?? '';
+// `||` (not `??`) so an EMPTY-string env (stripped OTA bundle) still falls back.
+const GOOGLE_WEB_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID || PUBLIC_GOOGLE_CLIENT_IDS[APP_ENV].web;
+const GOOGLE_IOS_CLIENT_ID = process.env.EXPO_PUBLIC_GOOGLE_IOS_CLIENT_ID || PUBLIC_GOOGLE_CLIENT_IDS[APP_ENV].ios;
 
 // Whether this build can actually use Google Sign-In. iOS REQUIRES an
 // iosClientId (or a GoogleService-Info.plist) — calling configure()/signIn()
