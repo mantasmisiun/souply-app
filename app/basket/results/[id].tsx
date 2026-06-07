@@ -43,6 +43,10 @@ export default function BasketResultsScreen() {
     const [selectedStoreId, setSelectedStoreId] = useState<number | null>(null);
     const [locationPromptVisible, setLocationPromptVisible] = useState(false);
     const [combos, setCombos] = useState<ScoredCombo[]>([]);
+    // Max stores the user agreed to visit (location settings) — caps combo
+    // scoring so a 1-store setting never surfaces 2/3-store splits. From the
+    // calc meta; defaults to 3 only when meta is missing.
+    const [maxStores, setMaxStores] = useState<1 | 2 | 3>(3);
     // Which option the user picked inside the bottom sheet for the tapped store
     // (a combo key, or the single-store key). null = sheet closed.
     const [selectedOptionKey, setSelectedOptionKey] = useState<string | null>(null);
@@ -94,12 +98,14 @@ export default function BasketResultsScreen() {
                 const criticalIds = new Set<number>(
                     (itemsData as any[]).filter(it => it.isCritical).map(it => Number(it.productId)),
                 );
-                const scored = scoreAllCombinations(pool, criticalIds, 3);
+                // `maxStores` (1/2/3) is the user's store-count setting — never
+                // score wider combos than they agreed to visit.
+                const scored = maxStores <= 1 ? [] : scoreAllCombinations(pool, criticalIds, maxStores);
                 if (alive) setCombos(scored);
             } catch { /* non-fatal — stores still tappable as single options */ }
         })();
         return () => { alive = false; };
-    }, [results, lazyResults, id]);
+    }, [results, lazyResults, id, maxStores]);
 
 
     // Defer the heavy MapView mount until after the toggle's tap interaction so
@@ -128,6 +134,12 @@ export default function BasketResultsScreen() {
             AsyncStorage.getItem(`basket_results_${id}`),
             AsyncStorage.getItem(`basket_calc_meta_${id}`),
         ]);
+        // Read the store-count cap BEFORE results so combo scoring runs once
+        // with the right limit (no 2/3-store flash on a 1-store setting).
+        try {
+            const n = Number((metaRaw ? JSON.parse(metaRaw) : null)?.storeCount);
+            setMaxStores(n === 1 ? 1 : n === 2 ? 2 : 3);
+        } catch { setMaxStores(3); }
         if (stored) {
             setResults(JSON.parse(stored) as StoreResult[]);
         } else {
