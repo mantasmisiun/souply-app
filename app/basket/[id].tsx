@@ -32,7 +32,6 @@ import { createTemplateFromBasket, instantiateTemplate } from '../../utils/baske
 import { CardActionBar } from '../../components/CardActionBar';
 import { getUserId } from '../../config/user';
 import { useAuthState } from '../../state/authState';
-import { dbg } from '../../utils/debugLog';
 
 interface BasketItem {
     id: number;
@@ -416,7 +415,6 @@ export default function BasketDetailScreen() {
      * again.
      */
     const runCalcWithCoords = async (coords: UserCoords) => {
-        dbg(`RASTI modal-show(calcing=true) t=${Date.now()}`);
         setCalcError(null);
         setCalcing(true);
         try {
@@ -474,24 +472,20 @@ export default function BasketDetailScreen() {
      */
     const handleCalculate = async () => {
         if (calcInFlight.current || calcing) return;
-        dbg(`RASTI press t=${Date.now()}`);
         calcInFlight.current = true;
         setResolvingLocation(true);
         try {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
             const cached = await loadCachedCoords();
-            dbg(`RASTI cache-done t=${Date.now()} cached=${!!cached}`);
             if (cached) {
                 await runCalcWithCoords(cached);
                 return;
             }
             const gps = await tryGpsCoords();
-            dbg(`RASTI gps-done t=${Date.now()} gps=${!!gps}`);
             if (gps) {
                 await runCalcWithCoords(gps);
                 return;
             }
-            dbg(`RASTI no-coords->prompt t=${Date.now()}`);
             // No coords resolvable without user input — hand off to the
             // location prompt; the modal's resolver continues the calc.
             setLocationPromptVisible(true);
@@ -913,10 +907,12 @@ export default function BasketDetailScreen() {
             </View>
 
             {/* Full-screen calc progress modal so rapid back-taps can't
-                leave the user with a half-calculated basket. Modal
-                dismisses when calcing flips off and we navigate. */}
+                leave the user with a half-calculated basket. Shown for the
+                WHOLE busy window (location resolving + calculating), not just
+                `calcing` — otherwise GPS acquisition (seconds) passes with no
+                modal and the press feels dead. */}
             <Modal
-                visible={calcing}
+                visible={busy}
                 transparent
                 animationType="fade"
                 statusBarTranslucent
