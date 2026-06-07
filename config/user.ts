@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import { API_BASE_URL } from './api';
 import { DEV_RANDOM_USER_UUID } from '../constants/flags';
+import { dbg } from '../utils/debugLog';
 
 const USER_ID_KEY = 'userId';
 const USER_SYNCED_KEY = 'userSyncedToBackend';
@@ -40,9 +41,11 @@ async function initUserId(): Promise<string> {
         return DEV_USER_ID;
     }
     let userId = await AsyncStorage.getItem(USER_ID_KEY);
+    dbg(`initUserId: stored=${userId ?? 'null'}`);
     if (!userId) {
         userId = Crypto.randomUUID();
         await AsyncStorage.setItem(USER_ID_KEY, userId);
+        dbg(`initUserId: GENERATED ${userId}`);
     }
     await syncToBackendIfNeeded(userId);
     return userId;
@@ -90,6 +93,7 @@ export const getUserId = async (): Promise<string> => {
  * the same dev User row on next backend sync.
  */
 export const resetUserId = async (): Promise<void> => {
+    dbg('resetUserId CALLED');
     await AsyncStorage.multiRemove([USER_ID_KEY, USER_SYNCED_KEY]);
     // Drop the memoised promise so `getUserId()` re-runs `initUserId()`.
     initPromise = null;
@@ -107,6 +111,7 @@ export const resetUserId = async (): Promise<void> => {
  * `reloadAsync()` is the path used by the restore screen.
  */
 export const setUserId = async (recoveredId: string): Promise<void> => {
+    dbg(`setUserId CALLED ${recoveredId}`);
     await AsyncStorage.setItem(USER_ID_KEY, recoveredId);
     await AsyncStorage.setItem(USER_SYNCED_KEY, '1');
     initPromise = null;
