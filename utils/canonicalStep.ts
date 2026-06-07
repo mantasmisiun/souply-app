@@ -34,9 +34,14 @@ export function resolveDisplayUnit(p: ProductCanonical): string {
 
 export function resolveCanonicalStep(p: ProductCanonical): number {
     if (p.canonicalStep && p.canonicalStep > 0) return p.canonicalStep;
-    const isWeighable = !!(p.isWeighable ?? p.hasWeighable);
-    const displayUnit = resolveDisplayUnit(p);
-    if (isWeighable || displayUnit === 'kg' || displayUnit === 'l') return 0.1;
+    // Weighable always steps in deli granularity.
+    if (p.isWeighable ?? p.hasWeighable) return 0.1;
+    // Only a *computed* canonical fluid/weight unit justifies a 0.1 step. The
+    // raw `unit` field is an unreliable fallback — the browse endpoint hardcodes
+    // `'g'` for every product — so basing the step on it makes a count item
+    // (e.g. a single-SP 330 ml can with no amount/unit) add as "0,1" instead of
+    // "1". With no canonicalUnit the item is a pack → step 1.
+    if (p.canonicalUnit === 'kg' || p.canonicalUnit === 'l') return 0.1;
     return 1;
 }
 

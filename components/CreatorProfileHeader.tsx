@@ -40,7 +40,10 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
         authUser?.displayName ||
         (username ? `@${username}` : t('basketTab.creatorProfile.title'));
     const handle = username ? `@${username}` : null;
-    const avatarSrc = localUri ?? profile.avatarUrl ?? null;
+    // Fall back to the session avatar (carried by the OAuth response) so the
+    // photo shows even when the /profile fetch hasn't landed or predates the
+    // avatar fix — mirrors the name/username fallbacks above.
+    const avatarSrc = localUri ?? profile.avatarUrl ?? authUser?.avatarUrl ?? null;
     const initials = (() => {
         const fl = `${(profile.firstName ?? '').trim()[0] ?? ''}${(profile.lastName ?? '').trim()[0] ?? ''}`.toUpperCase();
         if (fl) return fl;

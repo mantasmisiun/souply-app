@@ -21,6 +21,7 @@ import { useTheme, type AppTheme } from '../constants/theme';
 import * as Haptics from 'expo-haptics';
 import { formatEuro } from '../utils/formatCurrency';
 import { formatStoreStreet } from '../utils/formatAddress';
+import { isWeighableDisplay } from '../utils/weighable';
 import { chainBrandName } from '../utils/chainBrandName';
 import { useTranslation } from 'react-i18next';
 
@@ -99,7 +100,7 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
                     <Text style={styles.itemQuantity}>
                         {t('shoppingListDetail.quantityLabel')}: {item.storeProductId
                             ? `${item.quantity} ${item.unit}`
-                            : item.isWeighable
+                            : isWeighableDisplay(item.isWeighable, item.quantity)
                                 ? (item.quantity < 10 ? `${item.quantity} kg` : `${item.quantity} g`)
                                 : `${item.quantity} ${t('shoppingListDetail.unitPieces')}`}
                     </Text>
