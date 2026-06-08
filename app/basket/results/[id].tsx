@@ -3,6 +3,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect, useNavigation, Stack } from 'expo-router';
 import React, { useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
+import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { API_BASE_URL } from '../../../config/api';
@@ -16,9 +17,10 @@ import { type StoreResult, fetchStorePrices } from '../../../utils/basketPricing
 import { getStoreDirectory } from '../../../utils/storeDirectory';
 import { type StoreLite } from '../../../utils/candidatePool';
 import { orderStopsNearestFirst, orderStopsAlongRoute, buildGoogleMapsRouteUrl } from '../../../utils/multiStopRoute';
-import { getPresets } from '../../../utils/locationStorage';
+import { getPresets, getLocationSettings, saveLocationSettings } from '../../../utils/locationStorage';
 import StoreResultsMap, { type MapPin } from '../../../components/results/StoreResultsMap';
 import ResultsBottomSheet from '../../../components/results/ResultsBottomSheet';
+import { LiquidGlass } from '../../../components/LiquidGlass';
 import { buildSplitOptions, TRIP_RADIUS_KM, type SheetOption } from '../../../utils/splitOptions';
 
 // StoreResult / ItemResult now live in utils/basketPricing (shared with the
@@ -130,16 +132,16 @@ export default function BasketResultsScreen() {
         setCombos([]);
         setLazyResults([]); // stale once the basket/results change
 
-        const [stored, metaRaw] = await Promise.all([
+        const [stored, metaRaw, ls] = await Promise.all([
             AsyncStorage.getItem(`basket_results_${id}`),
             AsyncStorage.getItem(`basket_calc_meta_${id}`),
+            getLocationSettings(),
         ]);
-        // Read the store-count cap BEFORE results so combo scoring runs once
-        // with the right limit (no 2/3-store flash on a 1-store setting).
-        try {
-            const n = Number((metaRaw ? JSON.parse(metaRaw) : null)?.storeCount);
-            setMaxStores(n === 1 ? 1 : n === 2 ? 2 : 3);
-        } catch { setMaxStores(3); }
+        // Store-count is the LIVE location setting (single source of truth) — not
+        // frozen in the calc meta — so a change from Settings or the map's 1·2·3
+        // toggle is reflected here without a recalc. Read it BEFORE results so
+        // combo scoring runs once with the right limit (no 2/3-store flash).
+        setMaxStores(ls.storeCount === 1 ? 1 : ls.storeCount === 2 ? 2 : 3);
         if (stored) {
             setResults(JSON.parse(stored) as StoreResult[]);
         } else {
@@ -382,6 +384,22 @@ export default function BasketResultsScreen() {
     }, []);
     const handleSelectOption = useCallback((key: string) => setSelectedOptionKey(key), []);
     const closeSheet = useCallback(() => { setSelectedStoreId(null); setSelectedOptionKey(null); }, []);
+
+    // Live store-count toggle (1/2/3) on the map. Pure CLIENT re-rank — combos
+    // are scored from the already-priced stores, so no server recalc/spinner.
+    // Closes the open sheet (so a now-gone combo option can't go stale) and
+    // lets the map reframe to the new recommendation; persists to the calc meta
+    // so the choice survives re-entering these results.
+    const setStoreCount = useCallback(async (n: 1 | 2 | 3) => {
+        if (n === maxStores) return;
+        try { Haptics.selectionAsync(); } catch {}
+        setMaxStores(n);
+        closeSheet();
+        // Persist to the GLOBAL location setting so the basket's settings button
+        // reflects it on back, and it stays in sync everywhere. Store-count no
+        // longer affects pricing, so this never forces a recalc.
+        try { await saveLocationSettings({ storeCount: n }); } catch {}
+    }, [maxStores, closeSheet]);
 
     // Stores that already carry a price pill — excluded from the directory layer.
     const pricedStoreIds = useMemo(
@@ -681,9 +699,33 @@ export default function BasketResultsScreen() {
                         />
                         {/* Full-bleed map → floating back circle, top-left. */}
                         <View style={[styles.mapTopLeft, { top: topInset + 10 }]} pointerEvents="box-none">
-                            <TouchableOpacity style={styles.mapBackBtn} onPress={() => router.back()} activeOpacity={0.8}>
-                                <Ionicons name="chevron-back" size={24} color={colors.primary} />
+                            <TouchableOpacity style={styles.mapBackShadow} onPress={() => router.back()} activeOpacity={0.8}>
+                                <LiquidGlass style={styles.mapBackBtn} fallback="solid">
+                                    <Ionicons name="chevron-back" size={24} color={colors.primary} />
+                                </LiquidGlass>
                             </TouchableOpacity>
+                        </View>
+                        {/* Top-centre store-count toggle. Instant client re-rank
+                            of how the basket is split across 1/2/3 shops. */}
+                        <View style={[styles.mapTopCenter, { top: topInset + 10 }]} pointerEvents="box-none">
+                            <View style={styles.storeCountShadow}>
+                                <LiquidGlass style={styles.storeCountPill} fallback="solid">
+                                    <Ionicons name="storefront-outline" size={15} color={colors.textSecondary} style={styles.storeCountIcon} />
+                                    {([1, 2, 3] as const).map(n => {
+                                        const active = maxStores === n;
+                                        return (
+                                            <TouchableOpacity
+                                                key={n}
+                                                style={[styles.storeCountBtn, active && styles.storeCountBtnActive]}
+                                                onPress={() => setStoreCount(n)}
+                                                activeOpacity={0.8}
+                                            >
+                                                <Text style={[styles.storeCountText, active && styles.storeCountTextActive]}>{n}</Text>
+                                            </TouchableOpacity>
+                                        );
+                                    })}
+                                </LiquidGlass>
+                            </View>
                         </View>
                     </>
                 ) : (
@@ -725,10 +767,10 @@ export default function BasketResultsScreen() {
                         </View>
                     ) : (
                         <View style={[styles.hintWrap, { bottom: 20 + bottomInset }]} pointerEvents="none">
-                            <View style={styles.hintPill}>
+                            <LiquidGlass style={styles.hintPill} fallback="solid" interactive={false}>
                                 <Ionicons name="hand-left-outline" size={15} color={colors.textSecondary} />
                                 <Text style={styles.hintText}>Palieskite parduotuvę</Text>
-                            </View>
+                            </LiquidGlass>
                         </View>
                     )
                 ) : null}
@@ -750,13 +792,35 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     // Floating map header (map view is full-bleed): back circle + toggle, left.
     mapTopLeft: { position: 'absolute', left: 12, alignItems: 'flex-start', gap: 10, zIndex: 20 },
+    // Glass surfaces clip to their rounded shape (overflow hidden), so the
+    // drop shadow lives on an outer wrapper — a clipped view can't cast one.
+    mapBackShadow: {
+        borderRadius: 21,
+        elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4,
+    },
     mapBackBtn: {
-        width: 42, height: 42, borderRadius: 21,
+        width: 42, height: 42, borderRadius: 21, overflow: 'hidden',
         backgroundColor: c.cardBackground,
         alignItems: 'center', justifyContent: 'center',
-        elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4,
         borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
     },
+    // Top-centre store-count segmented toggle (1·2·3).
+    mapTopCenter: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 20 },
+    storeCountShadow: {
+        borderRadius: 22,
+        elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.16, shadowRadius: 8,
+    },
+    storeCountPill: {
+        flexDirection: 'row', alignItems: 'center', overflow: 'hidden',
+        backgroundColor: c.cardBackground, borderRadius: 22,
+        paddingLeft: 10, paddingRight: 4, paddingVertical: 4, gap: 2,
+        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+    },
+    storeCountIcon: { marginRight: 4 },
+    storeCountBtn: { minWidth: 34, paddingVertical: 6, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
+    storeCountBtnActive: { backgroundColor: c.primary },
+    storeCountText: { fontSize: 15, fontWeight: '800', color: c.textSecondary },
+    storeCountTextActive: { color: c.onPrimary },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
     loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, backgroundColor: c.pageBackground },
     loadingText: { fontSize: 15, color: c.textSecondary },
@@ -852,11 +916,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     hintWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
     hintPill: {
-        flexDirection: 'row', alignItems: 'center', gap: 6,
+        flexDirection: 'row', alignItems: 'center', gap: 6, overflow: 'hidden',
         backgroundColor: c.cardBackground, borderRadius: 999,
         paddingHorizontal: 14, paddingVertical: 8,
         borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
-        elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.15, shadowRadius: 4,
     },
     hintText: { fontSize: 13, fontWeight: '600', color: c.textSecondary },
     // Area-batch "price this area" button (pink pill, bottom-center).
