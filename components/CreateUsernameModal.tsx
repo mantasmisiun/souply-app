@@ -17,7 +17,7 @@ import { useAuthState } from '../state/authState';
  * as the publish wall's username stage, extracted so the sign-in flow and the
  * publish wall share one component.
  */
-export function CreateUsernameModal({ visible, onDone }: { visible: boolean; onDone: () => void }) {
+export function CreateUsernameModal({ visible, onDone, onDismiss }: { visible: boolean; onDone: () => void; onDismiss?: () => void }) {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { t } = useTranslation();
@@ -73,7 +73,7 @@ export function CreateUsernameModal({ visible, onDone }: { visible: boolean; onD
     };
 
     return (
-        <Modal visible={visible} transparent animationType="fade" onRequestClose={() => {}}>
+        <Modal visible={visible} transparent animationType="fade" onRequestClose={() => {}} onDismiss={onDismiss}>
             <View style={styles.backdrop}>
                 <View style={styles.sheet}>
                     <Text style={styles.title}>{t('basketTab.templates.usernamePromptTitle')}</Text>
