@@ -226,7 +226,20 @@ export default function CreatorAuthScreen() {
             </Modal>
 
             {/* Required first-sign-in username picker. */}
-            <CreateUsernameModal visible={needUsername} onDone={() => router.back()} />
+            <CreateUsernameModal
+                visible={needUsername}
+                // Close the handle modal FIRST, then return to Profilis. Firing
+                // router.back() while the native <Modal> is still presented gets
+                // swallowed on iOS (the "stuck on creator-auth after picking a
+                // handle" bug), so on iOS we navigate from the modal's onDismiss
+                // — which fires only after it's fully gone. Android's Modal has no
+                // onDismiss and doesn't block the pop, so go back immediately.
+                onDone={() => {
+                    setNeedUsername(false);
+                    if (Platform.OS !== 'ios') router.back();
+                }}
+                onDismiss={() => { if (Platform.OS === 'ios') router.back(); }}
+            />
         </View>
     );
 }
