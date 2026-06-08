@@ -175,7 +175,10 @@ function SingleSheet({ options, onNavigate, onCreateList, creatingList, colors, 
             style={styles.sheet}
             onLayout={e => onHeightChange?.(e.nativeEvent.layout.height)}
         >
-            <View style={styles.handleArea}><View style={styles.handle} /></View>
+            {/* No drag pill: the single-store sheet is auto-height and can't
+                expand, so a handle would imply a gesture that does nothing.
+                Keep the area for top breathing room under the rounded corners. */}
+            <View style={styles.handleArea} />
             <View style={styles.singlePad}>
                 <View style={styles.singleHeader}>
                     <ChainLogo chainId={store.chainId} chainName={store.chainName} size={46} colors={colors} />
@@ -371,7 +374,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     listContent: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
 
     // ── Single-store card ──
-    singlePad: { paddingHorizontal: 16, paddingTop: 10 },
+    singlePad: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16 },
     singleHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
     singleMid: { flex: 1, paddingRight: 8 },
     singleTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary },

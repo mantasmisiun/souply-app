@@ -140,11 +140,12 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
     const colors = useTheme();
     const { i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    // Clear the bottom tab bar (iOS liquid-glass NativeTabs ≈ 49 + safe area,
-    // Android JS Tabs from context) so the last L1 row is reachable on first
-    // mount — don't rely on iOS's flaky auto content-inset, which only kicks in
-    // after a re-layout (hence "works after switching tabs").
+    // Exact bottom tab bar clearance (NativeTabs folds the bar into the safe-area
+    // inset on iOS; @react-navigation context on Android) + a small breather, so
+    // the last L1 row sits just above the bar on every device. No FAB here, so no
+    // extra reserve.
     const tabBarHeight = useSafeBottomTabBarHeight();
+    const listPadBottom = tabBarHeight + 8;
     const [l1Categories, setL1Categories] = useState<Category[]>([]);
     const [l2Map, setL2Map] = useState<Record<number, Category[]>>({});
     const [expandedL1, setExpandedL1] = useState<number | null>(null);
@@ -215,7 +216,7 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
             data={l1Categories}
             keyExtractor={(item: any) => item.id.toString()}
             contentInsetAdjustmentBehavior="never"
-            contentContainerStyle={[styles.list, { paddingTop: contentPaddingTop + 16, paddingBottom: tabBarHeight + 24 }]}
+            contentContainerStyle={[styles.list, { paddingTop: contentPaddingTop + 16, paddingBottom: listPadBottom }]}
             scrollIndicatorInsets={{ bottom: tabBarHeight }}
             ListHeaderComponent={header ?? undefined}
             renderItem={({ item }) => (
