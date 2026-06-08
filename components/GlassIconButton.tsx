@@ -1,7 +1,7 @@
-import { Pressable, View, StyleSheet, useColorScheme } from 'react-native';
-import { BlurView } from 'expo-blur';
+import { Pressable, View, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../constants/theme';
+import { LiquidGlass } from './LiquidGlass';
 
 interface Props {
     icon: keyof typeof Ionicons.glyphMap;
@@ -39,7 +39,6 @@ export function GlassIconButton({
     glass,
 }: Props) {
     const colors = useTheme();
-    const scheme = useColorScheme();
     const tint = disabled ? colors.textMuted : (color ?? colors.primary);
     const disc = size + 14;
     const iconEl = <Ionicons name={icon} size={size} color={tint} />;
@@ -57,13 +56,11 @@ export function GlassIconButton({
             })}
         >
             {glass ? (
-                <BlurView
-                    intensity={50}
-                    tint={scheme === 'dark' ? 'dark' : 'light'}
+                <LiquidGlass
                     style={[styles.disc, styles.glassDisc, { width: disc, height: disc, borderRadius: disc / 2 }]}
                 >
                     {iconEl}
-                </BlurView>
+                </LiquidGlass>
             ) : (
                 <View style={[styles.disc, { width: disc, height: disc }]}>
                     {iconEl}

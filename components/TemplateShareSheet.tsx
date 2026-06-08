@@ -9,7 +9,7 @@ import * as Clipboard from 'expo-clipboard';
 import * as MediaLibrary from 'expo-media-library';
 import * as Sharing from 'expo-sharing';
 import * as FileSystem from 'expo-file-system/legacy';
-import QRCode from 'react-native-qrcode-svg';
+import { BrandedQR } from './BrandedQR';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../constants/theme';
 import {
@@ -329,37 +329,7 @@ export function TemplateShareSheet({
                         <>
                             <View style={styles.qrWrap}>
                                 <View style={styles.qrInner}>
-                                    {(() => {
-                                        const branded = data.qrDataUrl ?? (data.qrUrl && !qrUrlFailed ? data.qrUrl : null);
-                                        if (branded) {
-                                            return (
-                                                <Image
-                                                    source={{ uri: branded }}
-                                                    style={{ width: 180, height: 180 }}
-                                                    resizeMode="contain"
-                                                    onError={() => setQrUrlFailed(true)}
-                                                />
-                                            );
-                                        }
-                                        return (
-                                            <QRCode
-                                                value={data.url}
-                                                size={180}
-                                                color={colors.textPrimary}
-                                                backgroundColor={colors.cardBackground}
-                                                // Branded centre mark. ecl="H" (30% error
-                                                // correction) keeps the code scannable with the
-                                                // logo covering the middle; logoMargin leaves a
-                                                // little breathing room around the mark.
-                                                ecl="H"
-                                                logo={require('../assets/images/icon.png')}
-                                                logoSize={40}
-                                                logoMargin={5}
-                                                logoBackgroundColor={colors.cardBackground}
-                                                logoBorderRadius={9}
-                                            />
-                                        );
-                                    })()}
+                                    <BrandedQR value={data.url} size={180} />
                                 </View>
                             </View>
 
@@ -476,10 +446,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     errorText: { flex: 1, fontSize: 13, color: c.textPrimary },
     qrWrap: { alignItems: 'center', justifyContent: 'center', marginTop: 8 },
-    qrInner: {
-        padding: 16, borderRadius: 16, backgroundColor: c.cardBackground,
-        borderWidth: 1, borderColor: c.border,
-    },
+    qrInner: { alignItems: 'center', justifyContent: 'center' },
     savingsRow: { flexDirection: 'row', gap: 6, alignItems: 'center', justifyContent: 'center' },
     savingsText: { fontSize: 13, fontWeight: '700', color: c.success },
     url: {

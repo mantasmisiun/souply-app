@@ -29,7 +29,7 @@ import { coverEmoji } from '../../utils/templateCover';
 import { TemplateCoverEditor, type CoverDraft } from '../../components/TemplateCoverEditor';
 import { Toast, type ToastHandle } from '../../components/Toast';
 import { createTemplateFromBasket, instantiateTemplate } from '../../utils/basketTemplatesApi';
-import { CardActionBar } from '../../components/CardActionBar';
+import { ContextMenu } from '../../components/ContextMenu';
 import { getUserId } from '../../config/user';
 import { useAuthState } from '../../state/authState';
 
@@ -187,8 +187,11 @@ export default function BasketDetailScreen() {
     // gotchas a naive JSON.stringify would have.
     const settingsChanged = useMemo(() => {
         if (!calcSettingsSnapshot || !activeSettings) return false;
+        // Ignore `storeCount`: it only re-organises the already-priced basket
+        // (client-side split across 1/2/3 shops), so changing it must NOT force
+        // a recalc. Location-affecting fields (mode / Vieta / Maršrutas) still do.
         const norm = (s: LocationSettings) =>
-            JSON.stringify(s, Object.keys(s as any).sort());
+            JSON.stringify(s, Object.keys(s as any).filter(k => k !== 'storeCount').sort());
         return norm(calcSettingsSnapshot) !== norm(activeSettings);
     }, [calcSettingsSnapshot, activeSettings]);
 
@@ -938,16 +941,14 @@ export default function BasketDetailScreen() {
                 onSubmit={handleSaveAsTemplate}
             />
 
-            {actionsOpen && (
-                <CardActionBar
-                    title={inheritedName}
-                    onDismiss={() => setActionsOpen(false)}
-                    actions={[
-                        { icon: 'copy-outline', label: t('basketTab.copyBasket'), onPress: handleCopyBasket },
-                        ...(edited ? [{ icon: 'duplicate-outline' as const, label: t('basketTab.copyOriginal'), onPress: handleCopyOriginal }] : []),
-                    ]}
-                />
-            )}
+            <ContextMenu
+                visible={actionsOpen}
+                onDismiss={() => setActionsOpen(false)}
+                actions={[
+                    { icon: 'copy-outline', label: t('basketTab.copyBasket'), onPress: handleCopyBasket },
+                    ...(edited ? [{ icon: 'duplicate-outline' as const, label: t('basketTab.copyOriginal'), onPress: handleCopyOriginal }] : []),
+                ]}
+            />
 
             <LocationPromptModal
                 visible={locationPromptVisible}

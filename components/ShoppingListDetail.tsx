@@ -13,7 +13,8 @@ import { GlassIconButton } from './GlassIconButton';
 import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import QRCode from 'react-native-qrcode-svg';
+import { BrandedQR } from './BrandedQR';
+import { ContextMenu } from './ContextMenu';
 import { API_BASE_URL } from '../config/api';
 import { getUserId } from '../config/user';
 import { ProductImage } from './ProductImage';
@@ -52,17 +53,24 @@ interface ShoppingListItem {
     storeProductId?: number | null;
     requiresCoupon?: boolean;
     couponLabel?: string | null;
+    l1CategoryId?: number | null;
     l2CategoryId?: number | null;
     l2CategoryName?: string | null;
 }
 
+// Category groups follow the Naršyti sequence — by L1 id, then L2 id (NOT
+// alphabetical). Uncategorised items (no L2) sink to the bottom under "Kita".
+const CAT_LAST = Number.MAX_SAFE_INTEGER;
 const sortItems = (arr: ShoppingListItem[]): ShoppingListItem[] =>
     arr.sort((a, b) => {
         if (a.isChecked !== b.isChecked) return Number(a.isChecked) - Number(b.isChecked);
         if (!a.isChecked) {
-            const ca = a.l2CategoryName ?? '￿';
-            const cb = b.l2CategoryName ?? '￿';
-            if (ca !== cb) return ca.localeCompare(cb, 'lt');
+            const l1a = a.l2CategoryId == null ? CAT_LAST : (a.l1CategoryId ?? CAT_LAST);
+            const l1b = b.l2CategoryId == null ? CAT_LAST : (b.l1CategoryId ?? CAT_LAST);
+            if (l1a !== l1b) return l1a - l1b;
+            const l2a = a.l2CategoryId ?? CAT_LAST;
+            const l2b = b.l2CategoryId ?? CAT_LAST;
+            if (l2a !== l2b) return l2a - l2b;
         }
         return a.productName.localeCompare(b.productName, 'lt');
     });
@@ -367,10 +375,13 @@ export function ShoppingListDetail({
         const groups = Array.from(byCategory.entries())
             .map(([key, groupItems]) => ({ name: key || null, items: groupItems }))
             .sort((a, b) => {
-                if (!a.name && !b.name) return 0;
-                if (!a.name) return 1;
-                if (!b.name) return -1;
-                return a.name.localeCompare(b.name, 'lt');
+                // Naršyti sequence: L1 id, then L2 id. Uncategorised → bottom.
+                const la = a.name ? (a.items[0].l1CategoryId ?? CAT_LAST) : CAT_LAST;
+                const lb = b.name ? (b.items[0].l1CategoryId ?? CAT_LAST) : CAT_LAST;
+                if (la !== lb) return la - lb;
+                const ka = a.name ? (a.items[0].l2CategoryId ?? CAT_LAST) : CAT_LAST;
+                const kb = b.name ? (b.items[0].l2CategoryId ?? CAT_LAST) : CAT_LAST;
+                return ka - kb;
             });
 
         return { uncheckedGroups: groups, checkedItems: checked };
@@ -606,7 +617,7 @@ export function ShoppingListDetail({
                         <View style={styles.listInner}>
                         {uncheckedGroups.map(group => (
                             <View key={group.name ?? '__no_category__'}>
-                                {group.name && <Text style={styles.sectionHeader}>{group.name}</Text>}
+                                <Text style={styles.sectionHeader}>{group.name ?? t('shoppingListDetail.uncategorised', { defaultValue: 'Kita' })}</Text>
                                 <View style={styles.listContainer}>
                                     {group.items.map((item, index) => (
                                         <View key={item.id}>
@@ -711,16 +722,13 @@ export function ShoppingListDetail({
                     )}
                     </KeyboardStickyView>
 
-                    {menuVisible && (
-                        <TouchableOpacity style={styles.menuOverlay} onPress={() => setMenuVisible(false)} activeOpacity={1}>
-                            <View style={styles.menuContainer}>
-                                <TouchableOpacity style={styles.menuItem} onPress={() => { setMenuVisible(false); handleDuplicate(); }}>
-                                    <Ionicons name="copy-outline" size={18} color={colors.textPrimary} />
-                                    <Text style={styles.menuItemText}>{t('shoppingListDetail.copyList')}</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </TouchableOpacity>
-                    )}
+                    <ContextMenu
+                        visible={menuVisible}
+                        onDismiss={() => setMenuVisible(false)}
+                        actions={[
+                            { icon: 'copy-outline', label: t('shoppingListDetail.copyList'), onPress: () => { setMenuVisible(false); handleDuplicate(); } },
+                        ]}
+                    />
             </View>
 
             {/* Quantity modal with presets */}
@@ -899,19 +907,7 @@ export function ShoppingListDetail({
                                     {shareLoading || !shareToken ? (
                                         <ActivityIndicator size="large" color={colors.primary} />
                                     ) : (
-                                        <QRCode
-                                            value={shareToken}
-                                            size={220}
-                                            // Branded centre mark; ecl="H" keeps it scannable
-                                            // with the logo over the middle, logoMargin adds a
-                                            // little padding around the mark.
-                                            ecl="H"
-                                            logo={require('../assets/images/icon.png')}
-                                            logoSize={46}
-                                            logoMargin={5}
-                                            logoBackgroundColor="#ffffff"
-                                            logoBorderRadius={10}
-                                        />
+                                        <BrandedQR value={shareToken} size={220} />
                                     )}
                                 </View>
                                 <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
@@ -1082,7 +1078,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     shareTitle: { fontSize: 18, fontWeight: '700', color: c.textPrimary, marginBottom: 6, textAlign: 'center' },
     shareSubtitle: { fontSize: 13, color: c.textSecondary, marginBottom: 16, textAlign: 'center' },
     shareQrWrap: {
-        padding: 12, backgroundColor: '#fff', borderRadius: 12, marginBottom: 18,
+        marginBottom: 18,
         minWidth: 244, minHeight: 244, alignItems: 'center', justifyContent: 'center',
     },
     shareCloseBtn: { paddingHorizontal: 24, paddingVertical: 12, backgroundColor: c.primary, borderRadius: 8 },

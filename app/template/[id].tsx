@@ -1,6 +1,6 @@
 import {
     View, Text, FlatList, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
-    Alert, TextInput, RefreshControl, Switch,
+    Alert, TextInput, RefreshControl, Switch, Modal, Pressable,
 } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
@@ -17,7 +17,7 @@ import { ScreenBackButton } from '../../components/ScreenBackButton';
 import { GlassIconButton } from '../../components/GlassIconButton';
 import { ProductImage } from '../../components/ProductImage';
 import { SkeletonBox } from '../../components/SkeletonBox';
-import { CardActionBar, type CardAction } from '../../components/CardActionBar';
+import { ContextMenu } from '../../components/ContextMenu';
 import { TemplateShareSheet } from '../../components/TemplateShareSheet';
 import { PublishWallModal } from '../../components/PublishWallModal';
 import { ConfirmModal } from '../../components/ConfirmModal';
@@ -121,6 +121,9 @@ export default function TemplateDetailScreen() {
     }, [template, setVisibility]);
 
     const [instantiating, setInstantiating] = useState(false);
+    // Set to an existing in-progress basket's id when the server says one is
+    // resumable → opens the Souply-themed "continue or start new" choice.
+    const [resumeBasketId, setResumeBasketId] = useState<number | null>(null);
 
     // ── Data load ─────────────────────────────────────────────────────────
     const fetchTemplate = useCallback(async (silent: boolean) => {
@@ -228,22 +231,8 @@ export default function TemplateDetailScreen() {
             const result = await instantiateTemplate(template.id, userId);
             if (result.action === 'resume') {
                 setInstantiating(false);
-                Alert.alert(
-                    t('basketTab.templates.resumeTitle'),
-                    t('basketTab.templates.resumeBody'),
-                    [
-                        { text: t('basketTab.templates.resumeBasketCancel'), style: 'cancel' },
-                        {
-                            text: t('basketTab.templates.resumeNew'),
-                            style: 'destructive',
-                            onPress: () => runInstantiate(true),
-                        },
-                        {
-                            text: t('basketTab.templates.resumeContinue'),
-                            onPress: () => router.replace(`/basket/${result.basketId}` as any),
-                        },
-                    ],
-                );
+                // Souply-themed choice (not the native Alert).
+                setResumeBasketId(result.basketId);
                 return;
             }
             router.replace(`/basket/${result.basketId}` as any);
@@ -583,29 +572,27 @@ export default function TemplateDetailScreen() {
                 )}
             </View>
 
-            {actionBarOpen && (
-                <CardActionBar
-                    title={template.name}
-                    onDismiss={() => setActionBarOpen(false)}
-                    actions={[
-                        // Copy → a new editable template. Available for every
-                        // template, and the only way to "edit" the auto one.
-                        {
-                            icon: 'copy-outline',
-                            label: t('basketTab.templates.copyTemplate'),
-                            onPress: () => { setActionBarOpen(false); handleDuplicate(); },
-                        },
-                        // The auto default template can't be deleted (learning
-                        // switch only); manual templates keep delete.
-                        ...(isDefault ? [] : [{
-                            icon: 'trash-outline' as const,
-                            label: t('basketTab.templates.deleteConfirm'),
-                            destructive: true,
-                            onPress: () => { setActionBarOpen(false); confirmDelete(); },
-                        }]),
-                    ]}
-                />
-            )}
+            <ContextMenu
+                visible={actionBarOpen}
+                onDismiss={() => setActionBarOpen(false)}
+                actions={[
+                    // Copy → a new editable template. Available for every
+                    // template, and the only way to "edit" the auto one.
+                    {
+                        icon: 'copy-outline',
+                        label: t('basketTab.templates.copyTemplate'),
+                        onPress: () => { setActionBarOpen(false); handleDuplicate(); },
+                    },
+                    // The auto default template can't be deleted (learning
+                    // switch only); manual templates keep delete.
+                    ...(isDefault ? [] : [{
+                        icon: 'trash-outline' as const,
+                        label: t('basketTab.templates.deleteConfirm'),
+                        destructive: true,
+                        onPress: () => { setActionBarOpen(false); confirmDelete(); },
+                    }]),
+                ]}
+            />
 
             <TemplateShareSheet
                 visible={shareSheetOpen}
@@ -638,6 +625,43 @@ export default function TemplateDetailScreen() {
 
             <StatsHelpModal visible={statsHelpOpen} onClose={() => setStatsHelpOpen(false)} />
 
+            {/* Resume-or-new choice (Souply-themed, replaces the native Alert). */}
+            <Modal
+                visible={resumeBasketId !== null}
+                transparent
+                animationType="fade"
+                statusBarTranslucent
+                onRequestClose={() => setResumeBasketId(null)}
+            >
+                <Pressable style={styles.resumeBackdrop} onPress={() => setResumeBasketId(null)}>
+                    <Pressable style={styles.resumeCard} onPress={() => {}}>
+                        <Text style={styles.resumeTitle}>{t('basketTab.templates.resumeTitle')}</Text>
+                        <Text style={styles.resumeBody}>{t('basketTab.templates.resumeBody')}</Text>
+                        <TouchableOpacity
+                            style={styles.resumePrimaryBtn}
+                            activeOpacity={0.85}
+                            onPress={() => {
+                                const bid = resumeBasketId;
+                                setResumeBasketId(null);
+                                if (bid != null) router.replace(`/basket/${bid}` as any);
+                            }}
+                        >
+                            <Text style={styles.resumePrimaryText}>{t('basketTab.templates.resumeContinue')}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={styles.resumeSecondaryBtn}
+                            activeOpacity={0.85}
+                            onPress={() => { setResumeBasketId(null); runInstantiate(true); }}
+                        >
+                            <Text style={styles.resumeSecondaryText}>{t('basketTab.templates.resumeNew')}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity style={styles.resumeCancelBtn} activeOpacity={0.7} onPress={() => setResumeBasketId(null)}>
+                            <Text style={styles.resumeCancelText}>{t('basketTab.templates.resumeBasketCancel')}</Text>
+                        </TouchableOpacity>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+
             <TemplateCoverEditor
                 visible={coverEditorOpen}
                 onClose={() => setCoverEditorOpen(false)}
@@ -665,6 +689,18 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     settingLabel: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
     settingHint: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
+
+    // Resume-or-new choice modal.
+    resumeBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 28 },
+    resumeCard: { width: '100%', maxWidth: 420, backgroundColor: c.cardBackground, borderRadius: 22, padding: 22 },
+    resumeTitle: { fontSize: 18, fontWeight: '800', color: c.textPrimary, textAlign: 'center' },
+    resumeBody: { fontSize: 14, color: c.textSecondary, textAlign: 'center', marginTop: 8, marginBottom: 18, lineHeight: 20 },
+    resumePrimaryBtn: { backgroundColor: c.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
+    resumePrimaryText: { color: c.onPrimary, fontSize: 15, fontWeight: '700' },
+    resumeSecondaryBtn: { marginTop: 10, borderRadius: 14, paddingVertical: 14, alignItems: 'center', borderWidth: 1.5, borderColor: c.primary },
+    resumeSecondaryText: { color: c.primary, fontSize: 15, fontWeight: '700' },
+    resumeCancelBtn: { marginTop: 6, paddingVertical: 12, alignItems: 'center' },
+    resumeCancelText: { color: c.textSecondary, fontSize: 15, fontWeight: '600' },
 
     // ── Statistika tab — creator-account explainer ────────────────────────
     statsScroll: { padding: 16, paddingBottom: 32 },

@@ -1,26 +1,39 @@
 import { useContext } from 'react';
 import { Platform } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 
-// Standard UITabBar item height on iOS. The total visible bar height is
-// this + bottom safe-area inset (49 + 34 = 83pt on iPhone X+).
+// Standard UITabBar item height on iOS. The full clearance is this + the
+// home-indicator inset (49 + 34 = 83).
+//
+// CRITICAL: we add it to the home-indicator inset from `initialWindowMetrics`
+// (captured ONCE at startup), NOT the live `useSafeAreaInsets().bottom`. Under
+// RNS NativeTabs the live bottom inset is unstable — it toggles between 34 (bar
+// excluded) and 83 (bar folded in) across re-layouts and tab revisits. Adding a
+// constant 49 to a value that already includes the bar double-counts to 132, so
+// the gap visibly grew every time you switched back to the tab. The startup
+// home-indicator value never toggles, so this stays a rock-steady 83.
 const IOS_TAB_BAR_ITEM_HEIGHT = 49;
 
 /**
- * Returns the bottom tab bar height under either:
- *   - `@react-navigation/bottom-tabs` (Android JS Tabs) — read from context
- *   - `expo-router/unstable-native-tabs` (iOS NativeTabs) — computed from
- *     the standard UITabBar height + safe-area bottom inset
+ * Bottom clearance for content / FABs sitting under the tab bar, correct under:
+ *   - `@react-navigation/bottom-tabs` (Android JS Tabs) → exact height from context
+ *   - `expo-router/unstable-native-tabs` (iOS NativeTabs) → standard bar item
+ *     height + the stable startup home-indicator inset (see note above)
  *
- * `useBottomTabBarHeight` from @react-navigation/bottom-tabs throws when
- * called outside a Bottom Tab Navigator, which crashes screens hosted by
- * NativeTabs. Read the context directly so it returns `null` instead.
+ * `useBottomTabBarHeight()` from @react-navigation throws outside a JS Bottom
+ * Tab Navigator (crashing NativeTabs screens), so we read the context directly
+ * and get `undefined` instead.
  */
 export function useSafeBottomTabBarHeight(): number {
     const contextHeight = useContext(BottomTabBarHeightContext);
     const insets = useSafeAreaInsets();
     if (contextHeight != null) return contextHeight;
-    if (Platform.OS === 'ios') return IOS_TAB_BAR_ITEM_HEIGHT + insets.bottom;
+    if (Platform.OS === 'ios') {
+        // Prefer the stable startup inset; only fall back to the live inset if
+        // initial metrics were unavailable (rare; mostly non-iOS).
+        const homeInset = initialWindowMetrics?.insets.bottom ?? insets.bottom;
+        return IOS_TAB_BAR_ITEM_HEIGHT + homeInset;
+    }
     return 0;
 }
