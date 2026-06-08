@@ -86,6 +86,14 @@ export const useAuthState = create<AuthState>((set, get) => ({
             // this device's anonymous id (the cause of "edits don't save" +
             // "couldn't load template" after signing into an existing account).
             if (user?.id) await setUserId(user.id);
+            // The account just changed. The profile store still holds the
+            // previous (anonymous) account's profile/stats with a fresh
+            // timestamp, so its time-based staleness check won't refetch —
+            // leaving stats/level empty until a cold restart. Invalidate +
+            // refetch for the new id so they populate immediately on sign-in.
+            const { useProfileStore } = require('./profileStore');
+            useProfileStore.getState().invalidate();
+            void useProfileStore.getState().fetchProfile();
         } catch {}
         set({ token, user });
     },
