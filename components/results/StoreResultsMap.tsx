@@ -4,9 +4,9 @@ import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Asset } from 'expo-asset';
 import { Ionicons } from '@expo/vector-icons';
-import { type AppTheme } from '../../constants/theme';
+import { spacing, radius, elevation, iconSize, type AppTheme } from '../../constants/theme';
 import { chainBrandColorById } from '../../utils/chainBrandName';
-import { chainPinImage } from '../../utils/chainLogoAssets';
+import { chainPinImage, chainBadgeImage } from '../../utils/chainLogoAssets';
 import { DARK_MAP_STYLE } from '../../constants/darkMapStyle';
 import { formatEuro } from '../../utils/formatCurrency';
 import { type StoreLite } from '../../utils/candidatePool';
@@ -65,24 +65,21 @@ type Props = {
 type Styles = ReturnType<typeof makeStyles>;
 
 /**
- * One store pin = a circular LOGO badge + an attached PRICE pill that read as a
- * single unit. Colour encodes value: cheapest = the app pink, others = neutral
- * surface; selected = solid pink. The price is text-only, so we re-snapshot the
- * marker briefly on any visual change, then freeze.
+ * One store pin = a baked circular chain BADGE + an attached PRICE pill. They're
+ * TWO markers on purpose: Android won't rasterise a child <Image> inside a custom
+ * marker view, so the logo has to ride the marker's native `image` prop (a
+ * pre-composed logo-on-brand PNG — chainBadgeImage). The price is dynamic text,
+ * so it's a separate View marker seated to the badge's right; it re-snapshots
+ * briefly on any visual change then freezes. The badge is a native image, so it
+ * always renders and never needs tracking.
  *
- * Platform split (this is the crux of the iOS logo-alignment bug):
- *  - Android/Fabric WON'T rasterise a child `<Image>` inside a marker, so the
- *    logo has to be the marker's native `image` prop — a SEPARATE marker seated
- *    inside the pill via a negative anchor (Google Maps honours that offset).
- *  - Apple Maps does NOT honour the negative anchor (the logo ends up centred),
- *    but it DOES render a child `<Image>`. So on iOS we render ONE marker with
- *    the logo as a child laid out left-of-price by normal flexbox — no anchor
- *    hack, perfect left alignment.
+ * Colour encodes value: cheapest = pink ring, others = white ring; selected =
+ * solid pink pill. The badge marker sits one z above its pill so it stays on top.
  */
 function StorePin({ pin, styles, colors, selected, dimmed, zRank, onPress }: {
     pin: MapPin; styles: Styles; colors: AppTheme; selected: boolean; dimmed: boolean; zRank: number; onPress: (id: number) => void;
 }) {
-    const logo = chainPinImage(pin.chainId, false); // constant size — no swap on select
+    const badge = chainBadgeImage(pin.chainId);
     const cheapest = pin.recommended;
     const priced = pin.euro != null;
     const tap = () => onPress(pin.storeId);
@@ -90,7 +87,7 @@ function StorePin({ pin, styles, colors, selected, dimmed, zRank, onPress }: {
     const variant = selected ? styles.pillSelected : cheapest ? styles.pillCheapest : styles.pillNeutral;
     const priceColor = selected ? '#FFFFFF' : colors.textPrimary;
 
-    // The price pill is text-only → re-snapshot briefly on visual change, then freeze.
+    // Price pill is text-only → re-snapshot briefly on visual change, then freeze.
     const [tracks, setTracks] = useState(true);
     useEffect(() => {
         setTracks(true);
@@ -98,43 +95,13 @@ function StorePin({ pin, styles, colors, selected, dimmed, zRank, onPress }: {
         return () => clearTimeout(t);
     }, [pin.euro, pin.recommended, selected, dimmed]);
 
-    const fallback = (size: number) => (
-        <View style={[styles.fallbackChip, { width: size, height: size, borderRadius: size / 2, backgroundColor: chainBrandColorById(pin.chainId) }]}>
-            <Text style={styles.fallbackText}>{(pin.chainName[0] ?? '?').toUpperCase()}</Text>
-        </View>
-    );
+    const coordinate = { latitude: pin.latitude, longitude: pin.longitude };
 
-    // iOS: single cohesive pill, logo as a left-aligned child image.
-    if (Platform.OS === 'ios') {
-        return (
-            <Marker
-                coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
-                anchor={{ x: 0, y: 0.5 }}
-                tracksViewChanges={tracks}
-                opacity={dimmed ? 0.4 : 1}
-                zIndex={zRank}
-                onPress={tap}
-            >
-                <View style={[styles.pillRow, variant]}>
-                    {logo != null
-                        ? <Image source={logo} style={styles.pillRowLogo} resizeMode="contain" />
-                        : fallback(26)}
-                    {priced && (
-                        <Text style={[styles.pillPrice, { color: priceColor }]} numberOfLines={1}>
-                            {formatEuro(pin.euro as number)}
-                        </Text>
-                    )}
-                </View>
-            </Marker>
-        );
-    }
-
-    // Android: native-image logo marker seated inside a separate price pill.
     return (
         <>
             {priced && (
                 <Marker
-                    coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
+                    coordinate={coordinate}
                     anchor={{ x: 0, y: 0.5 }}
                     tracksViewChanges={tracks}
                     opacity={dimmed ? 0.4 : 1}
@@ -142,23 +109,27 @@ function StorePin({ pin, styles, colors, selected, dimmed, zRank, onPress }: {
                     onPress={tap}
                 >
                     <View style={[styles.pill, variant]}>
-                        <Text style={[styles.pillPrice, { color: priceColor }]} numberOfLines={1}>
+                        <Text style={[styles.pillPrice, { color: priceColor }]} numberOfLines={1} allowFontScaling={false}>
                             {formatEuro(pin.euro as number)}
                         </Text>
                     </View>
                 </Marker>
             )}
-            <Marker
-                coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
-                anchor={{ x: -0.17, y: 0.5 }}
-                image={logo ?? undefined}
-                opacity={dimmed ? 0.4 : 1}
-                tracksViewChanges={false}
-                zIndex={zRank * 2 + 1}
-                onPress={tap}
-            >
-                {logo == null ? fallback(30) : undefined}
-            </Marker>
+            {badge != null && (
+                <Marker
+                    coordinate={coordinate}
+                    // Negative x → the badge's left edge sits ~5.5dp RIGHT of the
+                    // coord (= the pill's left edge), so the logo has the same
+                    // gap on the left as it does top/bottom. Google Maps honours
+                    // out-of-range anchor fractions; this is Android's seat.
+                    anchor={{ x: -0.18, y: 0.5 }}
+                    image={badge}
+                    opacity={dimmed ? 0.4 : 1}
+                    tracksViewChanges={false}
+                    zIndex={zRank * 2 + 1}
+                    onPress={tap}
+                />
+            )}
         </>
     );
 }
@@ -317,6 +288,16 @@ export default function StoreResultsMap({
         order.forEach((p, i) => m.set(p.storeId, i + 1));
         return m;
     }, [pins]);
+
+    // Render order = z order. react-native-maps ignores `zIndex` re-ordering on
+    // Android (marker insertion order wins), so we render pins from lowest to
+    // highest zRank → active/selected pins render LAST and always sit on top
+    // (fixes a 2nd selected store hiding behind a neutral pin, and a re-selected
+    // store rendering below its former combo partner).
+    const pinsByZ = useMemo(
+        () => [...pins].sort((a, b) => (zRankMap.get(a.storeId) ?? 0) - (zRankMap.get(b.storeId) ?? 0)),
+        [pins, zRankMap],
+    );
 
     const allCoords = useMemo(() => {
         const c: LatLng[] = pins.map(p => ({ latitude: p.latitude, longitude: p.longitude }));
@@ -514,9 +495,17 @@ export default function StoreResultsMap({
                         </View>
                     </Marker>
                 )}
-                {pins.map(pin => (
+                {pinsByZ.map(pin => (
                     <StorePin
-                        key={`${pin.storeId}-${pin.active ? 'a' : 'i'}`}
+                        // Key encodes z-rank AND the visual variant. z-rank: on a
+                        // selection change ranks reshuffle → pins remount and
+                        // re-insert in sorted (pinsByZ) order (react-native-maps
+                        // adds remounted markers on top, so highlighted pins render
+                        // LAST = on top). Variant (s/r/n + dim): forces a remount —
+                        // and thus a re-rasterise of the frozen marker — whenever a
+                        // pin's pill colour changes, even if its rank didn't (e.g.
+                        // tapping the already-recommended store: cheapest → selected).
+                        key={`${pin.storeId}-${zRankMap.get(pin.storeId) ?? 0}-${pin.active ? 's' : pin.recommended ? 'r' : 'n'}${anySelected && !pin.active ? 'd' : ''}`}
                         pin={pin} styles={styles} colors={colors}
                         selected={pin.active}
                         dimmed={anySelected && !pin.active}
@@ -527,13 +516,13 @@ export default function StoreResultsMap({
             </MapView>
 
             {/* Floating controls — top-right, clear of the status bar. */}
-            <View style={[styles.controls, { top: insets.top + 12 }]} pointerEvents="box-none">
+            <View style={[styles.controls, { top: insets.top + spacing.md }]} pointerEvents="box-none">
                 <TouchableOpacity style={styles.ctrlBtn} onPress={fitAll} activeOpacity={0.8}>
-                    <Ionicons name="scan-outline" size={20} color={colors.textPrimary} />
+                    <Ionicons name="scan-outline" size={iconSize.md} color={colors.textPrimary} />
                 </TouchableOpacity>
                 {userCoords && (
                     <TouchableOpacity style={styles.ctrlBtn} onPress={goToUser} activeOpacity={0.8}>
-                        <Ionicons name="locate" size={20} color={colors.primary} />
+                        <Ionicons name="locate" size={iconSize.md} color={colors.primary} />
                     </TouchableOpacity>
                 )}
             </View>
@@ -544,12 +533,12 @@ export default function StoreResultsMap({
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     dim: { opacity: 0.4 },
 
-    // Price pill. Tall enough that the 24dp logo (a separate native-image
-    // marker, inset via anchor) clears the top/bottom with an even gap; extra
-    // left padding seats the logo + leaves a gap before the price.
+    // Price pill. The 30dp chain badge is a separate native-image marker
+    // left-anchored at the same coordinate, so it sits over the pill's left;
+    // paddingLeft clears it and leaves a gap before the price.
     pill: {
         alignItems: 'center', justifyContent: 'center',
-        borderRadius: 999, paddingLeft: 34, paddingRight: 12, paddingVertical: 8,
+        borderRadius: 999, paddingLeft: 38, paddingRight: 12, paddingVertical: 8,
         borderWidth: 2,
         elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3,
     },
@@ -560,16 +549,14 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     pillSelected: { backgroundColor: c.primary, borderColor: c.primary },
     pillPrice: { fontSize: 13, fontWeight: '800' },
 
-    // iOS single-marker pill: logo + price in one row, logo left-aligned by flex
+    // Single-marker pill: badge + price in one row, badge left-aligned by flex
     // (variants pillNeutral/pillCheapest/pillSelected supply bg + border).
     pillRow: {
         flexDirection: 'row', alignItems: 'center', gap: 5,
-        borderRadius: 999, paddingLeft: 5, paddingRight: 11, paddingVertical: 4,
+        borderRadius: 999, paddingLeft: 4, paddingRight: 11, paddingVertical: 4,
         borderWidth: 2,
         elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3,
     },
-    pillRowLogo: { width: 30, height: 30 },
-
     // iOS un-priced directory pin: bigger logo + transparent padding so it's
     // easy to see and gives a comfortable tap target.
     dirHit: { padding: 6, alignItems: 'center', justifyContent: 'center' },
@@ -611,12 +598,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     clusterBig: { minWidth: 46, height: 46, borderRadius: 23 },
     clusterText: { fontSize: 13, fontWeight: '800', color: c.primary },
 
-    controls: { position: 'absolute', right: 12, gap: 10 },
+    controls: { position: 'absolute', right: spacing.md, gap: spacing.sm },
     ctrlBtn: {
-        width: 42, height: 42, borderRadius: 21,
+        width: 42, height: 42, borderRadius: radius.pill,
         backgroundColor: c.cardBackground,
         alignItems: 'center', justifyContent: 'center',
-        elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4,
+        ...elevation.level2,
         borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
     },
 });

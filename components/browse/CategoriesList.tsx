@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
 import { useSafeBottomTabBarHeight } from '../../hooks/useSafeBottomTabBarHeight';
 import { SkeletonBox } from '../SkeletonBox';
 
@@ -196,7 +196,7 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
                         style={{
                             flexDirection: 'row', alignItems: 'center', gap: 12,
                             paddingHorizontal: 16, paddingVertical: 14,
-                            backgroundColor: colors.cardBackground, borderRadius: 12,
+                            backgroundColor: colors.cardBackground, borderRadius: radius.lg,
                             borderLeftWidth: 3, borderLeftColor: colors.softAccent,
                         }}
                     >
@@ -239,11 +239,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     list: { paddingHorizontal: 16, paddingTop: 16, gap: 10 },
     l1Container: {
         backgroundColor: c.cardBackground,
-        borderRadius: 12,
+        borderRadius: radius.lg,
         overflow: 'hidden',
-        elevation: 1,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.06, shadowRadius: 2,
+        ...elevation.level1,
         borderLeftWidth: 3,
         borderLeftColor: c.softAccent,
     },

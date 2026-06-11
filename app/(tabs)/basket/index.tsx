@@ -18,7 +18,7 @@ import { useAuthState } from '../../../state/authState';
 import { ltPluralSuffix } from '../../../utils/ltPlural';
 import { getUserId } from '../../../config/user';
 import { useBasketState } from '../../../state/basketState';
-import { useTheme, type AppTheme } from '../../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../../constants/theme';
 import { ScalePressable } from '../../../components/ScalePressable';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatDate, formatEuro } from '../../../utils/formatCurrency';
@@ -767,7 +767,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // header has on top.
     section: {
         marginBottom: 10,
-        borderRadius: 10, overflow: 'hidden',
+        borderRadius: radius.lg, overflow: 'hidden',
         borderWidth: 1, borderColor: c.border,
         backgroundColor: c.cardBackground,
     },
@@ -811,7 +811,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     addTemplateCard: {
         flexDirection: 'row', alignItems: 'center', gap: 10,
         backgroundColor: c.cardBackground,
-        borderRadius: 12, padding: 16, marginBottom: 12,
+        borderRadius: radius.lg, padding: 16, marginBottom: 12,
         borderWidth: 1.5, borderColor: c.primary, borderStyle: 'dashed',
     },
     addTemplateCardText: { fontSize: 14, fontWeight: '700', color: c.primary },
@@ -822,24 +822,25 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         alignItems: 'center', justifyContent: 'center', padding: 20,
     },
     modalCard: {
-        backgroundColor: c.cardBackground, borderRadius: 16,
+        backgroundColor: c.cardBackground, borderRadius: radius.xl,
         padding: 20, width: '100%', gap: 12,
+        ...elevation.level3,
     },
     modalTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
     modalLabel: { fontSize: 12, color: c.textMuted, marginTop: 4 },
     modalInput: {
-        borderWidth: 1, borderColor: c.border, borderRadius: 10,
+        borderWidth: 1, borderColor: c.border, borderRadius: radius.md,
         paddingHorizontal: 12, paddingVertical: 10,
         fontSize: 15, color: c.textPrimary,
     },
     modalActions: { flexDirection: 'row', gap: 10, marginTop: 8 },
     modalCancel: {
-        flex: 1, paddingVertical: 12, borderRadius: 10,
+        flex: 1, paddingVertical: 12, borderRadius: radius.pill,
         borderWidth: 1, borderColor: c.border, alignItems: 'center',
     },
     modalCancelText: { color: c.textPrimary, fontWeight: '600' },
     modalConfirm: {
-        flex: 1, paddingVertical: 12, borderRadius: 10,
+        flex: 1, paddingVertical: 12, borderRadius: radius.pill,
         backgroundColor: c.primary, alignItems: 'center',
     },
     modalConfirmDisabled: { backgroundColor: c.border },
@@ -847,10 +848,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
 
     // ── Template card ─────────────────────────────────────────────────────
     templateCard: {
-        backgroundColor: c.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10,
+        backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: 14, marginBottom: 10,
         flexDirection: 'row', alignItems: 'center',
-        elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.06, shadowRadius: 2,
+        ...elevation.level1,
         borderLeftWidth: 3, borderLeftColor: c.primary,
     },
     // Smart (auto) template — full pink fill so it stands out from manual cards.
@@ -860,7 +860,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderLeftWidth: 1.5, borderLeftColor: c.primary,
     },
     templateIcon: {
-        width: 36, height: 36, borderRadius: 8,
+        width: 36, height: 36, borderRadius: radius.md,
         backgroundColor: c.primaryMuted ?? c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
     },
@@ -868,7 +868,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     basketEmoji: { fontSize: 26 },
     attribRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
     attrib: { fontSize: 12, color: c.primary, fontWeight: '600', flexShrink: 1 },
-    editedChip: { backgroundColor: c.surfaceMuted ?? c.border, borderRadius: 8, paddingHorizontal: 7, paddingVertical: 2 },
+    editedChip: { backgroundColor: c.surfaceMuted ?? c.border, borderRadius: radius.pill, paddingHorizontal: 7, paddingVertical: 2 },
     editedChipText: { fontSize: 10, fontWeight: '700', color: c.textSecondary, textTransform: 'uppercase', letterSpacing: 0.4 },
     fab: {
         position: 'absolute', right: 20,
@@ -882,7 +882,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // ── Empty ─────────────────────────────────────────────────────────────
     emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', marginTop: 16, textAlign: 'center' },
     emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 6, textAlign: 'center', lineHeight: 18 },
-    emptyButton: { marginTop: 20, backgroundColor: c.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
+    emptyButton: { marginTop: 20, backgroundColor: c.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: radius.pill },
     emptyButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 14 },
 
     // ── Misc ──────────────────────────────────────────────────────────────
@@ -893,7 +893,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     badge: {
         position: 'absolute', top: -4, right: -6,
-        backgroundColor: c.primary, borderRadius: 10,
+        backgroundColor: c.primary, borderRadius: radius.pill,
         minWidth: 18, height: 18,
         alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4,
     },

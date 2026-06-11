@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Image, StyleSheet, TouchableOpacity, Pressable, ActivityIndicator, ScrollView, Dimensions, PanResponder } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Pressable, ActivityIndicator, ScrollView, Dimensions, PanResponder } from 'react-native';
 import Animated, { SlideInDown, SlideOutDown, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { type AppTheme } from '../../constants/theme';
+import { spacing, radius, typography, iconSize, avatarSize, type AppTheme } from '../../constants/theme';
 import { type SheetOption } from '../../utils/splitOptions';
-import { chainPinImage } from '../../utils/chainLogoAssets';
-import { chainBrandColorById, chainBrandName } from '../../utils/chainBrandName';
+import { ChainLogoChip } from '../ChainLogoChip';
+import { chainBrandName } from '../../utils/chainBrandName';
 import { formatEuro } from '../../utils/formatCurrency';
+import { useTranslation } from 'react-i18next';
 
 // SheetOption lives in utils/splitOptions (pure + unit-tested). Re-export so
 // existing imports from this component keep working.
@@ -15,32 +16,20 @@ export type { SheetOption };
 const SCREEN_H = Dimensions.get('window').height;
 const PEEK_GAP = 26;   // sliver of the next card shown when collapsed
 
-const prekes = (n: number) => {
-    const m10 = n % 10, m100 = n % 100;
-    if (m10 === 1 && m100 !== 11) return 'prekė';
-    if (m10 >= 2 && m10 <= 9 && (m100 < 10 || m100 >= 20)) return 'prekės';
-    return 'prekių';
-};
+/** "1.4 km" / "850 m" — distance display, switching to metres under 1 km. Units
+ *  are universal, so no translation needed. */
+function formatDistance(km: number): string {
+    return km < 1 ? `${Math.round(km * 100) * 10} m` : `${km.toFixed(1)} km`;
+}
+
 
 /** Circular chain badge — the same baked pin asset used on the map markers. */
-function ChainLogo({ chainId, chainName, size, colors }: {
-    chainId: number; chainName: string; size: number; colors: AppTheme;
+// Thin wrapper over the shared ChainLogoChip so the sheet and the map pill draw
+// the chain badge identically (glyph on its brand-coloured disc).
+function ChainLogo({ chainId, chainName, size }: {
+    chainId: number; chainName: string; size: number; colors?: AppTheme;
 }) {
-    const asset = chainPinImage(chainId, false);
-    if (asset != null) {
-        return <Image source={asset} style={{ width: size, height: size }} resizeMode="contain" />;
-    }
-    return (
-        <View style={{
-            width: size, height: size, borderRadius: size / 2,
-            backgroundColor: chainBrandColorById(chainId),
-            alignItems: 'center', justifyContent: 'center',
-        }}>
-            <Text style={{ color: '#FFFFFF', fontSize: size * 0.42, fontWeight: '800' }}>
-                {(chainName[0] ?? '?').toUpperCase()}
-            </Text>
-        </View>
-    );
+    return <ChainLogoChip chainId={chainId} name={chainName} size={size} />;
 }
 
 function Radio({ selected, colors }: { selected: boolean; colors: AppTheme }) {
@@ -51,8 +40,8 @@ function Radio({ selected, colors }: { selected: boolean; colors: AppTheme }) {
     );
 }
 const styles_radio = StyleSheet.create({
-    ring: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-    dot: { width: 11, height: 11, borderRadius: 6 },
+    ring: { width: 22, height: 22, borderRadius: radius.pill, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+    dot: { width: 11, height: 11, borderRadius: radius.pill },
 });
 
 /** A selectable combo (or baseline single) row with a radio, in the multi sheet. */
@@ -60,6 +49,7 @@ function OptionCard({ option, selected, styles, colors, onPress, onLayout }: {
     option: SheetOption; selected: boolean; styles: Styles; colors: AppTheme;
     onPress: () => void; onLayout?: (h: number) => void;
 }) {
+    const { t } = useTranslation();
     const multi = option.stores.length > 1;
     return (
         <Pressable
@@ -72,28 +62,47 @@ function OptionCard({ option, selected, styles, colors, onPress, onLayout }: {
                 {multi ? (
                     <View style={styles.logoStack}>
                         {option.stores.map((s, i) => (
-                            <View key={s.storeId} style={i > 0 ? { marginLeft: -16 } : undefined}>
-                                <ChainLogo chainId={s.chainId} chainName={s.chainName} size={38} colors={colors} />
+                            <View key={s.storeId} style={i > 0 ? { marginLeft: -spacing.lg } : undefined}>
+                                <ChainLogo chainId={s.chainId} chainName={s.chainName} size={avatarSize.md} colors={colors} />
                             </View>
                         ))}
                     </View>
                 ) : (
-                    <ChainLogo chainId={option.stores[0].chainId} chainName={option.stores[0].chainName} size={40} colors={colors} />
+                    <ChainLogo chainId={option.stores[0].chainId} chainName={option.stores[0].chainName} size={avatarSize.md} colors={colors} />
                 )}
                 <View style={styles.cardMid}>
                     {multi ? (
                         <>
-                            <Text style={styles.cardTitle}>{option.stores.length} parduotuvės</Text>
-                            {option.saving > 0 && <Text style={styles.saving}>Sutaupote {formatEuro(option.saving)}</Text>}
+                            <Text style={styles.cardTitle}>{t('results.sheet.storesPlural', { count: option.stores.length })}</Text>
+                            <View style={styles.cardBadgeRow}>
+                                {option.detourKm != null && option.detourKm > 0 && (
+                                    <View style={[styles.metaChip, styles.detourChip]}>
+                                        <Ionicons name="navigate-outline" size={iconSize.xs} color={colors.warning} />
+                                        <Text style={[styles.metaText, styles.detourChipText]} allowFontScaling={false}>{`+ ${formatDistance(option.detourKm)}`}</Text>
+                                    </View>
+                                )}
+                                {option.saving > 0 && (
+                                    <View style={[styles.metaChip, styles.savingChip]}>
+                                        <Ionicons name="pricetag-outline" size={iconSize.xs} color={colors.success} />
+                                        <Text style={[styles.metaText, styles.savingChipText]} allowFontScaling={false}>{`- ${formatEuro(option.saving)}`}</Text>
+                                    </View>
+                                )}
+                            </View>
                         </>
                     ) : (
                         <>
                             <Text style={styles.cardTitle} numberOfLines={1}>{chainBrandName(option.stores[0].chainName)}</Text>
-                            <Text style={styles.cardSub} numberOfLines={1}>Tik šioje parduotuvėje</Text>
+                            <Text style={styles.cardSub} numberOfLines={1}>{t('results.sheet.onlyHere')}</Text>
+                            {Number.isFinite(option.stores[0].distance) && option.stores[0].distance > 0 && (
+                                <View style={[styles.metaChip, styles.cardMetaChip]}>
+                                    <Ionicons name="navigate-outline" size={iconSize.xs} color={colors.textMuted} />
+                                    <Text style={styles.metaText}>{formatDistance(option.stores[0].distance)}</Text>
+                                </View>
+                            )}
                         </>
                     )}
                 </View>
-                <Text style={styles.price}>{formatEuro(option.total)}</Text>
+                <Text style={styles.price} allowFontScaling={false}>{formatEuro(option.total)}</Text>
             </View>
 
             {multi && option.combo && (
@@ -103,13 +112,10 @@ function OptionCard({ option, selected, styles, colors, onPress, onLayout }: {
                         return (
                             <Text key={s.storeId} style={styles.breakdownLine} numberOfLines={1}>
                                 <Text style={styles.breakdownChain}>{chainBrandName(s.chainName)}</Text>
-                                {`  ${count} ${prekes(count)} · ${s.storeAddress}`}
+                                {`  ${t('results.sheet.items', { count })} · ${s.storeAddress}`}
                             </Text>
                         );
                     })}
-                    {option.combo.extraDistanceKm > 0.05 && (
-                        <Text style={styles.breakdownDist}>+{option.combo.extraDistanceKm.toFixed(1)} km kelio</Text>
-                    )}
                 </View>
             )}
         </Pressable>
@@ -138,17 +144,18 @@ function Actions({ styles, colors, creatingList, onNavigate, onCreateList, botto
     styles: Styles; colors: AppTheme; creatingList: boolean;
     onNavigate: () => void; onCreateList: () => void; bottomInset: number;
 }) {
+    const { t } = useTranslation();
     return (
-        <View style={[styles.actions, { paddingBottom: Math.max(bottomInset, 12) + 10 }]}>
+        <View style={[styles.actions, { paddingBottom: Math.max(bottomInset, spacing.md) + spacing.sm }]}>
             <TouchableOpacity style={styles.navigateBtn} onPress={onNavigate}>
-                <Ionicons name="navigate-outline" size={20} color={colors.primary} />
-                <Text style={styles.navigateText}>Vykti</Text>
+                <Ionicons name="navigate-outline" size={iconSize.md} color={colors.primary} />
+                <Text style={styles.navigateText}>{t('results.sheet.navigate')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.listBtn} onPress={onCreateList} disabled={creatingList}>
                 {creatingList
                     ? <ActivityIndicator size="small" color={colors.onPrimary} />
-                    : <Ionicons name="list-outline" size={20} color={colors.onPrimary} />}
-                <Text style={styles.listText}>{creatingList ? 'Kuriama…' : 'Pirkinių sąrašas'}</Text>
+                    : <Ionicons name="list-outline" size={iconSize.md} color={colors.onPrimary} />}
+                <Text style={styles.listText}>{creatingList ? t('results.sheet.creating') : t('results.sheet.createList')}</Text>
             </TouchableOpacity>
         </View>
     );
@@ -166,6 +173,7 @@ export default function ResultsBottomSheet(props: Props) {
 /* ── Single-store: one beautiful auto-height card (never clips). ─────────── */
 function SingleSheet({ options, onNavigate, onCreateList, creatingList, colors, bottomInset, onHeightChange }: Props) {
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    const { t } = useTranslation();
     const store = options[0]?.stores[0];
     if (!store) return null;
     return (
@@ -181,31 +189,31 @@ function SingleSheet({ options, onNavigate, onCreateList, creatingList, colors, 
             <View style={styles.handleArea} />
             <View style={styles.singlePad}>
                 <View style={styles.singleHeader}>
-                    <ChainLogo chainId={store.chainId} chainName={store.chainName} size={46} colors={colors} />
+                    <ChainLogo chainId={store.chainId} chainName={store.chainName} size={avatarSize.lg} colors={colors} />
                     <View style={styles.singleMid}>
                         <Text style={styles.singleTitle} numberOfLines={1}>{chainBrandName(store.chainName)}</Text>
                         <Text style={styles.singleAddr} numberOfLines={1}>{store.storeAddress}</Text>
                     </View>
-                    <Text style={styles.singlePrice}>{formatEuro(options[0].total)}</Text>
+                    <Text style={styles.singlePrice} allowFontScaling={false}>{formatEuro(options[0].total)}</Text>
                 </View>
 
                 <View style={styles.metaRow}>
                     {Number.isFinite(store.distance) && store.distance > 0 && (
                         <View style={styles.metaChip}>
-                            <Ionicons name="navigate-outline" size={13} color={colors.textMuted} />
-                            <Text style={styles.metaText}>{store.distance.toFixed(1)} km</Text>
+                            <Ionicons name="navigate-outline" size={iconSize.xs} color={colors.textMuted} />
+                            <Text style={styles.metaText}>{formatDistance(store.distance)}</Text>
                         </View>
                     )}
                     {store.isApproximated && (
                         <View style={styles.metaChip}>
-                            <Ionicons name="sparkles-outline" size={13} color={colors.textMuted} />
-                            <Text style={styles.metaText}>Apytikslė kaina</Text>
+                            <Ionicons name="sparkles-outline" size={iconSize.xs} color={colors.textMuted} />
+                            <Text style={styles.metaText}>{t('results.sheet.approxPrice')}</Text>
                         </View>
                     )}
                     {store.missingItemNames.length > 0 && (
                         <View style={[styles.metaChip, styles.warnChip]}>
-                            <Ionicons name="alert-circle-outline" size={13} color={colors.warning} />
-                            <Text style={[styles.metaText, { color: colors.warning }]}>Trūksta {store.missingItemNames.length}</Text>
+                            <Ionicons name="alert-circle-outline" size={iconSize.xs} color={colors.warning} />
+                            <Text style={[styles.metaText, { color: colors.warning }]}>{t('results.sheet.missing', { count: store.missingItemNames.length })}</Text>
                         </View>
                     )}
                 </View>
@@ -362,61 +370,73 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     sheet: {
         position: 'absolute', left: 0, right: 0, bottom: 0,
         backgroundColor: c.cardBackground,
-        borderTopLeftRadius: 20, borderTopRightRadius: 20,
+        borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
         overflow: 'hidden',
+        // Upward sheet shadow (negative offset) — bespoke, not an elevation tier.
         elevation: 16, shadowColor: '#000', shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.18, shadowRadius: 10,
     },
     // Generous drag target; the visible pill sits centred within it.
     handleArea: { height: HANDLE_H, alignItems: 'center', justifyContent: 'center' },
-    handle: { width: 44, height: 5, borderRadius: 3, backgroundColor: c.border },
+    handle: { width: 44, height: 5, borderRadius: radius.pill, backgroundColor: c.border },
 
     list: { flex: 1 },
-    listContent: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
+    listContent: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs, paddingBottom: spacing.sm },
 
     // ── Single-store card ──
-    singlePad: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16 },
-    singleHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-    singleMid: { flex: 1, paddingRight: 8 },
-    singleTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
-    singleAddr: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+    singlePad: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.lg },
+    singleHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    singleMid: { flex: 1, paddingRight: spacing.sm },
+    singleTitle: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
+    singleAddr: { ...typography.caption, color: c.textMuted, marginTop: 2 },
+    // Price is a bespoke display figure — no type token in the 4-pt scale fits.
     singlePrice: { fontSize: 22, fontWeight: '800', color: c.primary },
-    metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+    metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },
     metaChip: {
-        flexDirection: 'row', alignItems: 'center', gap: 4,
-        backgroundColor: c.surfaceMuted, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
+        flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+        backgroundColor: c.surfaceMuted, borderRadius: radius.sm, paddingHorizontal: spacing.sm, paddingVertical: spacing.xs,
     },
     warnChip: { backgroundColor: c.warningMuted },
-    metaText: { fontSize: 12, color: c.textMuted, fontWeight: '600' },
+    // metaChip used as a standalone badge inside an OptionCard column.
+    cardMetaChip: { alignSelf: 'flex-start', marginTop: spacing.xs },
+    // Decision badges on the multi-store card: detour (amber, a cost) + saving
+    // (green, the win), side by side and vivid for a quick glance.
+    cardBadgeRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.xs },
+    detourChip: { backgroundColor: c.warningMuted },
+    detourChipText: { color: c.warning, fontWeight: '700' },
+    savingChip: { backgroundColor: c.successMuted },
+    savingChipText: { color: c.success, fontWeight: '700' },
+    metaText: { ...typography.label, color: c.textMuted },
 
     // ── Option (radio) card ──
     card: {
-        backgroundColor: c.cardBackground, borderRadius: 14, padding: 12, marginBottom: 10,
+        backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.sm,
         borderWidth: 1.5, borderColor: c.border,
     },
     cardSelected: { borderColor: c.primary, backgroundColor: c.primaryMuted ?? c.surfaceMuted },
-    cardTopRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    cardTopRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     logoStack: { flexDirection: 'row', alignItems: 'center' },
     cardMid: { flex: 1 },
-    cardTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
-    cardSub: { fontSize: 12, color: c.textMuted, marginTop: 2 },
-    saving: { fontSize: 12, fontWeight: '700', color: c.success, marginTop: 2 },
+    cardTitle: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
+    cardSub: { ...typography.caption, color: c.textMuted, marginTop: 2 },
+    saving: { ...typography.label, fontWeight: '700', color: c.success, marginTop: 2 },
+    // Price is a bespoke display figure — no type token in the 4-pt scale fits.
     price: { fontSize: 19, fontWeight: '800', color: c.primary },
 
-    breakdown: { marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border, gap: 3 },
-    breakdownLine: { fontSize: 12, color: c.textSecondary },
+    breakdown: { marginTop: spacing.sm, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border, gap: spacing.xs },
+    breakdownLine: { ...typography.caption, color: c.textSecondary },
     breakdownChain: { fontWeight: '700', color: c.textPrimary },
-    breakdownDist: { fontSize: 11, color: c.textMuted, marginTop: 2 },
+    breakdownDist: { ...typography.caption, color: c.textMuted, marginTop: 2 },
 
     // ── Actions ──
-    actions: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },
+    actions: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.md, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },
     navigateBtn: {
-        flex: 1, borderWidth: 1, borderColor: c.primary, borderRadius: 12,
-        paddingVertical: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+        flex: 1, borderWidth: 1, borderColor: c.primary, borderRadius: radius.pill,
+        paddingVertical: spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
     },
-    navigateText: { color: c.primary, fontWeight: '600', fontSize: 15 },
+    navigateText: { ...typography.bodyStrong, color: c.primary },
     listBtn: {
-        flex: 2, backgroundColor: c.primary, borderRadius: 12,
-        paddingVertical: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+        flex: 2, backgroundColor: c.primary, borderRadius: radius.pill,
+        paddingVertical: spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
     },
-    listText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
+    listText: { ...typography.bodyStrong, fontWeight: '700', color: c.onPrimary },
 });

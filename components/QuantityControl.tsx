@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, radius, type AppTheme } from '../constants/theme';
 
 interface Props {
     quantity: number;
@@ -50,14 +50,14 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'space-between',
         borderWidth: 1,
         borderColor: c.primary,
-        borderRadius: 8,
+        borderRadius: radius.pill,
         paddingVertical: 6,
         paddingHorizontal: 10,
     },
     quantityControlLg: {
         paddingVertical: 13,
         paddingHorizontal: 16,
-        borderRadius: 12,
+        borderRadius: radius.pill,
         borderWidth: 1.5,
     },
     qtyButton: {

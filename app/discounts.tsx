@@ -15,7 +15,7 @@ import { useBasketState } from '../state/basketState';
 import { addProductToBasket } from '../utils/basketUtils';
 import { resolveCanonicalStep } from '../utils/canonicalStep';
 import { ProductImage } from '../components/ProductImage';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../constants/theme';
 import { getUserId } from '../config/user';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -518,11 +518,11 @@ export default function DiscountsScreen() {
                                 {Array.from({ length: 6 }).map((_, i) => (
                                     <View key={i} style={{ flexDirection: 'row', gap: 12 }}>
                                         {[0, 1].map(j => (
-                                            <View key={j} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: 12, padding: 12, gap: 8 }}>
-                                                <SkeletonBox height={100} borderRadius={8} />
+                                            <View key={j} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: 12, gap: 8, ...elevation.level2 }}>
+                                                <SkeletonBox height={110} borderRadius={radius.md} />
                                                 <SkeletonBox height={12} borderRadius={6} />
                                                 <SkeletonBox width={80} height={12} borderRadius={6} />
-                                                <SkeletonBox height={32} borderRadius={8} />
+                                                <SkeletonBox height={36} borderRadius={radius.pill} />
                                             </View>
                                         ))}
                                     </View>
@@ -672,9 +672,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         marginHorizontal: 16,
         marginTop: 8,
         marginBottom: 4,
-        borderRadius: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        borderRadius: radius.pill,
+        paddingHorizontal: 14,
+        paddingVertical: 9,
         gap: 8,
         borderWidth: 1,
         borderColor: c.border,
@@ -691,8 +691,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10,
     },
     searchField: {
-        borderWidth: 1, borderColor: c.border, borderRadius: 10,
-        paddingHorizontal: 12, paddingVertical: 9,
+        borderWidth: 1, borderColor: c.border, borderRadius: radius.pill,
+        paddingHorizontal: 16, paddingVertical: 10,
         fontSize: 16, color: c.textPrimary,
     },
     bubblesRow: {
@@ -708,9 +708,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         gap: 8,
     },
     bubble: {
-        paddingHorizontal: 14,
-        paddingVertical: 7,
-        borderRadius: 20,
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: radius.pill,
         borderWidth: 1,
         borderColor: c.border,
         backgroundColor: c.cardBackground,
@@ -718,6 +718,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     bubbleActive: {
         backgroundColor: c.primary,
         borderColor: c.primary,
+        ...elevation.level1,
     },
     bubbleText: {
         fontSize: 13,
@@ -731,12 +732,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     row: { gap: 12, marginBottom: 12 },
     productCard: {
         backgroundColor: c.cardBackground,
-        borderRadius: 12,
+        borderRadius: radius.lg,
         padding: 12,
         alignItems: 'center',
-        elevation: 1,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05, shadowRadius: 2,
+        ...elevation.level2,
         flex: 1,
         maxWidth: '50%',
     },
@@ -747,26 +746,28 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'center',
         marginBottom: 8,
     },
-    productImage: { width: '100%', height: '100%' },
+    productImage: { width: '100%', height: '100%', borderRadius: radius.md },
     productImagePlaceholder: {
         width: '100%', height: '100%',
         alignItems: 'center', justifyContent: 'center',
-        backgroundColor: c.surfaceMuted, borderRadius: 8,
+        backgroundColor: c.surfaceMuted, borderRadius: radius.md,
     },
     productImageEmoji: { fontSize: 44, opacity: 0.4 },
     discountBadge: {
         position: 'absolute',
-        top: 4,
-        right: 4,
+        top: 6,
+        right: 6,
         backgroundColor: c.primary,
-        borderRadius: 8,
-        paddingHorizontal: 6,
-        paddingVertical: 3,
+        borderRadius: radius.pill,
+        paddingHorizontal: 9,
+        paddingVertical: 4,
+        ...elevation.level1,
     },
     discountBadgeText: {
-        fontSize: 11,
-        fontWeight: '700',
+        fontSize: 12,
+        fontWeight: '800',
         color: c.onPrimary,
+        letterSpacing: 0.2,
     },
     productInfo: { flex: 1, width: '100%', marginBottom: 10 },
     productName: { fontSize: 13, color: c.textPrimary, lineHeight: 18 },
@@ -774,7 +775,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     addButton: {
         width: '100%',
         backgroundColor: c.primary,
-        borderRadius: 8,
+        borderRadius: radius.pill,
         paddingVertical: 10,
         alignItems: 'center',
     },
@@ -822,7 +823,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'space-between',
         borderWidth: 1,
         borderColor: c.primary,
-        borderRadius: 8,
+        borderRadius: radius.pill,
         paddingVertical: 6,
         paddingHorizontal: 10,
     },

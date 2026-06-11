@@ -1,4 +1,25 @@
 {
+  "locationSettings": {
+    "title": "Parduotuvių paieškos nustatymai",
+    "storeCountLabel": "Kiek parduotuvių aplankysite",
+    "storeCountHint1": "Rekomenduojama 1 parduotuvė",
+    "storeCountHint2": "Palyginami apsipirkimai 1 ir 2 parduotuvėse",
+    "storeCountHint3": "Palyginami apsipirkimai iki 3 parduotuvių kombinacijose",
+    "modeLabel": "Kur ieškoti parduotuvių?",
+    "modeGps": "GPS",
+    "modePlace": "Vieta",
+    "modeRoute": "Kelias",
+    "routeFrom": "Iš:",
+    "routeTo": "Į:",
+    "routeHint": "Pridėkite bent vieną vietą, kad galėtumėte naudoti maršruto režimą.",
+    "transportLabel": "Transportas",
+    "transportBus": "Autobusas",
+    "transportCar": "Automobilis",
+    "presetHome": "Namai",
+    "presetWork": "Darbas",
+    "presetCustom": "Kita",
+    "add": "+ Pridėti"
+  },
   "tabs": {
     "receipts": "Analizė",
     "browse": "Naršyti",
@@ -857,7 +878,38 @@
     "draft": "Juodraštis",
     "calculating": "Skaičiuojama…",
     "calculate": "Apskaičiuoti",
-    "calcModalSub": "Lyginame kainas 10 artimiausių parduotuvių"
+    "calcModalSub": "Lyginame kainas 10 artimiausių parduotuvių",
+    "findStores": "Rasti parduotuves",
+    "findStore": "Rasti parduotuvę",
+    "viewStores": "Parduotuvės",
+    "viewStore": "Parduotuvė"
+  },
+  "results": {
+    "loading": "Skaičiuojamos kainos…",
+    "tapStore": "Palieskite parduotuvę",
+    "batchCalculating": "Skaičiuojama…",
+    "batchMore": "Paskaičiuoti dar ({{count}})",
+    "errorTitle": "Klaida",
+    "errorRecalc": "Nepavyko perskaičiuoti",
+    "errorGetPrice": "Nepavyko gauti kainos",
+    "errorPriceStores": "Nepavyko įkainoti parduotuvių",
+    "errorCreateList": "Nepavyko sukurti pirkinių sąrašo",
+    "sheet": {
+      "storesPlural": "{{count}} parduotuvės",
+      "onlyHere": "Tik šioje parduotuvėje",
+      "savingVsSingle": "Sutaupote {{amount}} vs 1 parduotuvė",
+      "navigate": "Vykti",
+      "createList": "Pirkinių sąrašas",
+      "creating": "Kuriama…",
+      "approxPrice": "Apytikslė kaina",
+      "missing": "Trūksta {{count}}",
+      "distanceKm": "{{km}} km",
+      "extraKm": "+{{km}} km kelio",
+      "items_one": "{{count}} prekė",
+      "items_few": "{{count}} prekės",
+      "items_many": "{{count}} prekių",
+      "items_other": "{{count}} prekių"
+    }
   },
   "shoppingListDetail": {
     "delete": "Ištrinti",

@@ -8,13 +8,14 @@ import {
     Platform,
     Animated,
     PanResponder,
-    LayoutAnimation,
 } from 'react-native';
 import { useMemo, useState, useEffect, useRef } from 'react';
 import { type ScrollView as ScrollViewType } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../constants/theme';
+import { useTranslation } from 'react-i18next';
+import Reanimated, { FadeInDown, LinearTransition } from 'react-native-reanimated';
 import {
     getLocationSettings,
     saveLocationSettings,
@@ -43,8 +44,14 @@ const PRESET_KEYS: PresetKey[] = ['home', 'work', 'custom'];
 
 export default function LocationSettingsModal({ visible, onClose, refreshKey, onOpenPresetMap }: Props) {
     const colors = useTheme();
+    const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
+    const presetLabels: Record<PresetKey, string> = {
+        home: t('locationSettings.presetHome'),
+        work: t('locationSettings.presetWork'),
+        custom: t('locationSettings.presetCustom'),
+    };
 
     const [settings, setSettings] = useState<LocationSettings>({
         transport: 'bus',
@@ -99,7 +106,6 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
     const handleTransport = (t: TransportMode) => update({ transport: t });
 
     const handleMode = (m: LocationMode) => {
-        LayoutAnimation.configureNext(LayoutAnimation.Presets.easeInEaseOut);
         const patch: Partial<LocationSettings> = { mode: m };
         if (m === 'current') {
             patch.specificPreset = null;
@@ -111,9 +117,6 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
             if (first) patch.specificPreset = first;
         }
         update(patch);
-        if (m === 'route' || m === 'specific') {
-            setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 200);
-        }
     };
 
     const handleSpecificPreset = (key: PresetKey) => {
@@ -137,7 +140,7 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
                         <View style={styles.handle} />
                     </View>
                     <View style={styles.header}>
-                        <Text style={styles.title}>Parduotuvių paieškos nustatymai</Text>
+                        <Text style={styles.title}>{t('locationSettings.title')}</Text>
                         <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
                             <Ionicons name="close" size={22} color={colors.textSecondary} />
                         </TouchableOpacity>
@@ -145,7 +148,7 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
 
                     <ScrollView ref={scrollRef} showsVerticalScrollIndicator={false} bounces={false}>
                         {/* ── Store count — always first ── */}
-                        <Text style={styles.sectionLabel}>Kiek parduotuvių aplankysite</Text>
+                        <Text style={styles.sectionLabel}>{t('locationSettings.storeCountLabel')}</Text>
                         <View style={styles.countRow}>
                             {([1, 2, 3] as const).map(n => (
                                 <TouchableOpacity
@@ -161,17 +164,17 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
                         </View>
                         <Text style={styles.countHint}>
                             {settings.storeCount === 1
-                                ? 'Rekomenduojama 1 parduotuvė'
+                                ? t('locationSettings.storeCountHint1')
                                 : settings.storeCount === 2
-                                ? 'Palyginami apsipirkimai 1 ir 2 parduotuvėse'
-                                : 'Palyginami apsipirkimai iki 3 parduotuvių kombinacijose'}
+                                ? t('locationSettings.storeCountHint2')
+                                : t('locationSettings.storeCountHint3')}
                         </Text>
 
                         {/* ── Location mode ── */}
-                        <Text style={styles.sectionLabel}>Kur ieškoti parduotuvių?</Text>
+                        <Text style={styles.sectionLabel}>{t('locationSettings.modeLabel')}</Text>
                         <View style={styles.segmentRow}>
                             <SegmentBtn
-                                label="GPS"
+                                label={t('locationSettings.modeGps')}
                                 icon="locate-outline"
                                 active={settings.mode === 'current'}
                                 onPress={() => handleMode('current')}
@@ -179,7 +182,7 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
                                 styles={styles}
                             />
                             <SegmentBtn
-                                label="Vieta"
+                                label={t('locationSettings.modePlace')}
                                 icon="location-outline"
                                 active={settings.mode === 'specific'}
                                 onPress={() => handleMode('specific')}
@@ -187,7 +190,7 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
                                 styles={styles}
                             />
                             <SegmentBtn
-                                label="Kelias"
+                                label={t('locationSettings.modeRoute')}
                                 icon="git-commit-outline"
                                 active={settings.mode === 'route'}
                                 onPress={() => handleMode('route')}
@@ -198,57 +201,57 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
 
                         {/* ── Specific location — preset picker ── */}
                         {settings.mode === 'specific' && (
-                            <View style={styles.presetBlock}>
+                            <Reanimated.View style={styles.presetBlock} entering={FadeInDown.duration(220)} layout={LinearTransition.duration(200)}>
                                 {PRESET_KEYS.map(key => (
                                     <PresetRow
                                         key={key}
                                         presetKey={key}
-                                        label={PRESET_LABELS[key]}
+                                        label={presetLabels[key]}
                                         preset={presets[key]}
                                         selected={settings.specificPreset === key}
                                         onSelect={() => handleSpecificPreset(key)}
-                                        onAdd={() => onOpenPresetMap(key, PRESET_LABELS[key], null)}
-                                        onEdit={() => onOpenPresetMap(key, PRESET_LABELS[key], presets[key])}
+                                        onAdd={() => onOpenPresetMap(key, presetLabels[key], null)}
+                                        onEdit={() => onOpenPresetMap(key, presetLabels[key], presets[key])}
                                         colors={colors}
                                         styles={styles}
                                     />
                                 ))}
-                            </View>
+                            </Reanimated.View>
                         )}
 
                         {/* ── Route — from/to pickers ── */}
                         {settings.mode === 'route' && (
-                            <View style={styles.presetBlock}>
-                                <Text style={styles.routeRowLabel}>Iš:</Text>
+                            <Reanimated.View style={styles.presetBlock} entering={FadeInDown.duration(220)} layout={LinearTransition.duration(200)}>
+                                <Text style={styles.routeRowLabel}>{t('locationSettings.routeFrom')}</Text>
                                 {PRESET_KEYS.map(key => (
                                     <PresetRow
                                         key={`from-${key}`}
                                         presetKey={key}
-                                        label={PRESET_LABELS[key]}
+                                        label={presetLabels[key]}
                                         preset={presets[key]}
                                         selected={settings.routeFrom === key}
                                         disabled={settings.routeTo === key}
                                         onSelect={() => handleRouteEndpoint('from', key)}
-                                        onAdd={() => onOpenPresetMap(key, PRESET_LABELS[key], null)}
-                                        onEdit={() => onOpenPresetMap(key, PRESET_LABELS[key], presets[key])}
+                                        onAdd={() => onOpenPresetMap(key, presetLabels[key], null)}
+                                        onEdit={() => onOpenPresetMap(key, presetLabels[key], presets[key])}
                                         colors={colors}
                                         styles={styles}
                                         compact
                                     />
                                 ))}
                                 <View style={styles.routeSeparator} />
-                                <Text style={styles.routeRowLabel}>Į:</Text>
+                                <Text style={styles.routeRowLabel}>{t('locationSettings.routeTo')}</Text>
                                 {PRESET_KEYS.map(key => (
                                     <PresetRow
                                         key={`to-${key}`}
                                         presetKey={key}
-                                        label={PRESET_LABELS[key]}
+                                        label={presetLabels[key]}
                                         preset={presets[key]}
                                         selected={settings.routeTo === key}
                                         disabled={settings.routeFrom === key}
                                         onSelect={() => handleRouteEndpoint('to', key)}
-                                        onAdd={() => onOpenPresetMap(key, PRESET_LABELS[key], null)}
-                                        onEdit={() => onOpenPresetMap(key, PRESET_LABELS[key], presets[key])}
+                                        onAdd={() => onOpenPresetMap(key, presetLabels[key], null)}
+                                        onEdit={() => onOpenPresetMap(key, presetLabels[key], presets[key])}
                                         colors={colors}
                                         styles={styles}
                                         compact
@@ -256,19 +259,19 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
                                 ))}
                                 {availablePresets.length === 0 && (
                                     <Text style={styles.routeHint}>
-                                        Pridėkite bent vieną vietą, kad galėtumėte naudoti maršruto režimą.
+                                        {t('locationSettings.routeHint')}
                                     </Text>
                                 )}
-                            </View>
+                            </Reanimated.View>
                         )}
 
                         {/* ── Transport — only relevant for route mode ── */}
                         {settings.mode === 'route' && (
-                            <>
-                                <Text style={styles.sectionLabel}>Transportas</Text>
+                            <Reanimated.View entering={FadeInDown.duration(220)} layout={LinearTransition.duration(200)}>
+                                <Text style={styles.sectionLabel}>{t('locationSettings.transportLabel')}</Text>
                                 <View style={styles.segmentRow}>
                                     <SegmentBtn
-                                        label="Autobusas"
+                                        label={t('locationSettings.transportBus')}
                                         icon="bus-outline"
                                         active={settings.transport === 'bus'}
                                         onPress={() => handleTransport('bus')}
@@ -276,7 +279,7 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
                                         styles={styles}
                                     />
                                     <SegmentBtn
-                                        label="Automobilis"
+                                        label={t('locationSettings.transportCar')}
                                         icon="car-outline"
                                         active={settings.transport === 'car'}
                                         onPress={() => handleTransport('car')}
@@ -284,7 +287,7 @@ export default function LocationSettingsModal({ visible, onClose, refreshKey, on
                                         styles={styles}
                                     />
                                 </View>
-                            </>
+                            </Reanimated.View>
                         )}
                     </ScrollView>
                 </Animated.View>
@@ -342,6 +345,7 @@ function PresetRow({
     styles,
     compact,
 }: PresetRowProps) {
+    const { t } = useTranslation();
     return (
         <TouchableOpacity
             style={[
@@ -365,7 +369,7 @@ function PresetRow({
                         {preset.address ?? preset.label}
                     </Text>
                 ) : (
-                    <Text style={styles.presetRowAdd}>+ Pridėti</Text>
+                    <Text style={styles.presetRowAdd}>{t('locationSettings.add')}</Text>
                 )}
             </View>
 
@@ -392,8 +396,8 @@ const makeStyles = (c: AppTheme) =>
         },
         sheet: {
             backgroundColor: c.cardBackground,
-            borderTopLeftRadius: 20,
-            borderTopRightRadius: 20,
+            borderTopLeftRadius: radius.xl,
+            borderTopRightRadius: radius.xl,
             paddingHorizontal: 20,
             paddingTop: 10,
             maxHeight: '92%',
@@ -447,7 +451,7 @@ const makeStyles = (c: AppTheme) =>
             justifyContent: 'center',
             gap: 6,
             paddingVertical: 11,
-            borderRadius: 10,
+            borderRadius: radius.md,
             backgroundColor: c.surfaceMuted,
             borderWidth: 1,
             borderColor: 'transparent',
@@ -466,7 +470,7 @@ const makeStyles = (c: AppTheme) =>
         },
         presetBlock: {
             marginBottom: 18,
-            borderRadius: 12,
+            borderRadius: radius.lg,
             borderWidth: 1,
             borderColor: c.border,
             overflow: 'hidden',
@@ -559,7 +563,7 @@ const makeStyles = (c: AppTheme) =>
             flex: 1,
             paddingVertical: 14,
             alignItems: 'center',
-            borderRadius: 10,
+            borderRadius: radius.md,
             backgroundColor: c.surfaceMuted,
             borderWidth: 1,
             borderColor: 'transparent',

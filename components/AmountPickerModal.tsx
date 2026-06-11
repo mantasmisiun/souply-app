@@ -2,7 +2,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Modal, TextInput } from 'reac
 import { useMemo, useState, useEffect } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../constants/theme';
 
 interface AmountPickerModalProps {
     visible: boolean;
@@ -193,10 +193,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     modal: {
         backgroundColor: c.cardBackground,
-        borderRadius: 16,
+        borderRadius: radius.xl,
         padding: 24,
         width: '100%',
         maxWidth: 340,
+        ...elevation.level3,
     },
     title: {
         fontSize: 17,
@@ -266,7 +267,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     cancelButton: {
         flex: 1,
         paddingVertical: 12,
-        borderRadius: 10,
+        borderRadius: radius.pill,
         borderWidth: 1,
         borderColor: c.border,
         alignItems: 'center',
@@ -279,7 +280,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     confirmButton: {
         flex: 1,
         paddingVertical: 12,
-        borderRadius: 10,
+        borderRadius: radius.pill,
         backgroundColor: c.primary,
         alignItems: 'center',
     },

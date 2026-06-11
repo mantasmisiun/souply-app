@@ -1,4 +1,25 @@
 {
+  "locationSettings": {
+    "title": "Store search settings",
+    "storeCountLabel": "How many stores will you visit",
+    "storeCountHint1": "1 store recommended",
+    "storeCountHint2": "Compares shopping across 1 and 2 stores",
+    "storeCountHint3": "Compares shopping across up to 3-store combinations",
+    "modeLabel": "Where to look for stores?",
+    "modeGps": "GPS",
+    "modePlace": "Place",
+    "modeRoute": "Route",
+    "routeFrom": "From:",
+    "routeTo": "To:",
+    "routeHint": "Add at least one location to use route mode.",
+    "transportLabel": "Transport",
+    "transportBus": "Bus",
+    "transportCar": "Car",
+    "presetHome": "Home",
+    "presetWork": "Work",
+    "presetCustom": "Other",
+    "add": "+ Add"
+  },
   "tabs": {
     "receipts": "Analyze",
     "browse": "Browse",
@@ -884,7 +905,36 @@
     "draft": "Draft",
     "calculating": "Calculating…",
     "calculate": "Calculate",
-    "calcModalSub": "Comparing prices across the 10 nearest stores"
+    "calcModalSub": "Comparing prices across the 10 nearest stores",
+    "findStores": "Find stores",
+    "findStore": "Find store",
+    "viewStores": "Stores",
+    "viewStore": "Store"
+  },
+  "results": {
+    "loading": "Calculating prices…",
+    "tapStore": "Tap a store",
+    "batchCalculating": "Calculating…",
+    "batchMore": "Price more ({{count}})",
+    "errorTitle": "Error",
+    "errorRecalc": "Couldn't recalculate",
+    "errorGetPrice": "Couldn't get price",
+    "errorPriceStores": "Couldn't price stores",
+    "errorCreateList": "Couldn't create shopping list",
+    "sheet": {
+      "storesPlural": "{{count}} stores",
+      "onlyHere": "Only at this store",
+      "savingVsSingle": "Save {{amount}} vs 1 store",
+      "navigate": "Go",
+      "createList": "Shopping list",
+      "creating": "Creating…",
+      "approxPrice": "Approx. price",
+      "missing": "Missing {{count}}",
+      "distanceKm": "{{km}} km",
+      "extraKm": "+{{km}} km detour",
+      "items_one": "{{count}} item",
+      "items_other": "{{count}} items"
+    }
   },
   "shoppingListDetail": {
     "delete": "Delete",

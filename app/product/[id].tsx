@@ -8,7 +8,7 @@ import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
 import MiniPriceChart, { PriceChartSvg, type PricePoint, type RangeKey, preparePriceData, filterByRange } from '../../components/MiniPriceChart';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import { useTranslation } from 'react-i18next';
@@ -434,7 +434,7 @@ export default function ProductDetailScreen() {
 
     if (loading) return (
         <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, gap: 10 }}>
-            <View style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, gap: 10 }}>
+            <View style={{ backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: 16, gap: 10 }}>
                 {Array.from({ length: 4 }).map((_, i) => (
                     <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                         <SkeletonBox width={52} height={52} borderRadius={8} />
@@ -701,13 +701,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.cardBackground,
         marginHorizontal: 16,
         marginTop: 10,
-        borderRadius: 12,
+        borderRadius: radius.lg,
         padding: 12,
-        elevation: 1,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
+        ...elevation.level1,
     },
     spLeft: {
         flex: 1,
@@ -718,12 +714,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     spImage: {
         width: 52,
         height: 52,
-        borderRadius: 8,
+        borderRadius: radius.md,
     },
     spImagePlaceholder: {
         width: 52,
         height: 52,
-        borderRadius: 8,
+        borderRadius: radius.md,
         backgroundColor: c.surfaceSubtle,
         alignItems: 'center',
         justifyContent: 'center',
@@ -810,10 +806,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     chartModalCard: {
         backgroundColor: c.cardBackground,
-        borderRadius: 16,
+        borderRadius: radius.xl,
         padding: 20,
         width: '100%',
         maxWidth: 480,
+        ...elevation.level3,
     },
     chartModalTitle: {
         fontSize: 16,
@@ -892,7 +889,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     rangePill: {
         paddingHorizontal: 10,
         paddingVertical: 4,
-        borderRadius: 12,
+        borderRadius: radius.pill,
         backgroundColor: c.softAccent,
     },
     rangePillActive: {
@@ -940,8 +937,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         left: 0,
         right: 0,
         backgroundColor: c.cardBackground,
-        borderTopWidth: 0.5,
-        borderTopColor: c.border,
+        borderTopLeftRadius: radius.lg,
+        borderTopRightRadius: radius.lg,
+        ...elevation.level3,
         paddingHorizontal: 16,
         paddingTop: 10,
     },
@@ -951,7 +949,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'center',
         gap: 8,
         backgroundColor: c.primary,
-        borderRadius: 12,
+        borderRadius: radius.pill,
         paddingVertical: 14,
     },
     addButtonDone: {

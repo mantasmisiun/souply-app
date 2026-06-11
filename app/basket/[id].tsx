@@ -12,7 +12,8 @@ import { ScreenBackButton } from '../../components/ScreenBackButton';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../../config/api';
 import { ProductImage } from '../../components/ProductImage';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
+import ProductLineCard from '../../components/ProductLineCard';
 import { useBasketState } from '../../state/basketState';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import LocationPromptModal from '../../components/LocationPromptModal';
@@ -692,83 +693,38 @@ export default function BasketDetailScreen() {
                         // done, basket is locked. compared = editable but edits
                         // auto-revert to draft. draft = freely editable.
                         const readOnly = basket?.status === 'inProgress' || basket?.status === 'completed';
+                        const weighable = isWeighableItem(item);
+                        const step = weighable ? 0.1 : 1;
+                        const inputValueDefault = weighable
+                            ? Number(item.quantity).toFixed(1).replace('.', ',')
+                            : String(item.quantity);
                         return (
-                        <View style={styles.card}>
-                            <ProductImage
-                                uris={item.imageUrls}
-                                imageStyle={styles.productImage}
-                                placeholderStyle={styles.productImagePlaceholder}
-                                emojiStyle={styles.productImageEmoji}
+                            <ProductLineCard
+                                name={item.productName}
+                                imageUrls={item.imageUrls}
+                                readOnly={readOnly}
+                                readOnlyQtyText={`${item.quantity}${weighable ? ' kg' : ' vnt.'}`}
+                                quantityText={quantityInputs[item.id] ?? inputValueDefault}
+                                unit={weighable ? 'kg' : 'vnt.'}
+                                weighable={weighable}
+                                onChangeQuantity={(v) => {
+                                    if (!weighable && (v.includes('.') || v.includes(','))) return;
+                                    const dotIndex = v.indexOf('.');
+                                    const commaIndex = v.indexOf(',');
+                                    const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
+                                    if (separatorIndex !== -1 && v.length - separatorIndex > 2) return;
+                                    setQuantityInputs(prev => ({ ...prev, [item.id]: v }));
+                                }}
+                                onCommitQuantity={async (text) => {
+                                    const val = parseFloat(text.replace(',', '.'));
+                                    if (!val || val <= 0) { removeItem(item.id); return; }
+                                    await updateQuantity(item.id, val);
+                                    setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
+                                }}
+                                onDecrement={() => updateQuantity(item.id, Number(item.quantity) - step)}
+                                onIncrement={() => updateQuantity(item.id, Number(item.quantity) + step)}
+                                onRemove={() => removeItem(item.id)}
                             />
-                            <View style={styles.cardContent}>
-                                <Text style={styles.itemName}>{item.productName}</Text>
-                                {readOnly ? (
-                                    <Text style={styles.readOnlyQty}>
-                                        {item.quantity}{isWeighableItem(item) ? ' kg' : ' vnt.'}
-                                    </Text>
-                                ) : (() => {
-                                    // Weighable rows step in 0.1 kg; piece rows
-                                    // step in whole units. Mirrors the template
-                                    // editor so the two surfaces feel identical.
-                                    const weighable = isWeighableItem(item);
-                                    const step = weighable ? 0.1 : 1;
-                                    const inputValueDefault = weighable
-                                        ? Number(item.quantity).toFixed(1).replace('.', ',')
-                                        : String(item.quantity);
-                                    return (
-                                    <View style={styles.controls}>
-                                        <TouchableOpacity
-                                            style={styles.controlButton}
-                                            onPress={() => updateQuantity(item.id, Number(item.quantity) - step)}
-                                        >
-                                            <Ionicons name="remove" size={18} color={colors.primary} />
-                                        </TouchableOpacity>
-                                        <TextInput
-                                            style={styles.quantityInput}
-                                            value={quantityInputs[item.id] ?? inputValueDefault}
-                                            onChangeText={v => {
-                                                if (!weighable && (v.includes('.') || v.includes(','))) return;
-                                                const dotIndex = v.indexOf('.');
-                                                const commaIndex = v.indexOf(',');
-                                                const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
-                                                if (separatorIndex !== -1 && v.length - separatorIndex > 2) return;
-                                                setQuantityInputs(prev => ({ ...prev, [item.id]: v }));
-                                            }}
-                                            onEndEditing={async e => {
-                                                const val = parseFloat(e.nativeEvent.text.replace(',', '.'));
-                                                if (!val || val <= 0) {
-                                                    removeItem(item.id);
-                                                    return;
-                                                }
-                                                await updateQuantity(item.id, val);
-                                                setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
-                                            }}
-                                            keyboardType={weighable ? 'decimal-pad' : 'number-pad'}
-                                            selectTextOnFocus
-                                            underlineColorAndroid="transparent"
-                                        />
-                                        <Text style={styles.unitLabel}>
-                                            {weighable ? 'kg' : 'vnt.'}
-                                        </Text>
-                                        <TouchableOpacity
-                                            style={styles.controlButton}
-                                            onPress={() => updateQuantity(item.id, Number(item.quantity) + step)}
-                                        >
-                                            <Ionicons name="add" size={18} color={colors.primary} />
-                                        </TouchableOpacity>
-                                    </View>
-                                    );
-                                })()}
-                            </View>
-                            {!readOnly && (
-                                <TouchableOpacity
-                                    style={styles.removeButton}
-                                    onPress={() => removeItem(item.id)}
-                                >
-                                    <Ionicons name="trash-outline" size={20} color={colors.error} />
-                                </TouchableOpacity>
-                            )}
-                        </View>
                         );
                     }}
                 />
@@ -838,7 +794,7 @@ export default function BasketDetailScreen() {
                                 >
                                     <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
                                     <Text style={styles.showResultsText}>
-                                        {(activeSettings?.storeCount ?? 1) > 1 ? 'Parduotuvės' : 'Parduotuvė'}
+                                        {t((activeSettings?.storeCount ?? 1) > 1 ? 'basketDetail.viewStores' : 'basketDetail.viewStore')}
                                     </Text>
                                 </ScalePressable>
                             </>
@@ -890,9 +846,7 @@ export default function BasketDetailScreen() {
                                         <>
                                             <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
                                             <Text style={styles.showResultsText}>
-                                                {(activeSettings?.storeCount ?? 1) > 1
-                                                    ? 'Rasti parduotuves'
-                                                    : 'Rasti parduotuvę'}
+                                                {t((activeSettings?.storeCount ?? 1) > 1 ? 'basketDetail.findStores' : 'basketDetail.findStore')}
                                             </Text>
                                         </>
                                     )}
@@ -989,7 +943,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     titleText: { fontSize: 22, fontWeight: '700' },
     addItemBtn: {
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        gap: 6, paddingVertical: 12, borderRadius: 10, marginBottom: 12,
+        gap: 6, paddingVertical: 12, borderRadius: radius.lg, marginBottom: 12,
         borderWidth: 1, borderColor: c.primary, borderStyle: 'dashed',
     },
     addItemBtnText: { fontSize: 14, fontWeight: '600', color: c.primary },
@@ -1021,7 +975,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingVertical: 10,
         paddingHorizontal: 12,
         backgroundColor: c.warningMuted,
-        borderRadius: 10,
+        borderRadius: radius.lg,
     },
     errorBannerText: {
         flex: 1,
@@ -1032,14 +986,15 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         flexDirection: 'row',
         padding: 12,
         backgroundColor: c.cardBackground,
-        borderTopWidth: 1,
-        borderTopColor: c.border,
+        borderTopLeftRadius: radius.lg,
+        borderTopRightRadius: radius.lg,
+        ...elevation.level3,
         gap: 10,
     },
     showResultsButton: {
         flex: 1,
         backgroundColor: c.primary,
-        borderRadius: 12,
+        borderRadius: radius.pill,
         padding: 14,
         flexDirection: 'row',
         alignItems: 'center',
@@ -1050,7 +1005,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     settingsSquircle: {
         width: 50,
         height: 50,
-        borderRadius: 14,
+        borderRadius: radius.lg,
         backgroundColor: c.surfaceMuted,
         borderWidth: 1,
         borderColor: c.border,
@@ -1068,7 +1023,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         right: -5,
         width: 16,
         height: 16,
-        borderRadius: 8,
+        borderRadius: radius.pill,
         backgroundColor: c.primary,
         alignItems: 'center',
         justifyContent: 'center',
@@ -1112,12 +1067,13 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     calcModalCard: {
         backgroundColor: c.cardBackground,
-        borderRadius: 16,
+        borderRadius: radius.xl,
         paddingHorizontal: 32,
         paddingVertical: 28,
         alignItems: 'center',
         gap: 10,
         minWidth: 220,
+        ...elevation.level3,
     },
     calcModalTitle: {
         fontSize: 15,

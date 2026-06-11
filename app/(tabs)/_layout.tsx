@@ -2,7 +2,7 @@ import { Tabs } from 'expo-router';
 import { NativeTabs, Icon, Label, Badge } from 'expo-router/unstable-native-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
-import { Component, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Platform, View, Text, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
@@ -10,6 +10,8 @@ import { getUserId } from '../../config/user';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { useProfileStore } from '../../state/profileStore';
 import { HapticTab } from '../../components/haptic-tab';
+import { FloatingPillTabBar } from '../../components/FloatingPillTabBar';
+import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { devLog } from '../../utils/devLog';
 
 class NativeTabsBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { hasError: boolean }> {
@@ -83,10 +85,14 @@ export default function TabLayout() {
         useProfileStore.getState().fetchProfile();
     }, []);
 
+    const renderTabBar = useCallback((props: BottomTabBarProps) => <FloatingPillTabBar {...props} />, []);
+
     const jsTabs = (
         <Tabs
+            tabBar={renderTabBar}
             screenOptions={{
                 tabBarButton: HapticTab,
+                freezeOnBlur: true,
                 tabBarActiveTintColor: colors.primary,
                 tabBarInactiveTintColor: colors.textSecondary,
                 tabBarStyle: {

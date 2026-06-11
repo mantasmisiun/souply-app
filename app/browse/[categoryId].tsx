@@ -14,7 +14,7 @@ import BasketProductCard from '../../components/browse/BasketProductCard';
 import CategoryBubbles from '../../components/browse/CategoryBubbles';
 import { TemplateReturnBanner } from '../../components/template/TemplateReturnBanner';
 import { useTemplateAddState } from '../../state/templateAddState';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import { getUserId } from '../../config/user';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -663,11 +663,11 @@ export default function CategoryScreen() {
                 {Array.from({ length: 3 }).map((_, row) => (
                     <View key={row} style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
                         {[0, 1].map(col => (
-                            <View key={col} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: 12, padding: 12, alignItems: 'center', gap: 8 }}>
-                                <SkeletonBox height={130} borderRadius={8} />
+                            <View key={col} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: 12, alignItems: 'center', gap: 8 }}>
+                                <SkeletonBox height={130} borderRadius={radius.md} />
                                 <SkeletonBox width={100} height={13} borderRadius={6} />
                                 <SkeletonBox width={60} height={11} borderRadius={5} />
-                                <SkeletonBox height={34} borderRadius={10} />
+                                <SkeletonBox height={34} borderRadius={radius.pill} />
                             </View>
                         ))}
                     </View>
@@ -701,7 +701,7 @@ export default function CategoryScreen() {
                                 value={mode === 'base'}
                                 onValueChange={handleModeSwitchRequest}
                                 trackColor={{ false: colors.border, true: colors.primary }}
-                                thumbColor={colors.cardBackground}
+                                thumbColor={colors.onPrimary}
                                 disabled={converting}
                             />
                         </View>
@@ -722,11 +722,11 @@ export default function CategoryScreen() {
                             {Array.from({ length: 3 }).map((_, row) => (
                                 <View key={row} style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
                                     {[0, 1].map(col => (
-                                        <View key={col} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: 12, padding: 12, alignItems: 'center', gap: 8 }}>
-                                            <SkeletonBox height={130} borderRadius={8} style={{ alignSelf: 'stretch' }} />
+                                        <View key={col} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: 12, alignItems: 'center', gap: 8 }}>
+                                            <SkeletonBox height={130} borderRadius={radius.md} style={{ alignSelf: 'stretch' }} />
                                             <SkeletonBox width={100} height={13} borderRadius={6} />
                                             <SkeletonBox width={60} height={11} borderRadius={5} />
-                                            <SkeletonBox height={34} borderRadius={10} style={{ alignSelf: 'stretch' }} />
+                                            <SkeletonBox height={34} borderRadius={radius.pill} style={{ alignSelf: 'stretch' }} />
                                         </View>
                                     ))}
                                 </View>
@@ -920,7 +920,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     helpCard: {
         backgroundColor: c.cardBackground,
-        borderRadius: 14,
+        borderRadius: radius.lg,
         padding: 20,
         gap: 12,
         width: '100%',
@@ -947,7 +947,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         marginTop: 4,
         paddingHorizontal: 16,
         paddingVertical: 8,
-        borderRadius: 10,
+        borderRadius: radius.pill,
         backgroundColor: c.primary,
         minWidth: 84,
         alignItems: 'center',
@@ -986,9 +986,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         gap: 8,
     },
     bubble: {
-        paddingHorizontal: 14,
-        paddingVertical: 7,
-        borderRadius: 20,
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: radius.pill,
         borderWidth: 1,
         borderColor: c.border,
         backgroundColor: c.cardBackground,
@@ -996,6 +996,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     bubbleActive: {
         backgroundColor: c.primary,
         borderColor: c.primary,
+        ...elevation.level1,
     },
     bubbleText: {
         fontSize: 13,
@@ -1022,7 +1023,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         gap: 12,
     },
     productIcon: {
-        width: 36, height: 36, borderRadius: 8,
+        width: 36, height: 36, borderRadius: radius.md,
         backgroundColor: c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
     },
@@ -1032,8 +1033,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingHorizontal: 16,
         paddingTop: 12,
         backgroundColor: c.cardBackground,
-        borderTopWidth: 1,
-        borderTopColor: c.border,
+        borderTopLeftRadius: radius.lg,
+        borderTopRightRadius: radius.lg,
+        ...elevation.level3,
         gap: 12,
     },
     basketBarLeft: {
@@ -1054,7 +1056,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.primary,
         paddingVertical: 10,
         paddingHorizontal: 16,
-        borderRadius: 10,
+        borderRadius: radius.pill,
     },
     basketBarButtonText: {
         fontSize: 14,

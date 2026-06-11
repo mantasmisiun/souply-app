@@ -3,7 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
 import { GlassIconButton } from '../../components/GlassIconButton';
 import { CategoriesList, type Category } from '../../components/browse/CategoriesList';
 import { ScreenHeading } from '../../components/ScreenHeading';
@@ -103,16 +103,14 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     discountsCard: {
         backgroundColor: c.primary,
-        borderRadius: 14,
+        borderRadius: radius.lg,
         marginBottom: 10,
         paddingHorizontal: 16,
         paddingVertical: 18,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        elevation: 2,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.12, shadowRadius: 4,
+        ...elevation.level2,
     },
     discountsIcon: { fontSize: 28 },
     discountsTextWrap: { flex: 1 },

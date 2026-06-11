@@ -5,9 +5,10 @@ import React, { useMemo, useState, useCallback, useEffect, useLayoutEffect, useR
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Animated, { FadeIn } from 'react-native-reanimated';
+import Animated, { FadeIn, useSharedValue, withTiming, useAnimatedStyle } from 'react-native-reanimated';
+import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
-import { useTheme, type AppTheme } from '../../../constants/theme';
+import { useTheme, spacing, radius, elevation, typography, iconSize, type AppTheme } from '../../../constants/theme';
 import { useBasketState } from '../../../state/basketState';
 import { useProfileStore } from '../../../state/profileStore';
 import { loadCachedCoords, tryGpsCoords, persistCoords, type UserCoords } from '../../../utils/location';
@@ -30,9 +31,14 @@ import { buildSplitOptions, TRIP_RADIUS_KM, type SheetOption } from '../../../ut
  *  hundreds of stores; we only ever show the top 10 ranked options. */
 const MAX_SINGLE_STORES = 10;
 
+/** Width (dp) of one digit segment in the 1·2·3 store-count toggle — also the
+ *  sliding indicator's width. Fixed so the pill stays compact, not full-width. */
+const STORE_COUNT_SEG = 34;
+
 
 export default function BasketResultsScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const { clearSessionBasket } = useBasketState();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset, top: topInset } = useSafeAreaInsets();
@@ -201,7 +207,7 @@ export default function BasketResultsScreen() {
             setLazyResults([]); // re-priced basket → old lazy prices are stale
             setLoading(false);
         } catch {
-            Alert.alert('Klaida', 'Nepavyko perskaičiuoti');
+            Alert.alert(t('results.errorTitle'), t('results.errorRecalc'));
             setLoading(false);
         }
     }, [id]);
@@ -401,6 +407,15 @@ export default function BasketResultsScreen() {
         try { await saveLocationSettings({ storeCount: n }); } catch {}
     }, [maxStores, closeSheet]);
 
+    // Sliding capsule for the 1/2/3 store-count toggle — the selection animates
+    // between segments instead of hard-cutting. `segW` is one segment's width
+    // (measured), `idx` the active segment (0-based).
+    const storeCountIdx = useSharedValue(maxStores - 1);
+    useEffect(() => { storeCountIdx.value = maxStores - 1; }, [maxStores, storeCountIdx]);
+    const storeCountIndicatorStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: withTiming(storeCountIdx.value * STORE_COUNT_SEG, { duration: 220 }) }],
+    }));
+
     // Stores that already carry a price pill — excluded from the directory layer.
     const pricedStoreIds = useMemo(
         () => new Set(pins.map(p => p.storeId)),
@@ -437,7 +452,7 @@ export default function BasketResultsScreen() {
                 Alert.alert('Nėra kainos', 'Šioje parduotuvėje nepavyko įkainoti krepšelio.');
             }
         } catch {
-            Alert.alert('Klaida', 'Nepavyko gauti kainos');
+            Alert.alert(t('results.errorTitle'), t('results.errorGetPrice'));
         } finally {
             setPricingStoreId(null);
         }
@@ -460,7 +475,7 @@ export default function BasketResultsScreen() {
                 });
             }
         } catch {
-            Alert.alert('Klaida', 'Nepavyko įkainoti parduotuvių');
+            Alert.alert(t('results.errorTitle'), t('results.errorPriceStores'));
         } finally {
             setBatchPricing(false);
         }
@@ -593,7 +608,7 @@ export default function BasketResultsScreen() {
                 router.push(`/shopping-list/${listData.id}` as any);
             }, 100);
         } catch (error: any) {
-            Alert.alert('Klaida', 'Nepavyko sukurti pirkinių sąrašo');
+            Alert.alert(t('results.errorTitle'), t('results.errorCreateList'));
         } finally {
             setCreatingList(false);
         }
@@ -656,7 +671,7 @@ export default function BasketResultsScreen() {
                 router.push(`/shopping-list/split/${id}` as any);
             }, 100);
         } catch {
-            Alert.alert('Klaida', 'Nepavyko sukurti pirkinių sąrašo');
+            Alert.alert(t('results.errorTitle'), t('results.errorCreateList'));
         } finally {
             setCreatingList(false);
         }
@@ -673,7 +688,7 @@ export default function BasketResultsScreen() {
                 {loading && !pullRefreshing ? (
                     <Animated.View entering={FadeIn} style={styles.loadingContainer}>
                         <ActivityIndicator size="large" color={colors.primary} />
-                        <Text style={styles.loadingText}>Skaičiuojamos kainos...</Text>
+                        <Text style={styles.loadingText}>{t('results.loading')}</Text>
                     </Animated.View>
                 ) : mapMounted ? (
                     // Full-bleed map fills the content region; the option sheet
@@ -701,7 +716,7 @@ export default function BasketResultsScreen() {
                         <View style={[styles.mapTopLeft, { top: topInset + 10 }]} pointerEvents="box-none">
                             <TouchableOpacity style={styles.mapBackShadow} onPress={() => router.back()} activeOpacity={0.8}>
                                 <LiquidGlass style={styles.mapBackBtn} fallback="solid">
-                                    <Ionicons name="chevron-back" size={24} color={colors.primary} />
+                                    <Ionicons name="chevron-back" size={iconSize.lg} color={colors.primary} />
                                 </LiquidGlass>
                             </TouchableOpacity>
                         </View>
@@ -710,20 +725,23 @@ export default function BasketResultsScreen() {
                         <View style={[styles.mapTopCenter, { top: topInset + 10 }]} pointerEvents="box-none">
                             <View style={styles.storeCountShadow}>
                                 <LiquidGlass style={styles.storeCountPill} fallback="solid">
-                                    <Ionicons name="storefront-outline" size={15} color={colors.textSecondary} style={styles.storeCountIcon} />
-                                    {([1, 2, 3] as const).map(n => {
-                                        const active = maxStores === n;
-                                        return (
-                                            <TouchableOpacity
-                                                key={n}
-                                                style={[styles.storeCountBtn, active && styles.storeCountBtnActive]}
-                                                onPress={() => setStoreCount(n)}
-                                                activeOpacity={0.8}
-                                            >
-                                                <Text style={[styles.storeCountText, active && styles.storeCountTextActive]}>{n}</Text>
-                                            </TouchableOpacity>
-                                        );
-                                    })}
+                                    <Ionicons name="storefront-outline" size={iconSize.sm} color={colors.textSecondary} style={styles.storeCountIcon} />
+                                    <View style={styles.storeCountSegments}>
+                                        <Animated.View style={[styles.storeCountIndicator, storeCountIndicatorStyle]} />
+                                        {([1, 2, 3] as const).map(n => {
+                                            const active = maxStores === n;
+                                            return (
+                                                <TouchableOpacity
+                                                    key={n}
+                                                    style={styles.storeCountBtn}
+                                                    onPress={() => setStoreCount(n)}
+                                                    activeOpacity={0.8}
+                                                >
+                                                    <Text style={[styles.storeCountText, active && styles.storeCountTextActive]}>{n}</Text>
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </View>
                                 </LiquidGlass>
                             </View>
                         </View>
@@ -750,7 +768,7 @@ export default function BasketResultsScreen() {
                         />
                     ) : visibleUnpriced.length > 0 ? (
                         // Un-priced stores in view → one-tap "price this area".
-                        <View style={[styles.hintWrap, { bottom: 20 + bottomInset }]} pointerEvents="box-none">
+                        <View style={[styles.hintWrap, { bottom: spacing.xl + bottomInset }]} pointerEvents="box-none">
                             <TouchableOpacity
                                 style={styles.batchBtn}
                                 onPress={handleBatchPrice}
@@ -759,17 +777,17 @@ export default function BasketResultsScreen() {
                             >
                                 {batchPricing
                                     ? <ActivityIndicator size="small" color={colors.onPrimary} />
-                                    : <Ionicons name="pricetags-outline" size={17} color={colors.onPrimary} />}
+                                    : <Ionicons name="pricetags-outline" size={iconSize.sm} color={colors.onPrimary} />}
                                 <Text style={styles.batchBtnText}>
-                                    {batchPricing ? 'Skaičiuojama…' : `Paskaičiuoti dar (${visibleUnpriced.length})`}
+                                    {batchPricing ? t('results.batchCalculating') : t('results.batchMore', { count: visibleUnpriced.length })}
                                 </Text>
                             </TouchableOpacity>
                         </View>
                     ) : (
-                        <View style={[styles.hintWrap, { bottom: 20 + bottomInset }]} pointerEvents="none">
+                        <View style={[styles.hintWrap, { bottom: spacing.xl + bottomInset }]} pointerEvents="none">
                             <LiquidGlass style={styles.hintPill} fallback="solid" interactive={false}>
-                                <Ionicons name="hand-left-outline" size={15} color={colors.textSecondary} />
-                                <Text style={styles.hintText}>Palieskite parduotuvę</Text>
+                                <Ionicons name="hand-left-outline" size={iconSize.sm} color={colors.textSecondary} />
+                                <Text style={styles.hintText}>{t('results.tapStore')}</Text>
                             </LiquidGlass>
                         </View>
                     )
@@ -791,15 +809,15 @@ export default function BasketResultsScreen() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     // Floating map header (map view is full-bleed): back circle + toggle, left.
-    mapTopLeft: { position: 'absolute', left: 12, alignItems: 'flex-start', gap: 10, zIndex: 20 },
+    mapTopLeft: { position: 'absolute', left: spacing.md, alignItems: 'flex-start', gap: spacing.sm, zIndex: 20 },
     // Glass surfaces clip to their rounded shape (overflow hidden), so the
     // drop shadow lives on an outer wrapper — a clipped view can't cast one.
     mapBackShadow: {
-        borderRadius: 21,
-        elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4,
+        borderRadius: radius.pill,
+        ...elevation.level2,
     },
     mapBackBtn: {
-        width: 42, height: 42, borderRadius: 21, overflow: 'hidden',
+        width: 42, height: 42, borderRadius: radius.pill, overflow: 'hidden',
         backgroundColor: c.cardBackground,
         alignItems: 'center', justifyContent: 'center',
         borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
@@ -807,232 +825,38 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // Top-centre store-count segmented toggle (1·2·3).
     mapTopCenter: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 20 },
     storeCountShadow: {
-        borderRadius: 22,
-        elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.16, shadowRadius: 8,
+        borderRadius: radius.pill,
+        ...elevation.level3,
     },
     storeCountPill: {
         flexDirection: 'row', alignItems: 'center', overflow: 'hidden',
-        backgroundColor: c.cardBackground, borderRadius: 22,
-        paddingLeft: 10, paddingRight: 4, paddingVertical: 4, gap: 2,
+        backgroundColor: c.cardBackground, borderRadius: radius.pill,
+        paddingLeft: spacing.sm, paddingRight: spacing.xs, paddingVertical: spacing.xs, gap: 2,
         borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
     },
-    storeCountIcon: { marginRight: 4 },
-    storeCountBtn: { minWidth: 34, paddingVertical: 6, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-    storeCountBtnActive: { backgroundColor: c.primary },
+    storeCountIcon: { marginRight: spacing.xs },
+    storeCountSegments: { flexDirection: 'row', position: 'relative' },
+    // Sliding selection capsule; sits behind the digits and animates between them.
+    storeCountIndicator: { position: 'absolute', top: 0, bottom: 0, left: 0, width: STORE_COUNT_SEG, borderRadius: radius.pill, backgroundColor: c.primary },
+    storeCountBtn: { width: STORE_COUNT_SEG, paddingVertical: 6, alignItems: 'center', justifyContent: 'center' },
     storeCountText: { fontSize: 15, fontWeight: '800', color: c.textSecondary },
     storeCountTextActive: { color: c.onPrimary },
-    centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
-    loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, backgroundColor: c.pageBackground },
-    loadingText: { fontSize: 15, color: c.textSecondary },
-    list: { padding: 16, paddingBottom: 100 },
-    card: {
-        backgroundColor: c.cardBackground, borderRadius: 12, padding: 16, marginBottom: 10,
-        flexDirection: 'row', alignItems: 'center',
-        elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.08, shadowRadius: 2,
-    },
-    cardCheapest: { borderWidth: 2, borderColor: c.primary },
-    cardClosest: { borderWidth: 2, borderColor: c.info },
-    cardSelected: { backgroundColor: c.primaryMuted },
-    cheapestBadge: {
-        position: 'absolute', top: -8, left: 16,
-        backgroundColor: c.primary, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8,
-    },
-    cheapestBadgeText: { color: c.onPrimary, fontSize: 10, fontWeight: '700' },
-    closestBadge: {
-        position: 'absolute', top: -8, left: 16,
-        backgroundColor: c.info, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8,
-    },
-    closestBadgeText: { color: c.textInverse, fontSize: 10, fontWeight: '700' },
-    cardLeft: { marginRight: 12 },
-    logo: {
-        width: 48, height: 48, borderRadius: 8,
-        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-    },
-    logoImage: { width: 36, height: 36 },
-    logoPlaceholderText: { fontSize: 20, fontWeight: '700', color: '#FFFFFF' },
-    cardContent: { flex: 1 },
-    storeName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
-    metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 },
-    distance: { fontSize: 11, color: c.textMuted },
-    missingBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 2,
-        marginLeft: 6,
-        paddingHorizontal: 6,
-        paddingVertical: 1,
-        borderRadius: 8,
-        backgroundColor: c.warningMuted,
-    },
-    missingBadgeText: {
-        fontSize: 10,
-        color: c.warning,
-        fontWeight: '600',
-    },
-    missingList: {
-        marginTop: 4,
-        fontSize: 11,
-        color: c.textSecondary,
-        fontStyle: 'italic',
-    },
-    // Tier-3 substitute: the store carries a name-similar product, just
-    // not the user's exact one. Blue = "decent confidence, something to
-    // grab off the shelf".
-    substitutedBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 2,
-        marginLeft: 6,
-        paddingHorizontal: 6,
-        paddingVertical: 1,
-        borderRadius: 8,
-        backgroundColor: c.infoMuted,
-    },
-    substitutedBadgeText: {
-        fontSize: 10,
-        color: c.info,
-        fontWeight: '600',
-    },
-    approxBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 2,
-        marginLeft: 6,
-        paddingHorizontal: 6,
-        paddingVertical: 1,
-        borderRadius: 8,
-        backgroundColor: c.surfaceMuted,
-    },
-    approxBadgeText: {
-        fontSize: 10,
-        color: c.textMuted,
-        fontWeight: '600',
-    },
-    price: { fontSize: 18, fontWeight: '700', color: c.primary, marginLeft: 8 },
-    bottomBar: {
-        flexDirection: 'row', padding: 12, gap: 10,
-        backgroundColor: c.cardBackground, borderTopWidth: 1, borderTopColor: c.border,
-    },
+    loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.lg, backgroundColor: c.pageBackground },
+    loadingText: { ...typography.body, color: c.textSecondary },
     hintWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
     hintPill: {
         flexDirection: 'row', alignItems: 'center', gap: 6, overflow: 'hidden',
-        backgroundColor: c.cardBackground, borderRadius: 999,
-        paddingHorizontal: 14, paddingVertical: 8,
+        backgroundColor: c.cardBackground, borderRadius: radius.pill,
+        paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
         borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
     },
-    hintText: { fontSize: 13, fontWeight: '600', color: c.textSecondary },
+    hintText: { ...typography.label, color: c.textSecondary },
     // Area-batch "price this area" button (pink pill, bottom-center).
     batchBtn: {
-        flexDirection: 'row', alignItems: 'center', gap: 8,
-        backgroundColor: c.primary, borderRadius: 999,
-        paddingHorizontal: 18, paddingVertical: 12,
-        elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 5,
+        flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+        backgroundColor: c.primary, borderRadius: radius.pill,
+        paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+        ...elevation.level3,
     },
-    batchBtnText: { fontSize: 14, fontWeight: '700', color: c.onPrimary },
-    emptyText: { fontSize: 16, color: c.textSecondary },
-    shoppingListButton: {
-        flex: 2, backgroundColor: c.primary, borderRadius: 12,
-        padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    },
-    shoppingListText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
-    navigateButton: {
-        flex: 1, borderWidth: 1, borderColor: c.primary, borderRadius: 12,
-        padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    },
-    navigateText: { color: c.primary, fontWeight: '600', fontSize: 15 },
-
-    gateOverlay: {
-        flex: 1, alignItems: 'center', justifyContent: 'center',
-        padding: 32, gap: 16,
-    },
-    gateTitle: { fontSize: 20, fontWeight: '700', color: c.textPrimary, textAlign: 'center' },
-    gateBody: { fontSize: 14, color: c.textSecondary, textAlign: 'center', lineHeight: 22 },
-    gateButton: {
-        backgroundColor: c.primary, borderRadius: 10,
-        paddingVertical: 12, paddingHorizontal: 24, marginTop: 8,
-    },
-    gateButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
-
-    // ── Split basket section ──
-    splitSectionTitle: {
-        fontSize: 12, fontWeight: '700', color: c.textMuted,
-        textTransform: 'uppercase', letterSpacing: 0.5,
-        marginTop: 4, marginBottom: 8,
-    },
-    nudgeBanner: {
-        flexDirection: 'row', alignItems: 'flex-start', gap: 8,
-        backgroundColor: c.surfaceMuted, borderRadius: 10,
-        paddingVertical: 10, paddingHorizontal: 12, marginBottom: 10,
-    },
-    nudgeBannerText: { flex: 1, fontSize: 13, color: c.textSecondary, lineHeight: 18 },
-    comboCard: {
-        backgroundColor: c.cardBackground, borderRadius: 12,
-        padding: 14, marginBottom: 10,
-        elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.08, shadowRadius: 2,
-    },
-    comboCardRecommended: {
-        borderWidth: 2, borderColor: c.primary,
-    },
-    comboCardSelected: {
-        borderWidth: 2, borderColor: c.primary, backgroundColor: c.primaryMuted,
-    },
-    comboCardDimmed: { opacity: 0.55 },
-    recommendedBadge: {
-        position: 'absolute', top: -8, left: 14,
-        backgroundColor: c.primary, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8,
-    },
-    recommendedBadgeText: { color: c.onPrimary, fontSize: 10, fontWeight: '700' },
-    criticalWarning: {
-        flexDirection: 'row', alignItems: 'center', gap: 4,
-        marginBottom: 6,
-    },
-    criticalWarningText: { fontSize: 11, color: c.warning, fontWeight: '600' },
-    comboLogos: {
-        flexDirection: 'row', alignItems: 'center', gap: 0, marginBottom: 8, marginTop: 4,
-    },
-    comboLogoWrap: { flexDirection: 'row', alignItems: 'center' },
-    comboPlusSep: { width: 28, textAlign: 'center', fontSize: 13, color: c.textMuted, paddingVertical: 2 },
-    comboLogo: { width: 40, height: 40, borderRadius: 8 },
-    comboLogoPlaceholder: {
-        width: 40, height: 40, borderRadius: 8,
-        backgroundColor: c.border, alignItems: 'center', justifyContent: 'center',
-    },
-    comboLogoPlaceholderText: { fontSize: 16, fontWeight: '700', color: c.textSecondary },
-    comboStoreDetails: {
-        flexDirection: 'column',
-        marginBottom: 10, marginTop: 4,
-    },
-    comboStoreDetailRow: {
-        flexDirection: 'row', alignItems: 'flex-start', gap: 6,
-    },
-    comboMiniLogo: {
-        width: 28, height: 28, borderRadius: 6,
-        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-    },
-    comboMiniLogoImage: { width: 20, height: 20 },
-    comboMiniLogoText: { fontSize: 12, fontWeight: '700', color: '#FFFFFF' },
-    comboItemCount: { fontSize: 13, color: c.textSecondary, fontWeight: '500' },
-    comboStoreAddress: { fontSize: 11, color: c.textMuted, marginTop: 1 },
-    comboCardRow: { flexDirection: 'row', alignItems: 'center' },
-    comboCardLeft: { flex: 1 },
-    comboCardRight: { alignItems: 'flex-end', paddingLeft: 12 },
-    comboDelta: { fontSize: 12, color: c.textMuted, marginTop: 2 },
-    comboDeltaGood: { color: c.success },
-    comboDistRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-    comboDistText: { fontSize: 11, color: c.textMuted },
-    comboTotalsRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    comboTotal: { fontSize: 18, fontWeight: '700', color: c.primary },
-    comboSavingBadge: {
-        backgroundColor: c.successMuted, borderRadius: 8,
-        paddingHorizontal: 8, paddingVertical: 3,
-    },
-    comboSavingText: { fontSize: 13, fontWeight: '700', color: c.success },
-    comboEurosPerKm: { fontSize: 11, color: c.textMuted, marginTop: 4 },
-    showMoreBtn: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        gap: 4, paddingVertical: 10, marginBottom: 6,
-    },
-    showMoreBtnText: { fontSize: 13, fontWeight: '600', color: c.primary },
+    batchBtnText: { ...typography.bodyStrong, fontWeight: '700', color: c.onPrimary },
 });
