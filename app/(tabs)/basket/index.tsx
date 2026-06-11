@@ -527,7 +527,7 @@ export default function BasketScreen() {
                                     styles.templateCard,
                                     item.isDefault === 1
                                         ? styles.smartCard
-                                        : item.coverColor ? { borderLeftWidth: 4, borderLeftColor: item.coverColor } : null,
+                                        : item.coverColor ? { borderWidth: 4, borderColor: 'transparent', borderLeftColor: item.coverColor } : null,
                                 ]}
                                 onPress={() => handleTemplateTap(item)}
                                 activeOpacity={0.75}
@@ -692,7 +692,7 @@ export default function BasketScreen() {
                                     return (
                                         <TouchableOpacity
                                             key={b.id}
-                                            style={[styles.card, b.templateCoverColor ? { borderLeftWidth: 4, borderLeftColor: b.templateCoverColor } : null]}
+                                            style={[styles.card, b.templateCoverColor ? { borderWidth: 4, borderColor: 'transparent', borderLeftColor: b.templateCoverColor } : null]}
                                             onPress={() => router.push(`/basket/${b.id}`)}
                                         >
                                             <View style={styles.cardLeft}>
@@ -851,7 +851,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: 14, marginBottom: 10,
         flexDirection: 'row', alignItems: 'center',
         ...elevation.level1,
-        borderLeftWidth: 3, borderLeftColor: c.primary,
+        borderWidth: 3, borderColor: 'transparent', borderLeftColor: c.primary,
     },
     // Smart (auto) template — full pink fill so it stands out from manual cards.
     smartCard: {

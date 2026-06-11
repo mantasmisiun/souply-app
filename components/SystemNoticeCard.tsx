@@ -55,7 +55,7 @@ export function SystemNoticeCard({
 
     if (layout === 'banner') {
         return (
-            <View style={[styles.banner, { borderColor: tint }]}>
+            <View style={[styles.banner, { borderLeftColor: tint }]}>
                 {icon && <Ionicons name={icon} size={18} color={tint} />}
                 <View style={{ flex: 1 }}>
                     <Text style={styles.bannerTitle} numberOfLines={2}>{title}</Text>
@@ -151,7 +151,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.cardBackground,
         paddingHorizontal: 14, paddingVertical: 10,
         marginBottom: 10,
-        borderRadius: radius.lg, borderLeftWidth: 3,
+        borderRadius: radius.lg, borderWidth: 3, borderColor: 'transparent',
     },
     bannerTitle: { fontSize: 13, fontWeight: '600', color: c.textPrimary },
     bannerBody: { fontSize: 12, color: c.textSecondary, marginTop: 2 },

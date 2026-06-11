@@ -12,7 +12,6 @@ import {
     ActivityIndicator,
     Alert,
     FlatList,
-    Image,
     Modal,
     Pressable,
     RefreshControl,
@@ -23,13 +22,14 @@ import {
 } from "react-native";
 import { API_BASE_URL } from "../../../config/api";
 import { getUserId } from "../../../config/user";
-import { useTheme, type AppTheme } from "../../../constants/theme";
+import { useTheme, spacing, radius, elevation, iconSize, typography, type AppTheme } from "../../../constants/theme";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { glassHeaderOptions } from "../../../constants/navHeader";
 import { ScreenHeading } from "../../../components/ScreenHeading";
 import { useCollapsingHeader, CollapsingHeader } from "../../../components/CollapsingHeader";
-import { chainBrandName, chainBrandColor } from "../../../utils/chainBrandName";
+import { chainBrandName, chainIdByName } from "../../../utils/chainBrandName";
+import { ChainLogoChip } from "../../../components/ChainLogoChip";
 import { SkeletonBox } from "../../../components/SkeletonBox";
 import { PendingSwipesBanner } from "../../../components/PendingSwipesBanner";
 import { DEV_MODE } from "../../../constants/flags";
@@ -412,20 +412,20 @@ export default function ReceiptsScreen() {
           paddingHorizontal: 12, paddingVertical: 10,
         }}>
           {Array.from({ length: 4 }).map((_, i) => (
-            <SkeletonBox key={i} width={i === 0 ? 64 : 80} height={32} borderRadius={20} />
+            <SkeletonBox key={i} width={i === 0 ? 64 : 80} height={32} borderRadius={radius.lg} />
           ))}
         </View>
         <View style={[styles.list, { paddingTop: 16 }]}>
           {Array.from({ length: 5 }).map((_, i) => (
-            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10, gap: 12 }}>
-              <SkeletonBox width={32} height={32} borderRadius={6} />
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: spacing.lg, marginBottom: spacing.md, gap: spacing.md }}>
+              <SkeletonBox width={32} height={32} borderRadius={radius.sm} />
               <View style={{ flex: 1, gap: 8 }}>
-                <SkeletonBox width='70%' height={13} borderRadius={6} />
-                <SkeletonBox width='45%' height={11} borderRadius={6} />
+                <SkeletonBox width='70%' height={13} borderRadius={radius.sm} />
+                <SkeletonBox width='45%' height={11} borderRadius={radius.sm} />
               </View>
-              <View style={{ alignItems: 'flex-end', gap: 8 }}>
-                <SkeletonBox width={48} height={11} borderRadius={6} />
-                <SkeletonBox width={56} height={18} borderRadius={8} />
+              <View style={{ alignItems: 'flex-end', gap: spacing.sm }}>
+                <SkeletonBox width={48} height={11} borderRadius={radius.sm} />
+                <SkeletonBox width={56} height={18} borderRadius={radius.sm} />
               </View>
             </View>
           ))}
@@ -452,10 +452,10 @@ export default function ReceiptsScreen() {
 
     const leftIcon = (() => {
       if (isError) return (
-        <Ionicons name={isDuplicate ? "copy-outline" : "alert-circle-outline"} size={28} color={statusColor} />
+        <Ionicons name={isDuplicate ? "copy-outline" : "alert-circle-outline"} size={iconSize.xl} color={statusColor} />
       );
-      if (isAwaiting) return <Ionicons name="cloud-offline-outline" size={28} color={colors.warning} />;
-      if (isPending) return <Ionicons name="time-outline" size={28} color={colors.textMuted} />;
+      if (isAwaiting) return <Ionicons name="cloud-offline-outline" size={iconSize.xl} color={colors.warning} />;
+      if (isPending) return <Ionicons name="time-outline" size={iconSize.xl} color={colors.textMuted} />;
       return <ActivityIndicator size="small" color={colors.primary} />;
     })();
 
@@ -478,9 +478,9 @@ export default function ReceiptsScreen() {
           isAwaiting && { borderLeftColor: colors.warning },
         ]}
       >
-        <View style={{ marginRight: 12 }}>{leftIcon}</View>
+        <View style={{ marginRight: spacing.md }}>{leftIcon}</View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm }}>
             <Text style={styles.queueTitle} numberOfLines={1}>
               {queueCardTitle(item, t)}
             </Text>
@@ -493,8 +493,8 @@ export default function ReceiptsScreen() {
           ) : null}
         </View>
         {isError && (
-          <TouchableOpacity onPress={() => removeQueueItem(item.id)} style={{ paddingLeft: 8 }} hitSlop={8}>
-            <Ionicons name="close" size={20} color={colors.textMuted} />
+          <TouchableOpacity onPress={() => removeQueueItem(item.id)} style={{ paddingLeft: spacing.sm }} hitSlop={8}>
+            <Ionicons name="close" size={iconSize.md} color={colors.textMuted} />
           </TouchableOpacity>
         )}
         {isProcessing && (
@@ -545,19 +545,14 @@ export default function ReceiptsScreen() {
       >
         <View style={styles.cardLeft}>
           {item.chainLogoUrl || item.chainName ? (
-            <View style={[styles.cardLogo, { backgroundColor: chainBrandColor(item.chainName ?? '') }]}>
-              {item.chainMiniLogoUrl ?? item.chainLogoUrl ? (
-                <Image
-                  source={{ uri: (item.chainMiniLogoUrl ?? item.chainLogoUrl) as string }}
-                  style={styles.cardLogoImage}
-                  resizeMode="contain"
-                />
-              ) : (
-                <Text style={styles.cardLogoFallback}>{(item.chainName ?? '?')[0]}</Text>
-              )}
-            </View>
+            <ChainLogoChip
+              chainId={chainIdByName(item.chainName ?? '') ?? 0}
+              name={item.chainName ?? '?'}
+              logoUrl={item.chainMiniLogoUrl ?? item.chainLogoUrl}
+              size={32}
+            />
           ) : (
-            <Ionicons name="receipt-outline" size={28} color={colors.primary} />
+            <Ionicons name="receipt-outline" size={iconSize.xl} color={colors.primary} />
           )}
         </View>
         <View style={styles.cardContent}>
@@ -667,7 +662,7 @@ export default function ReceiptsScreen() {
           setUploadMenuOpen(true);
         }}
       >
-        <Ionicons name="add" size={28} color={colors.onPrimary} />
+        <Ionicons name="add" size={iconSize.xl} color={colors.onPrimary} />
       </TouchableOpacity>
 
       <Modal
@@ -694,12 +689,12 @@ export default function ReceiptsScreen() {
             <Text style={styles.menuTitle}>{t('receipts.menu.uploadTitle')}</Text>
 
             <TouchableOpacity style={styles.menuRow} onPress={onPickCamera}>
-              <Ionicons name="camera-outline" size={22} color={colors.primary} />
+              <Ionicons name="camera-outline" size={iconSize.lg} color={colors.primary} />
               <Text style={styles.menuRowText}>{t('receipts.menu.uploadCamera')}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.menuRow} onPress={onPickFile}>
-              <Ionicons name="cloud-upload-outline" size={22} color={colors.primary} />
+              <Ionicons name="cloud-upload-outline" size={iconSize.lg} color={colors.primary} />
               <Text style={styles.menuRowText}>{t('receipts.menu.uploadAction')}</Text>
             </TouchableOpacity>
 
@@ -738,40 +733,40 @@ export default function ReceiptsScreen() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: c.pageBackground },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  list: { padding: 16 },
+  list: { padding: spacing.lg },
 
   card: {
     backgroundColor: c.cardBackground,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
     flexDirection: "row",
     alignItems: "center",
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-    borderLeftWidth: 3,
+    ...elevation.level1,
+    // Uniform (transparent) border + coloured left edge. A single-sided
+    // borderLeftWidth makes Android render SQUARE corners despite borderRadius;
+    // a uniform borderWidth rounds correctly while only the left shows.
+    borderWidth: 3,
+    borderColor: "transparent",
     borderLeftColor: c.softAccent,
   },
   queueCard: {
-    paddingBottom: 18,
+    paddingBottom: spacing.lg,
     overflow: "hidden",
     position: "relative",
     borderLeftColor: c.primary,
   },
   queueTitle: {
-    fontSize: 14,
-    fontWeight: "600",
+    ...typography.bodySmallStrong,
     color: c.textPrimary,
     flex: 1,
     minWidth: 0,
   },
   queueSubline: {
-    fontSize: 12,
+    ...typography.labelSmall,
+    fontWeight: "400",
     color: c.textMuted,
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
   progressTrack: {
     position: "absolute",
@@ -795,48 +790,43 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     borderLeftColor: c.primary,
     shadowOpacity: 0.12,
   },
-  cardLeft: { marginRight: 12, width: 36, alignItems: "center", justifyContent: "center" },
-  cardLogo: {
-    width: 32, height: 32, borderRadius: 6,
-    alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-  },
-  cardLogoImage: { width: 22, height: 22 },
-  cardLogoFallback: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  cardLeft: { marginRight: spacing.md, width: 36, alignItems: "center", justifyContent: "center" },
   cardContent: { flex: 1, minWidth: 0 },
-  cardTitle: { fontSize: 15, fontWeight: "600", color: c.textPrimary },
-  cardAddress: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
-  cardRight: { alignItems: "flex-end", marginLeft: 8 },
-  cardDate: { fontSize: 12, color: c.textSecondary, marginBottom: 6 },
+  cardTitle: { ...typography.bodyStrong, color: c.textPrimary },
+  cardAddress: { ...typography.labelSmall, fontWeight: "400", color: c.textSecondary, marginTop: 2 },
+  cardRight: { alignItems: "flex-end", marginLeft: spacing.sm },
+  cardDate: { ...typography.labelSmall, fontWeight: "400", color: c.textSecondary, marginBottom: 6 },
   statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.sm,
   },
-  statusText: { fontSize: 11, color: c.textInverse, fontWeight: "600" },
+  statusText: { ...typography.caption, fontWeight: "600", color: c.textInverse },
   sectionHeader: {
-    fontSize: 11,
+    ...typography.caption,
     fontWeight: "700",
     color: c.textMuted,
     letterSpacing: 1.2,
     textTransform: "uppercase",
-    marginTop: 4,
-    marginBottom: 8,
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
     paddingHorizontal: 2,
   },
-  emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', marginTop: 16, textAlign: 'center' },
-  emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 6, textAlign: 'center', lineHeight: 18 },
-  emptyButton: { marginTop: 20, backgroundColor: c.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
-  emptyButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 14 },
+  emptyText: { ...typography.bodyStrong, color: c.textSecondary, marginTop: spacing.lg, textAlign: 'center' },
+  emptySubText: { ...typography.label, fontWeight: '400', color: c.textMuted, marginTop: 6, textAlign: 'center' },
+  emptyButton: { marginTop: spacing.xl, backgroundColor: c.primary, paddingHorizontal: spacing.xl, paddingVertical: spacing.md, borderRadius: radius.pill },
+  emptyButtonText: { ...typography.bodySmallStrong, fontWeight: '700', color: c.onPrimary },
   fab: {
     position: "absolute",
-    bottom: 24,
-    right: 20,
+    bottom: spacing.xl,
+    right: spacing.xl,
     backgroundColor: c.primary,
     width: 56,
     height: 56,
-    borderRadius: 28,
+    borderRadius: radius.pill,
     alignItems: "center",
     justifyContent: "center",
+    // Brand-coloured glow — bespoke, not a neutral elevation tier.
     elevation: 4,
     shadowColor: c.primaryShadow,
     shadowOffset: { width: 0, height: 3 },
@@ -847,61 +837,59 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     flex: 1,
     backgroundColor: c.overlayBackdrop,
     justifyContent: "center",
-    padding: 24,
+    padding: spacing.xl,
   },
   menuCard: {
     backgroundColor: c.cardBackground,
-    borderRadius: 14,
-    padding: 16,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
     gap: 6,
   },
   menuTitle: {
-    fontSize: 16,
+    ...typography.bodyStrong,
     fontWeight: "700",
     color: c.textPrimary,
-    marginBottom: 4,
+    marginBottom: spacing.xs,
   },
   menuRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderRadius: 8,
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
   },
   menuRowText: {
-    fontSize: 15,
-    color: c.textPrimary,
+    ...typography.bodyStrong,
     fontWeight: "500",
+    color: c.textPrimary,
   },
   previewToggle: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    marginTop: 4,
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    marginTop: spacing.xs,
     borderTopWidth: 1,
     borderTopColor: c.borderSubtle,
   },
   previewToggleText: {
-    fontSize: 14,
+    ...typography.bodySmallStrong,
     color: c.textPrimary,
-    fontWeight: "600",
   },
   previewToggleHint: {
-    fontSize: 11,
+    ...typography.caption,
     color: c.textMuted,
     marginTop: 2,
   },
   menuCancel: {
     alignItems: "center",
-    paddingVertical: 12,
-    marginTop: 4,
+    paddingVertical: spacing.md,
+    marginTop: spacing.xs,
   },
   menuCancelText: {
-    fontSize: 14,
+    ...typography.bodySmallStrong,
     color: c.textSecondary,
-    fontWeight: "600",
   },
 });

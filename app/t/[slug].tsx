@@ -300,7 +300,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     snapshotCard: {
         backgroundColor: c.cardBackground, borderRadius: 14,
         padding: 16, marginTop: 8, gap: 4,
-        borderLeftWidth: 4, borderLeftColor: c.success,
+        borderWidth: 4, borderColor: 'transparent', borderLeftColor: c.success,
     },
     snapshotLabel: { fontSize: 12, color: c.textMuted, textTransform: 'uppercase', letterSpacing: 0.4 },
     snapshotPrice: { fontSize: 28, fontWeight: '700', color: c.textPrimary },

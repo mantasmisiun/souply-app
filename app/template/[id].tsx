@@ -685,7 +685,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     metricLabel: { fontSize: 12, color: c.textSecondary, marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: '600' },
     statsCard: {
         backgroundColor: c.cardBackground, borderRadius: 16, padding: 18,
-        gap: 12, borderLeftWidth: 4, borderLeftColor: c.primary,
+        gap: 12, borderWidth: 4, borderColor: 'transparent', borderLeftColor: c.primary,
     },
     statsTitle: { fontSize: 18, fontWeight: '700', color: c.textPrimary },
     statsIntro: { fontSize: 14, color: c.textSecondary, lineHeight: 20 },

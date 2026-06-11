@@ -1,49 +1,61 @@
 import React from 'react';
-import { Image, StyleSheet, Text, View, type StyleProp, type ViewStyle } from 'react-native';
-import { chainGlyphScale, chainMiniLogo } from '../utils/chainLogoAssets';
+import { Image, StyleSheet, Text, View, type StyleProp, type ViewStyle, type ImageStyle } from 'react-native';
+import { chainBadgeImage } from '../utils/chainLogoAssets';
 import { chainBrandColorById } from '../utils/chainBrandName';
 
 /**
- * Round chain badge: the chain glyph centred on its brand-coloured disc. One
- * component for every surface (results sheet + map pill) so the logo treatment
- * stays identical everywhere.
+ * Round chain badge — the EXACT baked map-pin asset (chip_N: the chain logo on
+ * its brand-coloured disc + white ring, glyph centred with even padding around
+ * it). Rendered as a plain <Image> so every off-map surface (results sheet,
+ * shopping list, …) is pixel-identical to the map markers. Falls back to a brand
+ * disc + initial only for chains with no bundled badge (e.g. Barbora).
  *
- * `onLogoLoad` fires when the glyph image finishes decoding — the map pill uses
- * it to take its marker snapshot only AFTER the logo has painted (a React
- * <Image> inside a custom marker otherwise rasterises empty on Android).
+ * `onLogoLoad` fires when the image decodes (the map pill timed its snapshot off
+ * this; kept for API compatibility).
  */
 export function ChainLogoChip({
     chainId,
     name,
     size,
+    logoUrl,
     onLogoLoad,
     style,
 }: {
     chainId: number;
     name?: string;
     size: number;
+    /** Fetched logo URL — used only when the chain has no bundled baked badge
+     *  (e.g. an arbitrary scanned-receipt store), so it keeps its real logo
+     *  instead of dropping to an initial. */
+    logoUrl?: string | null;
     onLogoLoad?: () => void;
     style?: StyleProp<ViewStyle>;
 }) {
-    const brand = chainBrandColorById(chainId);
-    const glyph = chainMiniLogo(chainId);
-    const scale = chainGlyphScale(chainId);
+    const badge = chainBadgeImage(chainId);
 
+    if (badge != null) {
+        return (
+            <Image
+                source={badge}
+                onLoad={onLogoLoad}
+                style={[{ width: size, height: size }, style as StyleProp<ImageStyle>]}
+                resizeMode="contain"
+            />
+        );
+    }
+
+    // Unbundled chain: its fetched logo on a brand disc, or an initial as a last
+    // resort — same round shape as the baked pin either way.
     return (
         <View
             style={[
                 styles.chip,
-                { width: size, height: size, borderRadius: size / 2, backgroundColor: brand },
+                { width: size, height: size, borderRadius: size / 2, backgroundColor: chainBrandColorById(chainId) },
                 style,
             ]}
         >
-            {glyph != null ? (
-                <Image
-                    source={glyph}
-                    onLoad={onLogoLoad}
-                    style={{ width: size * scale, height: size * scale }}
-                    resizeMode="contain"
-                />
+            {logoUrl ? (
+                <Image source={{ uri: logoUrl }} onLoad={onLogoLoad} style={{ width: size * 0.66, height: size * 0.66 }} resizeMode="contain" />
             ) : (
                 <Text style={[styles.fallback, { fontSize: size * 0.5 }]}>
                     {(name?.[0] ?? '?').toUpperCase()}

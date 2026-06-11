@@ -581,7 +581,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderWidth: 1, borderColor: c.borderSubtle,
         backgroundColor: c.pageBackground, gap: 8,
     },
-    sectionRequired: { borderColor: c.primary, borderLeftWidth: 4, backgroundColor: c.primary + '12' },
+    sectionRequired: { borderWidth: 4, borderColor: 'transparent', borderLeftColor: c.primary, backgroundColor: c.primary + '12' },
     sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     sectionTitle: { fontSize: 12, fontWeight: '700', color: c.textSecondary, textTransform: 'uppercase' },
     sectionTitleRequired: { color: c.primary },

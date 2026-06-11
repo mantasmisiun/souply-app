@@ -197,7 +197,7 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
                             flexDirection: 'row', alignItems: 'center', gap: 12,
                             paddingHorizontal: 16, paddingVertical: 14,
                             backgroundColor: colors.cardBackground, borderRadius: radius.lg,
-                            borderLeftWidth: 3, borderLeftColor: colors.softAccent,
+                            borderWidth: 3, borderColor: 'transparent', borderLeftColor: colors.softAccent,
                         }}
                     >
                         <SkeletonBox width={24} height={24} borderRadius={6} />
@@ -242,7 +242,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderRadius: radius.lg,
         overflow: 'hidden',
         ...elevation.level1,
-        borderLeftWidth: 3,
+        borderWidth: 3, borderColor: 'transparent',
         borderLeftColor: c.softAccent,
     },
     l1ContainerExpanded: {

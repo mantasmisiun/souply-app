@@ -1,4 +1,4 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Image, Alert, Modal, RefreshControl } from 'react-native';
+import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Modal, RefreshControl } from 'react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -6,7 +6,7 @@ import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHei
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
 import { getUserId } from '../../../config/user';
-import { useTheme, type AppTheme } from '../../../constants/theme';
+import { useTheme, spacing, radius, elevation, iconSize, avatarSize, typography, type AppTheme } from '../../../constants/theme';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { glassHeaderOptions } from '../../../constants/navHeader';
@@ -14,7 +14,8 @@ import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatDate } from '../../../utils/formatCurrency';
-import { chainBrandName, getMiniLogoUrl, chainBrandColor } from '../../../utils/chainBrandName';
+import { chainBrandName, getMiniLogoUrl, chainIdByName } from '../../../utils/chainBrandName';
+import { ChainLogoChip } from '../../../components/ChainLogoChip';
 import { formatStoreStreet } from '../../../utils/formatAddress';
 import { StoreChipBar } from '../../../components/StoreChipBar';
 import { CardActionBar, type CardAction } from '../../../components/CardActionBar';
@@ -87,19 +88,11 @@ function ShoppingListCard({ item, onPress, onLongPress, selectionMode, selected,
         >
             {selectionMode && (
                 <View style={[styles.selectCircle, selected && styles.selectCircleChecked]}>
-                    {selected && <Ionicons name="checkmark" size={14} color={colors.onPrimary} />}
+                    {selected && <Ionicons name="checkmark" size={iconSize.xs} color={colors.onPrimary} />}
                 </View>
             )}
             <View style={styles.cardLeft}>
-                {item.logoUrl ? (
-                    <View style={[styles.logo, { backgroundColor: chainBrandColor(item.chainName) }]}>
-                        <Image source={{ uri: getMiniLogoUrl(item.chainName, item.logoUrl) }} style={styles.logoImage} resizeMode="contain" />
-                    </View>
-                ) : (
-                    <View style={[styles.logo, { backgroundColor: chainBrandColor(item.chainName) }]}>
-                        <Text style={styles.logoPlaceholderText}>{item.chainName[0]}</Text>
-                    </View>
-                )}
+                <ChainLogoChip chainId={chainIdByName(item.chainName) ?? 0} name={item.chainName} size={avatarSize.md} />
             </View>
             <View style={styles.cardContent}>
                 <Text style={styles.storeName} numberOfLines={1}>{formatStoreStreet(item.address)}</Text>
@@ -152,32 +145,20 @@ function SplitGroupCard({ group, onPress, onLongPress, selectionMode, selected, 
         >
             {selectionMode && (
                 <View style={[styles.selectCircle, selected && styles.selectCircleChecked]}>
-                    {selected && <Ionicons name="checkmark" size={14} color={colors.onPrimary} />}
+                    {selected && <Ionicons name="checkmark" size={iconSize.xs} color={colors.onPrimary} />}
                 </View>
             )}
             <View style={styles.cardLeft}>
                 <View style={styles.splitLogos}>
-                    {group.entries.slice(0, 3).map((entry, idx) =>
-                        entry.chainLogoUrl ? (
-                            <View
-                                key={entry.storeId}
-                                style={[styles.splitLogo, { backgroundColor: chainBrandColor(entry.chainName) }, idx > 0 && styles.splitLogoOverlap]}
-                            >
-                                <Image
-                                    source={{ uri: getMiniLogoUrl(entry.chainName, entry.chainLogoUrl) }}
-                                    style={styles.splitLogoImage}
-                                    resizeMode="contain"
-                                />
-                            </View>
-                        ) : (
-                            <View
-                                key={entry.storeId}
-                                style={[styles.splitLogo, { backgroundColor: chainBrandColor(entry.chainName) }, idx > 0 && styles.splitLogoOverlap]}
-                            >
-                                <Text style={styles.splitLogoPlaceholderText}>{entry.chainName[0]}</Text>
-                            </View>
-                        )
-                    )}
+                    {group.entries.slice(0, 3).map((entry, idx) => (
+                        <ChainLogoChip
+                            key={entry.storeId}
+                            chainId={chainIdByName(entry.chainName) ?? 0}
+                            name={entry.chainName}
+                            size={avatarSize.sm}
+                            style={idx > 0 ? styles.splitLogoOverlap : null}
+                        />
+                    ))}
                 </View>
             </View>
             <View style={styles.cardContent}>
@@ -415,11 +396,11 @@ export default function ShoppingListScreen() {
         <View style={styles.container}>
             <Stack.Screen options={glassHeaderOptions()} />
             <ScreenHeading title={t('tabs.shoppingList')} topInset={insets.top} />
-            <View style={{ padding: 16 }}>
-                <SkeletonBox width={70} height={13} borderRadius={6} style={{ marginBottom: 12 }} />
+            <View style={{ padding: spacing.lg }}>
+                <SkeletonBox width={70} height={13} borderRadius={radius.sm} style={{ marginBottom: spacing.md }} />
                 {Array.from({ length: 5 }).map((_, i) => (
-                    <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10, gap: 10, borderLeftWidth: 3, borderLeftColor: colors.borderSubtle }}>
-                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: radius.md, padding: spacing.lg, marginBottom: spacing.sm, gap: spacing.sm, borderWidth: 3, borderColor: 'transparent', borderLeftColor: colors.borderSubtle }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
                             <SkeletonBox width={32} height={32} borderRadius={6} />
                             <View style={{ gap: 6, flex: 1 }}>
                                 <SkeletonBox width={140} height={13} borderRadius={6} />
@@ -567,7 +548,7 @@ export default function ShoppingListScreen() {
                     onPress={() => setFabMenuOpen(true)}
                     activeOpacity={0.85}
                 >
-                    <Ionicons name="add" size={28} color={colors.onPrimary} />
+                    <Ionicons name="add" size={iconSize.xl} color={colors.onPrimary} />
                 </TouchableOpacity>
             )}
 
@@ -575,12 +556,12 @@ export default function ShoppingListScreen() {
                 <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setFabMenuOpen(false)}>
                     <View style={styles.fabMenu}>
                         <TouchableOpacity style={styles.fabMenuItem} onPress={openScanner}>
-                            <Ionicons name="qr-code-outline" size={22} color={colors.textPrimary} />
+                            <Ionicons name="qr-code-outline" size={iconSize.lg} color={colors.textPrimary} />
                             <Text style={styles.fabMenuItemText}>{t('shoppingListTab.fabScanQr')}</Text>
                         </TouchableOpacity>
                         <View style={styles.fabMenuDivider} />
                         <TouchableOpacity style={styles.fabMenuItem} onPress={openChainPicker}>
-                            <Ionicons name="add-circle-outline" size={22} color={colors.textPrimary} />
+                            <Ionicons name="add-circle-outline" size={iconSize.lg} color={colors.textPrimary} />
                             <Text style={styles.fabMenuItemText}>{t('shoppingListTab.fabCreate')}</Text>
                         </TouchableOpacity>
                     </View>
@@ -618,7 +599,7 @@ export default function ShoppingListScreen() {
                     <View style={styles.chainPickerSheet}>
                         <Text style={styles.sheetTitle}>{t('shoppingListTab.pickStoreTitle')}</Text>
                         {chainsLoading ? (
-                            <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+                            <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.lg }} />
                         ) : (chains ?? []).length === 0 ? (
                             <Text style={styles.sheetEmpty}>{t('shoppingListTab.noStoresFound')}</Text>
                         ) : (
@@ -629,13 +610,7 @@ export default function ShoppingListScreen() {
                                     onPress={() => createStandaloneList(chain.id)}
                                     disabled={creatingChainId !== null}
                                 >
-                                    {chain.logoUrl ? (
-                                        <Image source={{ uri: chain.logoUrl }} style={styles.chainLogo} resizeMode="contain" />
-                                    ) : (
-                                        <View style={styles.chainLogoPlaceholder}>
-                                            <Text style={styles.chainLogoPlaceholderText}>{chain.name[0]}</Text>
-                                        </View>
-                                    )}
+                                    <ChainLogoChip chainId={chain.id} name={chain.name} size={avatarSize.md} />
                                     <Text style={styles.chainName}>{chain.name}</Text>
                                     {creatingChainId === chain.id && <ActivityIndicator size="small" color={colors.primary} />}
                                 </TouchableOpacity>
@@ -650,103 +625,84 @@ export default function ShoppingListScreen() {
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
-    centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
-    list: { padding: 16 },
+    centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl },
+    list: { padding: spacing.lg },
     sectionTitle: {
-        fontSize: 13, fontWeight: '700', color: c.textMuted,
-        marginBottom: 8, marginTop: 8, textTransform: 'uppercase',
+        ...typography.label, fontWeight: '700', color: c.textMuted,
+        marginBottom: spacing.sm, marginTop: spacing.sm, textTransform: 'uppercase',
     },
 
     // ── Multi-select circle (shown next to the logo in selection mode) ───────
     selectCircle: {
-        width: 22, height: 22, borderRadius: 11,
+        width: 22, height: 22, borderRadius: radius.pill,
         borderWidth: 2, borderColor: c.border,
         alignItems: 'center', justifyContent: 'center',
-        marginRight: 10, flexShrink: 0,
+        marginRight: spacing.sm, flexShrink: 0,
     },
     selectCircleChecked: { backgroundColor: c.primary, borderColor: c.primary },
 
     // ── Single-store card ─────────────────────────────────────────────────────
     card: {
-        backgroundColor: c.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10,
+        backgroundColor: c.cardBackground, borderRadius: radius.md, padding: spacing.lg, marginBottom: spacing.sm,
         flexDirection: 'row', alignItems: 'center',
-        elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.08, shadowRadius: 2,
-        borderLeftWidth: 4,
+        ...elevation.level1,
+        borderWidth: 4, borderColor: 'transparent',
     },
     cardActive: { borderLeftColor: c.primary },
     cardCompleted: { borderLeftColor: c.textMuted },
-    cardLeft: { marginRight: 12 },
-    logo: { width: 32, height: 32, borderRadius: 6, alignItems: 'center', justifyContent: 'center', overflow: 'hidden' },
-    logoImage: { width: 24, height: 24 },
-    logoPlaceholderText: { fontSize: 15, fontWeight: '700', color: '#FFFFFF' },
+    cardLeft: { marginRight: spacing.md },
     cardContent: { flex: 1 },
-    storeName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
-    date: { fontSize: 12, color: c.textMuted, marginTop: 2 },
-    progressRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 6 },
-    progressBar: { flex: 1, height: 4, backgroundColor: c.border, borderRadius: 2, overflow: 'hidden' },
-    progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: 2 },
-    progressText: { fontSize: 11, color: c.textSecondary },
-    badgeContainer: { marginLeft: 8 },
+    storeName: { ...typography.bodySmallStrong, color: c.textPrimary },
+    date: { ...typography.labelSmall, fontWeight: '400', color: c.textMuted, marginTop: 2 },
+    progressRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: 6 },
+    progressBar: { flex: 1, height: 4, backgroundColor: c.border, borderRadius: radius.pill, overflow: 'hidden' },
+    progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: radius.pill },
+    progressText: { ...typography.caption, fontWeight: '400', color: c.textSecondary },
+    badgeContainer: { marginLeft: spacing.sm },
     badge: {
-        backgroundColor: c.primaryMuted, width: 28, height: 28, borderRadius: 14,
+        backgroundColor: c.primaryMuted, width: 28, height: 28, borderRadius: radius.pill,
         alignItems: 'center', justifyContent: 'center',
     },
     badgeCompleted: { backgroundColor: c.border },
-    badgeText: { fontSize: 12, fontWeight: '700', color: c.primary },
+    badgeText: { ...typography.labelSmall, fontWeight: '700', color: c.primary },
     badgeTextCompleted: { color: c.textMuted },
 
     // ── Multi-store split card ────────────────────────────────────────────────
     splitLogos: { flexDirection: 'row', alignItems: 'center' },
-    splitLogo: {
-        width: 36, height: 36, borderRadius: 8,
-        borderWidth: 2, borderColor: c.cardBackground,
-        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-    },
-    splitLogoImage: { width: 26, height: 26 },
-    splitLogoOverlap: { marginLeft: -10 },
-    splitLogoPlaceholderText: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+    splitLogoOverlap: { marginLeft: -spacing.sm },
     splitLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
     // ── Empty ─────────────────────────────────────────────────────────────────
-    emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', marginTop: 16, textAlign: 'center' },
-    emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 6, textAlign: 'center', lineHeight: 18 },
-    emptyButton: { marginTop: 20, backgroundColor: c.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
-    emptyButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 14 },
+    emptyText: { ...typography.bodyStrong, color: c.textSecondary, marginTop: spacing.lg, textAlign: 'center' },
+    emptySubText: { ...typography.label, fontWeight: '400', color: c.textMuted, marginTop: 6, textAlign: 'center' },
+    emptyButton: { marginTop: spacing.xl, backgroundColor: c.primary, paddingHorizontal: spacing.xl, paddingVertical: spacing.md, borderRadius: radius.pill },
+    emptyButtonText: { ...typography.bodySmallStrong, fontWeight: '700', color: c.onPrimary },
 
     // ── FAB ───────────────────────────────────────────────────────────────────
     fab: {
-        position: 'absolute', right: 20, width: 56, height: 56, borderRadius: 28,
+        position: 'absolute', right: spacing.xl, width: 56, height: 56, borderRadius: radius.pill,
         backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center',
-        elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.25, shadowRadius: 5,
+        ...elevation.level3,
     },
 
     // ── Modals ────────────────────────────────────────────────────────────────
     modalBackdrop: { flex: 1, backgroundColor: c.overlayBackdrop, justifyContent: 'flex-end' },
     fabMenu: {
-        backgroundColor: c.cardBackground, marginHorizontal: 16, marginBottom: 92,
-        borderRadius: 12, paddingVertical: 4,
-        elevation: 8, shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.2, shadowRadius: 6,
+        backgroundColor: c.cardBackground, marginHorizontal: spacing.lg, marginBottom: 92,
+        borderRadius: radius.md, paddingVertical: spacing.xs,
+        ...elevation.level3,
     },
-    fabMenuItem: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 14, paddingHorizontal: 18 },
-    fabMenuItemText: { fontSize: 15, color: c.textPrimary, fontWeight: '500' },
-    fabMenuDivider: { height: 1, backgroundColor: c.borderSubtle, marginHorizontal: 12 },
+    fabMenuItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.lg, paddingHorizontal: spacing.lg },
+    fabMenuItemText: { ...typography.bodyStrong, fontWeight: '500', color: c.textPrimary },
+    fabMenuDivider: { height: 1, backgroundColor: c.borderSubtle, marginHorizontal: spacing.md },
     chainPickerSheet: {
-        backgroundColor: c.cardBackground, borderTopLeftRadius: 16, borderTopRightRadius: 16,
-        paddingHorizontal: 20, paddingTop: 20, paddingBottom: 32,
+        backgroundColor: c.cardBackground, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
+        paddingHorizontal: spacing.xl, paddingTop: spacing.xl, paddingBottom: spacing.xxl,
     },
-    sheetTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginBottom: 12 },
-    sheetEmpty: { fontSize: 14, color: c.textMuted, textAlign: 'center', marginVertical: 16 },
+    sheetTitle: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary, marginBottom: spacing.md },
+    sheetEmpty: { ...typography.bodySmall, color: c.textMuted, textAlign: 'center', marginVertical: spacing.lg },
     chainRow: {
-        flexDirection: 'row', alignItems: 'center', gap: 12,
-        paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
+        flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+        paddingVertical: spacing.lg, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
     },
-    chainLogo: { width: 36, height: 36, borderRadius: 6 },
-    chainLogoPlaceholder: {
-        width: 36, height: 36, borderRadius: 6,
-        backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center',
-    },
-    chainLogoPlaceholderText: { fontSize: 16, fontWeight: '700', color: c.textSecondary },
-    chainName: { flex: 1, fontSize: 15, color: c.textPrimary, fontWeight: '500' },
+    chainName: { flex: 1, ...typography.bodyStrong, fontWeight: '500', color: c.textPrimary },
 });

@@ -445,7 +445,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderRadius: 14,
         padding: 14,
         gap: 10,
-        borderLeftWidth: 4,
+        borderWidth: 4, borderColor: 'transparent',
     },
     itemCardHeader: { gap: 2 },
     itemCardLabel: { fontSize: 13, fontWeight: '800', textTransform: 'uppercase' },

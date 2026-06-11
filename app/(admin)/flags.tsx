@@ -1170,8 +1170,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     // Flagged sub-section: pink accent ribbon on the left edge + matching tint.
     sectionFlagged: {
-        borderColor: c.primary,
-        borderLeftWidth: 4,
+        borderWidth: 4,
+        borderColor: 'transparent',
+        borderLeftColor: c.primary,
         backgroundColor: c.primary + '12',
     },
     sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },

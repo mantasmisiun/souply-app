@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Image, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import Svg, { Path, Circle } from 'react-native-svg';
 import Animated, {
     Easing,
@@ -13,6 +13,8 @@ import * as Haptics from 'expo-haptics';
 import { useTranslation } from 'react-i18next';
 import { formatEuro } from '../utils/formatCurrency';
 import { useTheme } from '../constants/theme';
+import { ChainLogoChip } from './ChainLogoChip';
+import { chainIdByName } from '../utils/chainBrandName';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 
@@ -301,19 +303,11 @@ export function DonutChart({
                 )}
             </Svg>
 
-            {/* Logo floats above the text block without affecting its layout */}
+            {/* Selected chain's badge — the same baked map-pin asset as everywhere
+                else. Floats above the text block without affecting its layout. */}
             {selectedSlice?.logoUri && (
-                <View pointerEvents="none" style={{
-                    position: 'absolute', top: logoTop, left: logoLeft,
-                    width: LOGO_SIZE, height: LOGO_SIZE, borderRadius: 6, overflow: 'hidden',
-                    alignItems: 'center', justifyContent: 'center',
-                    backgroundColor: selectedSlice.brandColor ?? 'transparent',
-                }}>
-                    <Image
-                        source={{ uri: selectedSlice.logoUri }}
-                        style={{ width: LOGO_SIZE * 0.7, height: LOGO_SIZE * 0.7 }}
-                        resizeMode="contain"
-                    />
+                <View pointerEvents="none" style={{ position: 'absolute', top: logoTop, left: logoLeft }}>
+                    <ChainLogoChip chainId={chainIdByName(selectedSlice.label) ?? 0} name={selectedSlice.label} size={LOGO_SIZE} />
                 </View>
             )}
 
