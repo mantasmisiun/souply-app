@@ -2,6 +2,11 @@ import TextRecognition from "@react-native-ml-kit/text-recognition";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Image } from "react-native";
 import { parseProductName } from "@shared/parsers/productNameParser";
+import { detectCardMaskBands, redactReceiptText, type MaskBand } from "@shared/parsers/cardMaskDetection";
+import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
+import { requestStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
+import { router } from "expo-router";
+import i18n from "../i18n";
 import { ocrImageTiled } from "../utils/mlkitOcr";
 import { API_BASE_URL } from "../config/api";
 import { getUserId } from "../config/user";
@@ -37,6 +42,7 @@ import {
   type LabeledRegion,
   type Region,
 } from "@shared/parsers/rimiParser";
+import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
 import { REGIONS_VERSION } from "./regionsRehydrationService";
 
 export interface ProcessingResult {
@@ -49,7 +55,8 @@ export type ProcessingFailReason =
   | "ocr_error"
   | "chain_unrecognized"
   | "store_unrecognized"
-  | "post_failed";
+  | "post_failed"
+  | "mask_failed";
 
 export class ProcessingError extends Error {
   constructor(
@@ -466,7 +473,44 @@ function buildFooter(
   return { total: f.total, date: f.date, time: f.time, receiptNo: f.receiptNo, totalSavings: f.totalSavings, rawText: f.rawText, region: f.region, lineRegions: f.lineRegions };
 }
 
+/**
+ * Strip bank/loyalty card numbers + cashier name from the stored parsedData
+ * (rawText fields + product rawLines) and stamp geometry-only redaction boxes
+ * so the Kvitas-tab overlay can re-draw them. Mirrors receipt-process.tsx's
+ * buildParsedData — the queue pipeline must give the same privacy guarantee.
+ */
+function redactQueueParsedData(parsedData: object, maskBands: MaskBand[]): object {
+  const pd = parsedData as Record<string, any>;
+  return {
+    ...pd,
+    header: pd.header ? { ...pd.header, rawText: redactReceiptText(pd.header.rawText) } : pd.header,
+    products: Array.isArray(pd.products)
+      ? pd.products.map((p: any) => ({
+          ...p,
+          rawLines: Array.isArray(p.rawLines) ? p.rawLines.map(redactReceiptText) : p.rawLines,
+        }))
+      : pd.products,
+    footer: pd.footer ? { ...pd.footer, rawText: redactReceiptText(pd.footer.rawText) } : pd.footer,
+    maskBands: maskBands.map((b) => ({
+      yTop: b.yTop, yBottom: b.yBottom, xLeft: b.xLeft, xRight: b.xRight, kind: b.kind,
+    })),
+  };
+}
+
 // ── Chain processors ──────────────────────────────────────────────────────────
+
+/**
+ * The store address didn't auto-match — surface the map store-resolution screen
+ * (chain known, store not) and await the user's pick. This service is headless,
+ * so it uses expo-router's imperative `router`. null = user backed out.
+ */
+async function promptStoreResolution(chainId: number, chainName: string, address: string | null, rawText?: string | null) {
+  const prefill = address || pickAddressFromRawText(rawText);
+  console.log(`[storeResolution] (queue) ${chainName} prefill=${JSON.stringify(prefill)}`);
+  const pending = requestStoreResolution(chainId, chainName, prefill);
+  router.push("/receipt/store-resolution" as any);
+  return await pending;
+}
 
 async function processRimi(
   allLines: LineWithFrame[],
@@ -475,7 +519,11 @@ async function processRimi(
 ): Promise<object> {
   const chainId = 2;
   const parsed = parseRimiReceipt(allLines);
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  if (!store) {
+    const chosen = await promptStoreResolution(chainId, "RIMI", parsed.header.storeAddress || null, parsed.header.rawText);
+    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
+  }
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "RIMI", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Rimi parduotuvė neatpažinta");
@@ -496,7 +544,11 @@ async function processMaxima(
 ): Promise<object> {
   const chainId = 1;
   const parsed = parseMaximaReceipt(allLines);
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  if (!store) {
+    const chosen = await promptStoreResolution(chainId, "MAXIMA", parsed.header.storeAddress || null, parsed.header.rawText);
+    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
+  }
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "MAXIMA", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Maxima parduotuvė neatpažinta");
@@ -527,7 +579,11 @@ async function processNorfa(
 ): Promise<object> {
   const chainId = 4;
   const parsed = parseNorfaReceipt(allLines);
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  if (!store) {
+    const chosen = await promptStoreResolution(chainId, "NORFA", parsed.header.storeAddress || null, parsed.header.rawText);
+    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
+  }
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "NORFA", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Norfa parduotuvė neatpažinta");
@@ -558,7 +614,11 @@ async function processLidl(
 ): Promise<object> {
   const chainId = 5;
   const parsed = parseLidlReceipt(allLines);
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  if (!store) {
+    const chosen = await promptStoreResolution(chainId, "LIDL", parsed.header.storeAddress || null, parsed.header.rawText);
+    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
+  }
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "LIDL", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Lidl parduotuvė neatpažinta");
@@ -589,7 +649,11 @@ async function processIki(
 ): Promise<object> {
   const chainId = 3;
   const parsed = parseIkiReceipt(mergedLines);
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  if (!store) {
+    const chosen = await promptStoreResolution(chainId, "IKI", parsed.header.storeAddress || null, parsed.header.rawText);
+    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
+  }
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "IKI", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "IKI parduotuvė neatpažinta");
@@ -621,7 +685,7 @@ export async function processOneReceipt(
   onProgress?: (step: string, done?: number, total?: number) => void,
 ): Promise<ProcessingResult> {
   try {
-    onProgress?.("Nuskaitoma...");
+    onProgress?.(i18n.t("receiptQueue.scanning"));
     const {
       allLines,
       mergedLines,
@@ -640,20 +704,30 @@ export async function processOneReceipt(
       throw new ProcessingError("ocr_no_text", "Nepavyko nuskaityti teksto");
     }
 
-    onProgress?.("Atpažįstama...");
+    onProgress?.(i18n.t("receiptQueue.recognising"));
     let parsedData: object;
     const reportMatch = (d: number, t: number) =>
-      onProgress?.(`${d}/${t} prekės`, d, t);
+      onProgress?.(i18n.t("receiptQueue.products", { done: d, total: t }), d, t);
 
-    if (isRimiReceipt(lineTexts)) {
+    // Primary text-fingerprint detection; fall back to the seller's PVM/VAT
+    // code (chain-specific, printed on every receipt) when those all miss.
+    const chainId =
+      isRimiReceipt(lineTexts) ? 2 :
+      isMaximaReceipt(lineTexts) ? 1 :
+      isNorfaReceipt(lineTexts) ? 4 :
+      isLidlReceipt(lineTexts) ? 5 :
+      isIkiReceipt(lineTexts) ? 3 :
+      (detectChainByVatCode(lineTexts)?.chainId ?? null);
+
+    if (chainId === 2) {
       parsedData = await processRimi(allLines, signal, reportMatch);
-    } else if (isMaximaReceipt(lineTexts)) {
+    } else if (chainId === 1) {
       parsedData = await processMaxima(allLines, signal, reportMatch);
-    } else if (isNorfaReceipt(lineTexts)) {
+    } else if (chainId === 4) {
       parsedData = await processNorfa(allLines, signal, reportMatch);
-    } else if (isLidlReceipt(lineTexts)) {
+    } else if (chainId === 5) {
       parsedData = await processLidl(allLines, signal, reportMatch);
-    } else if (isIkiReceipt(lineTexts)) {
+    } else if (chainId === 3) {
       parsedData = await processIki(mergedLines, signal, reportMatch);
     } else {
       await logFail("chain_unrecognized", {
@@ -663,11 +737,17 @@ export async function processOneReceipt(
       throw new ProcessingError("chain_unrecognized", "Parduotuvės tinklas neatpažintas");
     }
 
+    // Detect bank/loyalty/cashier redaction boxes (image-pixel space), then
+    // strip the same data from the stored parsedData. The queue pipeline gets
+    // the SAME privacy guarantee as the interactive flow.
+    const maskBands = detectCardMaskBands(allLines);
+    console.log(`[MASK] (queue) detected ${maskBands.length} band(s)`);
+
     // Inject image metadata so loadExistingReceipt can size pageMetas
     // without a separate Image.getSize round-trip. filePath stays null
     // until uploadReceiptImage PATCHes the receipt row below.
     const parsedDataWithImage = {
-      ...(parsedData as Record<string, unknown>),
+      ...(redactQueueParsedData(parsedData, maskBands) as Record<string, unknown>),
       image: {
         uri: firstPageUri,
         width: firstPageWidth,
@@ -676,16 +756,28 @@ export async function processOneReceipt(
       },
     };
 
-    onProgress?.("Išsaugoma...");
+    onProgress?.(i18n.t("receiptQueue.saving"));
     const postResult = await postReceipt(parsedDataWithImage, signal);
 
-    // Background-but-awaited image upload. Without this, the dev band-
-    // crop preview on the receipt detail screen has nothing to slice
-    // (the `/api/receipts/:id/image` endpoint returns null). Failures
-    // are non-fatal — the receipt data is already persisted; we just
-    // lose the dev preview for that receipt.
-    onProgress?.("Įkeliama nuotrauka...");
-    await uploadReceiptImage(postResult.receiptId, firstPageUri, signal);
+    // Burn the black redaction boxes into the image BEFORE upload (via the
+    // global off-screen ViewShot host — this service is headless). FAIL-CLOSED:
+    // if the redacted copy can't be produced, SKIP the image upload entirely
+    // rather than PUT the original that still shows a card number.
+    let uploadUri: string | null = firstPageUri;
+    if (maskBands.length > 0) {
+      onProgress?.(i18n.t("receiptQueue.masking"));
+      try {
+        uploadUri = await buildRedactedUploadUri(firstPageUri, firstPageWidth, firstPageHeight, maskBands);
+      } catch (e) {
+        console.warn("[MASK] (queue) redaction failed — skipping image upload:", e);
+        await logFail("mask_failed", { ocrLineCount: lineTexts.length });
+        uploadUri = null;
+      }
+    }
+    if (uploadUri) {
+      onProgress?.(i18n.t("receiptQueue.uploading"));
+      await uploadReceiptImage(postResult.receiptId, uploadUri, signal);
+    }
 
     return postResult;
   } catch (e) {

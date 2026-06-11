@@ -10,6 +10,7 @@ import { getUserId } from '../../config/user';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { useProfileStore } from '../../state/profileStore';
 import { HapticTab } from '../../components/haptic-tab';
+import { countAwaitingReceiptGroups } from '../../utils/awaitingReceipts';
 import { FloatingPillTabBar } from '../../components/FloatingPillTabBar';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { devLog } from '../../utils/devLog';
@@ -61,14 +62,17 @@ export default function TabLayout() {
                 ? baskets.filter((b: any) => b.status !== 'completed').length
                 : 0
             );
-            setListCount(Array.isArray(lists)
+            // List badge = active list groups + completed groups still
+            // awaiting a receipt (both grouped by basket so a split counts once).
+            const activeGroups = Array.isArray(lists)
                 ? new Set(
                     lists
                         .filter((l: any) => l.status === 'active')
                         .map((l: any) => l.basketId != null ? `b-${l.basketId}` : `l-${l.id}`)
                 ).size
-                : 0
-            );
+                : 0;
+            const awaitingGroups = Array.isArray(lists) ? countAwaitingReceiptGroups(lists) : 0;
+            setListCount(activeGroups + awaitingGroups);
             setPendingSwipeCount(profile?.pendingSwipeCount ?? (profile?.pendingSwipes ? 1 : 0));
         } catch (error) {
             console.error('Failed to fetch counts:', error);

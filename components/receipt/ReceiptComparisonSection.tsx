@@ -1,11 +1,11 @@
 import { ReceiptComparison } from '../../types/receipt-view';
 import React, { useEffect, useMemo, useRef } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, Image, Animated, Easing } from 'react-native';
+import { View, Text, ActivityIndicator, StyleSheet, Animated, Easing } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { chainBrandColour } from '../../constants/chainBrandColours';
-import { getChainMiniLogoUrl } from '../../utils/chainBrandName';
+import { ChainLogoChip } from '../ChainLogoChip';
 import { formatEuro, formatKm } from '../../utils/formatCurrency';
 type Props = {
   comparison: ReceiptComparison | null;
@@ -42,11 +42,6 @@ type Row = {
  * insight (rounding artefacts when chains are effectively tied).
  */
 const SAVING_HIDE_BELOW = 0.05;
-
-const getInitials = (value?: string) => {
-  if (!value) return '';
-  return value.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]?.toUpperCase() || '').join('');
-};
 
 export default function ReceiptComparisonSection({ comparison, loading, error, summary }: Props) {
   const colors = useTheme();
@@ -216,19 +211,14 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
           >
             <View style={styles.rowHeader}>
               <View style={styles.storeInfo}>
-                {/* Mini logo on a brand-coloured tile — same treatment as the
-                    Analizė tab and elsewhere (not the full store logo). */}
-                <View style={[styles.logo, { backgroundColor: chainBrandColour(row.chainId, colors.primary) }]}>
-                  {row.chainLogoUrl ? (
-                    <Image
-                      source={{ uri: getChainMiniLogoUrl(row.chainId, row.chainLogoUrl) }}
-                      style={styles.logoImage}
-                      resizeMode="contain"
-                    />
-                  ) : (
-                    <Text style={styles.logoFallbackText}>{getInitials(row.storeName || row.chainName)}</Text>
-                  )}
-                </View>
+                {/* Canonical baked chain badge (chip_N) — pixel-identical to the
+                    chips on the map, shopping list, and every other surface. */}
+                <ChainLogoChip
+                  chainId={row.chainId}
+                  name={row.chainName}
+                  size={32}
+                  logoUrl={row.chainLogoUrl}
+                />
 
                 <View style={{ flex: 1 }}>
                   <View style={styles.storeTitleRow}>
@@ -407,16 +397,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   warningText: { fontSize: 12, color: c.warning, marginTop: 6 },
   loadingRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
 
-  logo: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-  },
-  logoImage: { width: 18, height: 18 },
-  logoFallbackText: { fontSize: 11, fontWeight: '700', color: '#FFFFFF' },
 
   storeLabel: { fontSize: 13, color: c.textPrimary, fontWeight: '600' },
 

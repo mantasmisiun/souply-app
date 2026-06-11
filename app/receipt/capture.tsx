@@ -14,7 +14,7 @@ export default function CaptureReceiptScreen() {
   const [photo, setPhoto] = useState<string | null>(null);
   const cameraRef = useRef<CameraView>(null);
   const router = useRouter();
-  const { preview } = useLocalSearchParams<{ preview?: string }>();
+  const { preview, shoppingListId, expectedChainId, listMap } = useLocalSearchParams<{ preview?: string; shoppingListId?: string; expectedChainId?: string; listMap?: string }>();
   const isPreview = preview === "true";
 
   if (!permission) {
@@ -51,6 +51,9 @@ export default function CaptureReceiptScreen() {
     if (!photo) return;
     const params = new URLSearchParams({ uri: photo });
     if (isPreview) params.set("preview", "true");
+    if (shoppingListId) params.set("shoppingListId", shoppingListId);
+    if (expectedChainId) params.set("expectedChainId", expectedChainId);
+    if (listMap) params.set("listMap", listMap);
     router.push(`/receipt-process?${params.toString()}` as any);
   };
 

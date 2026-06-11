@@ -67,6 +67,16 @@ const lightTheme = {
   borderSubtle:   '#F0F0F0',
   borderMuted:    '#EEEEEE',
 
+  // Material-3 tonal roles (Android modernization). Keyed to the beet brand
+  // instead of wallpaper dynamic colour, so the identity stays intact while
+  // gaining M3's container / state-layer / surface-tint vocabulary.
+  secondaryContainer:   '#F6D9E2',              // active-indicator / filled-tonal fill
+  onSecondaryContainer: '#7A2E45',              // icon/label/text ON the tonal fill
+  surfaceContainer:     '#F4EEF0',              // tinted elevated surface (nav bar, sheets)
+  surfaceContainerHigh: '#FBF6F8',              // one elevation step higher
+  surfaceTint:          palette.beet as string, // elevation-tint overlay colour
+  outlineVariant:       '#E6DDE1',              // tinted hairline divider
+
   // Status
   warning:        '#F57C00',
   warningMuted:   '#FFECB3',
@@ -117,6 +127,14 @@ const darkTheme: typeof lightTheme = {
   border:         '#3A3A3C',
   borderSubtle:   '#2A2A2C',
   borderMuted:    '#222224',
+
+  // Material-3 tonal roles (mirror of light; lifted for dark surfaces).
+  secondaryContainer:   '#4A2A34',
+  onSecondaryContainer: '#FBD3DE',
+  surfaceContainer:     '#262227',
+  surfaceContainerHigh: '#2F2A30',
+  surfaceTint:          palette.beet,
+  outlineVariant:       '#3A3236',
 
   // Status
   warning:        '#F59E0B',
@@ -280,7 +298,22 @@ export const motion = {
   easing: { standard: [0.2, 0, 0, 1] as const, emphasized: [0.05, 0.7, 0.1, 1] as const },
   /** Default spring for press + the tab-bar active indicator. */
   spring: { damping: 18, stiffness: 220, mass: 1 },
+  /** Bouncier spring for expressive shape-morph / stretch (M3 Expressive). */
+  springExpressive: { damping: 13, stiffness: 200, mass: 1 },
 } as const;
+
+/** Material-3 state-layer opacities — a translucent overlay of the role colour
+ *  laid over a surface on interaction (hover/focus/press). Pair with `withAlpha`. */
+export const stateLayer = { hover: 0.08, focus: 0.1, pressed: 0.1, dragged: 0.16 } as const;
+
+/** Apply an alpha channel to a #RRGGBB hex → rgba() string (for ripples +
+ *  state layers). Falls back to the input if it isn't a 6-digit hex. */
+export const withAlpha = (hex: string, alpha: number): string => {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+};
 
 /** Material-3 elevation tiers → RN shadow (iOS) + `elevation` (Android).
  *  Neutral shadow; reads softer on dark surfaces automatically. */

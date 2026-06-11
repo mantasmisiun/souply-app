@@ -240,6 +240,12 @@
       }
     },
     "tabAmounts": "Amounts",
+    "tabFailed": "Failed",
+    "failed": {
+      "empty": "No failed receipts",
+      "lines": "{{count}} OCR lines",
+      "resolve": "Dismiss"
+    },
     "amounts": {
       "leaseProgress": "{{done}} / {{total}} cards",
       "claimBatch": "Claim new batch",
@@ -1069,6 +1075,22 @@
     "footerStatTime": "Time",
     "footerStatReceiptNo": "Receipt no."
   },
+  "storeResolution": {
+    "title": "Pick the store",
+    "hint": "We couldn't recognise the store — pick it on the map.",
+    "searchPlaceholder": "Search address...",
+    "confirm": "Confirm",
+    "minChars": "Enter at least 3 characters",
+    "addressNotFound": "Address not found"
+  },
+  "receiptQueue": {
+    "scanning": "Scanning...",
+    "recognising": "Recognising...",
+    "products": "{{done}}/{{total}} items",
+    "masking": "Masking private info",
+    "saving": "Saving...",
+    "uploading": "Uploading photo..."
+  },
   "receiptProcess": {
     "tabSummary": "Summary",
     "tabProducts": "Items ({{count}})",
@@ -1089,9 +1111,17 @@
     "imageMissing": "The image wasn't uploaded. To reprocess this receipt, restart from the Analyze tab.",
     "duplicateTitle": "Receipt already uploaded",
     "duplicateBody": "This receipt has already been uploaded.",
+    "duplicateLinkedBody": "You'd already uploaded this receipt — we've added it to your list.",
+    "dupOtherAccountTitle": "Receipt already uploaded",
+    "dupOtherAccountBody": "This receipt was already uploaded by another user, so it can't be added.",
+    "chainGateTitle": "Wrong store's receipt?",
+    "chainGateBody": "This receipt looks like it's from \"{{detected}}\", but the list is for \"{{expected}}\". Did you shop at a different store?",
+    "chainGateDifferentStore": "I went to a different store",
+    "chainGateCancel": "Cancel",
     "errorSave": "Couldn't save receipt",
     "errorUploadUrlFields": "upload-url response is missing fields",
     "errorUploadPhoto": "Couldn't upload photo",
+    "errorMaskFailed": "Couldn't hide card details — receipt not uploaded",
     "errorSendTitle": "Couldn't send",
     "errorSendBody": "Try again later.",
     "errorProductUnmatched": "Product not recognised",
@@ -1142,6 +1172,7 @@
     },
     "deletedUndo": "Deleted. Undo?",
     "sectionActive": "Active",
+    "sectionMissingReceipt": "Missing receipt",
     "sectionCompleted": "Completed",
     "empty": "No shopping lists yet",
     "emptyBody": "Add products to a basket, compare prices, and create a list",
@@ -1152,7 +1183,15 @@
     "fabCreate": "Create",
     "filterAll": "All",
     "searchPlaceholder": "Search lists...",
-    "noSearchResults": "Nothing found"
+    "noSearchResults": "Nothing found",
+    "receiptNeeded": "Missing receipt",
+    "receiptAdded": "Receipt added",
+    "receiptProgress": "Receipts {{have}}/{{total}}",
+    "uploadReceiptTitle": "Add receipt",
+    "uploadReceiptBody": "Take a photo or upload this store's receipt.",
+    "uploadTakePhoto": "Take photo",
+    "uploadSelectExisting": "Select from uploaded",
+    "selectExistingTitle": "Choose a receipt"
   },
   "creatorAuth": {
     "title": "Creator login",
@@ -1216,7 +1255,8 @@
       "products": "Items",
       "total": "Total",
       "dateTime": "Date and time",
-      "receiptNo": "Receipt no."
+      "receiptNo": "Receipt no.",
+      "private": "Private info"
     },
     "explainer": {
       "title": "What Souply recognises",
@@ -1226,6 +1266,7 @@
       "totalBody": "Receipt grand total.",
       "dateTimeBody": "Receipt date and time.",
       "receiptNoBody": "Unique receipt number — used to distinguish re-uploaded photos.",
+      "privateBody": "Bank card, loyalty card numbers and the cashier's name are blacked out on your phone — this data is never stored or uploaded.",
       "close": "Got it"
     }
   }

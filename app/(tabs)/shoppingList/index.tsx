@@ -19,6 +19,10 @@ import { ChainLogoChip } from '../../../components/ChainLogoChip';
 import { formatStoreStreet } from '../../../utils/formatAddress';
 import { StoreChipBar } from '../../../components/StoreChipBar';
 import { CardActionBar, type CardAction } from '../../../components/CardActionBar';
+import { isAwaitingReceipt, groupReceiptProgress } from '../../../utils/awaitingReceipts';
+import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
+import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '../../../utils/fetchWithTimeout';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface StoreChain {
@@ -41,11 +45,24 @@ interface ShoppingList {
     storeName: string;
     address: string;
     chainName: string;
+    chainId?: number;
     logoUrl: string | null;
     status: string;
+    basketId?: number | null;
     createdAt: string;
     itemCount: number;
     checkedCount: number;
+    receiptCount?: number;
+}
+
+/** A row from /api/users/:id/receipts — used by the "already uploaded" picker. */
+interface UserReceipt {
+    id: number;
+    chainName: string;
+    receiptDate?: string | null;
+    receiptNo?: string | null;
+    shoppingListId?: number | null;
+    processingStatus?: string | null;
 }
 
 interface SplitGroupEntry {
@@ -62,6 +79,39 @@ interface SplitGroup {
     lists: ShoppingList[];
 }
 
+// Build a chainId→listId map for the awaiting store rows of a list/group.
+// The receipt's detected chain auto-selects which row to link (no prompt).
+const buildChainListMap = (rows: ShoppingList[]): Record<number, number> => {
+    const map: Record<number, number> = {};
+    for (const l of rows) {
+        const cid = l.chainId ?? chainIdByName(l.chainName) ?? 0;
+        if (cid) map[cid] = l.id;
+    }
+    return map;
+};
+const mapToParam = (map: Record<number, number>) =>
+    Object.entries(map).map(([c, l]) => `${c}:${l}`).join(',');
+
+// ─── Receipt status pill (shown on completed cards) ───────────────────────────
+
+function ReceiptPill({ awaiting, label, styles, colors }: {
+    awaiting: boolean;
+    label: string;
+    styles: Styles;
+    colors: AppTheme;
+}) {
+    return (
+        <View style={[styles.receiptPill, awaiting ? styles.receiptPillNeeded : styles.receiptPillDone]}>
+            <Ionicons
+                name={awaiting ? 'receipt-outline' : 'checkmark-circle'}
+                size={iconSize.xs}
+                color={awaiting ? colors.warning : colors.textMuted}
+            />
+            <Text style={awaiting ? styles.receiptPillTextNeeded : styles.receiptPillTextDone}>{label}</Text>
+        </View>
+    );
+}
+
 // ─── Single-store card ────────────────────────────────────────────────────────
 
 function ShoppingListCard({ item, onPress, onLongPress, selectionMode, selected, styles, colors }: {
@@ -73,13 +123,17 @@ function ShoppingListCard({ item, onPress, onLongPress, selectionMode, selected,
     styles: Styles;
     colors: AppTheme;
 }) {
+    const { t } = useTranslation();
     const progress = item.itemCount > 0 ? item.checkedCount / item.itemCount : 0;
+    const awaitingReceipt = isAwaitingReceipt(item);
 
     return (
         <TouchableOpacity
             style={[
                 styles.card,
-                item.status === 'active' ? styles.cardActive : styles.cardCompleted,
+                item.status === 'active'
+                    ? styles.cardActive
+                    : awaitingReceipt ? styles.cardAwaiting : styles.cardCompleted,
             ]}
             onPress={() => onPress(item.id)}
             onLongPress={onLongPress}
@@ -105,13 +159,27 @@ function ShoppingListCard({ item, onPress, onLongPress, selectionMode, selected,
                         <Text style={styles.progressText}>{item.checkedCount}/{item.itemCount}</Text>
                     </View>
                 )}
+                {item.status === 'completed' && (
+                    <ReceiptPill
+                        awaiting={awaitingReceipt}
+                        label={awaitingReceipt ? t('shoppingListTab.receiptNeeded') : t('shoppingListTab.receiptAdded')}
+                        styles={styles}
+                        colors={colors}
+                    />
+                )}
             </View>
             <View style={styles.badgeContainer}>
-                <View style={[styles.badge, item.status === 'completed' && styles.badgeCompleted]}>
-                    <Text style={[styles.badgeText, item.status === 'completed' && styles.badgeTextCompleted]}>
-                        {item.itemCount}
-                    </Text>
-                </View>
+                {awaitingReceipt ? (
+                    <View style={styles.uploadCue}>
+                        <Ionicons name="camera" size={iconSize.sm} color={colors.onPrimary} />
+                    </View>
+                ) : (
+                    <View style={[styles.badge, item.status === 'completed' && styles.badgeCompleted]}>
+                        <Text style={[styles.badgeText, item.status === 'completed' && styles.badgeTextCompleted]}>
+                            {item.itemCount}
+                        </Text>
+                    </View>
+                )}
             </View>
         </TouchableOpacity>
     );
@@ -128,16 +196,22 @@ function SplitGroupCard({ group, onPress, onLongPress, selectionMode, selected, 
     styles: Styles;
     colors: AppTheme;
 }) {
+    const { t } = useTranslation();
     const totalItems = group.lists.reduce((s, l) => s + Number(l.itemCount), 0);
     const checkedItems = group.lists.reduce((s, l) => s + Number(l.checkedCount), 0);
     const progress = totalItems > 0 ? checkedItems / totalItems : 0;
     const isCompleted = group.lists.length > 0 && group.lists.every(l => l.status === 'completed');
+    const receipts = groupReceiptProgress(group.lists);
+    const awaitingReceipt = isCompleted && receipts.have < receipts.total;
     const streets = group.lists.map(l => formatStoreStreet(l.address)).filter(Boolean).join(' · ');
     const date = group.lists[0]?.createdAt;
 
     return (
         <TouchableOpacity
-            style={[styles.card, isCompleted ? styles.cardCompleted : styles.cardActive]}
+            style={[
+                styles.card,
+                !isCompleted ? styles.cardActive : awaitingReceipt ? styles.cardAwaiting : styles.cardCompleted,
+            ]}
             onPress={onPress}
             onLongPress={onLongPress}
             delayLongPress={350}
@@ -174,11 +248,25 @@ function SplitGroupCard({ group, onPress, onLongPress, selectionMode, selected, 
                         <Text style={styles.progressText}>{checkedItems}/{totalItems}</Text>
                     </View>
                 )}
+                {isCompleted && (
+                    <ReceiptPill
+                        awaiting={awaitingReceipt}
+                        label={t('shoppingListTab.receiptProgress', { have: receipts.have, total: receipts.total })}
+                        styles={styles}
+                        colors={colors}
+                    />
+                )}
             </View>
             <View style={styles.badgeContainer}>
-                <View style={[styles.badge, isCompleted && styles.badgeCompleted]}>
-                    <Text style={[styles.badgeText, isCompleted && styles.badgeTextCompleted]}>{totalItems}</Text>
-                </View>
+                {awaitingReceipt ? (
+                    <View style={styles.uploadCue}>
+                        <Ionicons name="camera" size={iconSize.sm} color={colors.onPrimary} />
+                    </View>
+                ) : (
+                    <View style={[styles.badge, isCompleted && styles.badgeCompleted]}>
+                        <Text style={[styles.badgeText, isCompleted && styles.badgeTextCompleted]}>{totalItems}</Text>
+                    </View>
+                )}
             </View>
         </TouchableOpacity>
     );
@@ -200,6 +288,15 @@ export default function ShoppingListScreen() {
     const [refreshing, setRefreshing] = useState(false);
     const [selectionMode, setSelectionMode] = useState(false);
     const [selectedListIds, setSelectedListIds] = useState<Set<number>>(new Set());
+    // Receipt-upload sheet target: chainId→listId for the awaiting store(s)
+    // of the tapped card (single = 1 entry, split group = N).
+    const [uploadTarget, setUploadTarget] = useState<Record<number, number> | null>(null);
+    const [pdfConverting, setPdfConverting] = useState(false);
+    // The user's receipts (for the "select from already uploaded" option).
+    const [receipts, setReceipts] = useState<UserReceipt[]>([]);
+    const [pickExistingTarget, setPickExistingTarget] = useState<Record<number, number> | null>(null);
+    // The fully-receipted "Completed" archive is collapsed by default.
+    const [completedCollapsed, setCompletedCollapsed] = useState(true);
 
     const exitSelection = useCallback(() => {
         setSelectionMode(false);
@@ -268,9 +365,48 @@ export default function ShoppingListScreen() {
         }
     }, [loadSplitGroups]);
 
+    const fetchReceipts = useCallback(async () => {
+        try {
+            const userId = await getUserId();
+            const res = await fetch(`${API_BASE_URL}/api/users/${userId}/receipts`);
+            const data = await res.json();
+            setReceipts(Array.isArray(data) ? data : []);
+        } catch { /* advisory — only powers the "already uploaded" option */ }
+    }, []);
+
     useFocusEffect(useCallback(() => {
         fetchLists();
-    }, [fetchLists]));
+        fetchReceipts();
+    }, [fetchLists, fetchReceipts]));
+
+    // Unlinked receipts whose chain matches one of the target's awaiting
+    // stores — the candidates for "select from already uploaded". Chain-
+    // filtered so a Lidl receipt can't be attached to a Maxima list.
+    const unlinkedReceiptsForMap = useCallback((map: Record<number, number> | null) => {
+        if (!map) return [] as UserReceipt[];
+        const chains = Object.keys(map).map(Number);
+        return receipts.filter(r =>
+            r.shoppingListId == null &&
+            r.processingStatus !== 'failed' &&
+            chains.includes(chainIdByName(r.chainName) ?? -1),
+        );
+    }, [receipts]);
+
+    // Link a picked receipt to the target's store row that matches its chain.
+    const linkExistingReceipt = useCallback(async (map: Record<number, number>, receiptId: number, chainName: string) => {
+        setPickExistingTarget(null);
+        const listId = map[chainIdByName(chainName) ?? -1];
+        if (!listId) return;
+        try {
+            await fetch(`${API_BASE_URL}/api/shopping-lists/${listId}/link-receipt`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ receiptId }),
+            });
+        } catch { /* best-effort */ }
+        fetchLists();
+        fetchReceipts();
+    }, [fetchLists, fetchReceipts]);
 
     // ── Delete / complete list ────────────────────────────────────────────────
 
@@ -295,6 +431,68 @@ export default function ShoppingListScreen() {
             fetchLists();
         }
     }, [fetchLists]);
+
+    // ── Receipt upload (post-completion "needs receipt" flow) ──────────────────
+    // The target is a chainId→listId map; receipt-process auto-selects the
+    // store row by the receipt's detected chain (no store-selection prompt).
+    const takeReceiptPhoto = useCallback((map: Record<number, number>) => {
+        setUploadTarget(null);
+        router.push(`/receipt/capture?listMap=${encodeURIComponent(mapToParam(map))}` as any);
+    }, [router]);
+
+    // Upload a single receipt file — image OR PDF, same as the Analyze tab.
+    // PDFs are converted to PNG pages server-side, then handed to
+    // receipt-process as a comma-separated `uris` list (multi-page).
+    const pickReceiptFile = useCallback(async (map: Record<number, number>) => {
+        setUploadTarget(null);
+        const listMapStr = encodeURIComponent(mapToParam(map));
+        const picked = await DocumentPicker.getDocumentAsync({
+            type: ['image/*', 'application/pdf'],
+            copyToCacheDirectory: true,
+            multiple: false,
+        });
+        if (picked.canceled || !picked.assets?.length) return;
+        const asset = picked.assets[0];
+        const isPdf =
+            asset.mimeType === 'application/pdf' ||
+            (asset.name?.toLowerCase().endsWith('.pdf') ?? false);
+
+        if (!isPdf) {
+            router.push(`/receipt-process?uri=${encodeURIComponent(asset.uri)}&listMap=${listMapStr}` as any);
+            return;
+        }
+
+        setPdfConverting(true);
+        try {
+            const pdfBase64 = await FileSystem.readAsStringAsync(asset.uri, {
+                encoding: FileSystem.EncodingType.Base64,
+            });
+            const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/pdf-to-image`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ pdfBase64 }),
+                timeoutMs: TIMEOUT_HEAVY_MS,
+            });
+            if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            const { images } = await res.json();
+            if (!Array.isArray(images) || images.length === 0) throw new Error('no pages');
+            const ts = Date.now();
+            const paths: string[] = [];
+            for (let i = 0; i < images.length; i++) {
+                const path = `${FileSystem.cacheDirectory}receipt-pdf-${ts}-${i}.png`;
+                await FileSystem.writeAsStringAsync(path, images[i], {
+                    encoding: FileSystem.EncodingType.Base64,
+                });
+                paths.push(path);
+            }
+            const urisParam = paths.map(encodeURIComponent).join(',');
+            router.push(`/receipt-process?uris=${urisParam}&listMap=${listMapStr}` as any);
+        } catch (e) {
+            Alert.alert(t('shoppingListTab.errors.generic'), t('receipts.uploadFail.body'));
+        } finally {
+            setPdfConverting(false);
+        }
+    }, [router, t]);
 
     // ── FAB / chain picker ────────────────────────────────────────────────────
     const [fabMenuOpen, setFabMenuOpen] = useState(false);
@@ -388,9 +586,18 @@ export default function ShoppingListScreen() {
     const activeGroups = filteredGroups.filter(g => g.lists.some(l => l.status === 'active') || g.lists.length === 0);
     const completedGroups = filteredGroups.filter(g => g.lists.length > 0 && g.lists.every(l => l.status === 'completed'));
 
+    // Within completed, split by receipt state: lists still missing a receipt
+    // stay visible (their own "Missing receipt" section); fully-receipted lists
+    // drop into the collapsed "Completed" archive below.
+    const missingSingle = completedSingle.filter(isAwaitingReceipt);
+    const doneSingle = completedSingle.filter(l => !isAwaitingReceipt(l));
+    const missingGroups = completedGroups.filter(g => g.lists.some(isAwaitingReceipt));
+    const doneGroups = completedGroups.filter(g => !g.lists.some(isAwaitingReceipt));
+
     const hasAny = lists.length > 0 || splitGroups.length > 0;
     const hasActive = activeSingle.length > 0 || activeGroups.length > 0;
-    const hasCompleted = completedSingle.length > 0 || completedGroups.length > 0;
+    const hasMissing = missingSingle.length > 0 || missingGroups.length > 0;
+    const hasDone = doneSingle.length > 0 || doneGroups.length > 0;
 
     if (loading) return (
         <View style={styles.container}>
@@ -458,6 +665,8 @@ export default function ShoppingListScreen() {
                                             group={group}
                                             onPress={() => {
                                                 if (selectionMode) { toggleSelectGroup(groupIds); return; }
+                                                const awaiting = group.lists.filter(isAwaitingReceipt);
+                                                if (awaiting.length > 0) { setUploadTarget(buildChainListMap(awaiting)); return; }
                                                 const firstId = group.entries[0]?.listId;
                                                 if (firstId) router.push(`/shopping-list/${firstId}?basketId=${group.basketId}` as any);
                                             }}
@@ -475,6 +684,7 @@ export default function ShoppingListScreen() {
                                         item={item}
                                         onPress={id => {
                                             if (selectionMode) { toggleSelectList(item.id); return; }
+                                            if (isAwaitingReceipt(item)) { setUploadTarget(buildChainListMap([item])); return; }
                                             router.push(`/shopping-list/${id}` as any);
                                         }}
                                         onLongPress={() => { setSelectionMode(true); toggleSelectList(item.id); }}
@@ -486,10 +696,64 @@ export default function ShoppingListScreen() {
                                 ))}
                             </>
                         )}
-                        {hasCompleted && (
+                        {hasMissing && (
                             <>
-                                <Text style={styles.sectionTitle}>{t('shoppingListTab.sectionCompleted')}</Text>
-                                {completedGroups.map(group => {
+                                <Text style={styles.sectionTitle}>{t('shoppingListTab.sectionMissingReceipt')}</Text>
+                                {missingGroups.map(group => {
+                                    const groupIds = group.lists.map(l => l.id);
+                                    const groupSelected = groupIds.length > 0 && groupIds.every(id => selectedListIds.has(id));
+                                    return (
+                                        <SplitGroupCard
+                                            key={group.basketId}
+                                            group={group}
+                                            onPress={() => {
+                                                if (selectionMode) { toggleSelectGroup(groupIds); return; }
+                                                const awaiting = group.lists.filter(isAwaitingReceipt);
+                                                if (awaiting.length > 0) { setUploadTarget(buildChainListMap(awaiting)); return; }
+                                                const firstId = group.entries[0]?.listId;
+                                                if (firstId) router.push(`/shopping-list/${firstId}?basketId=${group.basketId}` as any);
+                                            }}
+                                            onLongPress={() => { setSelectionMode(true); toggleSelectGroup(groupIds); }}
+                                            selectionMode={selectionMode}
+                                            selected={groupSelected}
+                                            styles={styles}
+                                            colors={colors}
+                                        />
+                                    );
+                                })}
+                                {missingSingle.map(item => (
+                                    <ShoppingListCard
+                                        key={item.id}
+                                        item={item}
+                                        onPress={id => {
+                                            if (selectionMode) { toggleSelectList(item.id); return; }
+                                            if (isAwaitingReceipt(item)) { setUploadTarget(buildChainListMap([item])); return; }
+                                            router.push(`/shopping-list/${id}` as any);
+                                        }}
+                                        onLongPress={() => { setSelectionMode(true); toggleSelectList(item.id); }}
+                                        selectionMode={selectionMode}
+                                        selected={selectedListIds.has(item.id)}
+                                        styles={styles}
+                                        colors={colors}
+                                    />
+                                ))}
+                            </>
+                        )}
+                        {hasDone && (
+                            <>
+                                <TouchableOpacity
+                                    style={styles.collapsibleHeader}
+                                    activeOpacity={0.6}
+                                    onPress={() => setCompletedCollapsed(c => !c)}
+                                >
+                                    <Text style={styles.sectionTitle}>{t('shoppingListTab.sectionCompleted')}</Text>
+                                    <Ionicons
+                                        name={completedCollapsed ? 'chevron-down' : 'chevron-up'}
+                                        size={18}
+                                        color={colors.textSecondary}
+                                    />
+                                </TouchableOpacity>
+                                {!completedCollapsed && doneGroups.map(group => {
                                     const groupIds = group.lists.map(l => l.id);
                                     const groupSelected = groupIds.length > 0 && groupIds.every(id => selectedListIds.has(id));
                                     return (
@@ -509,7 +773,7 @@ export default function ShoppingListScreen() {
                                         />
                                     );
                                 })}
-                                {completedSingle.map(item => (
+                                {!completedCollapsed && doneSingle.map(item => (
                                     <ShoppingListCard
                                         key={item.id}
                                         item={item}
@@ -619,6 +883,90 @@ export default function ShoppingListScreen() {
                     </View>
                 </TouchableOpacity>
             </Modal>
+
+            {/* Receipt-upload chooser (completed list → "needs receipt"). */}
+            <Modal
+                visible={uploadTarget !== null}
+                transparent
+                animationType="slide"
+                onRequestClose={() => setUploadTarget(null)}
+            >
+                <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setUploadTarget(null)}>
+                    <View style={styles.uploadSheet}>
+                        <Text style={styles.sheetTitle}>{t('shoppingListTab.uploadReceiptTitle')}</Text>
+                        <Text style={styles.uploadSheetSub}>{t('shoppingListTab.uploadReceiptBody')}</Text>
+                        <TouchableOpacity
+                            style={styles.uploadOption}
+                            onPress={() => { if (uploadTarget) takeReceiptPhoto(uploadTarget); }}
+                        >
+                            <Ionicons name="camera-outline" size={iconSize.lg} color={colors.primary} />
+                            <Text style={styles.uploadOptionText}>{t('shoppingListTab.uploadTakePhoto')}</Text>
+                        </TouchableOpacity>
+                        <View style={styles.fabMenuDivider} />
+                        <TouchableOpacity
+                            style={styles.uploadOption}
+                            onPress={() => { if (uploadTarget) pickReceiptFile(uploadTarget); }}
+                        >
+                            <Ionicons name="cloud-upload-outline" size={iconSize.lg} color={colors.primary} />
+                            <Text style={styles.uploadOptionText}>{t('receipts.menu.uploadAction')}</Text>
+                        </TouchableOpacity>
+                        {unlinkedReceiptsForMap(uploadTarget).length > 0 && (
+                            <>
+                                <View style={styles.fabMenuDivider} />
+                                <TouchableOpacity
+                                    style={styles.uploadOption}
+                                    onPress={() => {
+                                        const m = uploadTarget;
+                                        setUploadTarget(null);
+                                        setPickExistingTarget(m);
+                                    }}
+                                >
+                                    <Ionicons name="albums-outline" size={iconSize.lg} color={colors.primary} />
+                                    <Text style={styles.uploadOptionText}>{t('shoppingListTab.uploadSelectExisting')}</Text>
+                                </TouchableOpacity>
+                            </>
+                        )}
+                    </View>
+                </TouchableOpacity>
+            </Modal>
+
+            {/* "Already uploaded" picker — assign an existing unlinked receipt. */}
+            <Modal
+                visible={pickExistingTarget !== null}
+                transparent
+                animationType="slide"
+                onRequestClose={() => setPickExistingTarget(null)}
+            >
+                <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setPickExistingTarget(null)}>
+                    <View style={styles.uploadSheet}>
+                        <Text style={styles.sheetTitle}>{t('shoppingListTab.selectExistingTitle')}</Text>
+                        {unlinkedReceiptsForMap(pickExistingTarget).map(r => (
+                            <TouchableOpacity
+                                key={r.id}
+                                style={styles.existingRow}
+                                onPress={() => { if (pickExistingTarget) linkExistingReceipt(pickExistingTarget, r.id, r.chainName); }}
+                            >
+                                <ChainLogoChip chainId={chainIdByName(r.chainName) ?? 0} name={r.chainName} size={avatarSize.md} />
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.existingChain} numberOfLines={1}>{chainBrandName(r.chainName)}</Text>
+                                    {r.receiptDate ? <Text style={styles.existingDate}>{formatDate(r.receiptDate)}</Text> : null}
+                                </View>
+                                <Ionicons name="chevron-forward" size={iconSize.sm} color={colors.textMuted} />
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                </TouchableOpacity>
+            </Modal>
+
+            {/* PDF→image conversion in progress (matches the Analyze tab). */}
+            <Modal visible={pdfConverting} transparent animationType="fade">
+                <View style={styles.convertingBackdrop}>
+                    <View style={styles.convertingCard}>
+                        <ActivityIndicator size="large" color={colors.primary} />
+                        <Text style={styles.convertingText}>{t('receipts.menu.pdfConverting')}</Text>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
@@ -630,6 +978,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     sectionTitle: {
         ...typography.label, fontWeight: '700', color: c.textMuted,
         marginBottom: spacing.sm, marginTop: spacing.sm, textTransform: 'uppercase',
+    },
+    // Tappable section header for the collapsible "Completed" archive.
+    collapsibleHeader: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     },
 
     // ── Multi-select circle (shown next to the logo in selection mode) ───────
@@ -650,6 +1002,17 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     cardActive: { borderLeftColor: c.primary },
     cardCompleted: { borderLeftColor: c.textMuted },
+    cardAwaiting: { borderLeftColor: c.warning },
+
+    // ── Receipt status pill (completed cards) ─────────────────────────────────
+    receiptPill: {
+        flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
+        marginTop: 6, paddingHorizontal: spacing.sm, paddingVertical: 3, borderRadius: radius.pill,
+    },
+    receiptPillNeeded: { backgroundColor: c.warningMuted },
+    receiptPillDone: { backgroundColor: c.borderSubtle },
+    receiptPillTextNeeded: { ...typography.caption, fontWeight: '700', color: c.warning },
+    receiptPillTextDone: { ...typography.caption, fontWeight: '600', color: c.textMuted },
     cardLeft: { marginRight: spacing.md },
     cardContent: { flex: 1 },
     storeName: { ...typography.bodySmallStrong, color: c.textPrimary },
@@ -666,6 +1029,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     badgeCompleted: { backgroundColor: c.border },
     badgeText: { ...typography.labelSmall, fontWeight: '700', color: c.primary },
     badgeTextCompleted: { color: c.textMuted },
+    // Tap-to-add-receipt cue (replaces the item count on awaiting cards).
+    uploadCue: {
+        width: 28, height: 28, borderRadius: radius.pill,
+        backgroundColor: c.warning, alignItems: 'center', justifyContent: 'center',
+    },
 
     // ── Multi-store split card ────────────────────────────────────────────────
     splitLogos: { flexDirection: 'row', alignItems: 'center' },
@@ -705,4 +1073,27 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingVertical: spacing.lg, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
     },
     chainName: { flex: 1, ...typography.bodyStrong, fontWeight: '500', color: c.textPrimary },
+
+    // ── Receipt upload sheet ──────────────────────────────────────────────────
+    uploadSheet: {
+        backgroundColor: c.cardBackground, borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
+        paddingHorizontal: spacing.xl, paddingTop: spacing.xl, paddingBottom: spacing.xxl,
+    },
+    uploadSheetSub: { ...typography.bodySmall, color: c.textMuted, marginBottom: spacing.md },
+    uploadOption: {
+        flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.lg,
+    },
+    uploadOptionText: { ...typography.bodyStrong, fontWeight: '500', color: c.textPrimary },
+    existingRow: {
+        flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+        paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
+    },
+    existingChain: { ...typography.bodySmallStrong, color: c.textPrimary },
+    existingDate: { ...typography.labelSmall, fontWeight: '400', color: c.textMuted, marginTop: 2 },
+    convertingBackdrop: { flex: 1, backgroundColor: c.overlayBackdrop, alignItems: 'center', justifyContent: 'center' },
+    convertingCard: {
+        backgroundColor: c.cardBackground, borderRadius: radius.md, padding: spacing.xl,
+        alignItems: 'center', gap: spacing.md, ...elevation.level3,
+    },
+    convertingText: { ...typography.bodySmall, color: c.textSecondary },
 });

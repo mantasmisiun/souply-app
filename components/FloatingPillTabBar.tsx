@@ -1,10 +1,27 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { View, Pressable, Text, StyleSheet, type LayoutChangeEvent } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, {
+    Easing,
+    useAnimatedStyle,
+    useSharedValue,
+    withSequence,
+    withSpring,
+    withTiming,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { useTheme, spacing, radius, elevation, typography, motion } from '../constants/theme';
+import {
+    useTheme,
+    useResolvedScheme,
+    spacing,
+    radius,
+    typography,
+    motion,
+    stateLayer,
+    withAlpha,
+    type AppTheme,
+} from '../constants/theme';
 
 // Width/height of the Material-3 "active indicator" pill that sits behind the
 // selected tab's icon and slides between tabs.
@@ -21,21 +38,43 @@ const INDICATOR_HEIGHT = 34;
 export const FLOATING_TAB_BAR_CLEARANCE = 80;
 
 /**
- * Android floating pill tab bar. Replaces the flat bottom bar with a rounded,
- * elevated bar inset from the screen edges, plus a sliding pill indicator
- * behind the active icon (which is simultaneously the iOS-26 trend and native
- * Material-3 bottom-nav). iOS keeps the native glass `NativeTabs`; this is the
- * Android (and JS-fallback) bar, wired via the `tabBar` prop on `<Tabs>`.
+ * Android floating pill tab bar — Material-3 (Expressive) bottom navigation.
+ * iOS keeps the native glass `NativeTabs`; this is the Android (and JS-fallback)
+ * bar, wired via the `tabBar` prop on `<Tabs>`.
  *
- * Icons + badges are reused from each screen's existing `tabBarIcon` option so
- * counts stay in sync; this component only owns layout, the indicator, haptics
- * and the press handling.
+ * M3 features applied here (the "test surface" for the modernization pass):
+ *   - tonal **active-indicator** pill (`secondaryContainer`) that slides between
+ *     tabs and STRETCHES while travelling (expressive motion), then settles;
+ *   - **surface-tint** elevated bar (`surfaceContainer` + `outlineVariant`);
+ *   - per-tab **state layer + shape-morph**: native ripple, a press scale-down,
+ *     and a spring bounce when a tab becomes active;
+ *   - active icon/label in `onSecondaryContainer` with a heavier label weight;
+ *   - selection haptic on press.
+ *
+ * Icons + badges are reused from each screen's `tabBarIcon` option so counts
+ * stay in sync; this component owns layout, the indicator, motion + haptics.
  */
 export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
     const colors = useTheme();
+    const isDark = useResolvedScheme() === 'dark';
     const insets = useSafeAreaInsets();
     const [innerWidth, setInnerWidth] = useState(0);
     const tx = useSharedValue(0);
+    const stretch = useSharedValue(1);
+
+    // Two stacked shadows (Material's key + ambient light model) give a real
+    // sense of lift that a single capped Android `elevation` can't. The key
+    // shadow is tight, darker and tinted (warm beet in light mode) so the bar
+    // reads as floating ABOVE the page rather than printed on it; the ambient
+    // is wide + faint for the soft penumbra. An inner top highlight rim adds the
+    // convex sheen (lit-from-above) that sells the 3D, iOS-like feel.
+    const keyShadow = isDark
+        ? { shadowColor: '#000000', shadowOpacity: 0.6, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 16 }
+        : { shadowColor: '#5A2233', shadowOpacity: 0.3, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 16 };
+    const ambientShadow = isDark
+        ? { shadowColor: '#000000', shadowOpacity: 0.45, shadowRadius: 28, shadowOffset: { width: 0, height: 16 }, elevation: 8 }
+        : { shadowColor: '#3A1722', shadowOpacity: 0.16, shadowRadius: 28, shadowOffset: { width: 0, height: 16 }, elevation: 8 };
+    const rimColor = isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.9)';
 
     const count = state.routes.length;
     const itemWidth = innerWidth > 0 ? innerWidth / count : 0;
@@ -43,30 +82,47 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
     useEffect(() => {
         if (itemWidth <= 0) return;
         const target = state.index * itemWidth + (itemWidth - INDICATOR_WIDTH) / 2;
-        tx.value = withSpring(target, {
-            damping: motion.spring.damping,
-            stiffness: motion.spring.stiffness,
-            mass: motion.spring.mass,
-        });
-    }, [state.index, itemWidth, tx]);
+        tx.value = withSpring(target, motion.spring);
+        // Expressive: the indicator elongates while it travels, then springs back
+        // to its resting width — the signature M3 Expressive nav motion.
+        stretch.value = withSequence(
+            withTiming(1.55, {
+                duration: motion.duration.fast,
+                easing: Easing.bezier(...motion.easing.emphasized),
+            }),
+            withSpring(1, motion.springExpressive),
+        );
+    }, [state.index, itemWidth, tx, stretch]);
 
-    const indicatorStyle = useAnimatedStyle(() => ({ transform: [{ translateX: tx.value }] }));
+    const indicatorStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: tx.value }, { scaleX: stretch.value }],
+    }));
 
     return (
         <View
             pointerEvents="box-none"
             style={[styles.wrap, { paddingBottom: insets.bottom + spacing.sm }]}
         >
+          {/* Ambient (soft, wide) shadow layer — hugs the bar so both shadows
+              share the same rounded silhouette. The bar carries the tighter key
+              shadow; together they fake two-light depth. */}
+          <View style={[styles.shadowLayer, ambientShadow]}>
             <View
                 onLayout={(e: LayoutChangeEvent) =>
                     setInnerWidth(e.nativeEvent.layout.width - spacing.sm * 2)
                 }
                 style={[
                     styles.bar,
-                    elevation.level3,
-                    { backgroundColor: colors.cardBackground, borderColor: colors.borderSubtle },
+                    keyShadow,
+                    { backgroundColor: colors.surfaceContainer, borderColor: colors.outlineVariant },
                 ]}
             >
+                {/* Inner top-highlight rim — only the top edge is lit, giving the
+                    surface a convex, lit-from-above sheen. */}
+                <View
+                    pointerEvents="none"
+                    style={[styles.rim, { borderTopColor: rimColor }]}
+                />
                 {itemWidth > 0 && (
                     <Animated.View
                         pointerEvents="none"
@@ -77,7 +133,7 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
                                 width: INDICATOR_WIDTH,
                                 height: INDICATOR_HEIGHT,
                                 borderRadius: radius.pill,
-                                backgroundColor: colors.primaryMuted,
+                                backgroundColor: colors.secondaryContainer,
                             },
                             indicatorStyle,
                         ]}
@@ -87,7 +143,6 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
                 {state.routes.map((route, index) => {
                     const { options } = descriptors[route.key];
                     const focused = state.index === index;
-                    const tint = focused ? colors.primary : colors.textSecondary;
                     const label = (options.title ?? route.name) as string;
 
                     const onPress = () => {
@@ -101,26 +156,83 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
                     };
 
                     return (
-                        <Pressable
+                        <TabItem
                             key={route.key}
-                            accessibilityRole="button"
-                            accessibilityState={focused ? { selected: true } : {}}
-                            accessibilityLabel={label}
-                            android_ripple={{ color: colors.primaryMuted, borderless: true, radius: 36 }}
+                            label={label}
+                            focused={focused}
+                            colors={colors}
+                            renderIcon={(color) => options.tabBarIcon?.({ focused, color, size: 24 })}
                             onPress={onPress}
-                            style={styles.item}
-                        >
-                            <View style={styles.iconWrap}>
-                                {options.tabBarIcon?.({ focused, color: tint, size: 24 })}
-                            </View>
-                            <Text numberOfLines={1} style={[typography.caption, styles.label, { color: tint }]}>
-                                {label}
-                            </Text>
-                        </Pressable>
+                        />
                     );
                 })}
             </View>
+          </View>
         </View>
+    );
+}
+
+/**
+ * One tab cell — owns its own icon-scale spring so a press shrinks the icon
+ * (state-layer feedback) and becoming-active gives it a brief bounce
+ * (shape-morph). Kept as a child so each cell has independent shared values.
+ */
+function TabItem({
+    label,
+    focused,
+    colors,
+    renderIcon,
+    onPress,
+}: {
+    label: string;
+    focused: boolean;
+    colors: AppTheme;
+    renderIcon: (color: string) => ReactNode;
+    onPress: () => void;
+}) {
+    const scale = useSharedValue(1);
+    const tint = focused ? colors.onSecondaryContainer : colors.textSecondary;
+
+    useEffect(() => {
+        if (focused) {
+            scale.value = withSequence(
+                withSpring(1.14, motion.springExpressive),
+                withSpring(1, motion.springExpressive),
+            );
+        }
+    }, [focused, scale]);
+
+    const iconStyle = useAnimatedStyle(() => ({ transform: [{ scale: scale.value }] }));
+
+    return (
+        <Pressable
+            accessibilityRole="button"
+            accessibilityState={focused ? { selected: true } : {}}
+            accessibilityLabel={label}
+            android_ripple={{
+                color: withAlpha(colors.surfaceTint, stateLayer.pressed),
+                borderless: true,
+                radius: 36,
+            }}
+            onPress={onPress}
+            onPressIn={() => { scale.value = withSpring(0.86, motion.spring); }}
+            onPressOut={() => { scale.value = withSpring(1, motion.springExpressive); }}
+            style={styles.item}
+        >
+            <Animated.View style={[styles.iconWrap, iconStyle]}>
+                {renderIcon(tint)}
+            </Animated.View>
+            <Text
+                numberOfLines={1}
+                style={[
+                    focused ? typography.labelSmall : typography.caption,
+                    styles.label,
+                    { color: tint },
+                ]}
+            >
+                {label}
+            </Text>
+        </Pressable>
     );
 }
 
@@ -131,6 +243,20 @@ const styles = StyleSheet.create({
         right: 0,
         bottom: 0,
         paddingHorizontal: spacing.lg,
+    },
+    shadowLayer: {
+        borderRadius: radius.xl,
+    },
+    rim: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        borderRadius: radius.xl,
+        borderWidth: 1.2,
+        borderColor: 'transparent',
+        zIndex: 5,
     },
     bar: {
         flexDirection: 'row',

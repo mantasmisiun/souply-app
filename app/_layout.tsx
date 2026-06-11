@@ -13,6 +13,7 @@ import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { EnvBadge } from '../components/EnvBadge';
+import { MaskRedactionHost } from '../components/MaskRedactionHost';
 import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { UsernameGate } from '../components/UsernameGate';
 import { LevelUpModal } from '../components/LevelUpModal';
@@ -302,6 +303,7 @@ function RootLayout() {
         <Stack.Screen name="basket/results/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="shopping-list/[id]" options={{ title: t('screens.shoppingList'), headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
+        <Stack.Screen name="receipt/store-resolution" options={{ headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess'), headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
         <Stack.Screen
@@ -333,6 +335,10 @@ function RootLayout() {
       {/* Top-layer overlay (last child = highest paint order) so it sits above
           the navigator without ever altering its frame. */}
       <EnvBadge />
+      {/* Always-mounted off-screen surface used to burn card-masking boxes
+          into receipt images before upload (the headless receipt queue has
+          no ViewShot of its own). Renders nothing until a redaction runs. */}
+      <MaskRedactionHost />
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
       </View>
     </ThemeProvider>

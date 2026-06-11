@@ -12,6 +12,7 @@ import type { MaximaProduct, ProductBand } from '@shared/parsers/maximaParser';
 import type { RimiProduct, RimiReceiptBand } from '@shared/parsers/rimiParser';
 import type { NorfaProduct, NorfaReceiptBand } from '@shared/parsers/norfaParser';
 import type { LidlProduct, LidlReceiptBand } from '@shared/parsers/lidlParser';
+import type { MaskBand } from '@shared/parsers/cardMaskDetection';
 
 /**
  * Any chain's product shape — they're structurally identical (same
@@ -78,6 +79,14 @@ export interface ReceiptSnapshot {
      * chains that don't have a typed-band parser.
      */
     taggedBands?: TaggedReceiptBand[];
+    /**
+     * Bank-card + loyalty-card redaction bands detected by
+     * `detectCardMaskBands`. Drawn as solid red/orange strips over the
+     * receipt image on the dev detail screen so masking-detection
+     * accuracy can be eyeballed on real receipts. Chain-agnostic —
+     * populated for every chain, independent of the V2 product bands.
+     */
+    maskBands?: MaskBand[];
 }
 
 const snapshots = new Map<string, ReceiptSnapshot>();

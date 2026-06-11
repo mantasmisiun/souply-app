@@ -198,6 +198,12 @@
       }
     },
     "tabAmounts": "Kiekiai",
+    "tabFailed": "Nepavykę",
+    "failed": {
+      "empty": "Nepavykusių kvitų nėra",
+      "lines": "{{count}} OCR eilutės",
+      "resolve": "Atmesti"
+    },
     "amounts": {
       "leaseProgress": "{{done}} / {{total}} kortelės",
       "claimBatch": "Imti naują paketą",
@@ -1045,6 +1051,22 @@
     "footerStatTime": "Laikas",
     "footerStatReceiptNo": "Kvito Nr."
   },
+  "storeResolution": {
+    "title": "Pasirinkite parduotuvę",
+    "hint": "Nepavyko atpažinti parduotuvės — pasirinkite ją žemėlapyje.",
+    "searchPlaceholder": "Ieškoti adreso...",
+    "confirm": "Patvirtinti",
+    "minChars": "Įveskite bent 3 simbolius",
+    "addressNotFound": "Adresas nerastas"
+  },
+  "receiptQueue": {
+    "scanning": "Nuskaitoma...",
+    "recognising": "Atpažįstama...",
+    "products": "{{done}}/{{total}} prekės",
+    "masking": "Maskuojama privati informacija",
+    "saving": "Išsaugoma...",
+    "uploading": "Įkeliama nuotrauka..."
+  },
   "receiptProcess": {
     "tabSummary": "Suvestinė",
     "tabProducts": "Prekės ({{count}})",
@@ -1065,9 +1087,17 @@
     "imageMissing": "Paveikslėlis nebuvo įkeltas. Pakartotinai apdoroti kvitą reikėtų iš Analizės skirtuko.",
     "duplicateTitle": "Kvitas jau įkeltas",
     "duplicateBody": "Šis kvitas jau buvo įkeltas.",
+    "duplicateLinkedBody": "Šį kvitą jau buvote įkėlę — pridėjome jį prie sąrašo.",
+    "dupOtherAccountTitle": "Kvitas jau įkeltas",
+    "dupOtherAccountBody": "Šį kvitą jau įkėlė kitas naudotojas, todėl jo pridėti negalima.",
+    "chainGateTitle": "Ne tos parduotuvės kvitas?",
+    "chainGateBody": "Šis kvitas atrodo iš „{{detected}}“, o sąrašas skirtas „{{expected}}“. Ar tikrai apsipirkote kitoje parduotuvėje?",
+    "chainGateDifferentStore": "Buvau kitoje parduotuvėje",
+    "chainGateCancel": "Atšaukti",
     "errorSave": "Nepavyko išsaugoti kvito",
     "errorUploadUrlFields": "upload-url atsakyme trūksta laukų",
     "errorUploadPhoto": "Nepavyko įkelti nuotraukos",
+    "errorMaskFailed": "Nepavyko paslėpti kortelės duomenų, kvitas neįkeltas",
     "errorSendTitle": "Nepavyko išsiųsti",
     "errorSendBody": "Bandykite dar kartą vėliau.",
     "errorProductUnmatched": "Produktas neatpažintas",
@@ -1118,6 +1148,7 @@
     },
     "deletedUndo": "Ištrinta. Atšaukti?",
     "sectionActive": "Aktyvūs",
+    "sectionMissingReceipt": "Trūksta kvito",
     "sectionCompleted": "Užbaigti",
     "empty": "Pirkinių sąrašų nėra",
     "emptyBody": "Sudėkite produktus į krepšelį, palyginkite kainas ir sukurkite sąrašą",
@@ -1128,7 +1159,15 @@
     "fabCreate": "Kurti",
     "filterAll": "Visi",
     "searchPlaceholder": "Ieškoti sąrašų...",
-    "noSearchResults": "Nieko nerasta"
+    "noSearchResults": "Nieko nerasta",
+    "receiptNeeded": "Trūksta kvito",
+    "receiptAdded": "Kvitas pridėtas",
+    "receiptProgress": "Kvitai {{have}}/{{total}}",
+    "uploadReceiptTitle": "Pridėti kvitą",
+    "uploadReceiptBody": "Nufotografuokite arba įkelkite šios parduotuvės kvitą.",
+    "uploadTakePhoto": "Fotografuoti",
+    "uploadSelectExisting": "Pasirinkti iš įkeltų",
+    "selectExistingTitle": "Pasirinkite kvitą"
   },
   "creatorAuth": {
     "title": "Kūrėjo prisijungimas",
@@ -1194,7 +1233,8 @@
       "products": "Prekės",
       "total": "Suma",
       "dateTime": "Data ir laikas",
-      "receiptNo": "Kvito Nr."
+      "receiptNo": "Kvito Nr.",
+      "private": "Privati informacija"
     },
     "explainer": {
       "title": "Kokius duomenis Souply atpažįsta",
@@ -1204,6 +1244,7 @@
       "totalBody": "Bendra kvito suma.",
       "dateTimeBody": "Kvito data ir laikas.",
       "receiptNoBody": "Unikalus kvito numeris — pagal jį atskiriamos pakartotinai įkeltos nuotraukos.",
+      "privateBody": "Banko kortelės, lojalumo kortelės numeriai ir kasininko vardas užtušuojami juodai dar telefone — šie duomenys niekada neišsaugomi ir neįkeliami.",
       "close": "Supratau"
     }
   }

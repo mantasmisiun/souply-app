@@ -102,6 +102,10 @@ import {
     RimiProduct
 } from "@shared/parsers/rimiParser";
 import { parseProductName } from "@shared/parsers/productNameParser";
+import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
+import { redactReceiptText, detectCardMaskBands, type MaskBand } from "@shared/parsers/cardMaskDetection";
+import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
+import { requestStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
 import { ocrImageTiled } from "../utils/mlkitOcr";
 import { useProfileStore } from '../state/profileStore';
 
@@ -111,6 +115,9 @@ import { useProfileStore } from '../state/profileStore';
 // shaped line. Android emits one OCR line per row already, so the
 // option stays off and the existing pipeline is bit-for-bit identical.
 const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
+
+// chainId → display name, for the chain-match gate copy.
+const CHAIN_NAMES: Record<number, string> = { 1: 'Maxima', 2: 'Rimi', 3: 'Iki', 4: 'Norfa', 5: 'Lidl' };
 
 interface ProductMatchOption {
   storeProductId: number;
@@ -642,7 +649,12 @@ function buildParsedData(
   footer: FooterData,
   imageMeta: { uri: string | null; width: number; height: number } | null,
   imageFilePath: string | null,
+  maskBands: MaskBand[] = [],
 ): object {
+  // Strip bank/loyalty card numbers + cashier name from everything that gets
+  // persisted, so the DB never holds them (the image is redacted separately
+  // before upload). Only the free-text carriers need it — structured fields
+  // (receiptNo/date/total/storeAddress) are never sensitive.
   return {
     version: 1,
     image: imageMeta
@@ -652,21 +664,57 @@ function buildParsedData(
           height: imageMeta.height,
         }
       : null,
-    header,
-    products,
-    footer,
+    header: { ...header, rawText: redactReceiptText(header.rawText) },
+    products: products.map((p) => ({
+      ...p,
+      rawLines: Array.isArray(p.rawLines) ? p.rawLines.map(redactReceiptText) : p.rawLines,
+    })),
+    footer: { ...footer, rawText: redactReceiptText(footer.rawText) },
+    // Geometry-only redaction boxes (no card digits) so the Kvitas-tab
+    // overlay can re-draw the black "private info" bands on reload.
+    maskBands: maskBands.map((b) => ({
+      yTop: b.yTop, yBottom: b.yBottom, xLeft: b.xLeft, xRight: b.xRight, kind: b.kind,
+    })),
   };
 }
 
 export default function ProcessReceiptScreen() {
   const { t } = useTranslation();
-  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, swipeDone: swipeDoneParam } = useLocalSearchParams<{
+  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, swipeDone: swipeDoneParam, shoppingListId: shoppingListIdParam, expectedChainId: expectedChainIdParam, listMap: listMapParam } = useLocalSearchParams<{
     uri?: string;
     uris?: string;
     receiptId?: string;
     preview?: string;
     swipeDone?: string;
+    /** Single-store list upload: the list row to link the Receipt to. */
+    shoppingListId?: string;
+    /** Single-store: the list's chain — gate the scan against it. */
+    expectedChainId?: string;
+    /** Multi-store GROUP upload: `chainId:listId,chainId:listId` for the
+     *  group's awaiting stores. The receipt's detected chain auto-selects
+     *  which store row to link — no store-selection prompt. */
+    listMap?: string;
   }>();
+  const expectedChainIdNum = expectedChainIdParam ? Number(expectedChainIdParam) : null;
+  // Unified chainId→listId map for the list-upload flow: from the group
+  // `listMap`, else the single shoppingListId+expectedChainId pair.
+  const linkMap = useMemo<Record<number, number>>(() => {
+    if (listMapParam) {
+      const m: Record<number, number> = {};
+      for (const pair of listMapParam.split(',')) {
+        const [c, l] = pair.split(':').map(Number);
+        if (Number.isFinite(c) && Number.isFinite(l)) m[c] = l;
+      }
+      return m;
+    }
+    if (shoppingListIdParam && expectedChainIdNum != null) {
+      return { [expectedChainIdNum]: Number(shoppingListIdParam) };
+    }
+    return {};
+  }, [listMapParam, shoppingListIdParam, expectedChainIdNum]);
+  // Single-store with no known chain → nothing to gate; link unconditionally.
+  const fallbackLinkId = (!listMapParam && shoppingListIdParam && expectedChainIdNum == null)
+    ? Number(shoppingListIdParam) : null;
   const existingReceiptId = receiptIdParam ? Number(receiptIdParam) : null;
   const isExistingMode = Number.isFinite(existingReceiptId);
   // Set to true when navigating here FROM the swipe screen — prevents the
@@ -695,6 +743,15 @@ export default function ProcessReceiptScreen() {
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
   const [loadingMessage, setLoadingMessage] = useState("Nuskaitomas kvitas...");
+  // Chain-match gate (list-upload flow): when the scanned receipt's chain
+  // doesn't match the list's store, processReceipt parks here and awaits the
+  // user's decision via chainGateResolveRef (proceed = "different store", or
+  // back out). null when no mismatch.
+  const [chainGate, setChainGate] = useState<{ detectedChainId: number; expectedChainIds: number[] } | null>(null);
+  const chainGateResolveRef = useRef<((proceed: boolean) => void) | null>(null);
+  // Resolved list row to link the receipt to (auto-selected by detected
+  // chain for groups; the single list for single-store). Set in processReceipt.
+  const linkListIdRef = useRef<number | null>(null);
   // Per-product match progress. When non-null, loading overlay shows
   // an "N / M" counter alongside the message so the user sees the
   // phone is actively working through the product list. Reset to null
@@ -729,6 +786,11 @@ export default function ProcessReceiptScreen() {
   // Per-page metadata for RegionPreview (multi-page PDFs + horizontal
   // receipt-area crop to skip A4 whitespace).
   const [pageMetas, setPageMetas] = useState<PageMeta[]>([]);
+  // Bank/loyalty/cashier redaction boxes (image-pixel space) for the
+  // pre-upload image masking (P3b). Computed in processReceipt. The actual
+  // compositing is delegated to the global <MaskRedactionHost> (runUpload),
+  // so this screen no longer hosts its own ViewShot.
+  const [maskBands, setMaskBands] = useState<MaskBand[]>([]);
   const { pendingPick, clearPendingPick } = useReceiptPickerState();
   const setCreateContext = useReceiptCreateContext((s) => s.setContext);
   // productsExpanded removed — Prekės is now its own tab (C2 absorbed
@@ -1043,6 +1105,22 @@ export default function ProcessReceiptScreen() {
           : undefined,
       });
 
+      // Reload persisted redaction boxes (geometry only) so the Kvitas-tab
+      // overlay re-draws the black "private info" bands on an existing receipt.
+      const loadedMasks: MaskBand[] = Array.isArray(parsed.maskBands)
+        ? parsed.maskBands.map((b: any) => ({
+            yTop: Number(b.yTop) || 0,
+            yBottom: Number(b.yBottom) || 0,
+            xLeft: Number(b.xLeft) || 0,
+            xRight: Number(b.xRight) || 0,
+            kind: b.kind,
+            label: '',
+            reasons: [],
+            text: '',
+          }))
+        : [];
+      setMaskBands(loadedMasks);
+
       setReceiptId(id);
       hasPostedRef.current = true;
 
@@ -1200,6 +1278,7 @@ export default function ProcessReceiptScreen() {
     setReceiptId(null);
     setImageFilePath(null);
     setImageDims(null);
+    setMaskBands([]);
     setHeader(null);
     setFooter(null);
     setProducts([]);
@@ -1426,6 +1505,7 @@ export default function ProcessReceiptScreen() {
         footer,
         imageDims ? { uri: imageUri, ...imageDims } : null,
         imageFilePath,
+        maskBands,
       );
 
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts`, {
@@ -1442,14 +1522,34 @@ export default function ProcessReceiptScreen() {
       // screen, no sneaky nav to another receipt's view.
       if (res.status === 409) {
         setPostStatus("done");
-        // Receipt already exists server-side (either as this user's row
-        // or a different user's). Drop the local draft — there's
+        // Receipt already exists server-side. Drop the local draft — there's
         // nothing to resume; the data lives in someone's receipt list.
         clearReceiptDraft().catch(() => {});
         useProfileStore.getState().invalidate();
+        // Same-ACCOUNT duplicate while uploading for a list: the user already
+        // has this receipt — silently link the EXISTING row to the list
+        // instead of bailing, so the card still flips to "Kvitas pridėtas".
+        if (linkListIdRef.current && data?.existingReceiptId) {
+          fetch(`${API_BASE_URL}/api/shopping-lists/${linkListIdRef.current}/link-receipt`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ receiptId: data.existingReceiptId }),
+          }).catch(() => {});
+          router.replace("/(tabs)/shoppingList");
+          setTimeout(() => {
+            Alert.alert(t('receiptProcess.duplicateTitle'), t('receiptProcess.duplicateLinkedBody'));
+          }, 100);
+          return;
+        }
+        // Cross-ACCOUNT duplicate: a different account uploaded this receipt.
+        // Don't claim the current user uploaded it; can't link it either.
+        const crossAccount = data?.crossAccount === true;
         router.replace("/(tabs)/receipts");
         setTimeout(() => {
-          Alert.alert(t('receiptProcess.duplicateTitle'), t('receiptProcess.duplicateBody'));
+          Alert.alert(
+            crossAccount ? t('receiptProcess.dupOtherAccountTitle') : t('receiptProcess.duplicateTitle'),
+            crossAccount ? t('receiptProcess.dupOtherAccountBody') : t('receiptProcess.duplicateBody'),
+          );
         }, 100);
         return;
       }
@@ -1458,6 +1558,16 @@ export default function ProcessReceiptScreen() {
       }
       setReceiptId(data.id);
       setPostStatus("done");
+      // Link this receipt to the resolved list row (auto-selected by the
+      // detected chain for groups). Fire-and-forget — the List-tab card
+      // flips to "Kvitas pridėtas" on next refresh.
+      if (linkListIdRef.current) {
+        fetch(`${API_BASE_URL}/api/shopping-lists/${linkListIdRef.current}/link-receipt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ receiptId: data.id }),
+        }).catch(() => {});
+      }
       clearReceiptDraft().catch(() => {});
       // Record store visit for location intelligence (fire-and-forget)
       if (header.storeId && header.chainId) {
@@ -1508,7 +1618,7 @@ export default function ProcessReceiptScreen() {
     runPost();
   };
 
-  // Step 2: MinIO upload — runs in parallel with POST, PATCH filePath once done
+  // Step 2: MinIO upload — runs in parallel with POST, PATCH filePath once done.
   const runUpload = async () => {
     if (!imageUri || !receiptId) return;
     setUploadStatus("pending");
@@ -1527,9 +1637,41 @@ export default function ProcessReceiptScreen() {
       const { uploadUrl, filePath } = await urlRes.json();
       if (!uploadUrl || !filePath) throw new Error(t('receiptProcess.errorUploadUrlFields'));
 
-      // Local-file blob load is NOT a network call; fetch(imageUri)
-      // on a file:// URI is synchronous-ish. No timeout needed.
-      const imageBlob = await (await fetch(imageUri)).blob();
+      // Burn the card/loyalty/cashier black boxes into the image BEFORE upload
+      // so the raw card data never leaves the device. This goes through the
+      // SAME shared `buildRedactedUploadUri` as the headless queue, so every
+      // entry point (take-photo / upload / shopping-list) masks identically.
+      // Fail-closed: if sensitive bands were detected but a clean redaction
+      // can't be produced (incl. missing image dims), abort — never PUT the
+      // original image that still shows a card number.
+      let uploadUri = imageUri;
+      try {
+        uploadUri = await buildRedactedUploadUri(
+          imageUri,
+          imageDims?.width ?? 0,
+          imageDims?.height ?? 0,
+          maskBands,
+        );
+      } catch (e: any) {
+        console.warn("[mask] redaction failed, aborting upload:", e?.message ?? e);
+        // Log the unprocessable case (P4). Fire-and-forget; never block on it.
+        fetch(`${API_BASE_URL}/api/receipts/log-fail`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            userId: userIdRef.current,
+            failReason: "mask_failed",
+            shoppingListId: linkListIdRef.current ?? undefined,
+          }),
+        }).catch(() => {});
+        setUploadStatus("error");
+        setUploadErr(t('receiptProcess.errorMaskFailed'));
+        return;
+      }
+
+      // Local-file blob load is NOT a network call; fetch on a file:// URI
+      // is synchronous-ish. No timeout needed.
+      const imageBlob = await (await fetch(uploadUri)).blob();
       const putRes = await fetchWithTimeout(uploadUrl, {
         method: "PUT",
         headers: { "Content-Type": "image/jpeg" },
@@ -1731,6 +1873,7 @@ export default function ProcessReceiptScreen() {
       footer,
       imageDims ? { uri: imageUri, ...imageDims } : null,
       imageFilePath,
+      maskBands,
     );
     const nextComparisonKey = buildComparisonKey(header, products);
     shouldRefreshComparisonRef.current =
@@ -1985,6 +2128,28 @@ export default function ProcessReceiptScreen() {
       const frameScale = combinedFrameScale;
       allLines.sort((a, b) => a.yTop - b.yTop);
 
+      // Detect bank/loyalty/cashier redaction boxes for the pre-upload image
+      // masking. allLines are in image-pixel space, so the boxes map 1:1 onto
+      // the uploaded photo (single-image; multi-page bands beyond page 0 fall
+      // outside the uploaded page-0 image and are filtered at upload time).
+      const detectedMaskBands = detectCardMaskBands(allLines);
+      console.log(
+        `[MASK] detected ${detectedMaskBands.length} band(s):`,
+        detectedMaskBands.map((b) => `${b.label}@${Math.round(b.yTop)}-${Math.round(b.yBottom)}`).join(', ') || '(none)',
+      );
+      // SMOKING-GUN diagnostic: dump every OCR line that looks card/loyalty/
+      // cashier-ish, regardless of detection result. If these lines are present
+      // but `detected=0`, it's a DETECTOR bug; if they're absent, OCR never read
+      // the payment section (photo cut off / blurry) → nothing to mask.
+      const cardish = allLines.filter((l) =>
+        /[*xX•·]{2,}|mokejim|moket|kortel|lojalum|kasinink|\bbanko\b|maestro|visa|master/i.test(l.text),
+      );
+      console.log(
+        `[MASK] card-ish OCR lines (${cardish.length}/${allLines.length} total):`,
+      );
+      for (const l of cardish) console.log(`   y${Math.round(l.yTop)} » ${JSON.stringify(l.text)}`);
+      setMaskBands(detectedMaskBands);
+
       const mergedLines: LineWithFrame[] = [];
       const PRICE_RE = /^\d+[.,]\s?\d{2}\s*[AB]\s*$/;
       const ROW_THRESHOLD = 30 * frameScale;
@@ -2031,13 +2196,61 @@ export default function ProcessReceiptScreen() {
 
       setLoadingMessage(t('receiptProcess.loadingScan'));
 
+      // Chain-match gate + auto store-resolution (list-upload flow only).
+      // For a multi-store group the receipt's detected chain AUTO-selects
+      // which store row to link — no store-selection prompt. If the detected
+      // chain matches none of the list's stores, ask before continuing (the
+      // user may have shopped elsewhere — "I went to a different store"
+      // override). Backing out is a retry, NOT a failure (not logged). The
+      // isXReceipt checks are cheap regex; the real parse runs below regardless.
+      linkListIdRef.current = fallbackLinkId;
+      const expectedChainIds = Object.keys(linkMap).map(Number);
+      if (expectedChainIds.length > 0) {
+        const detectedChainId =
+          isRimiReceipt(lineTexts) ? 2 :
+          isMaximaReceipt(lineTexts) ? 1 :
+          isNorfaReceipt(lineTexts) ? 4 :
+          isLidlReceipt(lineTexts) ? 5 :
+          isIkiReceipt(lineTexts) ? 3 :
+          (detectChainByVatCode(lineTexts)?.chainId ?? null);
+        if (detectedChainId != null && linkMap[detectedChainId] != null) {
+          // Auto-detected store — link target resolved, no prompt.
+          linkListIdRef.current = linkMap[detectedChainId];
+        } else {
+          const proceed = await new Promise<boolean>((resolve) => {
+            chainGateResolveRef.current = resolve;
+            setChainGate({ detectedChainId: detectedChainId ?? 0, expectedChainIds });
+          });
+          setChainGate(null);
+          chainGateResolveRef.current = null;
+          if (!proceed) {
+            setLoading(false);
+            router.replace('/(tabs)/shoppingList');
+            return;
+          }
+          // Override: shopped at an unplanned store — fulfil the first
+          // awaiting store slot of this list/group.
+          linkListIdRef.current = Object.values(linkMap)[0] ?? fallbackLinkId;
+        }
+      }
+
       // Note on setLoading placement: we intentionally hold the main
       // loading overlay up through the ENTIRE applyXxxResult call.
       // Dropping it right after the early header was set used to flash
       // "Prekės (0) — prekės nerastos" to the user while per-product
       // match requests were still in flight. Keep the overlay until
       // products have been parsed + matched.
-      if (isRimiReceipt(lineTexts)) {
+      //
+      // Backup chain detection via the seller's PVM/VAT code — only consulted
+      // when ALL the primary text-fingerprint detectors miss, so the normal
+      // path is unchanged.
+      const vatChainId =
+        isRimiReceipt(lineTexts) || isMaximaReceipt(lineTexts) || isNorfaReceipt(lineTexts) ||
+        isLidlReceipt(lineTexts) || isIkiReceipt(lineTexts)
+          ? null
+          : (detectChainByVatCode(lineTexts)?.chainId ?? null);
+
+      if (isRimiReceipt(lineTexts) || vatChainId === 2) {
         // V2 Rimi parser does its own same-row absorption inside
         // findProductBandsInternal, so it expects RAW OCR lines.
         // The outer `mergedLines` blob fused header/product rows
@@ -2061,7 +2274,7 @@ export default function ProcessReceiptScreen() {
         const parsed = parseRimiReceipt(allLines);
         await applyRimiResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
-      } else if (isMaximaReceipt(lineTexts)) {
+      } else if (isMaximaReceipt(lineTexts) || vatChainId === 1) {
         // Maxima parser does its own splitMergedLines + same-row
         // handling internally, so it expects RAW OCR lines, not the
         // outer `mergedLines` blob. Passing the merged blob caused
@@ -2104,7 +2317,7 @@ export default function ProcessReceiptScreen() {
         }
         await applyMaximaResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
-      } else if (isNorfaReceipt(lineTexts)) {
+      } else if (isNorfaReceipt(lineTexts) || vatChainId === 4) {
         // Norfa V2 (hard-walled bands + per-band extract) consumes
         // RAW OCR lines — its mergeRowFragments pass needs the
         // original y-coords intact. Same reasoning as Rimi/Maxima.
@@ -2126,7 +2339,7 @@ export default function ProcessReceiptScreen() {
         const parsed = parseNorfaReceipt(allLines);
         await applyNorfaResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
-      } else if (isLidlReceipt(lineTexts)) {
+      } else if (isLidlReceipt(lineTexts) || vatChainId === 5) {
         // Lidl V2 (hard-walled bands + per-band extract) consumes
         // RAW OCR lines — same reasoning as Rimi/Maxima/Norfa.
         // Phone-photographed thermal print so OCR is rougher than
@@ -2151,7 +2364,7 @@ export default function ProcessReceiptScreen() {
         const parsed = parseLidlReceipt(allLines, PARSER_OPTS);
         await applyLidlResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
-      } else if (isIkiReceipt(lineTexts)) {
+      } else if (isIkiReceipt(lineTexts) || vatChainId === 3) {
         const earlyHeader = parseIkiHeaderOnly(mergedLines);
         setHeader({
           chainName: "IKI",
@@ -2182,6 +2395,16 @@ export default function ProcessReceiptScreen() {
         ocrPreview: error instanceof Error ? error.message : String(error),
       });
     }
+  };
+
+  // The store address didn't auto-match — send the user to the map
+  // store-resolution screen (chain known, store not) and await their pick.
+  // null = user backed out (caller bails as store_unrecognized).
+  const promptStoreResolution = async (chainId: number, chainName: string, ocrAddress: string | null, rawText?: string | null) => {
+    const prefill = ocrAddress || pickAddressFromRawText(rawText);
+    const pending = requestStoreResolution(chainId, chainName, prefill);
+    router.push("/receipt/store-resolution" as any);
+    return await pending;
   };
 
   const applyRimiResult = async (
@@ -2218,11 +2441,18 @@ export default function ProcessReceiptScreen() {
     // aggregation; easier to make the user re-scan than to thread
     // a null-store receipt through the rest of the system.
     if (storeId === null) {
-      await bailWithLog("store_unrecognized", {
-        detectedChainName: "RIMI",
-        extractedStoreAddress: rHeader.storeAddress || null,
-      });
-      return;
+      const chosen = await promptStoreResolution(chainId, "RIMI", rHeader.storeAddress || null, rHeader.rawText);
+      if (!chosen) {
+        await bailWithLog("store_unrecognized", {
+          detectedChainName: "RIMI",
+          extractedStoreAddress: rHeader.storeAddress || null,
+        });
+        return;
+      }
+      storeId = chosen.storeId;
+      storeName = chosen.storeName;
+      storeAddressMatched = chosen.storeAddress;
+      matchConfidence = 1;
     }
 
     setHeader({
@@ -2375,11 +2605,18 @@ export default function ProcessReceiptScreen() {
     }
 
     if (storeId === null) {
-      await bailWithLog("store_unrecognized", {
-        detectedChainName: "MAXIMA",
-        extractedStoreAddress: mHeader.storeAddress || null,
-      });
-      return;
+      const chosen = await promptStoreResolution(chainId, "MAXIMA", mHeader.storeAddress || null, mHeader.rawText);
+      if (!chosen) {
+        await bailWithLog("store_unrecognized", {
+          detectedChainName: "MAXIMA",
+          extractedStoreAddress: mHeader.storeAddress || null,
+        });
+        return;
+      }
+      storeId = chosen.storeId;
+      storeName = chosen.storeName;
+      storeAddressMatched = chosen.storeAddress;
+      matchConfidence = 1;
     }
 
     setHeader({
@@ -2508,17 +2745,24 @@ export default function ProcessReceiptScreen() {
     }
 
     if (storeId === null) {
-      if (__DEV__) {
-        console.log(
-          "[Norfa] Header rawText (first 500 chars):\n",
-          (nHeader.rawText || "").slice(0, 500),
-        );
+      const chosen = await promptStoreResolution(chainId, "NORFA", nHeader.storeAddress || null, nHeader.rawText);
+      if (!chosen) {
+        if (__DEV__) {
+          console.log(
+            "[Norfa] Header rawText (first 500 chars):\n",
+            (nHeader.rawText || "").slice(0, 500),
+          );
+        }
+        await bailWithLog("store_unrecognized", {
+          detectedChainName: "NORFA",
+          extractedStoreAddress: nHeader.storeAddress || null,
+        });
+        return;
       }
-      await bailWithLog("store_unrecognized", {
-        detectedChainName: "NORFA",
-        extractedStoreAddress: nHeader.storeAddress || null,
-      });
-      return;
+      storeId = chosen.storeId;
+      storeName = chosen.storeName;
+      storeAddressMatched = chosen.storeAddress;
+      matchConfidence = 1;
     }
 
     setHeader({
@@ -2635,11 +2879,18 @@ export default function ProcessReceiptScreen() {
     }
 
     if (storeId === null) {
-      await bailWithLog("store_unrecognized", {
-        detectedChainName: "LIDL",
-        extractedStoreAddress: lHeader.storeAddress || null,
-      });
-      return;
+      const chosen = await promptStoreResolution(chainId, "LIDL", lHeader.storeAddress || null, lHeader.rawText);
+      if (!chosen) {
+        await bailWithLog("store_unrecognized", {
+          detectedChainName: "LIDL",
+          extractedStoreAddress: lHeader.storeAddress || null,
+        });
+        return;
+      }
+      storeId = chosen.storeId;
+      storeName = chosen.storeName;
+      storeAddressMatched = chosen.storeAddress;
+      matchConfidence = 1;
     }
 
     setHeader({
@@ -2756,11 +3007,18 @@ export default function ProcessReceiptScreen() {
     }
 
     if (storeId === null) {
-      await bailWithLog("store_unrecognized", {
-        detectedChainName: "IKI",
-        extractedStoreAddress: iHeader.storeAddress || null,
-      });
-      return;
+      const chosen = await promptStoreResolution(chainId, "IKI", iHeader.storeAddress || null, iHeader.rawText);
+      if (!chosen) {
+        await bailWithLog("store_unrecognized", {
+          detectedChainName: "IKI",
+          extractedStoreAddress: iHeader.storeAddress || null,
+        });
+        return;
+      }
+      storeId = chosen.storeId;
+      storeName = chosen.storeName;
+      storeAddressMatched = chosen.storeAddress;
+      matchConfidence = 1;
     }
 
     setHeader({
@@ -3460,6 +3718,7 @@ export default function ProcessReceiptScreen() {
                   ? [footer.region]
                   : []
               }
+              maskRegions={maskBands}
             />
           </>
         )}
@@ -3605,11 +3864,46 @@ export default function ProcessReceiptScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      {/* Chain-match gate (list-upload flow): receipt's chain ≠ list's store. */}
+      <Modal
+        visible={chainGate !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => chainGateResolveRef.current?.(false)}
+      >
+        <View style={styles.chainGateBackdrop}>
+          <View style={styles.chainGateCard}>
+            <Ionicons name="alert-circle-outline" size={40} color={colors.warning} />
+            <Text style={styles.chainGateTitle}>{t('receiptProcess.chainGateTitle')}</Text>
+            <Text style={styles.chainGateBody}>
+              {t('receiptProcess.chainGateBody', {
+                detected: chainGate?.detectedChainId ? (CHAIN_NAMES[chainGate.detectedChainId] ?? '?') : '?',
+                expected: chainGate ? chainGate.expectedChainIds.map((c) => CHAIN_NAMES[c] ?? '?').join(' / ') : '',
+              })}
+            </Text>
+            <TouchableOpacity style={styles.chainGatePrimary} onPress={() => chainGateResolveRef.current?.(true)}>
+              <Text style={styles.chainGatePrimaryText}>{t('receiptProcess.chainGateDifferentStore')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => chainGateResolveRef.current?.(false)}>
+              <Text style={styles.chainGateSecondaryText}>{t('receiptProcess.chainGateCancel')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </>
   );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
+  chainGateBackdrop: { flex: 1, backgroundColor: c.overlayBackdrop, alignItems: "center", justifyContent: "center", padding: 24 },
+  chainGateCard: { backgroundColor: c.cardBackground, borderRadius: 16, padding: 24, alignItems: "center", gap: 10, width: "100%", maxWidth: 360 },
+  chainGateTitle: { fontSize: 17, fontWeight: "700", color: c.textPrimary, textAlign: "center" },
+  chainGateBody: { fontSize: 14, color: c.textSecondary, textAlign: "center", lineHeight: 20, marginBottom: 6 },
+  chainGatePrimary: { backgroundColor: c.primary, borderRadius: 999, paddingVertical: 13, paddingHorizontal: 24, alignSelf: "stretch", alignItems: "center" },
+  chainGatePrimaryText: { color: c.onPrimary, fontSize: 15, fontWeight: "700" },
+  chainGateSecondary: { paddingVertical: 11, alignSelf: "stretch", alignItems: "center" },
+  chainGateSecondaryText: { color: c.textSecondary, fontSize: 14, fontWeight: "600" },
   navHeaderWrap: { alignItems: "flex-start", maxWidth: 240 },
   navTitle: { fontSize: 15, fontWeight: "700", color: c.textPrimary },
   navSubtitle: { fontSize: 11, color: c.textSecondary, marginTop: 1 },

@@ -57,10 +57,15 @@ import {
 } from '@shared/parsers/maximaParser';
 import {
     setReceiptSnapshot,
+    getReceiptSnapshot,
     makeSnapshotKey,
     type PageMeta,
     type BandResult,
 } from '../../utils/parserTestSnapshot';
+import {
+    detectCardMaskBands,
+    traceCardMaskBands,
+} from '@shared/parsers/cardMaskDetection';
 import {
     isRimiReceipt,
     parseRimiReceipt,
@@ -116,6 +121,20 @@ type ChainName = (typeof CHAINS)[number];
 // different.
 const CHAIN_ID: Record<ChainName, number> = { maxima: 1, rimi: 2, norfa: 4, lidl: 5 };
 
+// Map Maxima's LabeledRegion kinds → the detail overlay's colour kinds
+// (store-name/store-address/datetime/receipt-no/total), so its header +
+// footer fields render the same way Rimi/Norfa/Lidl typed bands do.
+const MAXIMA_FIELD_KIND: Record<string, string> = {
+    storeName: 'store-name',
+    storeAddress: 'store-address',
+    storeCode: 'store-name',
+    total: 'total',
+    date: 'datetime',
+    time: 'datetime',
+    dateTime: 'datetime',
+    receiptNo: 'receipt-no',
+};
+
 interface ManifestEntry {
     sourcePdf: string;
     pages: string[];
@@ -151,6 +170,9 @@ interface RowStatus {
     /** V2 step 1 output: number of product bands detected. Tap a row
      *  to inspect the bands visually on the receipt-detail screen. */
     bandsV2Count?: number;
+    /** Number of bank/loyalty-card redaction bands detected. Tap a row
+     *  to see them drawn over the receipt on the detail screen. */
+    maskBandCount?: number;
     /** Comparison vs hand-annotated truth file (if present alongside
      *  the PDF/PNG). null if no truth file or comparison failed. */
     comparison?: ParserComparison | null;
@@ -574,11 +596,34 @@ export default function ReceiptBatchScreen() {
                     const { product, warnings } = extractMaximaProduct(planV2.internals[i]);
                     return { band, product, warnings };
                 });
+                // Maxima has no typed-band parser like Rimi/Norfa/Lidl, but
+                // its header/footer parse tracks per-field source-line bboxes
+                // (storeAddress/storeCode/total/date/time/receiptNo). Convert
+                // those + the product bands into taggedBands so the overlay
+                // shows ALL recognised regions — a visual check that the
+                // parser still finds store/address/total/date/receiptNo.
+                const fieldRegions = [
+                    ...((parsed.header as any)?.lineRegions ?? []),
+                    ...((parsed.footer as any)?.lineRegions ?? []),
+                ];
+                const fieldBands = fieldRegions.map((r: any) => ({
+                    kind: MAXIMA_FIELD_KIND[r.kind] ?? 'product',
+                    label: r.kind,
+                    yTop: r.yTop,
+                    yBottom: r.yBottom,
+                }));
+                const productTagged = planV2.bands.map((b, i) => ({
+                    kind: 'product',
+                    label: `#${i + 1}`,
+                    yTop: b.yTop,
+                    yBottom: b.yBottom,
+                }));
                 setReceiptSnapshot(makeSnapshotKey(row.chain, row.sourcePdf), {
                     chain: row.chain,
                     sourcePdf: row.sourcePdf,
                     pages: pageMetas,
                     bands,
+                    taggedBands: [...fieldBands, ...productTagged] as any,
                 });
             } catch (e) {
                 console.warn('[batch] V2 step 1+2 failed:', e);
@@ -756,6 +801,36 @@ export default function ReceiptBatchScreen() {
             } catch (e) {
                 console.warn('[batch] Lidl V2 step 1+2 failed:', e);
             }
+        }
+
+        // ── Card / loyalty MASK DETECTION (all chains) ──────────────
+        // Find the bank-card + loyalty-card Y-bands that the real upload
+        // flow will redact, and attach them to the snapshot so the detail
+        // screen draws them over the receipt — this is the surface for
+        // eyeballing masking-detection accuracy on real receipts. Runs
+        // for every chain (including iki, which has no V2 snapshot yet),
+        // so a minimal snapshot is created when one doesn't exist.
+        try {
+            const maskBands = detectCardMaskBands(allLines as any, detected);
+            status.maskBandCount = maskBands.length;
+            console.log(
+                `[MASK BEGIN ${row.sourcePdf}]\n\`\`\`text\n${traceCardMaskBands(maskBands)}\n\`\`\`\n[MASK END ${row.sourcePdf}]`,
+            );
+            const key = makeSnapshotKey(row.chain, row.sourcePdf);
+            const existing = getReceiptSnapshot(key);
+            if (existing) {
+                setReceiptSnapshot(key, { ...existing, maskBands });
+            } else {
+                setReceiptSnapshot(key, {
+                    chain: row.chain,
+                    sourcePdf: row.sourcePdf,
+                    pages: pageMetas,
+                    bands: [],
+                    maskBands,
+                });
+            }
+        } catch (e) {
+            console.warn('[batch] mask detection failed:', e);
         }
         return status;
     };
@@ -993,6 +1068,8 @@ export default function ReceiptBatchScreen() {
                                     {s.chain}
                                     {s.state === 'done' && s.bandsV2Count !== undefined &&
                                         ` · ${s.bandsV2Count} band${s.bandsV2Count === 1 ? 'a' : 'os'}`}
+                                    {s.state === 'done' && s.maskBandCount !== undefined &&
+                                        ` · 🛡${s.maskBandCount}`}
                                     {s.state === 'done' && s.comparison && (
                                         ` · score ${s.comparison.score.toFixed(2)} ` +
                                         `(${s.comparison.productsCorrect}/` +

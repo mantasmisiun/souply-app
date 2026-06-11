@@ -58,6 +58,7 @@ import type { ProductBand } from '@shared/parsers/maximaParser';
 import type { RimiBandKind, RimiReceiptBand } from '@shared/parsers/rimiParser';
 import type { NorfaReceiptBand } from '@shared/parsers/norfaParser';
 import type { LidlReceiptBand } from '@shared/parsers/lidlParser';
+import type { MaskBand } from '@shared/parsers/cardMaskDetection';
 
 // Kinds emitted by any chain's V2 parser. Rimi/Norfa/Lidl share
 // structurally-identical band-kind unions; the overlay colour map
@@ -129,6 +130,54 @@ const bucketBandsByPage = (
     }
     return { perPage, perBand };
 };
+
+/** A mask box placed onto one page: y in page pixel-space, x verbatim. */
+interface MaskOnPage {
+    idx: number;
+    yTopOnPage: number;
+    yBottomOnPage: number;
+    xLeft: number;
+    xRight: number;
+    kind: MaskBand['kind'];
+    label: string;
+}
+
+/**
+ * Bucket mask boxes onto pages like bucketBandsByPage, but preserve the
+ * x-bounds (mask boxes are horizontally bounded to the number/value, not
+ * full-width) so the overlay can draw a tight redaction rectangle.
+ */
+const bucketMaskBands = (
+    maskBands: MaskBand[],
+    pages: PageMeta[],
+): MaskOnPage[][] => {
+    const perPage: MaskOnPage[][] = pages.map(() => []);
+    for (let bi = 0; bi < maskBands.length; bi++) {
+        const b = maskBands[bi];
+        let pageIdx = 0;
+        for (let i = pages.length - 1; i >= 0; i--) {
+            if (b.yTop >= pages[i].yOffsetInParserSpace) {
+                pageIdx = i;
+                break;
+            }
+        }
+        const offset = pages[pageIdx].yOffsetInParserSpace;
+        perPage[pageIdx].push({
+            idx: bi,
+            yTopOnPage: b.yTop - offset,
+            yBottomOnPage: b.yBottom - offset,
+            xLeft: b.xLeft,
+            xRight: b.xRight,
+            kind: b.kind,
+            label: b.label,
+        });
+    }
+    return perPage;
+};
+
+/** Solid redaction-box colour per mask kind. */
+const maskKindColor = (kind: MaskBand['kind']): string =>
+    kind === 'bank' ? '#C62828' : kind === 'loyalty' ? '#EF6C00' : '#6A1B9A';
 
 /**
  * Per-kind overlay colour. Picked to be visually distinct on the
@@ -210,6 +259,16 @@ export default function ReceiptDetailScreen() {
     const productBuckets = useMemo(
         () => (snap ? bucketBandsByPage(productCropBands, snap.pages) : null),
         [snap, productCropBands],
+    );
+    // Card / loyalty / cashier redaction boxes — bucketed onto pages,
+    // x-bounded to the number/value (label stays visible), rendered as
+    // SOLID boxes (the masking preview).
+    const maskBuckets = useMemo(
+        () =>
+            snap?.maskBands?.length
+                ? bucketMaskBands(snap.maskBands, snap.pages)
+                : null,
+        [snap],
     );
 
     // iOS ImageManipulator refuses HTTP URIs and aborts with the
@@ -312,6 +371,7 @@ export default function ReceiptDetailScreen() {
                                     pageWidth={page.pixelWidth}
                                     pageHeight={page.pixelHeight}
                                     bands={overlayBuckets.perPage[pageIdx]}
+                                    maskBands={maskBuckets?.[pageIdx]}
                                     colors={colors}
                                 />
                             </View>
@@ -352,6 +412,45 @@ export default function ReceiptDetailScreen() {
                                       </Text>
                                   </View>
                               ))}
+                    </View>
+                    {/* Card / loyalty mask bands — the redaction preview
+                        the real upload flow will burn into the image. */}
+                    <View style={styles.bandsSection}>
+                        <Text style={styles.sectionTitle}>
+                            🛡 Maskuojamos juostos
+                            {snap.maskBands?.length
+                                ? ` (${snap.maskBands.length})`
+                                : ''}
+                        </Text>
+                        {!snap.maskBands || snap.maskBands.length === 0 ? (
+                            <Text style={styles.emptyText}>
+                                Banko / lojalumo kortelės neaptiktos.
+                            </Text>
+                        ) : (
+                            snap.maskBands.map((b, idx) => (
+                                <View key={idx} style={styles.bandRow}>
+                                    <View
+                                        style={[
+                                            styles.bandIdxBadge,
+                                            { backgroundColor: maskKindColor(b.kind) },
+                                        ]}
+                                    >
+                                        <Text style={styles.bandIdxText}>{b.label}</Text>
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.bandText}>
+                                            y {Math.round(b.yTop)}–{Math.round(b.yBottom)}
+                                            <Text style={styles.bandTextDim}>
+                                                {'  '}via {b.reasons.join(', ')}
+                                            </Text>
+                                        </Text>
+                                        <Text style={styles.bandTextDim} numberOfLines={2}>
+                                            “{b.text}”
+                                        </Text>
+                                    </View>
+                                </View>
+                            ))
+                        )}
                     </View>
                 </View>
             )}
@@ -640,12 +739,14 @@ const ImageWithBands = ({
     pageWidth,
     pageHeight,
     bands,
+    maskBands,
     colors,
 }: {
     uri: string;
     pageWidth: number;
     pageHeight: number;
     bands: BandOnPage[];
+    maskBands?: MaskOnPage[];
     colors: AppTheme;
 }) => {
     const aspect = pageWidth / pageHeight;
@@ -656,6 +757,30 @@ const ImageWithBands = ({
                 style={{ width: '100%', height: '100%' }}
                 resizeMode="contain"
             />
+            {(maskBands ?? []).map((b) => {
+                const topPct = (b.yTopOnPage / pageHeight) * 100;
+                const heightPct =
+                    ((b.yBottomOnPage - b.yTopOnPage) / pageHeight) * 100;
+                const leftPct = (b.xLeft / pageWidth) * 100;
+                const widthPct = ((b.xRight - b.xLeft) / pageWidth) * 100;
+                return (
+                    <View
+                        key={`mask-${b.idx}`}
+                        pointerEvents="none"
+                        style={{
+                            position: 'absolute',
+                            left: `${leftPct}%`,
+                            width: `${widthPct}%`,
+                            top: `${topPct}%`,
+                            height: `${heightPct}%`,
+                            // Pitch-black redaction — exactly what burns into
+                            // the uploaded image. kind is shown in the legend
+                            // list below, not on the box.
+                            backgroundColor: '#000',
+                        }}
+                    />
+                );
+            })}
             {bands.map((b) => {
                 const topPct = (b.yTopOnPage / pageHeight) * 100;
                 const heightPct =

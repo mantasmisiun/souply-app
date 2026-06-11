@@ -12,7 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, spacing, radius, typography, type AppTheme } from '../../constants/theme';
 
 /**
  * Inline receipt-photo viewer for the Kvitas tab.
@@ -112,6 +112,10 @@ interface Props {
     headerRegions: ReceiptRegion[];
     productRegions: ReceiptRegion[];
     footerRegions: ReceiptRegion[];
+    /** Bank-card / loyalty-card / cashier redaction boxes — drawn as SOLID
+     *  black bands so the private data is covered in this view too (the
+     *  uploaded image is separately redacted before it ever leaves the phone). */
+    maskRegions?: ReceiptRegion[];
 }
 
 export default function ReceiptPhotoView({
@@ -120,6 +124,7 @@ export default function ReceiptPhotoView({
     headerRegions,
     productRegions,
     footerRegions,
+    maskRegions = [],
 }: Props) {
     const colors = useTheme();
     const { t } = useTranslation();
@@ -152,12 +157,15 @@ export default function ReceiptPhotoView({
         for (const r of headerRegions) ys.push(r.yTop, r.yBottom);
         for (const r of productRegions) ys.push(r.yTop, r.yBottom);
         for (const r of footerRegions) ys.push(r.yTop, r.yBottom);
+        // Include mask bands so the (often bottom-of-receipt) payment/loyalty
+        // section isn't cropped out of the visible viewport.
+        for (const r of maskRegions) ys.push(r.yTop, r.yBottom);
         if (ys.length < 2) return null;
         const yMin = Math.max(0, Math.min(...ys) - CONTENT_MARGIN_PX);
         const yMax = Math.min(imageDims.height, Math.max(...ys) + CONTENT_MARGIN_PX);
         if (yMax - yMin < imageDims.height * 0.2) return null;
         return { yMin, yMax };
-    }, [headerRegions, productRegions, footerRegions, imageDims]);
+    }, [headerRegions, productRegions, footerRegions, maskRegions, imageDims]);
 
     // Display-space offset to apply when content is cropped. Bands'
     // top coords are computed against the full image; subtracting this
@@ -335,6 +343,14 @@ export default function ReceiptPhotoView({
                         styles={styles}
                     />
                 ))}
+                {maskRegions.length > 0 && (
+                    <LegendChip
+                        colour="#000"
+                        label={t('receiptPhoto.bands.private')}
+                        styles={styles}
+                        bordered
+                    />
+                )}
             </View>
 
             <View style={styles.stage} onLayout={onLayout}>
@@ -451,6 +467,9 @@ export default function ReceiptPhotoView({
                                 />
                             );
                         })}
+                        {/* Private-info areas are already burned black INTO
+                            the uploaded image (MinIO), so no UI overlay is
+                            drawn here — we show the real redacted file. */}
                     </View>
                 )}
             </View>
@@ -503,6 +522,13 @@ export default function ReceiptPhotoView({
                                 body={t('receiptPhoto.explainer.receiptNoBody')}
                                 styles={styles}
                             />
+                            <ExplainerRow
+                                colour="#000"
+                                bordered
+                                title={t('receiptPhoto.bands.private')}
+                                body={t('receiptPhoto.explainer.privateBody')}
+                                styles={styles}
+                            />
                         </View>
                         <TouchableOpacity
                             style={styles.modalCloseBtn}
@@ -521,14 +547,16 @@ function LegendChip({
     colour,
     label,
     styles,
+    bordered,
 }: {
     colour: string;
     label: string;
     styles: ReturnType<typeof makeStyles>;
+    bordered?: boolean;
 }) {
     return (
         <View style={styles.legendChip}>
-            <View style={[styles.legendDot, { backgroundColor: colour }]} />
+            <View style={[styles.legendDot, { backgroundColor: colour }, bordered && styles.dotBordered]} />
             <Text style={styles.legendLabel}>{label}</Text>
         </View>
     );
@@ -539,15 +567,17 @@ function ExplainerRow({
     title,
     body,
     styles,
+    bordered,
 }: {
     colour: string;
     title: string;
     body: string;
     styles: ReturnType<typeof makeStyles>;
+    bordered?: boolean;
 }) {
     return (
         <View style={styles.explainerRow}>
-            <View style={[styles.explainerDot, { backgroundColor: colour }]} />
+            <View style={[styles.explainerDot, { backgroundColor: colour }, bordered && styles.dotBordered]} />
             <View style={{ flex: 1 }}>
                 <Text style={styles.explainerTitle}>{title}</Text>
                 <Text style={styles.explainerBody}>{body}</Text>
@@ -619,6 +649,19 @@ const makeStyles = (c: AppTheme) =>
             borderWidth: 2,
             borderRadius: 3,
         },
+        // Solid private-info redaction box (white border so it reads as an
+        // intentional mask in both light + dark themes).
+        maskBand: {
+            backgroundColor: '#000',
+            borderColor: '#fff',
+            borderWidth: 1.5,
+        },
+        // Legend/explainer dot for the black private-info entry — white ring
+        // keeps the black dot visible on dark card backgrounds.
+        dotBordered: {
+            borderWidth: 1.5,
+            borderColor: '#fff',
+        },
         bandBadge: {
             position: 'absolute',
             width: 26,
@@ -652,60 +695,59 @@ const makeStyles = (c: AppTheme) =>
             flex: 1,
             backgroundColor: c.overlayBackdrop,
             justifyContent: 'center',
-            paddingHorizontal: 24,
+            paddingHorizontal: spacing.xl,
         },
         modalCard: {
             backgroundColor: c.cardBackground,
-            borderRadius: 16,
-            padding: 20,
-            gap: 14,
+            borderRadius: radius.lg,
+            padding: spacing.xl,
+            gap: spacing.md,
         },
         modalTitle: {
-            fontSize: 16,
-            fontWeight: '700',
+            ...typography.subheading,
             color: c.textPrimary,
             textAlign: 'center',
         },
         modalBody: {
-            fontSize: 13,
-            lineHeight: 19,
+            ...typography.bodySmall,
             color: c.textSecondary,
         },
         modalLegendList: {
-            gap: 12,
-            marginTop: 4,
+            gap: spacing.md,
+            marginTop: spacing.xs,
         },
         explainerRow: {
             flexDirection: 'row',
             alignItems: 'flex-start',
-            gap: 10,
+            gap: spacing.sm,
         },
         explainerDot: {
             width: 12,
             height: 12,
             borderRadius: 6,
-            marginTop: 4,
+            marginTop: spacing.xs,
         },
         explainerTitle: {
-            fontSize: 14,
+            ...typography.bodySmallStrong,
             fontWeight: '700',
             color: c.textPrimary,
         },
         explainerBody: {
-            fontSize: 12,
+            ...typography.labelSmall,
+            fontWeight: '400',
             color: c.textSecondary,
             marginTop: 2,
-            lineHeight: 17,
         },
         modalCloseBtn: {
             backgroundColor: c.primary,
-            borderRadius: 10,
-            paddingVertical: 12,
+            borderRadius: radius.pill,
+            paddingVertical: spacing.md,
+            paddingHorizontal: spacing.xl,
             alignItems: 'center',
-            marginTop: 6,
+            marginTop: spacing.sm,
         },
         modalCloseText: {
-            fontSize: 14,
+            ...typography.bodySmallStrong,
             fontWeight: '700',
             color: c.onPrimary,
         },
