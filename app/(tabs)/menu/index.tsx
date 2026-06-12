@@ -9,12 +9,12 @@ import Animated, {
     withTiming,
 } from 'react-native-reanimated';
 import { GlassIconButton } from '../../../components/GlassIconButton';
-import { useRouter , useFocusEffect } from 'expo-router';
+import { useRouter , useFocusEffect, useNavigation } from 'expo-router';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radius, elevation, iconSize, typography, type AppTheme } from '../../../constants/theme';
 import { getLevelData, getLevelName } from '../../../constants/levels';
@@ -126,9 +126,24 @@ export default function ProfilisScreen() {
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
+    const navigation = useNavigation();
     // Collapsing header: "Profilis" title hides on scroll (no pinned filter).
     const header = useCollapsingHeader();
     const tabBarHeight = useSafeBottomTabBarHeight();
+
+    // Set the settings-gear headerRight imperatively too. CollapsingHeader sets
+    // it declaratively via <Stack.Screen>, but this is the ONLY tab that turns
+    // the nav bar ON with a right item, so it hits the expo-router first-mount
+    // lag where the declarative headerRight paints a beat late (gear missing
+    // until you switch tabs and come back). A useLayoutEffect setOptions applies
+    // before first paint and fixes it.
+    useLayoutEffect(() => {
+        navigation.setOptions({
+            headerRight: () => (
+                <GlassIconButton icon="settings-outline" onPress={() => router.push('/settings' as any)} />
+            ),
+        });
+    }, [navigation, router]);
     const triggerIfNewLevel = useLevelStore(s => s.triggerIfNewLevel);
 
     const profile = useProfileStore(s => s.profile);

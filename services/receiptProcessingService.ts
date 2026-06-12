@@ -1,13 +1,10 @@
-import TextRecognition from "@react-native-ml-kit/text-recognition";
-import * as ImageManipulator from "expo-image-manipulator";
-import { Image } from "react-native";
 import { parseProductName } from "@shared/parsers/productNameParser";
 import { detectCardMaskBands, redactReceiptText, type MaskBand } from "@shared/parsers/cardMaskDetection";
 import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
 import { requestStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
 import { router } from "expo-router";
 import i18n from "../i18n";
-import { ocrImageTiled } from "../utils/mlkitOcr";
+import { ocrReceiptPages } from "../utils/receiptOcrPipeline";
 import { API_BASE_URL } from "../config/api";
 import { getUserId } from "../config/user";
 import {
@@ -98,101 +95,9 @@ interface MatchedProduct {
   region: Region;
 }
 
-async function rotatePortrait(uri: string): Promise<string> {
-  const dims = await new Promise<{ width: number; height: number }>(
-    (resolve, reject) => {
-      Image.getSize(uri, (width, height) => resolve({ width, height }), reject);
-    },
-  );
-  if (dims.height >= dims.width) return uri;
-  const [cw, ccw] = await Promise.all([
-    ImageManipulator.manipulateAsync(uri, [{ rotate: 90 }], {
-      compress: 1,
-      format: ImageManipulator.SaveFormat.JPEG,
-    }),
-    ImageManipulator.manipulateAsync(uri, [{ rotate: -90 }], {
-      compress: 1,
-      format: ImageManipulator.SaveFormat.JPEG,
-    }),
-  ]);
-  const [ocrCW, ocrCCW] = await Promise.all([
-    TextRecognition.recognize(cw.uri),
-    TextRecognition.recognize(ccw.uri),
-  ]);
-  const countLines = (r: { blocks: { lines: unknown[] }[] }) =>
-    r.blocks.reduce((s, b) => s + b.lines.length, 0);
-  return countLines(ocrCW) >= countLines(ocrCCW) ? cw.uri : ccw.uri;
-}
-
-async function ocrAllPages(imageUris: string[]): Promise<{
-  allLines: LineWithFrame[];
-  mergedLines: LineWithFrame[];
-  frameScale: number;
-  /** First page, post-rotation: this is what we upload + crop against. */
-  firstPageUri: string;
-  firstPageWidth: number;
-  firstPageHeight: number;
-}> {
-  const allLines: LineWithFrame[] = [];
-  let frameScale = 1;
-  let yOffset = 0;
-  let firstPageUri = imageUris[0] ?? "";
-  let firstPageWidth = 0;
-  let firstPageHeight = 0;
-
-  for (let pageIdx = 0; pageIdx < imageUris.length; pageIdx++) {
-    const pageUri = await rotatePortrait(imageUris[pageIdx]);
-    const ocr = await ocrImageTiled(pageUri);
-    if (pageIdx === 0) {
-      frameScale = ocr.frameScale;
-      firstPageUri = pageUri;
-      firstPageWidth = ocr.pixelWidth;
-      firstPageHeight = ocr.pixelHeight;
-    }
-
-    let pageMaxYScaled = 0;
-    for (const line of ocr.lines) {
-      if (line.yBottom > pageMaxYScaled) pageMaxYScaled = line.yBottom;
-      allLines.push({
-        text: line.text,
-        yTop: line.yTop + yOffset,
-        yBottom: line.yBottom + yOffset,
-        xLeft: line.xLeft,
-        xRight: line.xRight,
-      });
-    }
-    yOffset += pageMaxYScaled + 50;
-  }
-
-  allLines.sort((a, b) => a.yTop - b.yTop);
-
-  const mergedLines: LineWithFrame[] = [];
-  const PRICE_RE = /^\d+[.,]\s?\d{2}\s*[AB]\s*$/;
-  const ROW_THRESHOLD = 30 * frameScale;
-
-  for (const line of allLines) {
-    if (mergedLines.length > 0) {
-      const last = mergedLines[mergedLines.length - 1];
-      if (Math.abs(line.yTop - last.yTop) < ROW_THRESHOLD) {
-        if (PRICE_RE.test(line.text)) {
-          mergedLines.push({ ...line });
-        } else if (PRICE_RE.test(last.text)) {
-          mergedLines.splice(mergedLines.length - 1, 0, { ...line });
-        } else {
-          last.text = last.text + " " + line.text;
-          last.yTop = Math.min(last.yTop, line.yTop);
-          last.yBottom = Math.max(last.yBottom, line.yBottom);
-          last.xLeft = Math.min(last.xLeft, line.xLeft);
-          last.xRight = Math.max(last.xRight, line.xRight);
-        }
-        continue;
-      }
-    }
-    mergedLines.push({ ...line });
-  }
-
-  return { allLines, mergedLines, frameScale, firstPageUri, firstPageWidth, firstPageHeight };
-}
+// OCR pipeline (rotate + tile + multi-page merge) is shared with account
+// recovery via `utils/receiptOcrPipeline.ts` so the two paths can never drift.
+const ocrAllPages = ocrReceiptPages;
 
 /**
  * Map a local file URI to the MIME type the server-side presigner expects.
