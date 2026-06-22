@@ -679,6 +679,11 @@
       "bannerDisabled": "Waiting for network"
     },
     "filterAll": "All",
+    "devDelete": {
+      "title": "Delete receipt (DEV)",
+      "body": "Permanently delete \"{{store}}\" and all associated data (prices, products, image)?",
+      "confirm": "Delete everything"
+    },
     "menu": {
       "pdfConverting": "Converting PDF to image",
       "uploadTitle": "Upload receipt",
@@ -1052,7 +1057,20 @@
     "errorJoin": "Couldn't join the list",
     "errorScan": "Couldn't scan QR",
     "errorTitle": "Error",
-    "ok": "OK"
+    "ok": "OK",
+    "alignOverlap": "Line up with the previous part",
+    "hintFirst": "Capture the top of the receipt",
+    "hintNext": "Capture the next part (part {{n}})",
+    "done": "Done",
+    "retakeLast": "Retake last",
+    "guideStart": "Aim at the top, then hold steady",
+    "guideDown": "Slide down, then hold steady",
+    "guideDownMore": "Move down a bit more",
+    "guideUp": "Back up — you left a gap",
+    "guideEnd": "Looks like the end — tap Done",
+    "holdStill": "Hold still…",
+    "checking": "Checking…",
+    "captured": "Captured: {{n}}"
   },
   "comparison": {
     "calculating": "Calculating...",
@@ -1118,6 +1136,10 @@
     "chainGateBody": "This receipt looks like it's from \"{{detected}}\", but the list is for \"{{expected}}\". Did you shop at a different store?",
     "chainGateDifferentStore": "I went to a different store",
     "chainGateCancel": "Cancel",
+    "scanQualityTitle": "Receipt unreadable",
+    "scanQualityBody": "Couldn't find the receipt number and date — the photo is likely too dark or blurry. Turn on more light and rescan.",
+    "scanQualityRetake": "Rescan",
+    "scanQualityUseAnyway": "Use anyway",
     "errorSave": "Couldn't save receipt",
     "errorUploadUrlFields": "upload-url response is missing fields",
     "errorUploadPhoto": "Couldn't upload photo",
@@ -1252,20 +1274,24 @@
     "fallbackBody": "This receipt's photo isn't available.",
     "bands": {
       "address": "Store address",
+      "companyCode": "Company code",
       "products": "Items",
       "total": "Total",
       "dateTime": "Date and time",
       "receiptNo": "Receipt no.",
+      "skipped": "Not counted",
       "private": "Private info"
     },
     "explainer": {
       "title": "What Souply recognises",
       "body": "Souply highlights each data field on the receipt with a coloured frame so you can see exactly which pixels were read and what information is collected. This data is used only for price comparison and your personal purchase analysis.",
       "addressBody": "Store address — used to match against our store catalog.",
+      "companyCodeBody": "The retailer's company / VAT code — chain details, not the store address.",
       "productsBody": "Every purchased item with name, quantity, and price.",
       "totalBody": "Receipt grand total.",
       "dateTimeBody": "Receipt date and time.",
       "receiptNoBody": "Unique receipt number — used to distinguish re-uploaded photos.",
+      "skippedBody": "Coupons, bags and loyalty-points lines — recognised but intentionally not counted as products.",
       "privateBody": "Bank card, loyalty card numbers and the cashier's name are blacked out on your phone — this data is never stored or uploaded.",
       "close": "Got it"
     }

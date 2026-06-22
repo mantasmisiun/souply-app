@@ -4,12 +4,34 @@ import { Image, Platform } from 'react-native';
 import { devLog } from './devLog';
 import { normalizeLithuanianText } from '@shared/parsers/normalizeLithuanianText';
 
+/** Per-WORD box (MLKit element). Lets a parser anchor a band to a specific
+ *  word (e.g. the "Kvito" and "Kasa" that bracket the receipt-number line)
+ *  instead of the whole line's frame. All coords are in the same scaled,
+ *  y-offset image space as the line. */
+export interface OcrWord {
+    text: string;
+    xLeft: number;
+    xRight: number;
+    yTop: number;
+    yBottom: number;
+}
+
 export interface OcrLine {
     text: string;
     yTop: number;
     yBottom: number;
     xLeft: number;
     xRight: number;
+    // Skew-aware edge Y from MLKit cornerPoints: the line's top/bottom Y at its
+    // LEFT edge vs its RIGHT edge. On a tilted photo these differ, letting the
+    // detail view draw bands that follow the tilt. Absent → caller falls back to
+    // the axis-aligned yTop/yBottom.
+    yLeftTop?: number;
+    yRightTop?: number;
+    yLeftBottom?: number;
+    yRightBottom?: number;
+    // Per-word boxes (MLKit elements), for word-anchored bands.
+    words?: OcrWord[];
 }
 
 export interface OcrResult {
@@ -127,6 +149,7 @@ export async function ocrImageTiled(uri: string): Promise<OcrResult> {
     // Scale coords from working (resized) space back to original
     // pixel space. No-op when resizeFactor === 1.
     const invFactor = 1 / resizeFactor;
+    const sc = (v: number | undefined) => (v == null ? undefined : v * invFactor);
     const remap = (line: OcrLine): OcrLine => (
         resizeFactor === 1
             ? line
@@ -136,6 +159,17 @@ export async function ocrImageTiled(uri: string): Promise<OcrResult> {
                   yBottom: line.yBottom * invFactor,
                   xLeft: line.xLeft * invFactor,
                   xRight: line.xRight * invFactor,
+                  yLeftTop: sc(line.yLeftTop),
+                  yRightTop: sc(line.yRightTop),
+                  yLeftBottom: sc(line.yLeftBottom),
+                  yRightBottom: sc(line.yRightBottom),
+                  words: line.words?.map((w) => ({
+                      text: w.text,
+                      xLeft: w.xLeft * invFactor,
+                      xRight: w.xRight * invFactor,
+                      yTop: w.yTop * invFactor,
+                      yBottom: w.yBottom * invFactor,
+                  })),
               }
     );
 
@@ -289,30 +323,95 @@ async function runMlkitOnUri(
     const roundedInv = Math.max(1, Math.min(8, Math.round(1 / estimatedScale)));
     const frameScale = 1 / roundedInv;
 
-    const lines: OcrLine[] = [];
+    // Per-line tilt from per-word ELEMENT frames. MLKit often returns the LINE's
+    // cornerPoints FLAT even on visibly skewed text, but each word's axis-aligned
+    // `frame` steps down with the skew — so the leftmost+rightmost words give the
+    // REAL left/right Y, i.e. the real slope of THAT line. We keep tilt PER-LINE
+    // (the receipt curves — less skew at the top, more at the bottom; one global
+    // angle is wrong) but make it SMOOTH and robust:
+    //   1. measure each line's own slope from its words,
+    //   2. lines with too few words inherit the nearest measured slope (no flat
+    //      fallback — flat-vs-skew jumps were the trapezoid mess),
+    //   3. median-smooth over 3 neighbours so a garbled line can't spike the tilt.
+    type ElFrame = { top: number; left: number; width: number; height: number };
+    interface RawLine {
+        text: string;
+        frame: ElFrame;
+        slope: number | null;   // own element slope (px/px), or null when unmeasurable
+        textH: number;          // per-word text height (the line box is inflated by tilt)
+        els: { text: string; frame: ElFrame }[]; // per-word boxes, left→right
+    }
+    const raws: RawLine[] = [];
     for (const block of pageResult.blocks) {
         for (const line of block.lines) {
-            if (line.frame && line.text.trim()) {
-                // Normalize to Lithuanian alphabet here, before any
-                // parser sees the text. iOS MLKit emits non-Lithuanian
-                // Latin diacritics on receipt fonts (`Ā`/`É`/`Ǔ` etc.)
-                // that are pure OCR confusions, never legitimate on
-                // Lithuanian text. Mapping them back to ą/č/ė/š/ų/ū/ž
-                // or ASCII removes a class of cascading failures
-                // (name-token mismatches, regex anchors that demand
-                // `\p{L}` and trip on combining marks, etc.). Platform-
-                // agnostic — Android lines pass through identically
-                // because they rarely produce these confusions.
-                lines.push({
-                    text: normalizeLithuanianText(line.text.trim()),
-                    yTop: line.frame.top * frameScale + yOffset,
-                    yBottom: (line.frame.top + line.frame.height) * frameScale + yOffset,
-                    xLeft: line.frame.left * frameScale,
-                    xRight: (line.frame.left + line.frame.width) * frameScale,
-                });
+            if (!line.frame || !line.text.trim()) continue;
+            const els = ((line as { elements?: { text?: string; frame?: ElFrame }[] }).elements ?? [])
+                .filter((e): e is { text?: string; frame: ElFrame } => !!e.frame && e.frame.width > 0 && e.frame.height > 0)
+                .map((e) => ({ text: (e.text ?? '').trim(), frame: e.frame }))
+                .sort((a, b) => a.frame.left - b.frame.left);
+            let slope: number | null = null;
+            let textH = line.frame.height;
+            if (els.length >= 2) {
+                const L = els[0].frame, R = els[els.length - 1].frame;
+                const dx = (R.left + R.width / 2) - (L.left + L.width / 2);
+                if (dx >= 8) slope = (R.top - L.top) / dx;
+                textH = (L.height + R.height) / 2;
             }
+            raws.push({
+                // Normalize to Lithuanian alphabet before any parser sees the text
+                // (iOS MLKit emits non-Lithuanian Latin diacritics — pure OCR
+                // confusions; mapping them back avoids cascading failures).
+                text: normalizeLithuanianText(line.text.trim()),
+                frame: line.frame,
+                slope,
+                textH,
+                els,
+            });
         }
     }
+    raws.sort((a, b) => a.frame.top - b.frame.top); // y order, for slope continuity
+    // (2) fill unmeasured slopes from the nearest measured neighbour
+    const measured = raws.map((r, i) => (r.slope != null ? i : -1)).filter((i) => i >= 0);
+    const filled = raws.map((r, i) => {
+        if (r.slope != null) return Math.max(-0.15, Math.min(0.15, r.slope));
+        if (measured.length === 0) return 0;
+        let best = measured[0];
+        for (const k of measured) if (Math.abs(k - i) < Math.abs(best - i)) best = k;
+        return Math.max(-0.15, Math.min(0.15, raws[best].slope!));
+    });
+    // (3) median-smooth over 3 neighbours so one garbled row can't spike the tilt
+    const slopeAt = (i: number) => {
+        const a = filled[Math.max(0, i - 1)], b = filled[i], c = filled[Math.min(filled.length - 1, i + 1)];
+        return [a, b, c].sort((x, y) => x - y)[1];
+    };
+
+    const sy = (v: number) => v * frameScale + yOffset;
+    const lines: OcrLine[] = raws.map((r, i) => {
+        const f = r.frame;
+        const span = slopeAt(i) * f.width;                          // signed tilt across THIS line
+        const textH = Math.min(f.height, Math.max(4, r.textH));     // actual text height
+        // Axis box TOP = the higher corner; the parallelogram tilts by `span`.
+        const topL = f.top + Math.max(0, -span);
+        const topR = f.top + Math.max(0, span);
+        const yLeftTop = sy(topL), yRightTop = sy(topR);
+        const yLeftBottom = sy(topL + textH), yRightBottom = sy(topR + textH);
+        const words: OcrWord[] = r.els.map((e) => ({
+            text: e.text,
+            xLeft: e.frame.left * frameScale,
+            xRight: (e.frame.left + e.frame.width) * frameScale,
+            yTop: sy(e.frame.top),
+            yBottom: sy(e.frame.top + e.frame.height),
+        }));
+        return {
+            text: r.text,
+            yTop: Math.min(yLeftTop, yRightTop),
+            yBottom: Math.max(yLeftBottom, yRightBottom),
+            xLeft: f.left * frameScale,
+            xRight: (f.left + f.width) * frameScale,
+            yLeftTop, yRightTop, yLeftBottom, yRightBottom,
+            words: words.length ? words : undefined,
+        };
+    });
     return { lines, frameScale, mlkitMaxX, mlkitMaxY };
 }
 

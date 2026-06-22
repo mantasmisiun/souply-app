@@ -650,6 +650,11 @@
       "bannerDisabled": "Laukiama interneto"
     },
     "filterAll": "Visi",
+    "devDelete": {
+      "title": "Ištrinti kvitą (DEV)",
+      "body": "Visam laikui ištrinti „{{store}}“ ir visus susijusius duomenis (kainas, produktus, nuotrauką)?",
+      "confirm": "Ištrinti viską"
+    },
     "menu": {
       "pdfConverting": "PDF konvertuojamas į vaizdą",
       "uploadTitle": "Kvito įkėlimas",
@@ -1028,7 +1033,20 @@
     "errorJoin": "Nepavyko prisijungti prie sąrašo",
     "errorScan": "Nepavyko nuskaityti QR",
     "errorTitle": "Klaida",
-    "ok": "Gerai"
+    "ok": "Gerai",
+    "alignOverlap": "Sulygiuokite su ankstesne dalimi",
+    "hintFirst": "Nufotografuokite kvito viršų",
+    "hintNext": "Nufotografuokite kitą dalį (dalis {{n}})",
+    "done": "Baigta",
+    "retakeLast": "Perfotografuoti",
+    "guideStart": "Nukreipkite į kvito viršų ir palaikykite",
+    "guideDown": "Slinkite žemyn ir palaikykite",
+    "guideDownMore": "Slinkite šiek tiek žemiau",
+    "guideUp": "Grįžkite aukštyn — liko tarpas",
+    "guideEnd": "Atrodo, tai pabaiga — spauskite Baigta",
+    "holdStill": "Laikykite ramiai…",
+    "checking": "Tikrinama…",
+    "captured": "Užfiksuota dalių: {{n}}"
   },
   "comparison": {
     "calculating": "Skaičiuojama...",
@@ -1094,6 +1112,10 @@
     "chainGateBody": "Šis kvitas atrodo iš „{{detected}}“, o sąrašas skirtas „{{expected}}“. Ar tikrai apsipirkote kitoje parduotuvėje?",
     "chainGateDifferentStore": "Buvau kitoje parduotuvėje",
     "chainGateCancel": "Atšaukti",
+    "scanQualityTitle": "Kvitas neperskaitytas",
+    "scanQualityBody": "Nepavyko rasti kvito numerio ir datos — nuotrauka greičiausiai per tamsi ar neryški. Įjunkite daugiau šviesos ir nuskenuokite iš naujo.",
+    "scanQualityRetake": "Skenuoti iš naujo",
+    "scanQualityUseAnyway": "Vis tiek tęsti",
     "errorSave": "Nepavyko išsaugoti kvito",
     "errorUploadUrlFields": "upload-url atsakyme trūksta laukų",
     "errorUploadPhoto": "Nepavyko įkelti nuotraukos",
@@ -1230,20 +1252,24 @@
     "fallbackBody": "Šio kvito nuotrauka neprieinama.",
     "bands": {
       "address": "Parduotuvės adresas",
+      "companyCode": "Įmonės kodas",
       "products": "Prekės",
       "total": "Suma",
       "dateTime": "Data ir laikas",
       "receiptNo": "Kvito Nr.",
+      "skipped": "Neįskaičiuota",
       "private": "Privati informacija"
     },
     "explainer": {
       "title": "Kokius duomenis Souply atpažįsta",
       "body": "Souply pažymi kvite kiekvieną duomenų lauką spalvotu rėmeliu — taip matote tiksliai, kuriuos pikselius nuskaitėme ir kokia informacija renkama. Šie duomenys naudojami tik kainų palyginimui ir jūsų asmeninei pirkimų analizei.",
       "addressBody": "Parduotuvės adresas — pagal jį susiejama su mūsų parduotuvių katalogu.",
+      "companyCodeBody": "Prekybininko įmonės / PVM kodas — tinklo duomenys, ne parduotuvės adresas.",
       "productsBody": "Kiekviena pirkta prekė su pavadinimu, kiekiu ir kaina.",
       "totalBody": "Bendra kvito suma.",
       "dateTimeBody": "Kvito data ir laikas.",
       "receiptNoBody": "Unikalus kvito numeris — pagal jį atskiriamos pakartotinai įkeltos nuotraukos.",
+      "skippedBody": "Kuponų, maišelių ir lojalumo taškų eilutės — atpažintos, bet sąmoningai neįskaičiuotos kaip prekės.",
       "privateBody": "Banko kortelės, lojalumo kortelės numeriai ir kasininko vardas užtušuojami juodai dar telefone — šie duomenys niekada neišsaugomi ir neįkeliami.",
       "close": "Supratau"
     }

@@ -17,6 +17,7 @@ import { formatDate } from '../../../utils/formatCurrency';
 import { chainBrandName, getMiniLogoUrl, chainIdByName } from '../../../utils/chainBrandName';
 import { ChainLogoChip } from '../../../components/ChainLogoChip';
 import { formatStoreStreet } from '../../../utils/formatAddress';
+import { launchDocumentScanner } from '../../../utils/launchDocumentScanner';
 import { StoreChipBar } from '../../../components/StoreChipBar';
 import { CardActionBar, type CardAction } from '../../../components/CardActionBar';
 import { isAwaitingReceipt, groupReceiptProgress } from '../../../utils/awaitingReceipts';
@@ -435,9 +436,10 @@ export default function ShoppingListScreen() {
     // ── Receipt upload (post-completion "needs receipt" flow) ──────────────────
     // The target is a chainId→listId map; receipt-process auto-selects the
     // store row by the receipt's detected chain (no store-selection prompt).
+    // Default: OS document scanner (native edge-detect + auto-capture + de-skew).
     const takeReceiptPhoto = useCallback((map: Record<number, number>) => {
         setUploadTarget(null);
-        router.push(`/receipt/capture?listMap=${encodeURIComponent(mapToParam(map))}` as any);
+        launchDocumentScanner(router, { listMap: mapToParam(map) });
     }, [router]);
 
     // Upload a single receipt file — image OR PDF, same as the Analyze tab.

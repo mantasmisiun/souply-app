@@ -1,8 +1,9 @@
 import { useEffect, useReducer, useRef } from 'react';
 import { Image, PixelRatio, View } from 'react-native';
 import ViewShot, { captureRef } from 'react-native-view-shot';
+import Svg, { Polygon } from 'react-native-svg';
 import type { MaskBand } from '@shared/parsers/cardMaskDetection';
-import { bandsForUploadedImage, maskBoxPercent, maskRenderSize } from '../utils/maskRedaction';
+import { bandsForUploadedImage, maskQuadPercentPoints, maskRenderSize } from '../utils/maskRedaction';
 
 /**
  * Globally-mounted, clipped image-redaction surface.
@@ -161,23 +162,25 @@ export function MaskRedactionHost() {
                     fadeDuration={0}
                     onLoad={() => { runCapture(); }}
                 />
-                {onPageBands.map((b, i) => {
-                    const p = maskBoxPercent(b, req.width, req.height);
-                    return (
-                        <View
+                {/* Black redaction boxes as tilt-following polygons. viewBox is a
+                    0–100 percent space stretched over the surface, so the percent
+                    corner points map 1:1 onto the captured image regardless of DP
+                    render size. Polygon (not rect) so the burned box matches the
+                    bent overlay and never under-covers a tilted PII row. */}
+                <Svg
+                    style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%' }}
+                    viewBox="0 0 100 100"
+                    preserveAspectRatio="none"
+                    pointerEvents="none"
+                >
+                    {onPageBands.map((b, i) => (
+                        <Polygon
                             key={i}
-                            pointerEvents="none"
-                            style={{
-                                position: 'absolute',
-                                left: `${p.left}%`,
-                                top: `${p.top}%`,
-                                width: `${p.width}%`,
-                                height: `${p.height}%`,
-                                backgroundColor: '#000',
-                            }}
+                            points={maskQuadPercentPoints(b, req.width, req.height)}
+                            fill="#000"
                         />
-                    );
-                })}
+                    ))}
+                </Svg>
             </ViewShot>
         </View>
     );

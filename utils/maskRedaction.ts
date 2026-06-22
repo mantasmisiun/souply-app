@@ -43,6 +43,37 @@ export const maskBoxPercent = (
 
 const clampPct = (v: number): number => (v < 0 ? 0 : v > 100 ? 100 : v);
 
+/** Optional per-corner Y (skew) carried by a redaction box. */
+export interface QuadBand extends BoxBand {
+    yLeftTop?: number;
+    yRightTop?: number;
+    yLeftBottom?: number;
+    yRightBottom?: number;
+}
+
+/**
+ * The redaction box as an SVG polygon `points` string in PERCENT units (0–100),
+ * following the receipt tilt via the per-corner Y. Rendered inside an
+ * `<Svg viewBox="0 0 100 100" preserveAspectRatio="none">` so the percentages
+ * map straight onto the capture surface (any DP size). Falls back to the
+ * axis-aligned rectangle when no corners are present.
+ */
+export const maskQuadPercentPoints = (
+    b: QuadBand,
+    imageWidth: number,
+    imageHeight: number,
+): string => {
+    const w = Math.max(1, imageWidth);
+    const h = Math.max(1, imageHeight);
+    const xL = clampPct((b.xLeft / w) * 100);
+    const xR = clampPct((Math.max(b.xLeft + 1, b.xRight) / w) * 100);
+    const yLT = clampPct(((b.yLeftTop ?? b.yTop) / h) * 100);
+    const yRT = clampPct(((b.yRightTop ?? b.yTop) / h) * 100);
+    const yRB = clampPct(((b.yRightBottom ?? b.yBottom) / h) * 100);
+    const yLB = clampPct(((b.yLeftBottom ?? b.yBottom) / h) * 100);
+    return `${xL},${yLT} ${xR},${yRT} ${xR},${yRB} ${xL},${yLB}`;
+};
+
 /**
  * DP size to render the offscreen capture surface at.
  *

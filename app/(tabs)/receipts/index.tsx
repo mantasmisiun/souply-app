@@ -29,6 +29,7 @@ import { glassHeaderOptions } from "../../../constants/navHeader";
 import { ScreenHeading } from "../../../components/ScreenHeading";
 import { useCollapsingHeader, CollapsingHeader } from "../../../components/CollapsingHeader";
 import { chainBrandName, chainIdByName } from "../../../utils/chainBrandName";
+import { launchDocumentScanner } from "../../../utils/launchDocumentScanner";
 import { ChainLogoChip } from "../../../components/ChainLogoChip";
 import { SkeletonBox } from "../../../components/SkeletonBox";
 import { PendingSwipesBanner } from "../../../components/PendingSwipesBanner";
@@ -127,19 +128,20 @@ export default function ReceiptsScreen() {
   const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
   const [previewOnly, setPreviewOnly] = useState(false);
   const [pdfConverting, setPdfConverting] = useState(false);
+  // DEV-ONLY: long-press a receipt to hard-delete it + all its data.
+  const [deleteTarget, setDeleteTarget] = useState<Receipt | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const queueItems = useReceiptQueueStore((s) => s.items);
   const removeQueueItem = useReceiptQueueStore((s) => s.removeItem);
   const recentIds = useReceiptQueueStore((s) => s.recentIds);
   const pruneRecentIds = useReceiptQueueStore((s) => s.pruneRecentIds);
   const addItems = useReceiptQueueStore((s) => s.addItems);
 
+  // Default scan: the OS document scanner (native edge-detect + auto-capture +
+  // de-skew). Covers normal-length receipts.
   const onPickCamera = () => {
     setUploadMenuOpen(false);
-    if (previewOnly) {
-      router.push(`/receipt/capture?preview=true` as any);
-    } else {
-      router.push("/receipt/capture" as any);
-    }
+    launchDocumentScanner(router, { preview: previewOnly });
   };
 
   const onPickFile = async () => {
@@ -221,6 +223,26 @@ export default function ReceiptsScreen() {
       console.error("Failed to fetch receipts:", error);
     } finally {
       setLoading((prev) => (prev ? false : prev));
+    }
+  };
+
+  // DEV-ONLY: hard delete a receipt + all spawned data (prices, orphan SPs,
+  // MinIO image). Server refuses outside dev.
+  const confirmDeleteReceipt = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/receipts/${deleteTarget.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setReceipts((prev) => prev.filter((r) => r.id !== deleteTarget.id));
+      setDeleteTarget(null);
+      await fetchReceipts();
+    } catch (e) {
+      Alert.alert("Delete failed", String(e));
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -529,6 +551,8 @@ export default function ReceiptsScreen() {
     return (
       <TouchableOpacity
         style={[styles.card, hasPendingSwipes(item) && styles.cardPending]}
+        onLongPress={__DEV__ ? () => setDeleteTarget(item) : undefined}
+        delayLongPress={500}
         onPress={() => {
           if (hasPendingSwipes(item)) {
             router.push({
@@ -677,6 +701,51 @@ export default function ReceiptsScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* DEV-ONLY: long-press delete confirmation. Gated on __DEV__ so it only
+          exists in dev/Metro bundles and is absent from release/prod builds. */}
+      {__DEV__ && (
+        <Modal
+          visible={deleteTarget !== null}
+          transparent
+          animationType="fade"
+          onRequestClose={() => !deleting && setDeleteTarget(null)}
+        >
+          <Pressable style={styles.menuBackdrop} onPress={() => !deleting && setDeleteTarget(null)}>
+            <Pressable style={styles.menuCard} onPress={(e) => e.stopPropagation()}>
+              <Text style={styles.menuTitle}>{t('receipts.devDelete.title')}</Text>
+              <Text style={[styles.cardAddress, { marginBottom: spacing.sm }]}>
+                {t('receipts.devDelete.body', {
+                  store: deleteTarget?.storeName || deleteTarget?.chainName || `#${deleteTarget?.id ?? ''}`,
+                })}
+              </Text>
+              <TouchableOpacity
+                style={[styles.menuRow, { justifyContent: 'center' }, deleting && { opacity: 0.5 }]}
+                disabled={deleting}
+                onPress={confirmDeleteReceipt}
+              >
+                {deleting ? (
+                  <ActivityIndicator size="small" color={colors.error} />
+                ) : (
+                  <>
+                    <Ionicons name="trash-outline" size={iconSize.lg} color={colors.error} />
+                    <Text style={[styles.menuRowText, { color: colors.error }]}>
+                      {t('receipts.devDelete.confirm')}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.menuRow, { justifyContent: 'center' }]}
+                disabled={deleting}
+                onPress={() => setDeleteTarget(null)}
+              >
+                <Text style={styles.menuRowText}>{t('common.cancel')}</Text>
+              </TouchableOpacity>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      )}
 
       <Modal
         visible={uploadMenuOpen}

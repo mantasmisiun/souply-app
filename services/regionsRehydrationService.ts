@@ -78,8 +78,117 @@ const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
  *   v6.9 — Rimi receiptNo passes through ocrDigit (l/I→1, o/O→0) so
  *          OCR letter contamination ("l6/643/33366") doesn't reach
  *          the DB — Rimi numbers are pure digits + slashes.
+ *   v7.0 — IKI photographed (thermal) parser overhaul: scrambled-OCR
+ *          product recovery, coupon/discount/NUOLAIDA-fusion handling,
+ *          chain-agnostic address strip, split company-code detection,
+ *          AND a band-rendering overhaul — every section (header /
+ *          products / footer / masks) now emits skew-aware quad bands,
+ *          time (Laikas) is banded, and the total is banded on EVERY
+ *          form (SUMA same-line / SUMA-split-two-lines / Mokėti). This
+ *          bump RE-DERIVES all previously-saved receipts so they pick
+ *          up the new bands instead of keeping their stale v6.x set.
+ *   v7.1 — IKI thermal band seams now use a gap-aware MIDPOINT tiler:
+ *          each band keeps its true content box (name-top + price-row
+ *          bottom) and seams drop to the midpoint between a row's bottom
+ *          and the next row's top, so dense price/discount rows are no
+ *          longer clipped at the seam. Still gap-free + overlap-free.
+ *   v7.2 — IKI band BOTTOM now anchors to the product's price/weight row,
+ *          NOT its trailing full-width "NUOLAIDA SU KORTELE" label (whose
+ *          tilted left-bottom corner dragged the seam through the next
+ *          name). Names + prices stay whole. Also: the time band is sliced
+ *          to just "Laikas HH:MM:SS" when it shares a line with a prefix.
+ *   v7.3 — weighed item with a split weight row ("0,72" + "0 kg X 3,99")
+ *          and no printed total now derives total = qty × €/kg, instead
+ *          of mistaking the "0,72" quantity fragment for a 0,72 € total.
+ *   v7.4 — bands are now TIGHT: each hugs its own content (+ small margin)
+ *          and leaves a GAP over garbled/unrecognised rows instead of
+ *          stretching to the next product (fixes bands "absorbing" several
+ *          products on heavily-fused scans); still never overlap. Plus a
+ *          corner/frame reconciliation so a footer band (e.g. "Kvito Nr.")
+ *          can't float above its text when MLKit corners cover only the
+ *          top of a tall merged line box.
+ *   v7.5 — two product names fused on one OCR row by a line-total's VAT
+ *          letter ("LYDYTAS … 99 A LIETUVISKI POMIDORAI") now split into
+ *          separate products at the "<price> A" boundary.
+ *   v7.6 — STABILITY: product bands reverted to a dead-simple EDGE-TO-EDGE
+ *          partition. Each band = its NAME-line box; the tiler drops each
+ *          bottom to the next product's name top (per-corner). Every
+ *          product owns one contiguous, gap-free, non-overlapping slice.
+ *          No content-chasing / margins / heuristics — the seam is always
+ *          the next recognised name (replaces the unstable tight-band tiler).
+ *   v7.7 — removed the header/footer corner→frame "reconciliation" (a v7.4
+ *          misdiagnosis of the landscape image-space bug): it flattened a
+ *          band to its OCR frame box, which can span several merged rows, so
+ *          "Kvito Nr." rendered as a tall rectangle over extra lines and the
+ *          cashier mask. Footer/header bands now always use their own bent
+ *          corner points → hug the single line they came from.
+ *   v7.8 — header→product boundary: product 1's top is now CLAMPED DOWN to
+ *          the header edge (only pushed below it to avoid overlap), instead
+ *          of being pulled UP to it. The first band starts on its own name,
+ *          so the PVM-code line + dashed separator above stay a clean gap
+ *          instead of being absorbed into the first product band.
+ *   v7.9 — TILT from per-word ELEMENT frames. MLKit often returns a line's
+ *          cornerPoints flat even on visibly skewed text; each word's frame
+ *          steps with the skew, so we derive the true slope from the
+ *          leftmost+rightmost words (mlkitOcr) and CONTINUE that slope when a
+ *          band is widened to the section width (so the right-aligned price is
+ *          covered, not clipped). Bands now bend to match the OCR'd text.
+ *  v7.10 — per-line element slopes were NOISY (flat on some rows, steep on
+ *          others → wavy bands clipping prices). A receipt has ONE physical
+ *          tilt, so take the MEDIAN element slope across the page and apply it
+ *          UNIFORMLY: every line becomes a clean parallelogram at the same
+ *          skew, seams stay parallel, prices no longer sliced by a rogue tilt.
+ *  v7.11 — global tilt was WRONG: the receipt CURVES (less skew at top, more at
+ *          bottom). Back to PER-LINE tilt from each line's own words, but made
+ *          smooth+robust: lines with too few words inherit the nearest measured
+ *          slope (no flat fallback — that caused trapezoids), then median-smooth
+ *          over 3 neighbours so a garbled row can't spike the tilt. Tilt now
+ *          follows the real curve down the page.
+ *  v7.12 — per-WORD element boxes are now threaded through to the parser
+ *          (OcrLine/LineWithFrame/IkiLine `.words`). The "Kvito Nr." band is
+ *          anchored to the real "Kvito" (left) and "Kasa" (right) word boxes —
+ *          each side's own top/bottom Y, so it bends with the curve and hugs
+ *          that one line. Falls back to "0027" then last word, then line box.
+ *  v7.13 — word-anchoring extended to EVERY band: regionFor spans first→last
+ *          word (storeAddress, storeCode, date/dateTime, total), the time band
+ *          anchors "Laikas"→time-value word, and the black redaction masks
+ *          (bank/loyalty/cashier) anchor to the actual masked words (real x +
+ *          per-word Y, padded to keep over-covering). All fall back to the old
+ *          char→x / line-box geometry when per-word data is absent.
+ *  v7.14 — mask BEND fix: a single-word redaction (e.g. the PAN) anchored to one
+ *          word's flat box couldn't bend. Now the box keeps word-precise x but
+ *          takes its TILT from the line's own slope (≥2 words still use the real
+ *          word Y), so even a one-word mask follows the receipt curve.
+ *   v8.0 — IKI COLUMN ENGINE (flag-gated, falls back to the legacy tokenizer):
+ *          rebuilds physical rows from per-WORD boxes (ignores MLKit line
+ *          grouping), assembles products off the right-column positive-total
+ *          ladder with left-name reconcile + guarded recovery, and bands them
+ *          edge-to-edge with each seam tilted by the row's own local slope.
+ *          Resolves OCR line fusion/splits + column scramble (matches name↔price
+ *          by Y, not OCR order). Runs only when ≥60% of product rows carry words.
+ *   v8.1 — column-engine product bands are now the TWO-BOX dual-curve (Idea 3):
+ *          a name box [xLeft..xMid] joined to a price box [xMid..xRight] at the
+ *          mid column, so the left edge rides the name row and the right edge
+ *          rides the PRICE row (no diagonal clipping the middle rows). Region
+ *          gains optional xMid/yMidTop/yMidBottom → rendered as a 6-point polygon.
+ *   v8.2 — column-engine ASSEMBLY fixes (receipt-44 heavy-fusion failures): a
+ *          product accumulates its rows until the next product starts — discounts
+ *          (which print AFTER the total in IKI) attach to the current product, not
+ *          the next; a name fused onto a discount line starts the NEXT product (no
+ *          more "?" names / wrong promos); a name fused before a weight is
+ *          recovered. rawLines now carries the FULL row text per product.
+ *   v8.3 — column-engine: (a) "NUOLAIDA SU KORTELĖ" discount-label tails (garbled
+ *          "SU K HT", "ŠU KORTEL.") are no longer mistaken for product names → no
+ *          more phantom products; (b) a line-total fused onto the weight row
+ *          ("… EUR/kg 18,15 A") is now captured, so weighed items get the right
+ *          quantity + promo instead of a negative promoPrice.
+ *   v8.4 — PER-COLUMN row clustering: the left column (names/weights/labels) and
+ *          right column (prices/amounts) are clustered SEPARATELY (each narrow in
+ *          x → clean Y), then merged by curve-normalized Y. A wide physical row
+ *          can't be split or mis-merged by cross-column tilt error, and a price
+ *          OCR'd far from its name re-joins it by Y. Replaces single-pass cluster.
  */
-export const REGIONS_VERSION = 'v6.9';
+export const REGIONS_VERSION = 'v8.28';
 
 interface LineWithFrame {
     text: string;

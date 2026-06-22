@@ -27,6 +27,15 @@ export interface LineWithFrame {
     yBottom: number;
     xLeft: number;
     xRight: number;
+    // Skew-aware edge Y (from MLKit cornerPoints) — top/bottom Y at the line's
+    // left vs right edge. Optional; absent → axis-aligned yTop/yBottom.
+    yLeftTop?: number;
+    yRightTop?: number;
+    yLeftBottom?: number;
+    yRightBottom?: number;
+    // Per-word boxes (MLKit elements), for word-anchored bands. Carry the same
+    // y-offset as the line.
+    words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number }[];
 }
 
 export interface ReceiptOcrResult {
@@ -73,6 +82,80 @@ export async function rotatePortrait(uri: string): Promise<string> {
     return countLines(ocrCW) >= countLines(ocrCCW) ? cw.uri : ccw.uri;
 }
 
+export interface CropResult {
+    uri: string;
+    width: number;
+    height: number;
+}
+
+/**
+ * Crop a captured receipt photo down to just the receipt, using the OCR text
+ * geometry as a cheap, dependency-free edge detector: the union of all text
+ * boxes (with padding) is the receipt's printed region; everything outside it
+ * is background (table, hand, shadow). This avoids pulling in OpenCV / a native
+ * contour detector while still isolating the receipt in the common guided-scan
+ * case where text fills the paper top-to-bottom.
+ *
+ * `lines` MUST be in `uri`'s pixel space (i.e. the `allLines` that
+ * `ocrReceiptPages` returns for this same page). Horizontal bounds use the
+ * 5th/95th percentile so a single stray background read can't balloon the box;
+ * vertical bounds keep the full text span. Returns the original uri unchanged
+ * when there's too little text to trust a crop or the content already fills the
+ * frame.
+ */
+export async function cropToContentBounds(
+    uri: string,
+    lines: LineWithFrame[],
+    pageWidth: number,
+    pageHeight: number,
+): Promise<CropResult> {
+    if (lines.length < 4 || pageWidth <= 0 || pageHeight <= 0) {
+        return { uri, width: pageWidth, height: pageHeight };
+    }
+
+    let top = Infinity;
+    let bottom = -Infinity;
+    const lefts: number[] = [];
+    const rights: number[] = [];
+    for (const l of lines) {
+        if (l.yTop < top) top = l.yTop;
+        if (l.yBottom > bottom) bottom = l.yBottom;
+        lefts.push(l.xLeft);
+        rights.push(l.xRight);
+    }
+    lefts.sort((a, b) => a - b);
+    rights.sort((a, b) => a - b);
+    const pct = (arr: number[], p: number) =>
+        arr[Math.min(arr.length - 1, Math.max(0, Math.floor(arr.length * p)))];
+    let left = pct(lefts, 0.05);
+    let right = pct(rights, 0.95);
+
+    // Pad outward so the printed edge / a clipped last char is never shaved.
+    const padX = pageWidth * 0.05;
+    const padY = pageHeight * 0.02;
+    left = Math.max(0, left - padX);
+    right = Math.min(pageWidth, right + padX);
+    top = Math.max(0, top - padY);
+    bottom = Math.min(pageHeight, bottom + padY);
+
+    const cropW = Math.round(right - left);
+    const cropH = Math.round(bottom - top);
+    // Degenerate, or already ~full-frame → not worth a re-encode.
+    if (cropW < 24 || cropH < 24) {
+        return { uri, width: pageWidth, height: pageHeight };
+    }
+    if (cropW >= pageWidth * 0.96 && cropH >= pageHeight * 0.96) {
+        return { uri, width: pageWidth, height: pageHeight };
+    }
+
+    const out = await ImageManipulator.manipulateAsync(
+        uri,
+        [{ crop: { originX: Math.round(left), originY: Math.round(top), width: cropW, height: cropH } }],
+        { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG },
+    );
+    return { uri: out.uri, width: out.width, height: out.height };
+}
+
 /**
  * OCR every page (rotating to portrait + auto-tiling tall images via
  * `ocrImageTiled`), concatenate with per-page y-offsets so multi-page e-receipts
@@ -97,6 +180,7 @@ export async function ocrReceiptPages(imageUris: string[]): Promise<ReceiptOcrRe
         }
 
         let pageMaxYScaled = 0;
+        const off = (v: number | undefined) => (v == null ? undefined : v + yOffset);
         for (const line of ocr.lines) {
             if (line.yBottom > pageMaxYScaled) pageMaxYScaled = line.yBottom;
             allLines.push({
@@ -105,6 +189,11 @@ export async function ocrReceiptPages(imageUris: string[]): Promise<ReceiptOcrRe
                 yBottom: line.yBottom + yOffset,
                 xLeft: line.xLeft,
                 xRight: line.xRight,
+                yLeftTop: off(line.yLeftTop),
+                yRightTop: off(line.yRightTop),
+                yLeftBottom: off(line.yLeftBottom),
+                yRightBottom: off(line.yRightBottom),
+                words: line.words?.map((w) => ({ ...w, yTop: w.yTop + yOffset, yBottom: w.yBottom + yOffset })),
             });
         }
         yOffset += pageMaxYScaled + 50;
@@ -130,6 +219,11 @@ export async function ocrReceiptPages(imageUris: string[]): Promise<ReceiptOcrRe
                     last.yBottom = Math.max(last.yBottom, line.yBottom);
                     last.xLeft = Math.min(last.xLeft, line.xLeft);
                     last.xRight = Math.max(last.xRight, line.xRight);
+                    // Merge the word boxes too (kept x-sorted) so a row split by OCR
+                    // into two lines still exposes every word for band anchoring.
+                    if (line.words?.length) {
+                        last.words = [...(last.words ?? []), ...line.words].sort((a, b) => a.xLeft - b.xLeft);
+                    }
                 }
                 continue;
             }

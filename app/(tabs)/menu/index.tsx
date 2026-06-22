@@ -131,19 +131,6 @@ export default function ProfilisScreen() {
     const header = useCollapsingHeader();
     const tabBarHeight = useSafeBottomTabBarHeight();
 
-    // Set the settings-gear headerRight imperatively too. CollapsingHeader sets
-    // it declaratively via <Stack.Screen>, but this is the ONLY tab that turns
-    // the nav bar ON with a right item, so it hits the expo-router first-mount
-    // lag where the declarative headerRight paints a beat late (gear missing
-    // until you switch tabs and come back). A useLayoutEffect setOptions applies
-    // before first paint and fixes it.
-    useLayoutEffect(() => {
-        navigation.setOptions({
-            headerRight: () => (
-                <GlassIconButton icon="settings-outline" onPress={() => router.push('/settings' as any)} />
-            ),
-        });
-    }, [navigation, router]);
     const triggerIfNewLevel = useLevelStore(s => s.triggerIfNewLevel);
 
     const profile = useProfileStore(s => s.profile);
@@ -205,9 +192,23 @@ export default function ProfilisScreen() {
         });
     }, [activePage, pageHeights, carouselHeight]);
 
+    // Apply the settings-gear headerRight on focus, and re-apply on the next
+    // frame. The native stack header attaches a beat AFTER first mount, so a
+    // one-shot mount/layout-effect set the gear before the header existed — it
+    // only showed up after a tab switch re-focused the screen. Setting it on
+    // focus catches the first focus, and the rAF re-apply lands once the native
+    // header is mounted, so the gear is present on first load.
     useFocusEffect(useCallback(() => {
         fetchProfileIfStale();
-    }, []));
+        const applyGear = () => navigation.setOptions({
+            headerRight: () => (
+                <GlassIconButton icon="settings-outline" onPress={() => router.push('/settings' as any)} />
+            ),
+        });
+        applyGear();
+        const raf = requestAnimationFrame(applyGear);
+        return () => cancelAnimationFrame(raf);
+    }, [navigation, router]));
 
     const devItems: { label: string; icon: keyof typeof Ionicons.glyphMap; route: string }[] = [
         { label: t('profilis.devReceiptBatch'), icon: 'flask-outline', route: '/dev/receipt-batch' },

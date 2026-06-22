@@ -298,11 +298,9 @@ function RootLayout() {
             map instead). Declaring headerShown:false HERE (not just inline in
             the screen) is what actually keeps the header from reserving a
             top strip — relying on the screen's inline override alone left an
-            empty header bar pushing the map down (the "black bar at the top").
-            Mirrors receipt/capture, the other full-bleed screen. */}
+            empty header bar pushing the map down (the "black bar at the top"). */}
         <Stack.Screen name="basket/results/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="shopping-list/[id]" options={{ title: t('screens.shoppingList'), headerLeft: () => <ScreenBackButton /> }} />
-        <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
         <Stack.Screen name="receipt/store-resolution" options={{ headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess'), headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />

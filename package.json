@@ -25,6 +25,9 @@
   },
   "jest": {
     "preset": "jest-expo",
+    "setupFiles": [
+      "<rootDir>/jest.setup.js"
+    ],
     "transformIgnorePatterns": [
       "node_modules/(?!((jest-)?react-native|@react-native(-community)?)|expo(nent)?|@expo(nent)?/.*|@expo-google-fonts/.*|react-navigation|@react-navigation/.*|@unimodules/.*|unimodules|sentry-expo|native-base|react-native-svg)"
     ],
@@ -78,6 +81,7 @@
     "expo-media-library": "~18.2.1",
     "expo-router": "~6.0.23",
     "expo-secure-store": "~15.0.8",
+    "expo-sensors": "~15.0.8",
     "expo-share-intent": "^5.1.1",
     "expo-sharing": "~14.0.8",
     "expo-splash-screen": "~31.0.13",
@@ -92,6 +96,7 @@
     "react-dom": "19.1.0",
     "react-i18next": "^17.0.7",
     "react-native": "0.81.5",
+    "react-native-document-scanner-plugin": "^2.0.4",
     "react-native-gesture-handler": "~2.28.0",
     "react-native-keyboard-controller": "1.18.5",
     "react-native-maps": "^1.27.2",

@@ -232,6 +232,13 @@ export default {
         '@react-native-google-signin/google-signin',
         { iosUrlScheme: process.env.GOOGLE_IOS_URL_SCHEME || 'com.googleusercontent.apps.placeholder' },
       ],
+      // OS document scanner (ML Kit Document Scanner on Android, VisionKit on
+      // iOS) for normal-length receipts: native edge-detect + auto-capture +
+      // de-skew, on-device & free.
+      [
+        'react-native-document-scanner-plugin',
+        { cameraPermission: 'Souply naudoja kamerą kvitams nuskaityti.' },
+      ],
       // Must come last: strips unused permissions (mic / media-audio /
       // draw-over) that the plugins above pull in. See the plugin file.
       './plugins/withBlockedPermissions',

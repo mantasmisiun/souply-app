@@ -146,6 +146,11 @@ interface PageLine {
     yBottom: number;
     xLeft: number;
     xRight: number;
+    yLeftTop?: number;
+    yRightTop?: number;
+    yLeftBottom?: number;
+    yRightBottom?: number;
+    words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number }[];
 }
 
 interface ParsedProductSnapshot {
@@ -440,6 +445,10 @@ export default function ReceiptBatchScreen() {
                         ...l,
                         yTop: l.yTop + yOffset,
                         yBottom: l.yBottom + yOffset,
+                        // keep per-word boxes in the same parser y-space (for word-
+                        // anchored bands); no-op offset on single-page receipts.
+                        words: (l as { words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number }[] }).words
+                            ?.map((w) => ({ ...w, yTop: w.yTop + yOffset, yBottom: w.yBottom + yOffset })),
                     });
                 }
                 yOffset += maxY + 50;

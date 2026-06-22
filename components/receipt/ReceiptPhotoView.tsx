@@ -10,6 +10,7 @@ import {
     View,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import Svg, { Polygon } from 'react-native-svg';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useTheme, spacing, radius, typography, type AppTheme } from '../../constants/theme';
@@ -45,6 +46,18 @@ export interface ReceiptRegion {
     xRight: number;
     /** Phase-6 label. Optional so legacy receipts still render. */
     kind?: string;
+    /** Optional per-corner Y (skew) — band top/bottom at the left vs right
+     *  edge, so tilt-aware bands can be drawn as polygons. Absent → rectangle. */
+    yLeftTop?: number;
+    yRightTop?: number;
+    yLeftBottom?: number;
+    yRightBottom?: number;
+    /** Mid-column connection (column engine's two-box product band): renders as a
+     *  6-point polygon — name box [xLeft..xMid] joined to price box [xMid..xRight]
+     *  at this Y. Absent → ordinary 4-corner quad. */
+    xMid?: number;
+    yMidTop?: number;
+    yMidBottom?: number;
 }
 
 /** Display-space padding added to header/footer bands so the border
@@ -63,8 +76,10 @@ const BAND_PADDING_X_PX = 4;
 
 const PALETTE_DATETIME = '#7A9CC6';
 const PALETTE_RECEIPT_NO = '#B585C9';
+const PALETTE_COMPANY = '#4DB6AC';   // teal — company/VAT code (not the store address)
+const PALETTE_SKIPPED = '#9AA0A6';   // grey — coupons/bags/points: shown but NOT counted
 
-type BandGroup = 'address' | 'total' | 'dateTime' | 'receiptNo';
+type BandGroup = 'address' | 'companyCode' | 'total' | 'dateTime' | 'receiptNo' | 'skipped';
 
 interface BandStyle {
     colour: string;
@@ -74,9 +89,13 @@ interface BandStyle {
 
 const headerBandStyle = (kind: string | undefined, colors: AppTheme, t: TFunction): BandStyle => {
     switch (kind) {
+        // The PVM/VAT line is the COMPANY's registration code, not the store
+        // address — distinct colour + label so the two adjacent header bands
+        // don't read as one "address" band.
+        case 'storeCode':
+            return { colour: PALETTE_COMPANY, label: t('receiptPhoto.bands.companyCode'), group: 'companyCode' };
         case 'storeAddress':
         case 'storeName':
-        case 'storeCode':
             return { colour: colors.info, label: t('receiptPhoto.bands.address'), group: 'address' };
         default:
             // Legacy header without kind — single block-bbox case.
@@ -112,6 +131,10 @@ interface Props {
     headerRegions: ReceiptRegion[];
     productRegions: ReceiptRegion[];
     footerRegions: ReceiptRegion[];
+    /** Coupon / bag / loyalty-points lines: shown as distinct grey bands so the
+     *  user can see they WERE read, but they are intentionally NOT counted as
+     *  products. */
+    skippedRegions?: ReceiptRegion[];
     /** Bank-card / loyalty-card / cashier redaction boxes — drawn as SOLID
      *  black bands so the private data is covered in this view too (the
      *  uploaded image is separately redacted before it ever leaves the phone). */
@@ -124,6 +147,7 @@ export default function ReceiptPhotoView({
     headerRegions,
     productRegions,
     footerRegions,
+    skippedRegions = [],
     maskRegions = [],
 }: Props) {
     const colors = useTheme();
@@ -157,6 +181,7 @@ export default function ReceiptPhotoView({
         for (const r of headerRegions) ys.push(r.yTop, r.yBottom);
         for (const r of productRegions) ys.push(r.yTop, r.yBottom);
         for (const r of footerRegions) ys.push(r.yTop, r.yBottom);
+        for (const r of skippedRegions) ys.push(r.yTop, r.yBottom);
         // Include mask bands so the (often bottom-of-receipt) payment/loyalty
         // section isn't cropped out of the visible viewport.
         for (const r of maskRegions) ys.push(r.yTop, r.yBottom);
@@ -165,7 +190,7 @@ export default function ReceiptPhotoView({
         const yMax = Math.min(imageDims.height, Math.max(...ys) + CONTENT_MARGIN_PX);
         if (yMax - yMin < imageDims.height * 0.2) return null;
         return { yMin, yMax };
-    }, [headerRegions, productRegions, footerRegions, maskRegions, imageDims]);
+    }, [headerRegions, productRegions, footerRegions, skippedRegions, maskRegions, imageDims]);
 
     // Display-space offset to apply when content is cropped. Bands'
     // top coords are computed against the full image; subtracting this
@@ -182,107 +207,32 @@ export default function ReceiptPhotoView({
         r.yTop < imageDims.height &&
         r.yBottom > r.yTop;
 
-    /** Page-1 pixel rect → display-space rect, with no padding and no
-     *  neighbour-aware clamping. Used for product bands which already
-     *  hug each row precisely and can't pad without bleeding into
-     *  adjacent products. */
-    const toDisplayRectRaw = (r: ReceiptRegion) => {
-        if (!imageDims) return null;
-        const rawTop = r.yTop * scale - cropOffsetY;
-        const rawBottom = r.yBottom * scale - cropOffsetY;
-        const rawLeft = r.xLeft * scale;
-        const rawRight = r.xRight * scale;
-        const top = Math.max(0, rawTop);
-        const bottom = Math.min(stageH, rawBottom);
-        const left = Math.max(0, rawLeft);
-        const right = Math.min(containerW, rawRight);
-        return {
-            left,
-            top,
-            width: Math.max(2, right - left),
-            height: Math.max(2, bottom - top),
-        };
-    };
-
-    /** Layout a section's bands with padding + per-band clamping.
-     *
-     *  For each band, padding may NEVER extend past the midpoint of
-     *  the original (unpadded) gap to a horizontally-overlapping
-     *  neighbour. Two key consequences:
-     *    • Side-by-side bands on the same physical row (e.g. "Kvito
-     *      suma" + "12,34 EUR" → two OCR boxes at same y, different
-     *      x) do NOT clamp each other, because they don't overlap
-     *      horizontally. Both retain full padding.
-     *    • Vertically-stacked bands in the same column (e.g. Rimi
-     *      header: storeCode line over street line) clamp each other
-     *      at the midpoint of their original gap. Padding cannot
-     *      cross the divider, so neither band gets crushed away from
-     *      its own text.
-     *
-     *  This replaces the previous "snap after padding overlap" rule
-     *  which mistreated side-by-side bands and shrank both halves.
-     */
-    const layoutSection = (regions: ReceiptRegion[], padded: boolean) => {
-        if (!imageDims) return regions.map(() => null);
-        const padY = padded ? BAND_PADDING_Y_PX : 0;
-        const padX = padded ? BAND_PADDING_X_PX : 0;
-
-        return regions.map((r, i) => {
-            if (!onPageOne(r)) return null;
-            const rawTop = r.yTop * scale - cropOffsetY;
-            const rawBottom = r.yBottom * scale - cropOffsetY;
-            const rawLeft = r.xLeft * scale;
-            const rawRight = r.xRight * scale;
-
-            let upperDivider = 0;
-            let lowerDivider = stageH;
-            const myH = Math.max(1, rawBottom - rawTop);
-            const myCenter = (rawTop + rawBottom) / 2;
-            for (let j = 0; j < regions.length; j++) {
-                if (j === i) continue;
-                const other = regions[j];
-                if (!onPageOne(other)) continue;
-                // Horizontal overlap: bands in the same column can
-                // constrain each other vertically. Side-by-side bands
-                // (different columns) cannot.
-                const horizOverlap = !(other.xRight < r.xLeft || other.xLeft > r.xRight);
-                if (!horizOverlap) continue;
-                const otherTop = other.yTop * scale - cropOffsetY;
-                const otherBottom = other.yBottom * scale - cropOffsetY;
-                const otherH = Math.max(1, otherBottom - otherTop);
-                const otherCenter = (otherTop + otherBottom) / 2;
-                // Same-row guard: two bands on the same physical OCR
-                // line (e.g. Maxima `date` + `time` matched on a
-                // shared "2026-01-13 15:42:30" line, or any kind
-                // dedup that emits identical coords with different
-                // labels) have centers closer than half the smaller
-                // band's height. They shouldn't constrain each other
-                // — without this, both bands snap to the midpoint and
-                // cover only the top half of the digits.
-                const vertCenterDist = Math.abs(otherCenter - myCenter);
-                if (vertCenterDist < Math.min(myH, otherH) * 0.5) continue;
-                if (otherCenter < myCenter) {
-                    // 'other' sits above — midpoint of original gap
-                    // (or overlap region) is the divider.
-                    const divider = (otherBottom + rawTop) / 2;
-                    if (divider > upperDivider) upperDivider = divider;
-                } else {
-                    const divider = (rawBottom + otherTop) / 2;
-                    if (divider < lowerDivider) lowerDivider = divider;
-                }
-            }
-
-            const top = Math.max(0, upperDivider, rawTop - padY);
-            const bottom = Math.min(stageH, lowerDivider, rawBottom + padY);
-            const left = Math.max(0, rawLeft - padX);
-            const right = Math.min(containerW, rawRight + padX);
-            return {
-                left,
-                top,
-                width: Math.max(2, right - left),
-                height: Math.max(2, bottom - top),
-            };
-        });
+    /** Page-1 region → an SVG polygon (display space) that follows the receipt
+     *  tilt: the band's top/bottom edges use the per-corner Y (yLeftTop/yRightTop
+     *  …) when present, falling back to the axis-aligned rect. Returns the
+     *  `points` string plus the left edge + vertical centre (for the #N badge).
+     *  Used for product + skipped bands, whose walls must hug the tilted rows. */
+    const toQuadPoints = (r: ReceiptRegion): { points: string; left: number; midY: number } | null => {
+        if (!imageDims || !onPageOne(r)) return null;
+        const dx = (x: number) => Math.max(0, Math.min(containerW, x * scale));
+        const dy = (y: number) => Math.max(0, Math.min(stageH, y * scale - cropOffsetY));
+        const xL = dx(r.xLeft);
+        const xR = dx(r.xRight);
+        const yTL = dy(r.yLeftTop ?? r.yTop);
+        const yTR = dy(r.yRightTop ?? r.yTop);
+        const yBR = dy(r.yRightBottom ?? r.yBottom);
+        const yBL = dy(r.yLeftBottom ?? r.yBottom);
+        // Two-box product band → 6-point polygon: name box [xL..xMid] joined to the
+        // price box [xMid..xR] at the mid column, so each half hugs its own curve.
+        if (r.xMid != null && r.yMidTop != null && r.yMidBottom != null) {
+            const xM = dx(r.xMid);
+            const yMT = dy(r.yMidTop);
+            const yMB = dy(r.yMidBottom);
+            const poly = `${xL},${yTL} ${xM},${yMT} ${xR},${yTR} ${xR},${yBR} ${xM},${yMB} ${xL},${yBL}`;
+            return { points: poly, left: xL, midY: (yTL + yBL) / 2 };
+        }
+        const points = `${xL},${yTL} ${xR},${yTR} ${xR},${yBR} ${xL},${yBL}`;
+        return { points, left: xL, midY: (yTL + yBL) / 2 };
     };
 
     // Legend chips list the kinds actually present on this receipt,
@@ -305,8 +255,11 @@ export default function ReceiptPhotoView({
             const order = s.group === 'total' ? 2 : s.group === 'dateTime' ? 3 : 4;
             groups.set(s.group, { colour: s.colour, label: s.label, order });
         }
+        if (skippedRegions.length > 0) {
+            groups.set('skipped', { colour: PALETTE_SKIPPED, label: t('receiptPhoto.bands.skipped'), order: 5 });
+        }
         return Array.from(groups.values()).sort((a, b) => a.order - b.order);
-    }, [headerRegions, productRegions.length, footerRegions, colors, t]);
+    }, [headerRegions, productRegions.length, footerRegions, skippedRegions.length, colors, t]);
 
     if (!imageUri || !imageDims) {
         return (
@@ -372,101 +325,122 @@ export default function ReceiptPhotoView({
                             }}
                             resizeMode="stretch"
                         />
-                        {/* Header bands — one per parsed field. Legacy
-                            receipts pass a single block-bbox without
-                            kind; both render via the same path. Layout
-                            applies padding + clamps it at the midpoint
-                            of original gaps to horizontally-overlapping
-                            neighbours, so side-by-side same-row bands
-                            keep full padding and stacked bands don't
-                            cross into each other. */}
-                        {layoutSection(headerRegions, true).map((rect, i) => {
-                            if (!rect) return null;
-                            const s = headerBandStyle(headerRegions[i].kind, colors, t);
-                            return (
-                                <View
-                                    key={`h-${i}`}
-                                    pointerEvents="none"
-                                    style={[
-                                        styles.overlay,
-                                        rect,
-                                        {
-                                            borderColor: s.colour,
-                                            backgroundColor: `${s.colour}1A`,
-                                        },
-                                    ]}
-                                />
-                            );
-                        })}
-                        {/* Per-product green band + #N badge to the
-                            left. UNPADDED — adjacent product bands
-                            touch by construction (parser walls); any
-                            extra padding would bleed into neighbours
-                            and make the row text unreadable. */}
+                        {/* Tilt-following band walls: product (green) + skipped
+                            (grey dashed) bands as SVG polygons built from each
+                            region's per-corner Y, so the overlay follows a
+                            skewed receipt instead of boxing it as rectangles. */}
+                        <Svg
+                            style={StyleSheet.absoluteFill}
+                            width={containerW}
+                            height={stageH}
+                            pointerEvents="none"
+                        >
+                            {productRegions.map((r, i) => {
+                                const q = toQuadPoints(r);
+                                if (!q) return null;
+                                return (
+                                    <Polygon
+                                        key={`pp-${i}`}
+                                        points={q.points}
+                                        stroke={colors.success}
+                                        strokeWidth={2}
+                                        fill={`${colors.success}1A`}
+                                    />
+                                );
+                            })}
+                            {skippedRegions.map((r, i) => {
+                                const q = toQuadPoints(r);
+                                if (!q) return null;
+                                return (
+                                    <Polygon
+                                        key={`sp-${i}`}
+                                        points={q.points}
+                                        stroke={PALETTE_SKIPPED}
+                                        strokeWidth={2}
+                                        strokeDasharray="4 3"
+                                        fill={`${PALETTE_SKIPPED}26`}
+                                    />
+                                );
+                            })}
+                            {/* Privacy masks — solid black, tilt-following (same
+                                quad as the burned-in box) so the overlay matches
+                                the uploaded image. */}
+                            {maskRegions.map((r, i) => {
+                                const q = toQuadPoints(r);
+                                if (!q) return null;
+                                return (
+                                    <Polygon
+                                        key={`mk-${i}`}
+                                        points={q.points}
+                                        fill="#000"
+                                        stroke="#000"
+                                        strokeWidth={1}
+                                    />
+                                );
+                            })}
+                            {/* Footer bands (total / date / receipt №) as tilt-
+                                following polygons, coloured per kind — they sit
+                                well below the product section so no neighbour
+                                clamp is needed. */}
+                            {footerRegions.map((r, i) => {
+                                const q = toQuadPoints(r);
+                                if (!q) return null;
+                                const s = footerBandStyle(r.kind, colors, t);
+                                return (
+                                    <Polygon
+                                        key={`f-${i}`}
+                                        points={q.points}
+                                        stroke={s.colour}
+                                        strokeWidth={2}
+                                        fill={`${s.colour}1A`}
+                                    />
+                                );
+                            })}
+                            {/* Header bands (address / company-code) as tilt-
+                                following polygons too. The parser already tiled
+                                them (bent seams, no overlap with each other or the
+                                product section), so they render straight from the
+                                quad like every other band. */}
+                            {headerRegions.map((r, i) => {
+                                const q = toQuadPoints(r);
+                                if (!q) return null;
+                                const s = headerBandStyle(r.kind, colors, t);
+                                return (
+                                    <Polygon
+                                        key={`h-${i}`}
+                                        points={q.points}
+                                        stroke={s.colour}
+                                        strokeWidth={2}
+                                        fill={`${s.colour}1A`}
+                                    />
+                                );
+                            })}
+                        </Svg>
+                        {/* Per-product #N badge to the left of each band; the
+                            band itself is the green SVG polygon above. */}
                         {productRegions.map((r, i) => {
-                            if (!onPageOne(r)) return null;
-                            const rect = toDisplayRectRaw(r);
-                            if (!rect) return null;
+                            const q = toQuadPoints(r);
+                            if (!q) return null;
                             const BADGE_W = 26;
                             const BADGE_GAP = 4;
                             const badgeLeft =
-                                rect.left >= BADGE_W + BADGE_GAP
-                                    ? rect.left - BADGE_W - BADGE_GAP
-                                    : 2;
-                            const badgeTop = rect.top + rect.height / 2 - 9;
-                            return (
-                                <React.Fragment key={i}>
-                                    <View
-                                        pointerEvents="none"
-                                        style={[
-                                            styles.overlay,
-                                            rect,
-                                            {
-                                                borderColor: colors.success,
-                                                backgroundColor: `${colors.success}1A`,
-                                            },
-                                        ]}
-                                    />
-                                    <View
-                                        pointerEvents="none"
-                                        style={[
-                                            styles.bandBadge,
-                                            {
-                                                top: badgeTop,
-                                                left: badgeLeft,
-                                                backgroundColor: colors.success,
-                                            },
-                                        ]}
-                                    >
-                                        <Text style={styles.bandBadgeText}>
-                                            #{i + 1}
-                                        </Text>
-                                    </View>
-                                </React.Fragment>
-                            );
-                        })}
-                        {/* Footer bands — same layout rules as header.
-                            Coloured per kind so the user can tell
-                            total / date-time / receipt № at a glance.
-                            Legacy block-bbox renders orange. */}
-                        {layoutSection(footerRegions, true).map((rect, i) => {
-                            if (!rect) return null;
-                            const s = footerBandStyle(footerRegions[i].kind, colors, t);
+                                q.left >= BADGE_W + BADGE_GAP ? q.left - BADGE_W - BADGE_GAP : 2;
                             return (
                                 <View
-                                    key={`f-${i}`}
+                                    key={`pb-${i}`}
                                     pointerEvents="none"
                                     style={[
-                                        styles.overlay,
-                                        rect,
-                                        {
-                                            borderColor: s.colour,
-                                            backgroundColor: `${s.colour}1A`,
-                                        },
+                                        styles.bandBadge,
+                                        { top: q.midY - 9, left: badgeLeft, backgroundColor: colors.success },
                                     ]}
-                                />
+                                >
+                                    <Text style={styles.bandBadgeText}>#{i + 1}</Text>
+                                </View>
                             );
                         })}
+                        {/* (Footer bands are the per-kind SVG polygons in the
+                            layer above; skipped coupon/bag/points bands are the
+                            grey dashed polygons there too.) */}
                         {/* Private-info areas are already burned black INTO
                             the uploaded image (MinIO), so no UI overlay is
                             drawn here — we show the real redacted file. */}
@@ -499,9 +473,21 @@ export default function ReceiptPhotoView({
                                 styles={styles}
                             />
                             <ExplainerRow
+                                colour={PALETTE_COMPANY}
+                                title={t('receiptPhoto.bands.companyCode')}
+                                body={t('receiptPhoto.explainer.companyCodeBody')}
+                                styles={styles}
+                            />
+                            <ExplainerRow
                                 colour={colors.success}
                                 title={t('receiptPhoto.bands.products')}
                                 body={t('receiptPhoto.explainer.productsBody')}
+                                styles={styles}
+                            />
+                            <ExplainerRow
+                                colour={PALETTE_SKIPPED}
+                                title={t('receiptPhoto.bands.skipped')}
+                                body={t('receiptPhoto.explainer.skippedBody')}
                                 styles={styles}
                             />
                             <ExplainerRow

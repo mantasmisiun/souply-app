@@ -2,12 +2,14 @@ import { Ionicons } from "@expo/vector-icons";
 import { usePreventRemove, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { useTranslation } from "react-i18next";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
+import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
 import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import Svg, { Defs, ClipPath, Polygon, Image as SvgImage } from "react-native-svg";
 import {
     ActivityIndicator,
     Alert,
@@ -103,10 +105,11 @@ import {
 } from "@shared/parsers/rimiParser";
 import { parseProductName } from "@shared/parsers/productNameParser";
 import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
-import { redactReceiptText, detectCardMaskBands, type MaskBand } from "@shared/parsers/cardMaskDetection";
+import { redactReceiptText, detectCardMaskBands, clampMaskBandsToProtected, type MaskBand } from "@shared/parsers/cardMaskDetection";
 import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
 import { requestStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
 import { ocrImageTiled } from "../utils/mlkitOcr";
+import { launchDocumentScanner } from "../utils/launchDocumentScanner";
 import { useProfileStore } from '../state/profileStore';
 
 // Toggle for the iOS-only row-fragment merger in the Maxima + Lidl
@@ -115,6 +118,36 @@ import { useProfileStore } from '../state/profileStore';
 // shaped line. Android emits one OCR line per row already, so the
 // option stays off and the existing pipeline is bit-for-bit identical.
 const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
+
+/**
+ * DEV: paste-friendly dump of what a chain parser produced from the OCR text.
+ * Pair with the "DEDUPED RAW TEXT" block above it to review parser accuracy —
+ * copy both blocks out of the Metro log when a scanned receipt parses wrong.
+ * Defensive field access (`?? '-'`) so it never throws on a partial parse.
+ */
+function logParsedReview(chain: string, parsed: any): void {
+  try {
+    const h = parsed?.header ?? {};
+    const f = parsed?.footer ?? {};
+    const products: any[] = Array.isArray(parsed?.products) ? parsed.products : [];
+    const rows = products.map((p, i) =>
+      `  ${String(i + 1).padStart(2, ' ')}. ${p?.name ?? '?'}` +
+      ` | price=${p?.price ?? '-'} qty=${p?.quantity ?? '-'} promo=${p?.promoPrice ?? '-'}` +
+      `${p?.brandName ? ` brand=${p.brandName}` : ''}` +
+      `${p?.isWeighable ? ' [kg]' : ''}` +
+      `${p?.categoryId != null ? ` cat=${p.categoryId}` : ''}`,
+    );
+    console.log(
+      `=== PARSED REVIEW [${chain}] (${products.length} products) ===\n` +
+      `header: store=${h.storeName ?? '-'} | code=${h.storeCode ?? '-'} | addr=${h.storeAddress ?? '-'} | chainId=${h.chainId ?? '-'}\n` +
+      `footer: total=${f.total ?? '-'} | date=${f.date ?? '-'} | receiptNo=${f.receiptNo ?? '-'} | savings=${f.totalSavings ?? '-'}\n` +
+      `${rows.join('\n')}\n` +
+      `=== END PARSED [${chain}] ===`,
+    );
+  } catch (e) {
+    console.log(`[PARSED REVIEW ${chain}] log failed`, e);
+  }
+}
 
 // chainId → display name, for the chain-match gate copy.
 const CHAIN_NAMES: Record<number, string> = { 1: 'Maxima', 2: 'Rimi', 3: 'Iki', 4: 'Norfa', 5: 'Lidl' };
@@ -274,6 +307,49 @@ async function ensurePortraitOrientation(uri: string): Promise<string> {
 }
 
 /**
+ * Re-project a saved receipt's stored image back into the coordinate space its
+ * parsed regions live in. The OCR pipeline rotates every capture to PORTRAIT (and
+ * records the region geometry + parsed.image dims in that space), but the image
+ * uploaded/stored can be the pre-rotation LANDSCAPE original — or a different
+ * scale. Displayed/cropped as-is, every band lands in the wrong place and the
+ * per-band crops fall outside the image ("crop failed … rectangle inside source
+ * image"). This rotates to portrait the SAME way the OCR did (line-count vote) and
+ * resizes to the exact parsed pixel dims, so regions align 1:1 again. A no-op when
+ * the stored image already matches (the common, freshly-scanned case).
+ */
+async function normalizeLoadedImage(
+  uri: string,
+  parsedW: number,
+  parsedH: number,
+): Promise<{ uri: string; width: number; height: number }> {
+  try {
+    // ROTATE the stored image to portrait, then RESIZE it to the exact parsed
+    // pixel dims. EVERY stored region (products + masks + header + footer) lives
+    // in parsed.image space, so the displayed image content must occupy that exact
+    // space for the overlay to line up. Measure with ImageManipulator (the decoder
+    // TRUE dims — the same measure OCR used), NOT Image.getSize (which can report a
+    // decoder-SAMPLED size). Aspect is ~identical so the resize is near-uniform.
+    const portraitUri = await ensurePortraitOrientation(uri);
+    if (parsedW > 0 && parsedH > 0) {
+      const info = await ImageManipulator.manipulateAsync(portraitUri, []);
+      if (Math.abs(info.width - parsedW) > 1 || Math.abs(info.height - parsedH) > 1) {
+        const r = await ImageManipulator.manipulateAsync(
+          portraitUri,
+          [{ resize: { width: parsedW, height: parsedH } }],
+          { compress: 0.92, format: ImageManipulator.SaveFormat.JPEG },
+        );
+        return { uri: r.uri, width: parsedW, height: parsedH };
+      }
+      return { uri: portraitUri, width: info.width, height: info.height };
+    }
+    const info = await ImageManipulator.manipulateAsync(portraitUri, []);
+    return { uri: portraitUri, width: info.width, height: info.height };
+  } catch {
+    return { uri, width: parsedW, height: parsedH };
+  }
+}
+
+/**
  * Sharp per-product band crop using `ImageManipulator.manipulateAsync`.
  *
  * Why this exists alongside `RegionPreview`: RegionPreview slides a
@@ -291,6 +367,7 @@ async function ensurePortraitOrientation(uri: string): Promise<string> {
  */
 function BandCropImage({ pages, region, cardWidth }: RegionPreviewProps) {
   const themeColors = useTheme();
+  const clipId = useId();
   const [croppedUri, setCroppedUri] = useState<string | null>(null);
   const [cropError, setCropError] = useState<string | null>(null);
 
@@ -311,9 +388,25 @@ function BandCropImage({ pages, region, cardWidth }: RegionPreviewProps) {
       }
       page = p;
     }
-    const localYTop = Math.max(0, Math.floor(region.yTop - page.yOffsetScaled));
+    // Crop the full QUAD extent, not just yTop/yBottom: a skewed band's corner
+    // Y (yLeftBottom/yRightBottom) can sit below region.yBottom (they're borrowed
+    // from the next band's top edge by the parser's no-gap tiler). Cropping only
+    // yTop..yBottom would clip the parallelogram's lower edge so the clipped
+    // thumbnail renders as a near-rectangle. Span min-top..max-bottom of all
+    // corners so the clip polygon below fits entirely inside the crop.
+    const topSpace = Math.min(
+      region.yTop,
+      region.yLeftTop ?? region.yTop,
+      region.yRightTop ?? region.yTop,
+    );
+    const bottomSpace = Math.max(
+      region.yBottom,
+      region.yLeftBottom ?? region.yBottom,
+      region.yRightBottom ?? region.yBottom,
+    );
+    const localYTop = Math.max(0, Math.floor(topSpace - page.yOffsetScaled));
     const localYBottom = Math.min(
-      Math.ceil(region.yBottom - page.yOffsetScaled),
+      Math.ceil(bottomSpace - page.yOffsetScaled),
       page.pageMaxYScaled,
       page.pixelHeight,
     );
@@ -331,6 +424,9 @@ function BandCropImage({ pages, region, cardWidth }: RegionPreviewProps) {
       originY: localYTop,
       width: widthPx,
       height: heightPx,
+      // Region-space Y of the crop's top edge — the clip polygon is measured
+      // from here (NOT region.yTop, which may be below the top quad corner).
+      cropTopSpace: localYTop + page.yOffsetScaled,
     };
   }, [pages, region]);
 
@@ -383,17 +479,59 @@ function BandCropImage({ pages, region, cardWidth }: RegionPreviewProps) {
 
   if (!cropPlan) return null;
   const aspect = cropPlan.width / cropPlan.height;
+  const dispH = cardWidth / aspect;
+
+  // Skew clip: when the region carries per-corner Y (IKI photographed bands),
+  // clip the rectangular crop to the actual parallelogram so the tilted band
+  // doesn't show triangular slivers of the neighbouring rows. The corner Y are
+  // in merged-OCR space; offset by the band's top and scale to the card.
+  const s = cardWidth / cropPlan.width;
+  const r = region;
+  const hasQuad =
+    r.yLeftTop != null && r.yRightTop != null && r.yLeftBottom != null && r.yRightBottom != null;
+  // Measure corner Y from the crop's actual top edge (cropTopSpace), which spans
+  // the full quad — so the parallelogram lands fully inside the thumbnail.
+  const top0 = cropPlan.cropTopSpace;
+  const clipPts = hasQuad
+    ? [
+        [0, (r.yLeftTop! - top0) * s],
+        [cardWidth, (r.yRightTop! - top0) * s],
+        [cardWidth, (r.yRightBottom! - top0) * s],
+        [0, (r.yLeftBottom! - top0) * s],
+      ]
+        .map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`)
+        .join(" ")
+    : null;
+
   return (
     <View
       style={{
         width: cardWidth,
-        height: cardWidth / aspect,
+        height: dispH,
         borderRadius: 6,
         overflow: "hidden",
         backgroundColor: "#0001",
       }}
     >
-      {croppedUri && (
+      {croppedUri && clipPts && (
+        <Svg width={cardWidth} height={dispH}>
+          <Defs>
+            <ClipPath id={clipId}>
+              <Polygon points={clipPts} />
+            </ClipPath>
+          </Defs>
+          <SvgImage
+            href={{ uri: croppedUri }}
+            x={0}
+            y={0}
+            width={cardWidth}
+            height={dispH}
+            preserveAspectRatio="none"
+            clipPath={`url(#${clipId})`}
+          />
+        </Svg>
+      )}
+      {croppedUri && !clipPts && (
         <Image
           source={{ uri: croppedUri }}
           style={{ width: "100%", height: "100%" }}
@@ -650,6 +788,8 @@ function buildParsedData(
   imageMeta: { uri: string | null; width: number; height: number } | null,
   imageFilePath: string | null,
   maskBands: MaskBand[] = [],
+  wordsDump?: unknown,
+  wordsSrc?: string,
 ): object {
   // Strip bank/loyalty card numbers + cashier name from everything that gets
   // persisted, so the DB never holds them (the image is redacted separately
@@ -675,6 +815,14 @@ function buildParsedData(
     maskBands: maskBands.map((b) => ({
       yTop: b.yTop, yBottom: b.yBottom, xLeft: b.xLeft, xRight: b.xRight, kind: b.kind,
     })),
+    // DEV-only IKI per-word OCR capture (top-level so it isn't lost in the header-
+    // state round-trip). Reproduce a bad scan with scripts/wordsToFixture.mjs.
+    ...(wordsDump ? { wordsDump } : {}),
+    // TEMP PII-free probe to diagnose why wordsDump isn't persisting: `dev` = was
+    // __DEV__ true at save; `words` = captured word-line count (-1 = ref was empty/
+    // undefined when this blob was built). Remove once wordsDump is confirmed. No
+    // receipt text — just two numbers.
+    _wd: { dev: typeof __DEV__ !== "undefined" ? __DEV__ : null, words: Array.isArray(wordsDump) ? wordsDump.length : -1, src: wordsSrc ?? "none" },
   };
 }
 
@@ -749,6 +897,11 @@ export default function ProcessReceiptScreen() {
   // back out). null when no mismatch.
   const [chainGate, setChainGate] = useState<{ detectedChainId: number; expectedChainIds: number[] } | null>(null);
   const chainGateResolveRef = useRef<((proceed: boolean) => void) | null>(null);
+  // Scan-quality gate: shown when OCR couldn't extract the receipt number +
+  // date (a strong "too dark/blurry/skewed" signal). Resolves true = use
+  // anyway, false = retake (re-open the scanner). null when no issue.
+  const [scanQualityGate, setScanQualityGate] = useState(false);
+  const scanQualityResolveRef = useRef<((useAnyway: boolean) => void) | null>(null);
   // Resolved list row to link the receipt to (auto-selected by detected
   // chain for groups; the single list for single-store). Set in processReceipt.
   const linkListIdRef = useRef<number | null>(null);
@@ -775,6 +928,9 @@ export default function ProcessReceiptScreen() {
   const [header, setHeader] = useState<HeaderData | null>(null);
   const [products, setProducts] = useState<ProductLine[]>([]);
   const [footer, setFooter] = useState<FooterData | null>(null);
+  // Coupon/bag/points bands (IKI photographed) — shown grey in the photo view,
+  // never counted as products. Reset per scan; only the IKI path populates it.
+  const [skippedRegions, setSkippedRegions] = useState<LabeledRegion[]>([]);
   const [editingSection, setEditingSection] = useState<
     "header" | "footer" | number | null
   >(null);
@@ -791,6 +947,18 @@ export default function ProcessReceiptScreen() {
   // compositing is delegated to the global <MaskRedactionHost> (runUpload),
   // so this screen no longer hosts its own ViewShot.
   const [maskBands, setMaskBands] = useState<MaskBand[]>([]);
+  // Privacy masks, clamped so they never cover a recognised data band (product /
+  // header / footer line) — e.g. the cashier mask creeping over "Kvito Nr.".
+  // Used everywhere masks are consumed (render, burn-into-image, persist) so the
+  // stored image and the dev overlay agree.
+  const maskBandsClamped = useMemo(() => {
+    const protectedRegions = [
+      ...(header?.lineRegions ?? []),
+      ...(footer?.lineRegions ?? []),
+      ...products.map((p) => p.region).filter(Boolean),
+    ];
+    return clampMaskBandsToProtected(maskBands, protectedRegions as any);
+  }, [maskBands, header, footer, products]);
   const { pendingPick, clearPendingPick } = useReceiptPickerState();
   const setCreateContext = useReceiptCreateContext((s) => s.setContext);
   // productsExpanded removed — Prekės is now its own tab (C2 absorbed
@@ -1037,6 +1205,11 @@ export default function ProcessReceiptScreen() {
         return;
       }
 
+      // Restore the per-word capture from the loaded blob so a re-save on THIS mount
+      // (where processReceipt never ran) preserves it instead of clobbering with -1.
+      wordsDumpRef.current = (parsed as any).wordsDump;
+      wordsSrcRef.current = "load";
+
       setHeader({
         chainName:
           parsed.header.chainName ?? receipt.chainName ?? t('receiptProcess.fallbackChain'),
@@ -1189,6 +1362,24 @@ export default function ProcessReceiptScreen() {
 
             const parsedWidth = Number(parsed?.image?.width);
             const parsedHeight = Number(parsed?.image?.height);
+            const hasParsedDims =
+              Number.isFinite(parsedWidth) && Number.isFinite(parsedHeight) &&
+              parsedWidth > 0 && parsedHeight > 0;
+
+            // Re-project the stored image into the parsed (portrait/OCR) coordinate
+            // space so bands and per-band crops line up. ROTATE the stored landscape
+            // to portrait (the space ALL regions live in); a portrait stored image
+            // is returned unchanged.
+            const norm = await normalizeLoadedImage(
+              localUri,
+              hasParsedDims ? parsedWidth : 0,
+              hasParsedDims ? parsedHeight : 0,
+            );
+            localUri = norm.uri;
+            setImageUri(localUri); // overlay must render the SAME normalised image
+            devLog('loadExistingReceipt.normalized', {
+              id, parsed: `${parsedWidth}x${parsedHeight}`, measured: `${norm.width}x${norm.height}`,
+            });
 
             const applyDims = (w: number, h: number) => {
               setImageDims({ width: w, height: h });
@@ -1206,19 +1397,21 @@ export default function ProcessReceiptScreen() {
               ]);
             };
 
-            if (
-              Number.isFinite(parsedWidth) &&
-              Number.isFinite(parsedHeight) &&
-              parsedWidth > 0 &&
-              parsedHeight > 0
-            ) {
+            // CRITICAL: imageDims MUST be parsed.image dims — the coordinate space
+            // EVERY region (products + masks + header + footer) was emitted in
+            // (ocrImageTiled's trueWidth/trueHeight). NOT a re-measure: Image.getSize
+            // can report a decoder-SAMPLED size for big images, and resizing to it
+            // squished the image so lower bands drifted. With the image rotated to
+            // portrait, parsed dims line every band up 1:1.
+            if (hasParsedDims) {
               applyDims(parsedWidth, parsedHeight);
             } else {
-              Image.getSize(
-                localUri,
-                (width, height) => applyDims(width, height),
-                () => {},
-              );
+              try {
+                const info = await ImageManipulator.manipulateAsync(localUri, []);
+                applyDims(info.width, info.height);
+              } catch {
+                Image.getSize(localUri, (width, height) => applyDims(width, height), () => {});
+              }
             }
           }
         } catch (e) {
@@ -1248,6 +1441,12 @@ export default function ProcessReceiptScreen() {
   const receiptIdRef = useRef<number | null>(null);
   const userIdRef = useRef<string | null>(null);
   const hasPostedRef = useRef(false); // guard against double POST from re-renders
+  // DEV-only: per-word OCR capture for the last IKI parse, persisted top-level in
+  // the blob (NOT via header state, which propagates unreliably). See buildParsedData.
+  // `wordsSrcRef` records which path populated it ('scan'|'load'|'none') — a probe to
+  // diagnose why it sometimes saves empty.
+  const wordsDumpRef = useRef<unknown>(undefined);
+  const wordsSrcRef = useRef<string>("none");
   const hasProcessedRef = useRef(false); // guard against double OCR in StrictMode dev builds
   // Mirrors hasProcessedRef but for the existing-receipt path. Without
   // this, StrictMode's dev double-mount issues two parallel GETs for the
@@ -1505,7 +1704,9 @@ export default function ProcessReceiptScreen() {
         footer,
         imageDims ? { uri: imageUri, ...imageDims } : null,
         imageFilePath,
-        maskBands,
+        maskBandsClamped,
+        wordsDumpRef.current,
+        wordsSrcRef.current,
       );
 
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts`, {
@@ -1644,14 +1845,25 @@ export default function ProcessReceiptScreen() {
       // Fail-closed: if sensitive bands were detected but a clean redaction
       // can't be produced (incl. missing image dims), abort — never PUT the
       // original image that still shows a card number.
+      // `imageDims` is set during OCR and goes stale across the post→existing-
+      // mode re-mount (existing-mode load doesn't repopulate it), which made the
+      // redaction abort with "invalid image dims 0x0" — esp. on the multi-segment
+      // path. Measure the actual upload image instead of trusting that state; the
+      // mask bands (filtered to this page's height) map onto these pixels.
+      let uploadW = imageDims?.width ?? 0;
+      let uploadH = imageDims?.height ?? 0;
+      if (!(uploadW > 0) || !(uploadH > 0)) {
+        try {
+          const measured = await new Promise<{ width: number; height: number }>((resolve, reject) =>
+            Image.getSize(imageUri, (width, height) => resolve({ width, height }), reject),
+          );
+          uploadW = measured.width;
+          uploadH = measured.height;
+        } catch { /* leave 0 — buildRedactedUploadUri fail-closes if bands exist */ }
+      }
       let uploadUri = imageUri;
       try {
-        uploadUri = await buildRedactedUploadUri(
-          imageUri,
-          imageDims?.width ?? 0,
-          imageDims?.height ?? 0,
-          maskBands,
-        );
+        uploadUri = await buildRedactedUploadUri(imageUri, uploadW, uploadH, maskBandsClamped);
       } catch (e: any) {
         console.warn("[mask] redaction failed, aborting upload:", e?.message ?? e);
         // Log the unprocessable case (P4). Fire-and-forget; never block on it.
@@ -1873,7 +2085,9 @@ export default function ProcessReceiptScreen() {
       footer,
       imageDims ? { uri: imageUri, ...imageDims } : null,
       imageFilePath,
-      maskBands,
+      maskBandsClamped,
+      wordsDumpRef.current,
+      wordsSrcRef.current,
     );
     const nextComparisonKey = buildComparisonKey(header, products);
     shouldRefreshComparisonRef.current =
@@ -2011,9 +2225,40 @@ export default function ProcessReceiptScreen() {
   };
 
   const processReceipt = async (imageUris: string[]) => {
+    // Quality gate: a readable receipt always prints a receipt number AND date.
+    // If the parser found neither (or only one), the scan is almost certainly
+    // too dark / blurry / skewed — prompt a retake instead of saving garbage.
+    // We can't measure brightness from JS, so the missing-fields signal is the
+    // proxy. Returns true to continue parsing, false if the user chose to
+    // retake (caller must stop). "Use anyway" lets them override.
+    const ensureKeyReceiptFields = async (
+      footer: { receiptNo?: string | null; date?: string | null } | null,
+    ): Promise<boolean> => {
+      if (footer?.receiptNo && footer?.date) return true;
+      const useAnyway = await new Promise<boolean>((resolve) => {
+        scanQualityResolveRef.current = resolve;
+        setScanQualityGate(true);
+      });
+      setScanQualityGate(false);
+      scanQualityResolveRef.current = null;
+      if (!useAnyway) {
+        // Retake — re-open the scanner, replacing this failed attempt, keeping
+        // the same upload context.
+        launchDocumentScanner(router, {
+          preview: isPreviewMode,
+          shoppingListId: shoppingListIdParam,
+          expectedChainId: expectedChainIdParam,
+          listMap: listMapParam,
+          replace: true,
+        });
+      }
+      return useAnyway;
+    };
+
     try {
       setLoading(true);
       setLoadingMessage(t('receiptProcess.loadingScan'));
+      setSkippedRegions([]); // only the IKI path repopulates this
 
       interface LineWithFrame {
         text: string;
@@ -2021,6 +2266,11 @@ export default function ProcessReceiptScreen() {
         yBottom: number;
         xLeft: number;
         xRight: number;
+        yLeftTop?: number;
+        yRightTop?: number;
+        yLeftBottom?: number;
+        yRightBottom?: number;
+        words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number }[];
       }
 
       const allLines: LineWithFrame[] = [];
@@ -2057,6 +2307,7 @@ export default function ProcessReceiptScreen() {
 
         let pageMaxYScaled = 0;
         const pageLineBounds: { l: number; r: number }[] = [];
+        const offY = (v: number | undefined) => (v == null ? undefined : v + yOffset);
         for (const line of ocr.lines) {
           if (line.yBottom > pageMaxYScaled) pageMaxYScaled = line.yBottom;
           pageLineBounds.push({ l: line.xLeft, r: line.xRight });
@@ -2066,6 +2317,11 @@ export default function ProcessReceiptScreen() {
             yBottom: line.yBottom + yOffset,
             xLeft: line.xLeft,
             xRight: line.xRight,
+            yLeftTop: offY(line.yLeftTop),
+            yRightTop: offY(line.yRightTop),
+            yLeftBottom: offY(line.yLeftBottom),
+            yRightBottom: offY(line.yRightBottom),
+            words: line.words?.map((w) => ({ ...w, yTop: w.yTop + yOffset, yBottom: w.yBottom + yOffset })),
           });
         }
 
@@ -2123,6 +2379,14 @@ export default function ProcessReceiptScreen() {
 
       setPageMetas(collectedPageMetas);
 
+      // CANONICAL IMAGE = the ROTATED page that OCR actually ran on, NOT the raw
+      // capture. All region geometry (products/header/footer/masks) lives in this
+      // rotated portrait space. Using the raw landscape capture here would render
+      // every band in the wrong place, redact the masks at the wrong coords, and
+      // upload a landscape image whose saved-receipt view can't be cropped. For a
+      // portrait capture the rotated uri === the original, so this is a no-op.
+      if (collectedPageMetas[0]?.uri) setImageUri(collectedPageMetas[0].uri);
+
       const dims = firstPageDims ?? { width: 0, height: 0 };
       setImageDims(dims);
       const frameScale = combinedFrameScale;
@@ -2175,12 +2439,27 @@ export default function ProcessReceiptScreen() {
         mergedLines.push({ ...line });
       }
 
-      console.log("=== MERGED OCR LINES ===");
-      mergedLines.forEach((l, i) =>
-        console.log(`${i}: [y=${Math.round(l.yTop)}] ${l.text}`),
-      );
-
       const lineTexts = mergedLines.map((l) => l.text);
+
+      if (__DEV__) {
+        // DEV-only verbose OCR dump for parser debugging. Raw OCR holds pre-mask
+        // PII (card / loyalty / cashier), so it must NEVER reach prod logs —
+        // gate the whole thing behind __DEV__.
+        console.log("=== MERGED OCR LINES ===");
+        mergedLines.forEach((l, i) =>
+          console.log(`${i}: [y=${Math.round(l.yTop)}] ${l.text}`),
+        );
+        const rawDump = lineTexts.join("\n");
+        console.log(
+          `=== DEDUPED RAW TEXT (${lineTexts.length} lines) ===\n` +
+          rawDump +
+          "\n=== END RAW TEXT ===",
+        );
+        // Metro truncates long logs — also drop the full raw text on the
+        // clipboard so it's one paste away (no digging in the DB rawData field).
+        Clipboard.setStringAsync(rawDump).catch(() => {});
+        console.log(`[dev] raw OCR (${lineTexts.length} lines) copied to clipboard ✂️`);
+      }
 
       // OCR produced nothing usable — bail before trying chain detection.
       // Empty-text check uses >= 3 lines as the threshold: a well-lit
@@ -2272,6 +2551,8 @@ export default function ProcessReceiptScreen() {
         });
 
         const parsed = parseRimiReceipt(allLines);
+        logParsedReview('RIMI', parsed);
+        if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyRimiResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
       } else if (isMaximaReceipt(lineTexts) || vatChainId === 1) {
@@ -2315,6 +2596,8 @@ export default function ProcessReceiptScreen() {
             }),
           );
         }
+        logParsedReview('MAXIMA', parsed);
+        if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyMaximaResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
       } else if (isNorfaReceipt(lineTexts) || vatChainId === 4) {
@@ -2337,6 +2620,8 @@ export default function ProcessReceiptScreen() {
         });
 
         const parsed = parseNorfaReceipt(allLines);
+        logParsedReview('NORFA', parsed);
+        if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyNorfaResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
       } else if (isLidlReceipt(lineTexts) || vatChainId === 5) {
@@ -2362,6 +2647,8 @@ export default function ProcessReceiptScreen() {
         });
 
         const parsed = parseLidlReceipt(allLines, PARSER_OPTS);
+        logParsedReview('LIDL', parsed);
+        if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyLidlResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
       } else if (isIkiReceipt(lineTexts) || vatChainId === 3) {
@@ -2380,8 +2667,31 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
+        // DEV: capture the exact per-WORD lines the IKI column engine consumes, so a
+        // failing receipt can be reproduced 1:1 in a jest fixture (the stored blob
+        // otherwise keeps only MLKit's already-merged line text — not word coordinates,
+        // which is what the column engine actually clusters on). Stash in a REF and
+        // emit it as a TOP-LEVEL `wordsDump` field in buildParsedData (the header-state
+        // route dropped it). __DEV__-gated so production receipts never carry raw
+        // (unredacted) word text. Feed the pasted blob to scripts/wordsToFixture.mjs.
+        wordsDumpRef.current = __DEV__
+          ? mergedLines.map((l) => ({
+              t: l.text,
+              x: [Math.round(l.xLeft), Math.round(l.xRight)],
+              y: [Math.round(l.yTop), Math.round(l.yBottom)],
+              w: l.words?.map((w) => [w.text, Math.round(w.xLeft), Math.round(w.xRight), Math.round(w.yTop), Math.round(w.yBottom)]),
+            }))
+          : undefined;
+        wordsSrcRef.current = "scan";
+
         const parsed = parseIkiReceipt(mergedLines);
-        await applyIkiResult(parsed.header, parsed.products, parsed.footer);
+        console.log(
+          `[parse] IKI → ${parsed.products.length} product(s), total=${parsed.footer.total}, ` +
+          `date=${parsed.footer.date}, receiptNo=${parsed.footer.receiptNo}`,
+        );
+        logParsedReview('IKI', parsed);
+        if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
+        await applyIkiResult(parsed.header, parsed.products, parsed.footer, parsed.skippedRegions ?? []);
         setLoading(false);
       } else {
         await bailWithLog("chain_unrecognized", {
@@ -2467,6 +2777,7 @@ export default function ProcessReceiptScreen() {
       matchLoading: false,
       rawText: rHeader.rawText,
       region: rHeader.region,
+      regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
     });
 
     const AUTO_APPLY_THRESHOLD = 0.85;
@@ -2631,6 +2942,7 @@ export default function ProcessReceiptScreen() {
       matchLoading: false,
       rawText: mHeader.rawText,
       region: mHeader.region,
+      regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
     });
 
     const AUTO_APPLY_THRESHOLD = 0.85;
@@ -2777,6 +3089,7 @@ export default function ProcessReceiptScreen() {
       matchLoading: false,
       rawText: nHeader.rawText,
       region: nHeader.region,
+      regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
     });
 
     const AUTO_APPLY_THRESHOLD = 0.85;
@@ -2905,6 +3218,7 @@ export default function ProcessReceiptScreen() {
       matchLoading: false,
       rawText: lHeader.rawText,
       region: lHeader.region,
+      regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
     });
 
     const AUTO_APPLY_THRESHOLD = 0.85;
@@ -2982,8 +3296,10 @@ export default function ProcessReceiptScreen() {
     iHeader: IkiHeader,
     iProducts: IkiProduct[],
     iFooter: IkiFooter,
+    iSkipped: LabeledRegion[] = [],
   ) => {
     const chainId = 3;
+    setSkippedRegions(iSkipped);
 
     let storeId: number | null = null;
     let storeName: string | null = null;
@@ -3035,6 +3351,14 @@ export default function ProcessReceiptScreen() {
       matchLoading: false,
       rawText: iHeader.rawText,
       region: iHeader.region,
+      lineRegions: iHeader.lineRegions,
+      // Stamp the CURRENT regions version: a FRESH live parse already produced
+      // the best bands. Without this the version is undefined → the rehydration
+      // effect treats every fresh scan as "stale", re-OCRs the saved (downscaled/
+      // redacted) image and OVERWRITES footer.lineRegions — and that re-OCR often
+      // loses the SUMA/Mokėti total band. Rehydration is only for OLD receipts
+      // loaded from storage, never for what we just parsed.
+      regionsVersion: REGIONS_VERSION,
     });
 
     const AUTO_APPLY_THRESHOLD = 0.85;
@@ -3105,6 +3429,7 @@ export default function ProcessReceiptScreen() {
       totalSavings: iFooter.totalSavings,
       rawText: iFooter.rawText,
       region: iFooter.region,
+      lineRegions: iFooter.lineRegions,
     });
   };
 
@@ -3194,13 +3519,17 @@ export default function ProcessReceiptScreen() {
     void (async () => {
       const result = await computeRehydratedRegions(targetImageUri, chainId);
       if (!result) return;
-      // Apply unconditionally on version stale — even if the section
-      // already has kinded regions, the new parser revision may emit
-      // different bands. Only an empty result array is rejected.
+      // Region overwrite ONLY when the stored bands are unusable (missing/
+      // kindless). A re-OCR of the uploaded image lands in a slightly different
+      // pixel scale than the STORED product/mask bands (which we don't re-derive),
+      // so overwriting just header/footer with re-OCR'd regions visibly misaligns
+      // them against the products. When the stored regions are already kinded we
+      // KEEP them — same coordinate space as the products — and still backfill the
+      // re-parsed VALUES (total/date/…) + bump the version below.
       setHeader((h) => {
         if (!h) return h;
         const next: HeaderData = { ...h, regionsVersion: REGIONS_VERSION };
-        if (result.headerLineRegions.length > 0) {
+        if (headerNeeds && result.headerLineRegions.length > 0) {
           next.lineRegions = result.headerLineRegions;
         }
         return next;
@@ -3208,8 +3537,17 @@ export default function ProcessReceiptScreen() {
       setFooter((f) => {
         if (!f) return f;
         const next: FooterData = { ...f };
-        if (result.footerLineRegions.length > 0) {
-          next.lineRegions = result.footerLineRegions;
+        // Same as the header: only adopt re-OCR'd regions when the stored footer
+        // bands are unusable, so they stay in the products' coordinate space.
+        if (footerNeeds && result.footerLineRegions.length > 0) {
+          // Guard: the rehydration re-OCRs the downscaled/redacted upload, which
+          // is often WORSE than the original scan for the payment block — never
+          // let it overwrite a total band we already have with a set that lost it.
+          const hadTotal = (f.lineRegions ?? []).some((r) => r.kind === 'total');
+          const willHaveTotal = result.footerLineRegions.some((r) => r.kind === 'total');
+          if (willHaveTotal || !hadTotal) {
+            next.lineRegions = result.footerLineRegions;
+          }
         }
         // Re-parse is authoritative when it produced a value (number
         // or non-empty string). Covers three scenarios:
@@ -3711,6 +4049,7 @@ export default function ProcessReceiptScreen() {
                   : []
               }
               productRegions={products.map((p) => p.region).filter(Boolean)}
+              skippedRegions={skippedRegions}
               footerRegions={
                 footer?.lineRegions && footer.lineRegions.length > 0
                   ? footer.lineRegions
@@ -3718,7 +4057,7 @@ export default function ProcessReceiptScreen() {
                   ? [footer.region]
                   : []
               }
-              maskRegions={maskBands}
+              maskRegions={maskBandsClamped}
             />
           </>
         )}
@@ -3887,6 +4226,28 @@ export default function ProcessReceiptScreen() {
             </TouchableOpacity>
             <TouchableOpacity style={styles.chainGateSecondary} onPress={() => chainGateResolveRef.current?.(false)}>
               <Text style={styles.chainGateSecondaryText}>{t('receiptProcess.chainGateCancel')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Scan-quality gate: OCR couldn't read the receipt number + date. */}
+      <Modal
+        visible={scanQualityGate}
+        transparent
+        animationType="fade"
+        onRequestClose={() => scanQualityResolveRef.current?.(false)}
+      >
+        <View style={styles.chainGateBackdrop}>
+          <View style={styles.chainGateCard}>
+            <Ionicons name="scan-outline" size={40} color={colors.warning} />
+            <Text style={styles.chainGateTitle}>{t('receiptProcess.scanQualityTitle')}</Text>
+            <Text style={styles.chainGateBody}>{t('receiptProcess.scanQualityBody')}</Text>
+            <TouchableOpacity style={styles.chainGatePrimary} onPress={() => scanQualityResolveRef.current?.(false)}>
+              <Text style={styles.chainGatePrimaryText}>{t('receiptProcess.scanQualityRetake')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => scanQualityResolveRef.current?.(true)}>
+              <Text style={styles.chainGateSecondaryText}>{t('receiptProcess.scanQualityUseAnyway')}</Text>
             </TouchableOpacity>
           </View>
         </View>

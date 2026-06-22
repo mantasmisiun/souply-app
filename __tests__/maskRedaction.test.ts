@@ -2,6 +2,7 @@ import {
     bandsForUploadedImage,
     maskBoxPercent,
     maskRenderSize,
+    maskQuadPercentPoints,
 } from '../utils/maskRedaction';
 
 describe('bandsForUploadedImage', () => {
@@ -51,5 +52,23 @@ describe('maskRenderSize', () => {
 
     it('guards against a bogus pixelRatio (< 1)', () => {
         expect(maskRenderSize(1000, 1000, 0)).toEqual({ width: 1000, height: 1000 });
+    });
+});
+
+describe('maskQuadPercentPoints', () => {
+    it('emits 4 corner points as percentages following the per-corner Y', () => {
+        // 1000x2000 image; box x100..300, tilted (right edge 40px lower).
+        const pts = maskQuadPercentPoints(
+            { yTop: 400, yBottom: 480, xLeft: 100, xRight: 300,
+              yLeftTop: 400, yRightTop: 440, yLeftBottom: 480, yRightBottom: 520 },
+            1000, 2000,
+        );
+        // TL=(10,20) TR=(30,22) BR=(30,26) BL=(10,24)
+        expect(pts).toBe('10,20 30,22 30,26 10,24');
+    });
+
+    it('falls back to the axis-aligned rectangle when no corners present', () => {
+        const pts = maskQuadPercentPoints({ yTop: 400, yBottom: 480, xLeft: 100, xRight: 300 }, 1000, 2000);
+        expect(pts).toBe('10,20 30,20 30,24 10,24');
     });
 });
