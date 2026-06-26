@@ -1,14 +1,21 @@
-import { Ionicons } from "@expo/vector-icons";
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+    Ionicons } from "@expo/vector-icons";
+import { Stack,
+    useLocalSearchParams,
+    useRouter } from "expo-router";
+import { useEffect,
+    useMemo,
+    useRef,
+    useState } from "react";
 import {
   ActivityIndicator,
-  Dimensions,
-  StyleSheet,
-  Text,
-  TouchableOpacity,
-  View,
+    Dimensions,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
 } from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import {
   GestureHandlerRootView,
   Gesture,
@@ -689,7 +696,7 @@ export default function SwipeQueueScreen() {
       {/* ── Loading ── */}
       {loading && (
         <View style={styles.centered}>
-          <ActivityIndicator size="large" color={colors.primary} />
+          <MaterialProgress size="large" color={colors.primary} />
         </View>
       )}
 

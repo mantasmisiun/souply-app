@@ -1,7 +1,18 @@
 import {
-    View, Text, FlatList, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
-    Alert, TextInput, RefreshControl, Switch, Modal, Pressable,
-} from 'react-native';
+    View,
+    Text,
+    FlatList,
+    ScrollView,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    TextInput,
+    RefreshControl,
+    Switch,
+    Modal,
+    Pressable,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
 import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -481,7 +492,7 @@ export default function TemplateDetailScreen() {
                         disabled={instantiating || template.items.length === 0}
                     >
                         {instantiating
-                            ? <ActivityIndicator color={colors.onPrimary} />
+                            ? <MaterialProgress color={colors.onPrimary} />
                             : <Text style={styles.ctaText}>{t('basketTab.templates.instantiateCta')}</Text>}
                     </TouchableOpacity>
                 </View>

@@ -1,5 +1,9 @@
-import { Ionicons } from "@expo/vector-icons";
-import { usePreventRemove, useNavigation, useFocusEffect } from "@react-navigation/native";
+import {
+    Ionicons } from "@expo/vector-icons";
+import DateTimePicker from "@react-native-community/datetimepicker";
+import { usePreventRemove,
+    useNavigation,
+    useFocusEffect } from "@react-navigation/native";
 import { useTranslation } from "react-i18next";
 import TextRecognition from "@react-native-ml-kit/text-recognition";
 import * as Clipboard from "expo-clipboard";
@@ -7,9 +11,20 @@ import * as Haptics from "expo-haptics";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
-import Svg, { Defs, ClipPath, Polygon, Image as SvgImage } from "react-native-svg";
+import { Stack,
+    useLocalSearchParams,
+    useRouter } from "expo-router";
+import { useCallback,
+    useEffect,
+    useId,
+    useMemo,
+    useRef,
+    useState } from "react";
+import Svg,
+    { Defs,
+    ClipPath,
+    Polygon,
+    Image as SvgImage } from "react-native-svg";
 import {
     ActivityIndicator,
     Alert,
@@ -23,7 +38,7 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
-    View
+    View,
 } from "react-native";
 import { GlassIconButton } from "../components/GlassIconButton";
 import { ScreenBackButton } from "../components/ScreenBackButton";
@@ -105,11 +120,13 @@ import {
 } from "@shared/parsers/rimiParser";
 import { parseProductName } from "@shared/parsers/productNameParser";
 import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
-import { redactReceiptText, detectCardMaskBands, clampMaskBandsToProtected, type MaskBand } from "@shared/parsers/cardMaskDetection";
+import { redactReceiptText, detectCardMaskBands, clampMaskBandsToProtected, wordCentreInMaskBand, looksLikePiiText, type MaskBand } from "@shared/parsers/cardMaskDetection";
 import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
 import { requestStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
-import { ocrImageTiled } from "../utils/mlkitOcr";
+import { ocrImageEnhanced } from "../utils/mlkitOcr";
+import { refineFooterBands } from "../utils/footerBandRefine";
 import { launchDocumentScanner } from "../utils/launchDocumentScanner";
+import { MaterialProgress } from "../components/MaterialProgress";
 import { useProfileStore } from '../state/profileStore';
 
 // Toggle for the iOS-only row-fragment merger in the Maxima + Lidl
@@ -789,12 +806,17 @@ function buildParsedData(
   imageFilePath: string | null,
   maskBands: MaskBand[] = [],
   wordsDump?: unknown,
-  wordsSrc?: string,
 ): object {
   // Strip bank/loyalty card numbers + cashier name from everything that gets
   // persisted, so the DB never holds them (the image is redacted separately
   // before upload). Only the free-text carriers need it — structured fields
   // (receiptNo/date/total/storeAddress) are never sensitive.
+  // SLIM the persisted blob (see receipt rawData slimming): drop transient/duplicate
+  // fields + big image URLs. matchLoading = transient UI state; footer.rawText/region =
+  // byte-identical duplicates of header.*; image URLs are re-fetchable by storeProductId.
+  // Old receipts keep the fat shape — every reader stays backward-compatible.
+  const { matchLoading: _matchLoading, ...slimHeader } = header;
+  const { rawText: _footerRawText, region: _footerRegion, ...slimFooter } = footer;
   return {
     version: 1,
     image: imageMeta
@@ -804,25 +826,32 @@ function buildParsedData(
           height: imageMeta.height,
         }
       : null,
-    header: { ...header, rawText: redactReceiptText(header.rawText) },
+    header: { ...slimHeader, rawText: redactReceiptText(header.rawText) },
     products: products.map((p) => ({
       ...p,
       rawLines: Array.isArray(p.rawLines) ? p.rawLines.map(redactReceiptText) : p.rawLines,
+      // Drop the big image URLs from altMatches (never rendered — only altMatches[0]'s
+      // category is read; the displayed thumbnail uses storeProductImageUrl, kept). This
+      // is the bulk of the per-receipt bytes: ~3 dup/alt URLs × every product.
+      altMatches: Array.isArray(p.altMatches)
+        ? p.altMatches.map(({ imageUrl: _ai, ...am }) => am)
+        : p.altMatches,
     })),
-    footer: { ...footer, rawText: redactReceiptText(footer.rawText) },
+    footer: slimFooter, // rawText + region dropped (header is the single source of truth)
     // Geometry-only redaction boxes (no card digits) so the Kvitas-tab
     // overlay can re-draw the black "private info" bands on reload.
     maskBands: maskBands.map((b) => ({
       yTop: b.yTop, yBottom: b.yBottom, xLeft: b.xLeft, xRight: b.xRight, kind: b.kind,
+      // Keep the per-corner Y (skew) so the reload overlay can bend the black band
+      // along the tilted PII row instead of drawing a flat rectangle.
+      yLeftTop: b.yLeftTop, yRightTop: b.yRightTop,
+      yLeftBottom: b.yLeftBottom, yRightBottom: b.yRightBottom,
+      // PII text extent — so a re-clamp on reload still can't trim the band into the card number.
+      piiTop: b.piiTop, piiBottom: b.piiBottom,
     })),
-    // DEV-only IKI per-word OCR capture (top-level so it isn't lost in the header-
-    // state round-trip). Reproduce a bad scan with scripts/wordsToFixture.mjs.
+    // Per-word OCR capture (staging+prod now, PII redacted at the build site). Top-level
+    // so it survives the header-state round-trip. Repro a bad scan with wordsToFixture.mjs.
     ...(wordsDump ? { wordsDump } : {}),
-    // TEMP PII-free probe to diagnose why wordsDump isn't persisting: `dev` = was
-    // __DEV__ true at save; `words` = captured word-line count (-1 = ref was empty/
-    // undefined when this blob was built). Remove once wordsDump is confirmed. No
-    // receipt text — just two numbers.
-    _wd: { dev: typeof __DEV__ !== "undefined" ? __DEV__ : null, words: Array.isArray(wordsDump) ? wordsDump.length : -1, src: wordsSrc ?? "none" },
   };
 }
 
@@ -897,11 +926,17 @@ export default function ProcessReceiptScreen() {
   // back out). null when no mismatch.
   const [chainGate, setChainGate] = useState<{ detectedChainId: number; expectedChainIds: number[] } | null>(null);
   const chainGateResolveRef = useRef<((proceed: boolean) => void) | null>(null);
-  // Scan-quality gate: shown when OCR couldn't extract the receipt number +
-  // date (a strong "too dark/blurry/skewed" signal). Resolves true = use
-  // anyway, false = retake (re-open the scanner). null when no issue.
-  const [scanQualityGate, setScanQualityGate] = useState(false);
-  const scanQualityResolveRef = useRef<((useAnyway: boolean) => void) | null>(null);
+  // Manual date-entry gate: shown only when the receipt is otherwise readable
+  // (has receiptNo + time) but its DATE was unreadable (e.g. an ink stain). The
+  // user picks the date printed on the receipt; capped at today so it can never
+  // land a future-dated price (which would pin a wrong "latest" price).
+  const [dateGate, setDateGate] = useState(false);
+  const dateGateResolveRef = useRef<((picked: Date | null) => void) | null>(null);
+  const [dateGateTemp, setDateGateTemp] = useState<Date | null>(null); // null = empty field (no prefill)
+  const [dateGateShowPicker, setDateGateShowPicker] = useState(false);
+  // Souply-styled failure modal (replaces the stock OS Alert). Holds the
+  // user-facing message; buttons Try-again (re-open scanner) / Close.
+  const [failGate, setFailGate] = useState<string | null>(null);
   // Resolved list row to link the receipt to (auto-selected by detected
   // chain for groups; the single list for single-store). Set in processReceipt.
   const linkListIdRef = useRef<number | null>(null);
@@ -1266,8 +1301,9 @@ export default function ProcessReceiptScreen() {
         time: parsed.footer.time ?? "",
         receiptNo: parsed.footer.receiptNo ?? receipt.receiptNo ?? "",
         totalSavings: parsed.footer.totalSavings ?? null,
-        rawText: parsed.footer.rawText ?? "",
-        region: parsed.footer.region ?? {
+        // footer.rawText/region were deduped out of new blobs → fall back to header's copy.
+        rawText: parsed.footer.rawText ?? parsed.header?.rawText ?? "",
+        region: parsed.footer.region ?? parsed.header?.region ?? {
           yTop: 0,
           yBottom: 0,
           xLeft: 0,
@@ -1286,6 +1322,13 @@ export default function ProcessReceiptScreen() {
             yBottom: Number(b.yBottom) || 0,
             xLeft: Number(b.xLeft) || 0,
             xRight: Number(b.xRight) || 0,
+            // Restore per-corner skew (older receipts without it fall back to flat).
+            yLeftTop: b.yLeftTop != null ? Number(b.yLeftTop) : undefined,
+            yRightTop: b.yRightTop != null ? Number(b.yRightTop) : undefined,
+            yLeftBottom: b.yLeftBottom != null ? Number(b.yLeftBottom) : undefined,
+            yRightBottom: b.yRightBottom != null ? Number(b.yRightBottom) : undefined,
+            piiTop: b.piiTop != null ? Number(b.piiTop) : undefined,
+            piiBottom: b.piiBottom != null ? Number(b.piiBottom) : undefined,
             kind: b.kind,
             label: '',
             reasons: [],
@@ -1706,7 +1749,6 @@ export default function ProcessReceiptScreen() {
         imageFilePath,
         maskBandsClamped,
         wordsDumpRef.current,
-        wordsSrcRef.current,
       );
 
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts`, {
@@ -2087,7 +2129,6 @@ export default function ProcessReceiptScreen() {
       imageFilePath,
       maskBandsClamped,
       wordsDumpRef.current,
-      wordsSrcRef.current,
     );
     const nextComparisonKey = buildComparisonKey(header, products);
     shouldRefreshComparisonRef.current =
@@ -2217,42 +2258,58 @@ export default function ProcessReceiptScreen() {
     // draft so the Analize tab doesn't keep prompting "continue" on
     // a scan that will just bail again.
     clearReceiptDraft().catch(() => {});
-    // Navigate first, then alert — alert shows on the Analize tab.
-    router.replace("/(tabs)/receipts");
-    setTimeout(() => {
-      Alert.alert("Nepavyko apdoroti kvito", USER_FACING_BAIL_MSG[reason]);
-    }, 100);
+    // Show the Souply-styled failure modal (Try again / Close) instead of the
+    // stock OS Alert. Its buttons handle navigation — we DON'T navigate here, so
+    // "Try again" can re-open the scanner from this screen.
+    setFailGate(USER_FACING_BAIL_MSG[reason]);
   };
 
   const processReceipt = async (imageUris: string[]) => {
-    // Quality gate: a readable receipt always prints a receipt number AND date.
-    // If the parser found neither (or only one), the scan is almost certainly
-    // too dark / blurry / skewed — prompt a retake instead of saving garbage.
-    // We can't measure brightness from JS, so the missing-fields signal is the
-    // proxy. Returns true to continue parsing, false if the user chose to
-    // retake (caller must stop). "Use anyway" lets them override.
+    // Quality gate. A readable receipt always yields a receipt id (now incl. the
+    // "Kvitas"/synthetic fallbacks), a DATE and a TIME. Outcomes:
+    //   • receiptNo + date present → proceed.
+    //   • date MISSING but receiptNo + time present → the bottom block was readable
+    //     except the date (e.g. an ink stain): ask the user to pick the printed date
+    //     (capped at today; flows in exactly like an OCR date). Cancel → bail.
+    //   • otherwise (no receiptNo, or date AND time both missing) → genuinely
+    //     unreadable → fail with a message (no rescan loop). Mutates footer.date on a
+    //     successful manual entry so the rest of the save/price path uses it.
     const ensureKeyReceiptFields = async (
-      footer: { receiptNo?: string | null; date?: string | null } | null,
+      footer: { receiptNo?: string | null; date?: string | null; time?: string | null } | null,
     ): Promise<boolean> => {
       if (footer?.receiptNo && footer?.date) return true;
-      const useAnyway = await new Promise<boolean>((resolve) => {
-        scanQualityResolveRef.current = resolve;
-        setScanQualityGate(true);
-      });
-      setScanQualityGate(false);
-      scanQualityResolveRef.current = null;
-      if (!useAnyway) {
-        // Retake — re-open the scanner, replacing this failed attempt, keeping
-        // the same upload context.
-        launchDocumentScanner(router, {
-          preview: isPreviewMode,
-          shoppingListId: shoppingListIdParam,
-          expectedChainId: expectedChainIdParam,
-          listMap: listMapParam,
-          replace: true,
+      if (footer?.receiptNo && footer?.time && !footer?.date) {
+        // The component early-returns a full-screen loading view while `loading`
+        // is true (`if (loading) return <loadingScreen>`), which UN-MOUNTS every
+        // modal — including this one. Drop loading first so the date modal actually
+        // renders; otherwise its promise never resolves and the screen hangs on
+        // "Scanning and recognising" (the reported bug). Resume it on confirm.
+        setLoading(false);
+        setDateGateTemp(null); // empty field — force the user to actively pick
+        const picked = await new Promise<Date | null>((resolve) => {
+          dateGateResolveRef.current = resolve;
+          setDateGate(true);
         });
+        setDateGate(false);
+        setDateGateShowPicker(false);
+        dateGateResolveRef.current = null;
+        if (picked) {
+          setLoading(true); // resume the processing indicator for applyXResult
+          const y = picked.getFullYear();
+          const m = String(picked.getMonth() + 1).padStart(2, '0');
+          const d = String(picked.getDate()).padStart(2, '0');
+          footer.date = `${y}-${m}-${d}`;
+          return true;
+        }
+        // dismissed without a date → can't proceed
+        await bailWithLog('ocr_no_text', { ocrPreview: 'manual date entry cancelled' });
+        return false;
       }
-      return useAnyway;
+      // No receipt id, or BOTH date and time unreadable → fail (no rescan loop).
+      await bailWithLog('ocr_no_text', {
+        ocrPreview: `missing key fields: receiptNo=${footer?.receiptNo ?? '-'} date=${footer?.date ?? '-'} time=${footer?.time ?? '-'}`,
+      });
+      return false;
     };
 
     try {
@@ -2270,13 +2327,14 @@ export default function ProcessReceiptScreen() {
         yRightTop?: number;
         yLeftBottom?: number;
         yRightBottom?: number;
-        words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number }[];
+        words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number; cornerPoints?: { x: number; y: number }[] }[];
       }
 
       const allLines: LineWithFrame[] = [];
       let combinedFrameScale = 1;
       let yOffset = 0; // running accumulator across pages in Image-pixel space
       let firstPageDims: { width: number; height: number } | null = null;
+      let firstPageUri: string | null = null;
       const collectedPageMetas: PageMeta[] = [];
 
       for (let pageIdx = 0; pageIdx < imageUris.length; pageIdx++) {
@@ -2290,9 +2348,10 @@ export default function ProcessReceiptScreen() {
         // which otherwise silently halves character detail. Returns
         // lines already in page-pixel space with any per-tile offsets
         // applied, plus the pixelWidth/Height matching that space.
-        const ocr = await ocrImageTiled(pageUri);
+        const ocr = await ocrImageEnhanced(pageUri);
         const pageDims = { width: ocr.pixelWidth, height: ocr.pixelHeight };
         if (pageIdx === 0) firstPageDims = pageDims;
+        if (pageIdx === 0) firstPageUri = pageUri;
         const frameScale = ocr.frameScale;
         if (pageIdx === 0) combinedFrameScale = frameScale;
 
@@ -2321,7 +2380,10 @@ export default function ProcessReceiptScreen() {
             yRightTop: offY(line.yRightTop),
             yLeftBottom: offY(line.yLeftBottom),
             yRightBottom: offY(line.yRightBottom),
-            words: line.words?.map((w) => ({ ...w, yTop: w.yTop + yOffset, yBottom: w.yBottom + yOffset })),
+            words: line.words?.map((w) => ({
+              ...w, yTop: w.yTop + yOffset, yBottom: w.yBottom + yOffset,
+              cornerPoints: w.cornerPoints?.map((p) => ({ x: p.x, y: p.y + yOffset })),
+            })),
           });
         }
 
@@ -2667,21 +2729,29 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        // DEV: capture the exact per-WORD lines the IKI column engine consumes, so a
-        // failing receipt can be reproduced 1:1 in a jest fixture (the stored blob
-        // otherwise keeps only MLKit's already-merged line text — not word coordinates,
-        // which is what the column engine actually clusters on). Stash in a REF and
-        // emit it as a TOP-LEVEL `wordsDump` field in buildParsedData (the header-state
-        // route dropped it). __DEV__-gated so production receipts never carry raw
-        // (unredacted) word text. Feed the pasted blob to scripts/wordsToFixture.mjs.
-        wordsDumpRef.current = __DEV__
-          ? mergedLines.map((l) => ({
-              t: l.text,
-              x: [Math.round(l.xLeft), Math.round(l.xRight)],
-              y: [Math.round(l.yTop), Math.round(l.yBottom)],
-              w: l.words?.map((w) => [w.text, Math.round(w.xLeft), Math.round(w.xRight), Math.round(w.yTop), Math.round(w.yBottom)]),
-            }))
-          : undefined;
+        // Capture the exact per-WORD lines the IKI column engine consumes, so a failing
+        // receipt can be reproduced 1:1 in a jest fixture (the merged line text alone
+        // loses the word coordinates the engine clusters on). Emitted as a TOP-LEVEL
+        // `wordsDump` field in buildParsedData; feed a pasted blob to wordsToFixture.mjs.
+        // wordsDump ships in staging+prod now (not __DEV__-only), so it MUST be PII-safe:
+        // the card PAN / loyalty number / cashier name appear as raw words here. Redact
+        // any word inside a mask band (or whose text LOOKS like a card/loyalty number) to
+        // '[•••]', keeping its coordinates + corners (geometry is what the dump is for; the
+        // parser skips these words anyway). The line text `t` runs through the same
+        // redactReceiptText used for rawText so a full number never lands in plaintext.
+        wordsDumpRef.current = mergedLines.map((l) => ({
+          t: redactReceiptText(l.text),
+          x: [Math.round(l.xLeft), Math.round(l.xRight)],
+          y: [Math.round(l.yTop), Math.round(l.yBottom)],
+          w: l.words?.map((w) => {
+            const pii = wordCentreInMaskBand(w, detectedMaskBands) || looksLikePiiText(w.text);
+            return [
+              pii ? "[•••]" : w.text, Math.round(w.xLeft), Math.round(w.xRight), Math.round(w.yTop), Math.round(w.yBottom),
+              // Element corners [TLx,TLy, TRx,TRy, BRx,BRy, BLx,BLy] (or undefined) — kept even when redacted.
+              w.cornerPoints?.length ? w.cornerPoints.flatMap((p) => [Math.round(p.x), Math.round(p.y)]) : undefined,
+            ];
+          }),
+        }));
         wordsSrcRef.current = "scan";
 
         const parsed = parseIkiReceipt(mergedLines);
@@ -2691,6 +2761,18 @@ export default function ProcessReceiptScreen() {
         );
         logParsedReview('IKI', parsed);
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
+        // Option A: rebuild footer field bands (date/time/receiptNo/total) from a fresh
+        // ISOLATED re-OCR of each strip — fixes guessed bands when MLKit dropped the
+        // value's word boxes. Fail-safe (keeps the original band if the re-OCR misses).
+        if (firstPageUri && firstPageDims) {
+          parsed.footer.lineRegions = await refineFooterBands(
+            firstPageUri,
+            parsed.footer.lineRegions,
+            { date: parsed.footer.date, time: parsed.footer.time, receiptNo: parsed.footer.receiptNo, total: parsed.footer.total },
+            firstPageDims.width,
+            firstPageDims.height,
+          );
+        }
         await applyIkiResult(parsed.header, parsed.products, parsed.footer, parsed.skippedRegions ?? []);
         setLoading(false);
       } else {
@@ -3616,7 +3698,7 @@ export default function ProcessReceiptScreen() {
         : 0;
     return (
       <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color={colors.primary} />
+        <MaterialProgress size={52} color={colors.primary} />
         <Text style={styles.loadingText}>{loadingMessage}</Text>
         {matchProgress && matchProgress.total > 0 && (
           <View style={{ marginTop: 12, alignItems: "center", gap: 8 }}>
@@ -3971,7 +4053,7 @@ export default function ProcessReceiptScreen() {
                             placeholderTextColor={colors.textMuted}
                           />
                           {rematchLoadingByIndex[index] && (
-                            <ActivityIndicator
+                            <MaterialProgress
                               size="small"
                               color={colors.primary}
                               style={styles.editInputLoader}
@@ -4067,7 +4149,7 @@ export default function ProcessReceiptScreen() {
       {isProcessing && (
         <View style={styles.processingOverlay} pointerEvents="auto">
           <View style={styles.processingCard}>
-            <ActivityIndicator size="large" color={colors.primary} />
+            <MaterialProgress size={52} color={colors.primary} />
             <Text style={styles.processingTitle}>Kvitas apdorojamas</Text>
             {!!processingStep && (
               <Text style={styles.processingStep}>{processingStep}</Text>
@@ -4231,27 +4313,90 @@ export default function ProcessReceiptScreen() {
         </View>
       </Modal>
 
-      {/* Scan-quality gate: OCR couldn't read the receipt number + date. */}
+      {/* Manual date entry: receipt readable (receiptNo + time) but DATE unreadable. */}
       <Modal
-        visible={scanQualityGate}
+        visible={dateGate}
         transparent
         animationType="fade"
-        onRequestClose={() => scanQualityResolveRef.current?.(false)}
+        onRequestClose={() => dateGateResolveRef.current?.(null)}
       >
         <View style={styles.chainGateBackdrop}>
           <View style={styles.chainGateCard}>
-            <Ionicons name="scan-outline" size={40} color={colors.warning} />
-            <Text style={styles.chainGateTitle}>{t('receiptProcess.scanQualityTitle')}</Text>
-            <Text style={styles.chainGateBody}>{t('receiptProcess.scanQualityBody')}</Text>
-            <TouchableOpacity style={styles.chainGatePrimary} onPress={() => scanQualityResolveRef.current?.(false)}>
-              <Text style={styles.chainGatePrimaryText}>{t('receiptProcess.scanQualityRetake')}</Text>
+            <Ionicons name="calendar-outline" size={40} color={colors.warning} />
+            <Text style={styles.chainGateTitle}>{t('receiptProcess.dateGateTitle')}</Text>
+            <Text style={styles.chainGateBody}>{t('receiptProcess.dateGateBody')}</Text>
+            <TouchableOpacity style={styles.dateGateField} onPress={() => setDateGateShowPicker(true)}>
+              <Ionicons name="calendar-outline" size={18} color={colors.textSecondary} />
+              <Text style={[styles.dateGateFieldText, !dateGateTemp && styles.dateGatePlaceholder]}>
+                {dateGateTemp
+                  ? `${dateGateTemp.getFullYear()}-${String(dateGateTemp.getMonth() + 1).padStart(2, '0')}-${String(dateGateTemp.getDate()).padStart(2, '0')}`
+                  : t('receiptProcess.dateGatePlaceholder')}
+              </Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => scanQualityResolveRef.current?.(true)}>
-              <Text style={styles.chainGateSecondaryText}>{t('receiptProcess.scanQualityUseAnyway')}</Text>
+            {dateGateShowPicker && (
+              <DateTimePicker
+                value={dateGateTemp ?? new Date()}
+                mode="date"
+                // iOS: show the full graphical calendar straight away (Apple's
+                // native inline date picker) instead of the default "compact"
+                // chip that needs a second tap to expand. One tap → calendar.
+                display="inline"
+                maximumDate={new Date()}
+                minimumDate={new Date(new Date().getFullYear() - 2, new Date().getMonth(), new Date().getDate())}
+                onChange={(e, d) => {
+                  setDateGateShowPicker(false);
+                  if (e.type === 'set' && d) setDateGateTemp(d);
+                }}
+              />
+            )}
+            <TouchableOpacity
+              style={[styles.chainGatePrimary, !dateGateTemp && styles.gateDisabled]}
+              disabled={!dateGateTemp}
+              onPress={() => dateGateResolveRef.current?.(dateGateTemp)}
+            >
+              <Text style={styles.chainGatePrimaryText}>{t('receiptProcess.dateGateConfirm')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => dateGateResolveRef.current?.(null)}>
+              <Text style={styles.chainGateSecondaryText}>{t('receiptProcess.dateGateCancel')}</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
+
+      {/* Souply-styled failure modal (replaces the stock OS Alert). */}
+      <Modal
+        visible={failGate !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => { setFailGate(null); router.replace("/(tabs)/receipts"); }}
+      >
+        <View style={styles.chainGateBackdrop}>
+          <View style={styles.chainGateCard}>
+            <Ionicons name="alert-circle-outline" size={40} color={colors.warning} />
+            <Text style={styles.chainGateTitle}>{t('receiptProcess.failTitle')}</Text>
+            <Text style={styles.chainGateBody}>{failGate}</Text>
+            <TouchableOpacity
+              style={styles.chainGatePrimary}
+              onPress={() => {
+                setFailGate(null);
+                launchDocumentScanner(router, {
+                  preview: isPreviewMode,
+                  shoppingListId: shoppingListIdParam,
+                  expectedChainId: expectedChainIdParam,
+                  listMap: listMapParam,
+                  replace: true,
+                });
+              }}
+            >
+              <Text style={styles.chainGatePrimaryText}>{t('receiptProcess.failTryAgain')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => { setFailGate(null); router.replace("/(tabs)/receipts"); }}>
+              <Text style={styles.chainGateSecondaryText}>{t('receiptProcess.failClose')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
     </>
   );
 }
@@ -4265,6 +4410,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   chainGatePrimaryText: { color: c.onPrimary, fontSize: 15, fontWeight: "700" },
   chainGateSecondary: { paddingVertical: 11, alignSelf: "stretch", alignItems: "center" },
   chainGateSecondaryText: { color: c.textSecondary, fontSize: 14, fontWeight: "600" },
+  gateDisabled: { opacity: 0.4 },
+  dateGateField: { flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "stretch", borderWidth: 1, borderColor: c.border, borderRadius: 12, paddingVertical: 13, paddingHorizontal: 14, marginVertical: 4 },
+  dateGateFieldText: { fontSize: 16, fontWeight: "600", color: c.textPrimary },
+  dateGatePlaceholder: { color: c.textSecondary, fontWeight: "500" },
   navHeaderWrap: { alignItems: "flex-start", maxWidth: 240 },
   navTitle: { fontSize: 15, fontWeight: "700", color: c.textPrimary },
   navSubtitle: { fontSize: 11, color: c.textSecondary, marginTop: 1 },

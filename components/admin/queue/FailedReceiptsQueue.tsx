@@ -1,6 +1,12 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView, Alert,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    ScrollView,
+    Alert,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -60,7 +66,7 @@ export function FailedReceiptsQueue({ onEmpty }: { onEmpty?: () => void }) {
     if (rows === null) {
         return (
             <View style={styles.centered}>
-                <ActivityIndicator color={colors.primary} />
+                <MaterialProgress color={colors.primary} />
             </View>
         );
     }
@@ -106,7 +112,7 @@ export function FailedReceiptsQueue({ onEmpty }: { onEmpty?: () => void }) {
                         disabled={resolvingId === r.id}
                     >
                         {resolvingId === r.id ? (
-                            <ActivityIndicator size="small" color={colors.onPrimary} />
+                            <MaterialProgress size="small" color={colors.onPrimary} />
                         ) : (
                             <>
                                 <Ionicons name="checkmark" size={16} color={colors.onPrimary} />

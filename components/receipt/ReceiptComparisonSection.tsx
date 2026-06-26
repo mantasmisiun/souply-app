@@ -1,6 +1,16 @@
-import { ReceiptComparison } from '../../types/receipt-view';
-import React, { useEffect, useMemo, useRef } from 'react';
-import { View, Text, ActivityIndicator, StyleSheet, Animated, Easing } from 'react-native';
+import {
+    ReceiptComparison } from '../../types/receipt-view';
+import React,
+    { useEffect,
+    useMemo,
+    useRef } from 'react';
+import { View,
+    Text,
+    StyleSheet,
+    Animated,
+    Easing,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
@@ -81,7 +91,7 @@ export default function ReceiptComparisonSection({ comparison, loading, error, s
         <View style={styles.brandStrip} />
         <View style={styles.sectionInner}>
           <View style={styles.loadingRow}>
-            <ActivityIndicator size="small" color={colors.primary} />
+            <MaterialProgress size="small" color={colors.primary} />
             <Text style={styles.sectionSubvalue}>{t('comparison.calculating')}</Text>
           </View>
         </View>

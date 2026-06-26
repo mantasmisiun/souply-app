@@ -1,6 +1,9 @@
 import * as ImageManipulator from "expo-image-manipulator";
 import * as ImagePicker from "expo-image-picker";
-import { useEffect, useMemo, useState } from "react";
+import {
+    useEffect,
+    useMemo,
+    useState } from "react";
 import {
     ActivityIndicator,
     Alert,
@@ -13,6 +16,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { KeyboardAvoidingView } from "react-native-keyboard-controller";
 import { useTranslation } from "react-i18next";
 import { API_BASE_URL } from "../../config/api";
@@ -385,7 +389,7 @@ export default function CreateStoreProductModal({
           />
 
           {searchingCategories && (
-            <ActivityIndicator
+            <MaterialProgress
               size="small"
               color={colors.primary}
               style={{ marginTop: 6 }}

@@ -1,4 +1,14 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Modal, RefreshControl } from 'react-native';
+import {
+    View,
+    Text,
+    FlatList,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    Modal,
+    RefreshControl,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -865,7 +875,7 @@ export default function ShoppingListScreen() {
                     <View style={styles.chainPickerSheet}>
                         <Text style={styles.sheetTitle}>{t('shoppingListTab.pickStoreTitle')}</Text>
                         {chainsLoading ? (
-                            <ActivityIndicator color={colors.primary} style={{ marginVertical: spacing.lg }} />
+                            <MaterialProgress color={colors.primary} style={{ marginVertical: spacing.lg }} />
                         ) : (chains ?? []).length === 0 ? (
                             <Text style={styles.sheetEmpty}>{t('shoppingListTab.noStoresFound')}</Text>
                         ) : (
@@ -878,7 +888,7 @@ export default function ShoppingListScreen() {
                                 >
                                     <ChainLogoChip chainId={chain.id} name={chain.name} size={avatarSize.md} />
                                     <Text style={styles.chainName}>{chain.name}</Text>
-                                    {creatingChainId === chain.id && <ActivityIndicator size="small" color={colors.primary} />}
+                                    {creatingChainId === chain.id && <MaterialProgress size="small" color={colors.primary} />}
                                 </TouchableOpacity>
                             ))
                         )}
@@ -964,7 +974,7 @@ export default function ShoppingListScreen() {
             <Modal visible={pdfConverting} transparent animationType="fade">
                 <View style={styles.convertingBackdrop}>
                     <View style={styles.convertingCard}>
-                        <ActivityIndicator size="large" color={colors.primary} />
+                        <MaterialProgress size="large" color={colors.primary} />
                         <Text style={styles.convertingText}>{t('receipts.menu.pdfConverting')}</Text>
                     </View>
                 </View>

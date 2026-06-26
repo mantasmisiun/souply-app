@@ -1,7 +1,16 @@
-import { Tabs, useRouter } from 'expo-router';
+import {
+    Tabs,
+    useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import { useEffect,
+    useMemo,
+    useRef,
+    useState } from 'react';
+import { View,
+    Text,
+    StyleSheet,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { HapticTab } from '../../components/haptic-tab';
@@ -88,7 +97,7 @@ export default function AdminTabLayout() {
     if (!verified) {
         return (
             <View style={styles.verifying}>
-                <ActivityIndicator size="large" color={colors.primary} />
+                <MaterialProgress size="large" color={colors.primary} />
             </View>
         );
     }

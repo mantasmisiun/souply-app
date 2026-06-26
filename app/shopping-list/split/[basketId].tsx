@@ -1,4 +1,7 @@
-import { View, ActivityIndicator } from 'react-native';
+import {
+    View,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -26,7 +29,7 @@ export default function SplitShoppingListRedirect() {
 
     return (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
-            <ActivityIndicator color={colors.primary} />
+            <MaterialProgress color={colors.primary} />
         </View>
     );
 }

@@ -1,4 +1,16 @@
-import { View, Text, FlatList, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, RefreshControl, Modal, TextInput } from 'react-native';
+import {
+    View,
+    Text,
+    FlatList,
+    ScrollView,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    RefreshControl,
+    Modal,
+    TextInput,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { StoreChipBar } from '../../../components/StoreChipBar';
@@ -410,7 +422,7 @@ export default function BasketScreen() {
             />
             {refreshing && (
                 <View style={styles.refreshingBanner}>
-                    <ActivityIndicator size="small" color={colors.primary} />
+                    <MaterialProgress size="small" color={colors.primary} />
                     <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
                 </View>
             )}

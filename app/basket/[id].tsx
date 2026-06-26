@@ -1,4 +1,14 @@
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, TextInput, Modal } from 'react-native';
+import {
+    View,
+    Text,
+    FlatList,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    TextInput,
+    Modal,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { isWeighableDisplay } from '../../utils/weighable';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -839,7 +849,7 @@ export default function BasketDetailScreen() {
                                 >
                                     {busy ? (
                                         <>
-                                            <ActivityIndicator size="small" color={colors.onPrimary} />
+                                            <MaterialProgress size="small" color={colors.onPrimary} />
                                             <Text style={styles.showResultsText}>{t('basketDetail.calculating')}</Text>
                                         </>
                                     ) : (
@@ -876,7 +886,7 @@ export default function BasketDetailScreen() {
             >
                 <View style={styles.calcModalBackdrop}>
                     <View style={styles.calcModalCard}>
-                        <ActivityIndicator size="large" color={colors.primary} />
+                        <MaterialProgress size="large" color={colors.primary} />
                         <Text style={styles.calcModalTitle}>{t('basketDetail.calculating')}</Text>
                         <Text style={styles.calcModalSub}>
                             {t('basketDetail.calcModalSub')}

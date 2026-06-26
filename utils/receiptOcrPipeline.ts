@@ -1,7 +1,7 @@
 import TextRecognition from "@react-native-ml-kit/text-recognition";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Image } from "react-native";
-import { ocrImageTiled } from "./mlkitOcr";
+import { ocrImageEnhanced } from "./mlkitOcr";
 
 /**
  * SINGLE SOURCE OF TRUTH for turning receipt image/PDF-page URIs into the OCR
@@ -35,7 +35,7 @@ export interface LineWithFrame {
     yRightBottom?: number;
     // Per-word boxes (MLKit elements), for word-anchored bands. Carry the same
     // y-offset as the line.
-    words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number }[];
+    words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number; cornerPoints?: { x: number; y: number }[] }[];
 }
 
 export interface ReceiptOcrResult {
@@ -171,7 +171,7 @@ export async function ocrReceiptPages(imageUris: string[]): Promise<ReceiptOcrRe
 
     for (let pageIdx = 0; pageIdx < imageUris.length; pageIdx++) {
         const pageUri = await rotatePortrait(imageUris[pageIdx]);
-        const ocr = await ocrImageTiled(pageUri);
+        const ocr = await ocrImageEnhanced(pageUri);
         if (pageIdx === 0) {
             frameScale = ocr.frameScale;
             firstPageUri = pageUri;
@@ -193,7 +193,10 @@ export async function ocrReceiptPages(imageUris: string[]): Promise<ReceiptOcrRe
                 yRightTop: off(line.yRightTop),
                 yLeftBottom: off(line.yLeftBottom),
                 yRightBottom: off(line.yRightBottom),
-                words: line.words?.map((w) => ({ ...w, yTop: w.yTop + yOffset, yBottom: w.yBottom + yOffset })),
+                words: line.words?.map((w) => ({
+                    ...w, yTop: w.yTop + yOffset, yBottom: w.yBottom + yOffset,
+                    cornerPoints: w.cornerPoints?.map((p) => ({ x: p.x, y: p.y + yOffset })),
+                })),
             });
         }
         yOffset += pageMaxYScaled + 50;

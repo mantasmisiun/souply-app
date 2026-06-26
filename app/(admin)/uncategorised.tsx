@@ -1,7 +1,14 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView,
-    Image, TextInput, Alert,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    ScrollView,
+    Image,
+    TextInput,
+    Alert,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect, useNavigation, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -298,7 +305,7 @@ export default function AdminUncategorisedScreen() {
     if (loading) {
         return (
             <View style={styles.centered}>
-                <ActivityIndicator size="large" color={colors.primary} />
+                <MaterialProgress size="large" color={colors.primary} />
             </View>
         );
     }
@@ -383,7 +390,7 @@ export default function AdminUncategorisedScreen() {
                         <View style={styles.cropSection}>
                             <Text style={styles.cropLabel}>{t('admin.uncategorised.sectionReceipt')}</Text>
                             {cropLoading && !cropUri
-                                ? <ActivityIndicator color={colors.primary} style={styles.cropLoader} />
+                                ? <MaterialProgress color={colors.primary} style={styles.cropLoader} />
                                 : cropUri
                                     ? <Image
                                           source={{ uri: cropUri }}
@@ -537,7 +544,7 @@ export default function AdminUncategorisedScreen() {
                     disabled={!canConfirm}
                 >
                     {actioning
-                        ? <ActivityIndicator color={colors.onPrimary} />
+                        ? <MaterialProgress color={colors.onPrimary} />
                         : <Text style={styles.primaryBtnText}>{t('admin.uncategorised.confirm')}</Text>}
                 </TouchableOpacity>
             </View>

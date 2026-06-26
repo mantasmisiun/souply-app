@@ -1,7 +1,16 @@
 import {
-    View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
-    Alert, TextInput, Platform, Modal, KeyboardAvoidingView, Keyboard,
-} from 'react-native';
+    View,
+    Text,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    TextInput,
+    Platform,
+    Modal,
+    KeyboardAvoidingView,
+    Keyboard,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
@@ -927,7 +936,7 @@ export function ShoppingListDetail({
                                 <Text style={styles.shareSubtitle}>{t('shoppingListDetail.shareSubtitle')}</Text>
                                 <View style={styles.shareQrWrap}>
                                     {shareLoading || !shareToken ? (
-                                        <ActivityIndicator size="large" color={colors.primary} />
+                                        <MaterialProgress size="large" color={colors.primary} />
                                     ) : (
                                         <BrandedQR value={shareToken} size={220} />
                                     )}

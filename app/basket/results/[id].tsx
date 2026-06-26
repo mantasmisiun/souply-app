@@ -1,4 +1,12 @@
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, InteractionManager } from 'react-native';
+import {
+    View,
+    Text,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    InteractionManager,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect, useNavigation, Stack } from 'expo-router';
 import React, { useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
@@ -687,7 +695,7 @@ export default function BasketResultsScreen() {
             <View style={styles.container}>
                 {loading && !pullRefreshing ? (
                     <Animated.View entering={FadeIn} style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color={colors.primary} />
+                        <MaterialProgress size="large" color={colors.primary} />
                         <Text style={styles.loadingText}>{t('results.loading')}</Text>
                     </Animated.View>
                 ) : mapMounted ? (
@@ -748,7 +756,7 @@ export default function BasketResultsScreen() {
                     </>
                 ) : (
                     <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color={colors.primary} />
+                        <MaterialProgress size="large" color={colors.primary} />
                     </View>
                 )}
                 {/* Tap a pin → options sheet; nothing selected → a subtle hint. */}
@@ -776,7 +784,7 @@ export default function BasketResultsScreen() {
                                 activeOpacity={0.85}
                             >
                                 {batchPricing
-                                    ? <ActivityIndicator size="small" color={colors.onPrimary} />
+                                    ? <MaterialProgress size="small" color={colors.onPrimary} />
                                     : <Ionicons name="pricetags-outline" size={iconSize.sm} color={colors.onPrimary} />}
                                 <Text style={styles.batchBtnText}>
                                     {batchPricing ? t('results.batchCalculating') : t('results.batchMore', { count: visibleUnpriced.length })}

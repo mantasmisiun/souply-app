@@ -1,4 +1,14 @@
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert, Image, ScrollView } from 'react-native';
+import {
+    View,
+    Text,
+    StyleSheet,
+    FlatList,
+    TouchableOpacity,
+    Alert,
+    Image,
+    ScrollView,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -139,7 +149,7 @@ export default function AuditLogScreen() {
 
             {loading && rows.length === 0 ? (
                 <View style={[styles.centered, { paddingTop: header.paddingTop }]}>
-                    <ActivityIndicator size="large" color={colors.primary} />
+                    <MaterialProgress size="large" color={colors.primary} />
                 </View>
             ) : rows.length === 0 ? (
                 <View style={[styles.centered, { paddingTop: header.paddingTop }]}>
@@ -253,7 +263,7 @@ function AuditCard({ row, styles, colors, reverting, onRevert, t }: AuditCardPro
                     disabled={reverting}
                 >
                     {reverting
-                        ? <ActivityIndicator size="small" color={colors.primary} />
+                        ? <MaterialProgress size="small" color={colors.primary} />
                         : <Text style={styles.revertBtnText}>{t('admin.audit.revertButton')}</Text>}
                 </TouchableOpacity>
             ) : null}

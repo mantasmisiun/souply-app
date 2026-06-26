@@ -1,7 +1,15 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView,
-    Image, Pressable, TextInput, Alert,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    ScrollView,
+    Image,
+    Pressable,
+    TextInput,
+    Alert,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -496,7 +504,7 @@ export default function AdminFlagsScreen() {
     if (loading) {
         return (
             <View style={styles.centered}>
-                <ActivityIndicator size="large" color={colors.primary} />
+                <MaterialProgress size="large" color={colors.primary} />
             </View>
         );
     }
@@ -566,7 +574,7 @@ export default function AdminFlagsScreen() {
                         />
                     ) : crop.status === 'loading' ? (
                         <View style={[styles.cropFallback, styles.cropFallbackPlaceholder]}>
-                            <ActivityIndicator size="small" color={colors.primary} />
+                            <MaterialProgress size="small" color={colors.primary} />
                         </View>
                     ) : (
                         <View style={[styles.cropFallback, styles.cropFallbackPlaceholder]}>
@@ -821,7 +829,7 @@ export default function AdminFlagsScreen() {
                                     disabled={uploading || actioning}
                                 >
                                     {uploading ? (
-                                        <ActivityIndicator color={colors.primary} />
+                                        <MaterialProgress color={colors.primary} />
                                     ) : (
                                         <Ionicons name="add" size={32} color={colors.primary} />
                                     )}
@@ -1053,7 +1061,7 @@ export default function AdminFlagsScreen() {
                     disabled={actioning}
                 >
                     {actioning
-                        ? <ActivityIndicator color={colors.onPrimary} />
+                        ? <MaterialProgress color={colors.onPrimary} />
                         : <Text style={styles.primaryBtnText}>{t('admin.flags.confirm')}</Text>}
                 </TouchableOpacity>
                 <TouchableOpacity

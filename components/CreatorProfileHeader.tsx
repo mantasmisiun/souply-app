@@ -1,5 +1,17 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, Image, TouchableOpacity, TextInput, Modal, StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import {
+    View,
+    Text,
+    Image,
+    TouchableOpacity,
+    TextInput,
+    Modal,
+    StyleSheet,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import * as ImagePicker from 'expo-image-picker';
@@ -145,7 +157,7 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
                     )}
                     <View style={styles.avatarEdit}>
                         {uploading
-                            ? <ActivityIndicator size="small" color="#FFFFFF" />
+                            ? <MaterialProgress size="small" color="#FFFFFF" />
                             : <Ionicons name="camera" size={13} color="#FFFFFF" />}
                     </View>
                 </TouchableOpacity>
@@ -190,7 +202,7 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
                             </TouchableOpacity>
                             <TouchableOpacity style={styles.modalSave} onPress={saveName} disabled={savingName}>
                                 {savingName
-                                    ? <ActivityIndicator size="small" color={colors.onPrimary} />
+                                    ? <MaterialProgress size="small" color={colors.onPrimary} />
                                     : <Text style={styles.modalSaveText}>{t('basketTab.creatorProfile.save')}</Text>}
                             </TouchableOpacity>
                         </View>

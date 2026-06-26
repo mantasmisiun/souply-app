@@ -1,4 +1,13 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Modal, Dimensions, ActivityIndicator } from 'react-native';
+import {
+    View,
+    Text,
+    ScrollView,
+    TouchableOpacity,
+    StyleSheet,
+    Modal,
+    Dimensions,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
 import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { SkeletonBox } from '../../components/SkeletonBox';
@@ -577,7 +586,7 @@ export default function ProductDetailScreen() {
                         activeOpacity={0.8}
                     >
                         {isAdding
-                            ? <ActivityIndicator size="small" color="#fff" />
+                            ? <MaterialProgress size="small" color="#fff" />
                             : <Ionicons name="albums-outline" size={20} color="#fff" />}
                         <Text style={styles.addButtonText}>{t('basketTab.templates.addToTemplate')}</Text>
                     </TouchableOpacity>
@@ -598,7 +607,7 @@ export default function ProductDetailScreen() {
                         activeOpacity={0.8}
                     >
                         {isAdding
-                            ? <ActivityIndicator size="small" color="#fff" />
+                            ? <MaterialProgress size="small" color="#fff" />
                             : <Ionicons name="cart-outline" size={20} color="#fff" />}
                         <Text style={styles.addButtonText}>{t('product.addToBasket')}</Text>
                     </TouchableOpacity>

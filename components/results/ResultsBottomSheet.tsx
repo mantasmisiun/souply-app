@@ -1,5 +1,15 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Pressable, ActivityIndicator, ScrollView, Dimensions, PanResponder } from 'react-native';
+import {
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    Pressable,
+    ScrollView,
+    Dimensions,
+    PanResponder,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated, { SlideInDown, SlideOutDown, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { spacing, radius, typography, iconSize, avatarSize, type AppTheme } from '../../constants/theme';
@@ -153,7 +163,7 @@ function Actions({ styles, colors, creatingList, onNavigate, onCreateList, botto
             </TouchableOpacity>
             <TouchableOpacity style={styles.listBtn} onPress={onCreateList} disabled={creatingList}>
                 {creatingList
-                    ? <ActivityIndicator size="small" color={colors.onPrimary} />
+                    ? <MaterialProgress size="small" color={colors.onPrimary} />
                     : <Ionicons name="list-outline" size={iconSize.md} color={colors.onPrimary} />}
                 <Text style={styles.listText}>{creatingList ? t('results.sheet.creating') : t('results.sheet.createList')}</Text>
             </TouchableOpacity>

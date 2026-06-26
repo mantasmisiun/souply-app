@@ -1,7 +1,14 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView,
-    Image, TextInput, Alert,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    ScrollView,
+    Image,
+    TextInput,
+    Alert,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
@@ -143,7 +150,7 @@ export function AmountsQueue({ onEmpty }: Props) {
     if (loading) {
         return (
             <View style={styles.centered}>
-                <ActivityIndicator size="large" color={colors.primary} />
+                <MaterialProgress size="large" color={colors.primary} />
             </View>
         );
     }
@@ -292,7 +299,7 @@ export function AmountsQueue({ onEmpty }: Props) {
                     disabled={!confirmEnabled}
                 >
                     {actioning
-                        ? <ActivityIndicator color={colors.onPrimary} />
+                        ? <MaterialProgress color={colors.onPrimary} />
                         : <Text style={styles.primaryBtnText}>{t('admin.amounts.confirm')}</Text>}
                 </TouchableOpacity>
             </View>

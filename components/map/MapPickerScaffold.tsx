@@ -1,7 +1,16 @@
-import { ReactNode, RefObject, useMemo } from 'react';
 import {
-    View, Text, TextInput, TouchableOpacity, StyleSheet, ActivityIndicator, Platform,
-} from 'react-native';
+    ReactNode,
+    RefObject,
+    useMemo } from 'react';
+import {
+    View,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    StyleSheet,
+    Platform,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import MapView, { type Region } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -81,7 +90,7 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                 returnKeyType="search"
                 onSubmitEditing={props.onSearch}
             />
-            {props.searching && <ActivityIndicator size="small" color={colors.primary} />}
+            {props.searching && <MaterialProgress size="small" color={colors.primary} />}
         </View>
     );
 
@@ -93,7 +102,7 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                 disabled={!props.confirmEnabled || props.confirmLoading}
             >
                 {props.confirmLoading
-                    ? <ActivityIndicator color={colors.onPrimary} />
+                    ? <MaterialProgress color={colors.onPrimary} />
                     : <Text style={styles.confirmBtnText}>{props.confirmLabel}</Text>}
             </TouchableOpacity>
         </View>

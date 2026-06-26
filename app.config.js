@@ -136,11 +136,23 @@ export default {
       favicon: ICON,
     },
     plugins: [
+      '@react-native-community/datetimepicker',
       [
         'expo-build-properties',
         {
           ios: {
             deploymentTarget: '16.0',
+            // GoogleSignIn 9.x pulls AppCheckCore (a Swift pod) whose deps
+            // GoogleUtilities + RecaptchaInterop are Obj-C pods that don't define
+            // a module map — so a static-library build fails ("Swift pods cannot
+            // be integrated as static libraries"). Force modular headers on those
+            // two so AppCheckCore can import them. (Expo already enables modular
+            // headers for GoogleSignIn/ReachabilitySwift; this covers the deeper
+            // transitive chain CocoaPods resolved at build time.)
+            extraPods: [
+              { name: 'GoogleUtilities', modular_headers: true },
+              { name: 'RecaptchaInterop', modular_headers: true },
+            ],
           },
           android: {
             // DEV variant only: allow plain-HTTP to the LAN dev API
@@ -163,6 +175,10 @@ export default {
       ],
       'expo-router',
       'expo-localization',
+      // expo-font@14 ships a config plugin; bare entry is a no-op (no fonts to
+      // embed natively) but is the SDK-54-recommended setup and stops the
+      // `expo install` auto-add nag on the dynamic config.
+      'expo-font',
       'expo-secure-store',
       'expo-web-browser',
       [

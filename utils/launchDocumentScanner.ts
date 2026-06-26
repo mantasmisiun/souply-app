@@ -53,6 +53,14 @@ export async function launchDocumentScanner(
     router: PushRouter,
     params: ScanRouteParams = {},
 ): Promise<string[] | null> {
+    // iOS: every caller invokes this right after closing a JS Modal/overlay (the
+    // upload menu, the fail-gate "try again", the shopping-list target picker).
+    // Presenting the native VisionKit scanner while that modal is still dismissing
+    // wedges the view hierarchy — a frozen, unresponsive screen, worst on the
+    // first run where the camera-permission prompt stacks on top. Give the modal
+    // a beat to fully dismiss first (the file-picker path already does this).
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
     let scannedImages: string[] | undefined;
     let status: ScanDocumentResponseStatus | undefined;
     try {

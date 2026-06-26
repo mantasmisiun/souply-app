@@ -364,7 +364,7 @@ function buildHeader(
 ) {
   return {
     chainName, chainId, storeCode, storeAddress, storeId, storeName,
-    storeAddressMatched, matchConfidence, matchLoading: false, rawText, region,
+    storeAddressMatched, matchConfidence, rawText, region, // matchLoading dropped (transient UI state)
     lineRegions,
     // Stamp so mobile can detect when persisted regions came from an
     // older parser revision and force a re-OCR rehydration.
@@ -375,7 +375,9 @@ function buildHeader(
 function buildFooter(
   f: { total: number | null; date: string; time: string; receiptNo: string; totalSavings: number | null; rawText: string; region: Region; lineRegions: LabeledRegion[] },
 ) {
-  return { total: f.total, date: f.date, time: f.time, receiptNo: f.receiptNo, totalSavings: f.totalSavings, rawText: f.rawText, region: f.region, lineRegions: f.lineRegions };
+  // rawText + region dropped from the persisted footer — byte-identical duplicates of
+  // header.rawText/region, which stays the single source of truth.
+  return { total: f.total, date: f.date, time: f.time, receiptNo: f.receiptNo, totalSavings: f.totalSavings, lineRegions: f.lineRegions };
 }
 
 /**
@@ -395,7 +397,10 @@ function redactQueueParsedData(parsedData: object, maskBands: MaskBand[]): objec
           rawLines: Array.isArray(p.rawLines) ? p.rawLines.map(redactReceiptText) : p.rawLines,
         }))
       : pd.products,
-    footer: pd.footer ? { ...pd.footer, rawText: redactReceiptText(pd.footer.rawText) } : pd.footer,
+    // New blobs carry no footer.rawText (deduped); only redact it if an OLD blob still has one.
+    footer: pd.footer
+      ? { ...pd.footer, ...(pd.footer.rawText != null ? { rawText: redactReceiptText(pd.footer.rawText) } : {}) }
+      : pd.footer,
     maskBands: maskBands.map((b) => ({
       yTop: b.yTop, yBottom: b.yBottom, xLeft: b.xLeft, xRight: b.xRight, kind: b.kind,
     })),

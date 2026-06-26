@@ -1,5 +1,5 @@
 import { useEffect, useReducer, useRef } from 'react';
-import { Image, PixelRatio, View } from 'react-native';
+import { Image, PixelRatio, Platform, View } from 'react-native';
 import ViewShot, { captureRef } from 'react-native-view-shot';
 import Svg, { Polygon } from 'react-native-svg';
 import type { MaskBand } from '@shared/parsers/cardMaskDetection';
@@ -116,9 +116,23 @@ export function MaskRedactionHost() {
         capturedRef.current = true;
         const r = active;
         try {
+            // Platform-split capture (do NOT regress Android):
+            //  • Android — drawViewHierarchyInRect, which RESIZES to the
+            //    width/height option, so request the original pixel dims.
+            //  • iOS — drawViewHierarchyInRect fails on our 1×1-clipped surface
+            //    ("not successful"), so use renderInContext, which draws the
+            //    LAYER at its own bounds into a `size`-point context (no resize,
+            //    then ×deviceScale). Request the DP/render size so the layer
+            //    fills the context and the 3× scale restores full pixels —
+            //    passing the full-pixel size left the receipt in the top-left of
+            //    an oversized white canvas.
+            const ios = Platform.OS === 'ios';
+            const renderSize = maskRenderSize(r.width, r.height, PixelRatio.get());
             let out = await captureRef(shotRef, {
                 format: 'jpg', quality: 0.92, result: 'tmpfile',
-                width: r.width, height: r.height,
+                width: ios ? renderSize.width : r.width,
+                height: ios ? renderSize.height : r.height,
+                useRenderInContext: ios,
             });
             if (out && out.startsWith('/')) out = `file://${out}`;
             console.log('[MASK] host captured ->', out);
@@ -152,7 +166,7 @@ export function MaskRedactionHost() {
         >
             <ViewShot
                 ref={shotRef}
-                options={{ format: 'jpg', quality: 0.92, result: 'tmpfile', width: req.width, height: req.height }}
+                options={{ format: 'jpg', quality: 0.92, result: 'tmpfile', width: req.width, height: req.height, useRenderInContext: true }}
                 style={{ width: render.width, height: render.height }}
             >
                 <Image

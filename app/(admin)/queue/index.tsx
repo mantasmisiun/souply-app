@@ -1,6 +1,11 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    ScrollView,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Stack, useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -124,7 +129,7 @@ export default function QueueScreen() {
                                 </Text>
                                 {chip.id !== 'all' && badge(chip.id as QueueType)}
                                 {chip.id === 'all' && countsLoading && (
-                                    <ActivityIndicator size={10} color={active ? colors.onPrimary : colors.textSecondary} style={{ marginLeft: 4 }} />
+                                    <MaterialProgress size={10} color={active ? colors.onPrimary : colors.textSecondary} style={{ marginLeft: 4 }} />
                                 )}
                             </TouchableOpacity>
                         );

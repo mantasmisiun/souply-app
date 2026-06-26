@@ -1,0 +1,6 @@
+{
+  "name": "souply-progress",
+  "version": "0.1.0",
+  "description": "Android-only native Material You CircularProgressIndicator",
+  "main": "index.ts"
+}

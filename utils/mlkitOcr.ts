@@ -3,6 +3,23 @@ import * as ImageManipulator from 'expo-image-manipulator';
 import { Image, Platform } from 'react-native';
 import { devLog } from './devLog';
 import { normalizeLithuanianText } from '@shared/parsers/normalizeLithuanianText';
+import { visionOcrAvailable, visionRecognize } from './visionOcr';
+import { makeOcrVariants, preprocessAvailable } from './imagePreprocess';
+
+// ── OCR engine ──────────────────────────────────────────────────────────────
+// iOS uses Apple Vision (native module souply-vision-ocr); Android uses Google
+// ML Kit. Both return the same block/line/element shape so the parser is engine-
+// agnostic. The `visionOcrAvailable()` guard is a presence check only (it's true
+// on any iOS build with the module) — there is no MLKit-on-iOS fallback toggle;
+// if the module were somehow absent it degrades to ML Kit rather than crash.
+type MlkitResult = Awaited<ReturnType<typeof TextRecognition.recognize>>;
+
+async function recognizeText(uri: string): Promise<MlkitResult> {
+    if (Platform.OS === 'ios' && visionOcrAvailable()) {
+        return (await visionRecognize(uri)) as unknown as MlkitResult;
+    }
+    return TextRecognition.recognize(uri);
+}
 
 /** Per-WORD box (MLKit element). Lets a parser anchor a band to a specific
  *  word (e.g. the "Kvito" and "Kasa" that bracket the receipt-number line)
@@ -14,6 +31,11 @@ export interface OcrWord {
     xRight: number;
     yTop: number;
     yBottom: number;
+    // SPIKE (read-only): raw MLKit ELEMENT cornerPoints, scaled into the same image
+    // space as the frame. MLKit returns them clockwise from top-left [TL,TR,BR,BL].
+    // Captured to test whether per-word corners encode the receipt rotation (the
+    // LINE-level corners come back flat). Not consumed by the parser — dev dump only.
+    cornerPoints?: { x: number; y: number }[];
 }
 
 export interface OcrLine {
@@ -81,6 +103,16 @@ const TILING_THRESHOLD = Platform.OS === 'ios' ? 1800 : 3500;
 const IOS_MAX_WIDTH = 1500;
 const IOS_TILE_JPEG_QUALITY = 0.92;
 
+// Android-only: UPSCALE a small capture so body glyphs clear MLKit's ~16-24px
+// per-char floor. ML Kit has no sensitivity knob — a faint/stained date or
+// product name on a low-res capture is exactly what it silently drops, and the
+// recognizer's CNN works best near its trained glyph scale. Upscaling never
+// hurts (coords scale straight back via invFactor) and the tiler still caps each
+// tile under the 4096px downsample limit. Capped to avoid ballooning a tall
+// receipt into excessive tiles.
+const ANDROID_MIN_OCR_WIDTH = 1280;
+const ANDROID_MAX_UPSCALE = 2;
+
 // Dedupe distance for "same text at similar y from adjacent tiles".
 // Text row height is ~25-30 px on typical receipt OCR, so anything
 // beyond ~40 px is a different physical row. Using TILE_OVERLAP here
@@ -96,6 +128,134 @@ const TILE_DEDUPE_Y_TOL = 20;
  * is always 1 when tiling is active (each tile is small enough that
  * MLKit coords match the image's native pixel space).
  */
+// Count of "real" characters — a proxy for how complete a recognised line is,
+// used to pick the best read of the same physical line across preprocess variants.
+const alnumCount = (s: string): number =>
+    (s.match(/[A-Za-z0-9ĄČĘĖĮŠŲŪŽąčęėįšųūž]/g) || []).length;
+
+/** Cheap degradation signal: a healthy receipt OCR always surfaces a date AND a
+ *  decimal amount. Missing either ⇒ the scan is degraded enough to justify the
+ *  extra preprocess-variant passes. Conservative on purpose (clean receipts skip
+ *  the cost). */
+function isDegradedOcr(result: OcrResult): boolean {
+    const text = result.lines.map((l) => l.text).join('\n');
+    const hasDate = /\d{4}[-./]\d{1,2}[-./]\d{1,2}|\d{1,2}[-./]\d{1,2}[-./]\d{2,4}/.test(text);
+    const hasAmount = /\d+[.,]\d{2}\b/.test(text);
+    return !hasDate || !hasAmount;
+}
+
+/** Fuse several OCR passes of the SAME page (base + preprocess variants, all in
+ *  the same pixel space). Cluster lines by vertical position + horizontal
+ *  overlap and keep the most-complete read per physical line — so a stained word
+ *  recovered by the destain pass replaces the base pass's partial read, while
+ *  clean lines are unchanged. */
+function fuseOcrResults(results: OcrResult[]): OcrResult {
+    const base = results[0];
+    const all = results.flatMap((r) => r.lines);
+    if (all.length === 0) return base;
+    const heights = all.map((l) => l.yBottom - l.yTop).filter((h) => h > 0).sort((a, b) => a - b);
+    const medH = heights[Math.floor(heights.length / 2)] || 24;
+    const yTol = medH * 0.5;
+    const sorted = [...all].sort((a, b) => a.yTop - b.yTop);
+    const used = new Array(sorted.length).fill(false);
+    const fused: OcrLine[] = [];
+    for (let i = 0; i < sorted.length; i++) {
+        if (used[i]) continue;
+        const seedTop = sorted[i].yTop;
+        let best = sorted[i];
+        let bestScore = alnumCount(best.text);
+        used[i] = true;
+        for (let j = i + 1; j < sorted.length; j++) {
+            if (used[j]) continue;
+            const o = sorted[j];
+            if (o.yTop - seedTop > medH) break; // sorted by yTop ⇒ cluster is done
+            const yClose = Math.abs((o.yTop + o.yBottom) / 2 - (best.yTop + best.yBottom) / 2) <= yTol;
+            const xOverlap = Math.min(best.xRight, o.xRight) - Math.max(best.xLeft, o.xLeft);
+            const minW = Math.min(best.xRight - best.xLeft, o.xRight - o.xLeft);
+            if (yClose && xOverlap > 0.5 * minW) {
+                used[j] = true;
+                const s = alnumCount(o.text);
+                if (s > bestScore) { best = o; bestScore = s; }
+            }
+        }
+        fused.push(best);
+    }
+    fused.sort((a, b) => a.yTop - b.yTop);
+    return { ...base, lines: fused };
+}
+
+// Re-scale a variant's line coords back to the BASE pixel space so all passes
+// fuse in one coordinate system (the upscaled variant is rendered larger).
+function scaleLinesToWidth(result: OcrResult, toWidth: number): OcrResult {
+    const f = result.pixelWidth > 0 ? toWidth / result.pixelWidth : 1;
+    if (Math.abs(f - 1) < 1e-3) return result;
+    const sc = (v: number | undefined) => (v == null ? undefined : v * f);
+    return {
+        ...result,
+        lines: result.lines.map((l) => ({
+            ...l,
+            yTop: l.yTop * f, yBottom: l.yBottom * f, xLeft: l.xLeft * f, xRight: l.xRight * f,
+            yLeftTop: sc(l.yLeftTop), yRightTop: sc(l.yRightTop),
+            yLeftBottom: sc(l.yLeftBottom), yRightBottom: sc(l.yRightBottom),
+            words: l.words?.map((w) => ({
+                ...w, xLeft: w.xLeft * f, xRight: w.xRight * f, yTop: w.yTop * f, yBottom: w.yBottom * f,
+            })),
+        })),
+    };
+}
+
+// Upscale a degraded receipt past this width for the recovery re-OCR pass — more
+// pixels per glyph gives ML Kit's CNN a better shot at faint/misread text (e.g. a
+// thermal date it garbled to "226-D6-19"). Bounded so a tall receipt stays sane.
+const FUSION_UPSCALE_TARGET = 2600;
+
+/**
+ * OCR entry with degraded-receipt recovery (Android / ML Kit only). Runs the
+ * normal pass; if it looks degraded, re-OCRs extra whole-receipt variants and
+ * keeps the most-complete read per line:
+ *   • an UPSCALED pass — BUILD-FREE (expo-image-manipulator), so it runs today;
+ *   • Skia destain + contrast passes — only once @shopify/react-native-skia is in
+ *     the build (the blue-stain cure).
+ * Falls straight back to the base result when not degraded or on iOS (Apple
+ * Vision) — so it can never regress the happy path. THIS is the funnel the
+ * pipeline calls.
+ */
+export async function ocrImageEnhanced(uri: string): Promise<OcrResult> {
+    const base = await ocrImageTiled(uri);
+    if (Platform.OS !== 'android' || !isDegradedOcr(base)) return base;
+
+    const variants: OcrResult[] = [];
+
+    // (1) Build-free upscaled re-OCR — the lever that needs no native build.
+    if (base.pixelWidth > 0 && base.pixelWidth < FUSION_UPSCALE_TARGET) {
+        try {
+            const factor = Math.min(FUSION_UPSCALE_TARGET / base.pixelWidth, 2);
+            const up = await ImageManipulator.manipulateAsync(
+                uri,
+                [{ resize: { width: Math.round(base.pixelWidth * factor) } }],
+                { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG },
+            );
+            variants.push(scaleLinesToWidth(await ocrImageTiled(up.uri), base.pixelWidth));
+        } catch { /* skip — recovery is best-effort */ }
+    }
+
+    // (2) Skia destain/contrast (same dims as base) — present only after the build.
+    if (preprocessAvailable()) {
+        for (const v of await makeOcrVariants(uri)) {
+            try { variants.push(await ocrImageTiled(v)); } catch { /* skip */ }
+        }
+    }
+
+    if (variants.length === 0) return base;
+    const fused = fuseOcrResults([base, ...variants]);
+    devLog('mlkitOcr.fused', {
+        variants: variants.length,
+        baseLines: base.lines.length,
+        fusedLines: fused.lines.length,
+    });
+    return fused;
+}
+
 export async function ocrImageTiled(uri: string): Promise<OcrResult> {
     // Probe true pixel dims via ImageManipulator — NOT Image.getSize.
     // On Android, Image.getSize goes through BitmapFactory which auto-
@@ -114,16 +274,24 @@ export async function ocrImageTiled(uri: string): Promise<OcrResult> {
     // resized space and get scaled to the original at the end so
     // every downstream consumer (parser, RegionPreview, BandCropImage)
     // continues to work in source-image coordinates.
-    const needsResize =
-        Platform.OS === 'ios' && trueWidth > IOS_MAX_WIDTH;
+    // iOS DOWNSCALES wide images (row-fragmentation mitigation); Android UPSCALES
+    // small captures up to the glyph-size floor. Both re-encode a one-off OCR
+    // input and remap coords back to original space via invFactor below.
+    let targetWidth: number | null = null;
+    if (Platform.OS === 'ios' && trueWidth > IOS_MAX_WIDTH) {
+        targetWidth = IOS_MAX_WIDTH;
+    } else if (Platform.OS === 'android' && trueWidth > 0 && trueWidth < ANDROID_MIN_OCR_WIDTH) {
+        const factor = Math.min(ANDROID_MIN_OCR_WIDTH / trueWidth, ANDROID_MAX_UPSCALE);
+        targetWidth = Math.round(trueWidth * factor);
+    }
     let workingUri = info.uri;
     let workingWidth = trueWidth;
     let workingHeight = trueHeight;
     let resizeFactor = 1;
-    if (needsResize) {
+    if (targetWidth != null && targetWidth !== trueWidth) {
         const resized = await ImageManipulator.manipulateAsync(
             info.uri,
-            [{ resize: { width: IOS_MAX_WIDTH } }],
+            [{ resize: { width: targetWidth } }],
             { compress: IOS_TILE_JPEG_QUALITY, format: ImageManipulator.SaveFormat.JPEG },
         );
         workingUri = resized.uri;
@@ -301,7 +469,7 @@ async function runMlkitOnUri(
     refWidth: number,
     refHeight: number,
 ): Promise<RawOcrResult> {
-    const pageResult = await TextRecognition.recognize(uri);
+    const pageResult = await recognizeText(uri);
 
     let mlkitMaxX = 0;
     let mlkitMaxY = 0;
@@ -339,15 +507,15 @@ async function runMlkitOnUri(
         frame: ElFrame;
         slope: number | null;   // own element slope (px/px), or null when unmeasurable
         textH: number;          // per-word text height (the line box is inflated by tilt)
-        els: { text: string; frame: ElFrame }[]; // per-word boxes, left→right
+        els: { text: string; frame: ElFrame; corners?: { x: number; y: number }[] }[]; // per-word boxes, left→right
     }
     const raws: RawLine[] = [];
     for (const block of pageResult.blocks) {
         for (const line of block.lines) {
             if (!line.frame || !line.text.trim()) continue;
-            const els = ((line as { elements?: { text?: string; frame?: ElFrame }[] }).elements ?? [])
-                .filter((e): e is { text?: string; frame: ElFrame } => !!e.frame && e.frame.width > 0 && e.frame.height > 0)
-                .map((e) => ({ text: (e.text ?? '').trim(), frame: e.frame }))
+            const els = ((line as { elements?: { text?: string; frame?: ElFrame; cornerPoints?: { x: number; y: number }[] }[] }).elements ?? [])
+                .filter((e): e is { text?: string; frame: ElFrame; cornerPoints?: { x: number; y: number }[] } => !!e.frame && e.frame.width > 0 && e.frame.height > 0)
+                .map((e) => ({ text: (e.text ?? '').trim(), frame: e.frame, corners: e.cornerPoints }))
                 .sort((a, b) => a.frame.left - b.frame.left);
             let slope: number | null = null;
             let textH = line.frame.height;
@@ -401,6 +569,8 @@ async function runMlkitOnUri(
             xRight: (e.frame.left + e.frame.width) * frameScale,
             yTop: sy(e.frame.top),
             yBottom: sy(e.frame.top + e.frame.height),
+            // SPIKE: scale the raw element corners into the same space as the frame.
+            cornerPoints: e.corners?.map((p) => ({ x: p.x * frameScale, y: sy(p.y) })),
         }));
         return {
             text: r.text,

@@ -1,13 +1,20 @@
-import { Ionicons } from "@expo/vector-icons";
+import {
+    Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
-import { Stack, useFocusEffect, useRouter } from "expo-router";
+import { Stack,
+    useFocusEffect,
+    useRouter } from "expo-router";
 import { useSafeBottomTabBarHeight } from "../../../hooks/useSafeBottomTabBarHeight";
 import { StoreChipBar } from "../../../components/StoreChipBar";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback,
+    useEffect,
+    useMemo,
+    useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { useReceiptQueueStore, type QueueItem } from "../../../state/receiptQueueStore";
+import { useReceiptQueueStore,
+    type QueueItem } from "../../../state/receiptQueueStore";
 import {
     ActivityIndicator,
     Alert,
@@ -20,6 +27,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { API_BASE_URL } from "../../../config/api";
 import { getUserId } from "../../../config/user";
 import { useTheme, spacing, radius, elevation, iconSize, typography, type AppTheme } from "../../../constants/theme";
@@ -141,6 +149,8 @@ export default function ReceiptsScreen() {
   // de-skew). Covers normal-length receipts.
   const onPickCamera = () => {
     setUploadMenuOpen(false);
+    // The dismiss-before-present delay now lives inside launchDocumentScanner,
+    // so every scan entry point (here, shopping list, fail-gate retry) is guarded.
     launchDocumentScanner(router, { preview: previewOnly });
   };
 
@@ -478,7 +488,7 @@ export default function ReceiptsScreen() {
       );
       if (isAwaiting) return <Ionicons name="cloud-offline-outline" size={iconSize.xl} color={colors.warning} />;
       if (isPending) return <Ionicons name="time-outline" size={iconSize.xl} color={colors.textMuted} />;
-      return <ActivityIndicator size="small" color={colors.primary} />;
+      return <MaterialProgress size="small" color={colors.primary} />;
     })();
 
     const subline = (() => {
@@ -696,7 +706,7 @@ export default function ReceiptsScreen() {
       >
         <View style={styles.menuBackdrop}>
           <View style={[styles.menuCard, { alignItems: "center", gap: 12 }]}>
-            <ActivityIndicator size="large" color={colors.primary} />
+            <MaterialProgress size="large" color={colors.primary} />
             <Text style={styles.menuTitle}>{t('receipts.menu.pdfConverting')}</Text>
           </View>
         </View>
@@ -725,7 +735,7 @@ export default function ReceiptsScreen() {
                 onPress={confirmDeleteReceipt}
               >
                 {deleting ? (
-                  <ActivityIndicator size="small" color={colors.error} />
+                  <MaterialProgress size="small" color={colors.error} />
                 ) : (
                   <>
                     <Ionicons name="trash-outline" size={iconSize.lg} color={colors.error} />

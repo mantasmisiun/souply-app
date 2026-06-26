@@ -1,9 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    View, Text, ScrollView, TouchableOpacity, StyleSheet,
-    Alert, ActivityIndicator, Modal, TextInput, Switch,
-    Image, Pressable, Dimensions,
-} from 'react-native';
+    View,
+    Text,
+    ScrollView,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    Modal,
+    TextInput,
+    Switch,
+    Image,
+    Pressable,
+    Dimensions,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -262,7 +272,7 @@ function SpEditModal({
                         disabled={saving}
                     >
                         {saving
-                            ? <ActivityIndicator size="small" color={colors.primary} />
+                            ? <MaterialProgress size="small" color={colors.primary} />
                             : <Text style={styles.editHeaderSave}>{t('common.save')}</Text>}
                     </TouchableOpacity>
                 </View>
@@ -298,7 +308,7 @@ function SpEditModal({
                                     disabled={uploading}
                                 >
                                     {uploading
-                                        ? <ActivityIndicator color={colors.primary} />
+                                        ? <MaterialProgress color={colors.primary} />
                                         : <Ionicons name="add" size={28} color={colors.primary} />}
                                 </Pressable>
                                 {/* Remove slot */}
@@ -647,7 +657,7 @@ export default function AdminProductDetailScreen() {
                             />
                             {deletingSpId === sp.id && (
                                 <View style={styles.deletingOverlay}>
-                                    <ActivityIndicator color={colors.primary} />
+                                    <MaterialProgress color={colors.primary} />
                                 </View>
                             )}
                         </View>

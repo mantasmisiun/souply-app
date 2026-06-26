@@ -2,6 +2,8 @@ import {
     detectCardMaskBands,
     redactReceiptText,
     clampMaskBandsToProtected,
+    wordCentreInMaskBand,
+    looksLikePiiText,
     type MaskLineInput,
     type MaskBand,
 } from '../shared/parsers/cardMaskDetection';
@@ -190,6 +192,43 @@ describe('clampMaskBandsToProtected', () => {
         expect(out.yBottom).toBe(3197);
     });
 
+    it('a WIDE protected band Y-overlapping the PAN cannot expose the card number (per-corner containment + PII cap)', () => {
+        // PAN mask x26–607; the card digits run y1150..1231 (piiTop/piiBottom).
+        const panMask: MaskBand = {
+            yTop: 1140, yBottom: 1245, xLeft: 26, xRight: 607, kind: 'bank',
+            label: 'BANKAS', reasons: ['masked-number'], text: '[•••]',
+            yLeftTop: 1150, yRightTop: 1130, yLeftBottom: 1241, yRightBottom: 1221,
+            piiTop: 1150, piiBottom: 1231,
+        };
+        // (1) a band that SPANS the whole PAN (x0–700) and overlaps below: both corners
+        // are inside, the clamp runs, but the PII cap stops the bottom above y1231.
+        const spanning = { yTop: 1200, yBottom: 1290, xLeft: 0, xRight: 700 };
+        const [a] = clampMaskBandsToProtected([panMask], [spanning]);
+        expect(a.yLeftBottom).toBeGreaterThanOrEqual(1231);
+        expect(a.yRightBottom).toBeGreaterThanOrEqual(1231);
+        // (2) a band covering the PAN's right portion (x300–1401): the far-left corner
+        // (x26, outside x300–1401) is PINNED — never extrapolated up off the card number.
+        const rightPart = { yTop: 1200, yBottom: 1290, xLeft: 300, xRight: 1401 };
+        const [b] = clampMaskBandsToProtected([panMask], [rightPart]);
+        expect(b.yLeftBottom).toBe(1241); // pinned
+        expect(b.yRightBottom).toBeGreaterThanOrEqual(1231); // PAN still covered
+    });
+
+    it('does NOT clamp a mask that only EDGE-clips a protected band (PII stays fully covered)', () => {
+        // PAN mask x26–607; a "total" band x575–1401 overlaps only the mask's right edge
+        // (~32px, <35% of either band). Clamping there would pull the whole mask up off
+        // the card number — receipt-77's exposed-bottom bug. Must leave the mask intact.
+        const panMask: MaskBand = {
+            yTop: 1100, yBottom: 1240, xLeft: 26, xRight: 607, kind: 'bank',
+            label: 'BANKAS', reasons: ['masked-number'], text: '[•••]',
+            yLeftTop: 1110, yRightTop: 1095, yLeftBottom: 1240, yRightBottom: 1225,
+        };
+        const total = { yTop: 1194, yBottom: 1303, xLeft: 575, xRight: 1401 };
+        const [out] = clampMaskBandsToProtected([panMask], [total]);
+        expect(out.yLeftBottom).toBe(1240); // full PAN still covered, bottom not pulled up
+        expect(out.yRightBottom).toBe(1225);
+    });
+
     it('pulls the bottom up when the protected band sits below', () => {
         const below = { yTop: 3185, yBottom: 3230, xLeft: 100, xRight: 600 };
         const [out] = clampMaskBandsToProtected([mask()], [below]);
@@ -228,23 +267,26 @@ describe('clampMaskBandsToProtected', () => {
 });
 
 describe('mask skew (quad) plumbing', () => {
-    const Lq = (text: string): MaskLineInput => ({
-        text, yTop: 100, yBottom: 140, xLeft: 0, xRight: 1000,
-        yLeftTop: 100, yRightTop: 110, yLeftBottom: 140, yRightBottom: 150, // right edge 10px lower
-    });
-
-    it('mask box bends by the LINE\'s own edge slope over its box width', () => {
-        const [b] = detectCardMaskBands([Lq('Kasininkas Jonas Petraitis')]);
+    it('mask box bends by the masked WORDS / receipt tilt (line cornerPoints are unreliable)', () => {
+        // MLKit reports the LINE corners FLAT even though the printed row tilts — the
+        // bend must come from the per-WORD boxes (or the receipt reference tilt) instead.
+        const line: MaskLineInput = {
+            text: 'Kasininkas Jonas Petraitis',
+            yTop: 100, yBottom: 140, xLeft: 0, xRight: 1000,
+            yLeftTop: 100, yRightTop: 100, yLeftBottom: 140, yRightBottom: 140, // FLAT line corners
+            words: [
+                { text: 'Kasininkas', xLeft: 0, xRight: 200, yTop: 100, yBottom: 124 },
+                { text: 'Jonas', xLeft: 300, xRight: 450, yTop: 112, yBottom: 136 },
+                { text: 'Petraitis', xLeft: 700, xRight: 950, yTop: 124, yBottom: 148 },
+            ],
+        };
+        const [b] = detectCardMaskBands([line]);
         expect(b.kind).toBe('cashier');
-        // The box follows the line's own corner slope (10px / 1000 = 0.01),
-        // interpolated across the box's own width — both edges parallel.
         const slopeTop = (b.yRightTop! - b.yLeftTop!) / (b.xRight - b.xLeft);
         const slopeBot = (b.yRightBottom! - b.yLeftBottom!) / (b.xRight - b.xLeft);
-        expect(slopeTop).toBeCloseTo(0.01, 3);
-        expect(slopeBot).toBeCloseTo(0.01, 3);
-        // padding pushed top corners up and bottom corners down past the raw line.
-        expect(b.yLeftTop!).toBeLessThan(100);
-        expect(b.yLeftBottom!).toBeGreaterThan(140);
+        // bends following the WORDS even though the line corners are flat; edges parallel
+        expect(slopeTop).toBeGreaterThan(0.015);
+        expect(slopeBot).toBeCloseTo(slopeTop, 3);
     });
 
     it('a SINGLE-word PAN redaction still bends with the line slope (not flat)', () => {
@@ -274,5 +316,140 @@ describe('mask skew (quad) plumbing', () => {
         };
         const [b] = detectCardMaskBands([flatCashier]);
         expect(b.yRightTop! - b.yLeftTop!).toBeCloseTo(0, 5); // stays flat — not slanted across rows
+    });
+});
+
+describe('curved-receipt local-slope masks (receipt-83)', () => {
+    it('bank PAN mask uses the LOCAL (gentle) slope near a curved receipt\'s top and fully covers the PAN', () => {
+        const lines: MaskLineInput[] = [
+            // WIDE flat top sample (y~454) + WIDE steep bottom sample (y~2740) → local slope at
+            // y~1207 interpolates to a GENTLE tilt, not the steep global median
+            {
+                text: 'oketojo kodas LT101937219', yTop: 454, yBottom: 516, xLeft: 372, xRight: 1215,
+                words: [{ text: 'oketojo', xLeft: 372, xRight: 634, yTop: 454, yBottom: 516 }, { text: 'LT101937219', xLeft: 870, xRight: 1215, yTop: 454, yBottom: 516 }],
+            },
+            {
+                text: 'Su IKI KORTELE suteikta', yTop: 2661, yBottom: 2892, xLeft: 75, xRight: 1326,
+                words: [{ text: 'Su', xLeft: 75, xRight: 153, yTop: 2819, yBottom: 2892 }, { text: 'suteikta', xLeft: 1060, xRight: 1326, yTop: 2661, yBottom: 2759 }],
+            },
+            // bank context so the PAN classifies as 'bank'
+            { text: 'A0000000041010 - MASTERCARD', yTop: 1056, yBottom: 1155, xLeft: 17, xRight: 990 },
+            // the masked PAN — a single starred word at y1207-1297
+            {
+                text: 'X*XXXX*X*9003', yTop: 1207, yBottom: 1297, xLeft: 17, xRight: 615,
+                words: [{ text: 'X*XXXX*X*9003', xLeft: 17, xRight: 615, yTop: 1207, yBottom: 1297 }],
+            },
+        ];
+        const bank = detectCardMaskBands(lines).find((b) => b.kind === 'bank')!;
+        expect(bank).toBeTruthy();
+        // The band is now a tilted GLYPH strip (not the inflated bbox), so it spans from above
+        // the highest glyph (the bbox top, 1207, at the up-tilted right) to below the lowest
+        // (the bbox bottom, 1297, at the down-tilted left) — fully covering the PAN. The steep
+        // global tilt used to lift the right edge and barely-expose the end; this closes it.
+        expect(bank.yTop).toBeLessThanOrEqual(1207);
+        expect(bank.yBottom).toBeGreaterThanOrEqual(1297);
+    });
+
+    it('loyalty mask with STAGGERED fragments uses a FLAT envelope — focused on the digits, not lifted above', () => {
+        const lines: MaskLineInput[] = [
+            // loyalty number split into two STAGGERED fragments (tops differ 72px > 0.5·height)
+            {
+                text: 'kortele nr 99110000 000005068582', yTop: 1995, yBottom: 2147, xLeft: 80, xRight: 1360,
+                words: [
+                    { text: 'kortele', xLeft: 80, xRight: 300, yTop: 2120, yBottom: 2200 },
+                    { text: 'nr', xLeft: 320, xRight: 400, yTop: 2110, yBottom: 2185 },
+                    { text: '99110000', xLeft: 500, xRight: 633, yTop: 2067, yBottom: 2147 },     // left frag, LOWER
+                    { text: '000005068582', xLeft: 686, xRight: 1340, yTop: 1995, yBottom: 2133 }, // right frag, HIGHER
+                ],
+            },
+        ];
+        const loyalty = detectCardMaskBands(lines).find((b) => b.kind === 'loyalty')!;
+        expect(loyalty).toBeTruthy();
+        // staggered fragments → FLAT envelope (no tilt that would lift a corner off a fragment)
+        expect(Math.abs(loyalty.yLeftTop! - loyalty.yRightTop!)).toBeLessThan(2);
+        // FOCUSED: top sits just above the PII top (~1995, only the pad), NOT lifted ~120px
+        // above the way the min-anchor + steep tilt did (the bug's top was 1872).
+        expect(loyalty.yTop).toBeGreaterThan(1940);
+        // …and still COVERS every fragment (top ≤ highest fragment top, bottom ≥ lowest)
+        expect(loyalty.yTop).toBeLessThanOrEqual(1995);
+        expect(loyalty.yBottom).toBeGreaterThanOrEqual(2147);
+    });
+
+    it('loyalty mask is a THIN strip hugging the digits — not inflated over the line above (receipt-84)', () => {
+        const lines: MaskLineInput[] = [
+            // a line printed directly ABOVE the loyalty number that must stay uncovered
+            { text: 'Pirkimo data 2026-06-22', yTop: 1080, yBottom: 1160, xLeft: 80, xRight: 1100 },
+            // the IKI loyalty number — clean single row, near-flat
+            {
+                text: 'IKI korteles nr. 99110000000005068582', yTop: 1200, yBottom: 1280, xLeft: 80, xRight: 1340,
+                words: [
+                    { text: 'IKI', xLeft: 80, xRight: 180, yTop: 1200, yBottom: 1280 },
+                    { text: 'korteles', xLeft: 200, xRight: 420, yTop: 1200, yBottom: 1280 },
+                    { text: 'nr.', xLeft: 440, xRight: 520, yTop: 1200, yBottom: 1280 },
+                    { text: '99110000000005068582', xLeft: 560, xRight: 1340, yTop: 1200, yBottom: 1280 },
+                ],
+            },
+        ];
+        const loyalty = detectCardMaskBands(lines).find((b) => b.kind === 'loyalty')!;
+        expect(loyalty).toBeTruthy();
+        // COVERS the digits (1200-1280)…
+        expect(loyalty.yTop).toBeLessThanOrEqual(1200);
+        expect(loyalty.yBottom).toBeGreaterThanOrEqual(1280);
+        // …but is THIN: only the value height (80) + small pad, NOT inflated up into the
+        // line above (1080-1160). Glyph-strip height should stay well under 1.7× the digits.
+        const h = loyalty.yBottom! - loyalty.yTop!;
+        expect(h).toBeLessThan(80 * 1.7);
+        // and its top never reaches the line above
+        expect(loyalty.yTop).toBeGreaterThan(1160);
+    });
+});
+
+describe('wordsDump PII redaction (wordsDump ships in staging+prod)', () => {
+    it('wordCentreInMaskBand flags a word whose CENTRE is inside the band, not an edge-clipper', () => {
+        const band: MaskBand = {
+            yTop: 1000, yBottom: 1100, xLeft: 20, xRight: 580, kind: 'bank',
+            label: 'BANKAS', reasons: ['masked-number'], text: '[•••]',
+            yLeftTop: 1010, yRightTop: 990, yLeftBottom: 1100, yRightBottom: 1080,
+            piiTop: 1005, piiBottom: 1095,
+        };
+        // the PAN word, centre squarely inside
+        expect(wordCentreInMaskBand({ xLeft: 30, xRight: 540, yTop: 1020, yBottom: 1090 }, [band])).toBe(true);
+        // centre reaches the band only via the skew-corner union top (yRightTop 990)
+        expect(wordCentreInMaskBand({ xLeft: 30, xRight: 540, yTop: 980, yBottom: 1000 }, [band])).toBe(true);
+        // a product word far above → centre outside
+        expect(wordCentreInMaskBand({ xLeft: 30, xRight: 540, yTop: 500, yBottom: 560 }, [band])).toBe(false);
+        // x-disjoint → outside
+        expect(wordCentreInMaskBand({ xLeft: 700, xRight: 900, yTop: 1020, yBottom: 1090 }, [band])).toBe(false);
+        // "Pardavimas"-style: EDGE-clips the band x by a few px but its centre is well to the
+        // right (x685) → NOT redacted. This is the receipt-81 over-redaction fix.
+        expect(wordCentreInMaskBand({ xLeft: 537, xRight: 833, yTop: 1040, yBottom: 1095 }, [band])).toBe(false);
+    });
+
+    it('looksLikePiiText catches loyalty/card numbers but NOT trader IDs or product words', () => {
+        expect(looksLikePiiText('99110000000005068582')).toBe(true);  // 20-digit loyalty number
+        expect(looksLikePiiText('X*****xX***9003')).toBe(true);        // star-masked PAN
+        expect(looksLikePiiText('15001934')).toBe(false);              // 8-digit trader ID stays clear
+        expect(looksLikePiiText('NATURALUS')).toBe(false);
+        expect(looksLikePiiText('1,05')).toBe(false);
+    });
+
+    it('end-to-end: a real loyalty-number word is flagged PII (band overlap OR text), the label is not', () => {
+        const lines: MaskLineInput[] = [
+            {
+                text: 'IKI KORTELĖS NR. 99110000000005068582', yTop: 1800, yBottom: 1920, xLeft: 80, xRight: 1240,
+                words: [
+                    { text: 'IKI', xLeft: 80, xRight: 175, yTop: 1880, yBottom: 1950 },
+                    { text: 'KORTELĖS', xLeft: 200, xRight: 470, yTop: 1865, yBottom: 1945 },
+                    { text: 'NR.', xLeft: 500, xRight: 570, yTop: 1860, yBottom: 1925 },
+                    { text: '99110000000005068582', xLeft: 620, xRight: 1240, yTop: 1815, yBottom: 1920 },
+                ],
+            },
+        ];
+        const bands = detectCardMaskBands(lines);
+        expect(bands.length).toBeGreaterThan(0);
+        const num = lines[0].words![3];
+        expect(wordCentreInMaskBand(num, bands) || looksLikePiiText(num.text)).toBe(true);
+        const label = lines[0].words![0]; // "IKI"
+        expect(looksLikePiiText(label.text)).toBe(false);
     });
 });

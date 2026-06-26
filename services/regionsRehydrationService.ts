@@ -188,7 +188,7 @@ const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
  *          can't be split or mis-merged by cross-column tilt error, and a price
  *          OCR'd far from its name re-joins it by Y. Replaces single-pass cluster.
  */
-export const REGIONS_VERSION = 'v8.28';
+export const REGIONS_VERSION = 'v8.42';
 
 interface LineWithFrame {
     text: string;

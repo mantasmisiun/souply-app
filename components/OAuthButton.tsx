@@ -1,4 +1,9 @@
-import { TouchableOpacity, Text, ActivityIndicator, StyleSheet } from 'react-native';
+import {
+    TouchableOpacity,
+    Text,
+    StyleSheet,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useTheme } from '../constants/theme';
 import { AppleMark, GoogleMark } from './BrandMarks';
 
@@ -42,7 +47,7 @@ export function OAuthButton({
             ]}
         >
             {loading
-                ? <ActivityIndicator color={fg} />
+                ? <MaterialProgress color={fg} />
                 : <>
                     {isApple ? <AppleMark size={18} color={fg} /> : <GoogleMark size={18} />}
                     <Text style={[styles.label, { color: fg }]}>{label}</Text>

@@ -1,7 +1,13 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
-    TextInput, Alert, Image,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    TextInput,
+    Alert,
+    Image,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -188,7 +194,7 @@ export default function ReceiptSplitScreen() {
                 <View style={styles.cropCard}>
                     <Text style={styles.cropLabel}>{t('admin.split.receiptLine')}</Text>
                     {cropLoading && !cropUri
-                        ? <ActivityIndicator color={colors.primary} style={styles.cropLoader} />
+                        ? <MaterialProgress color={colors.primary} style={styles.cropLoader} />
                         : cropUri
                             ? <View style={styles.cropImageContainer}>
                                 <Image source={{ uri: cropUri }} style={styles.cropImage} resizeMode="contain" />
@@ -262,7 +268,7 @@ export default function ReceiptSplitScreen() {
                     disabled={!canSubmit}
                 >
                     {submitting
-                        ? <ActivityIndicator color={colors.onPrimary} />
+                        ? <MaterialProgress color={colors.onPrimary} />
                         : <>
                             <Ionicons name="git-branch-outline" size={18} color={colors.onPrimary} />
                             <Text style={styles.submitBtnText}>{t('admin.split.submit')}</Text>

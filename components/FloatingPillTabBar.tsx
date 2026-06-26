@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { View, Pressable, Text, StyleSheet, type LayoutChangeEvent } from 'react-native';
+import { BlurView } from 'expo-blur';
 import Animated, {
     Easing,
     useAnimatedStyle,
@@ -114,9 +115,25 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
                 style={[
                     styles.bar,
                     keyShadow,
-                    { backgroundColor: colors.surfaceContainer, borderColor: colors.outlineVariant },
+                    { borderColor: colors.outlineVariant }, // background is now glass (blur + tint), not solid
                 ]}
             >
+                {/* GLASS: a blurred backdrop of the page behind the bar, plus a
+                    semi-transparent surface tint over it for color identity and so
+                    icons/labels stay legible over busy content. `experimentalBlurMethod`
+                    enables a real blur on Android (iOS ignores it). Both layers are
+                    clipped to the bar's rounded shape via `styles.glass`. */}
+                <BlurView
+                    pointerEvents="none"
+                    intensity={isDark ? 40 : 55}
+                    tint={isDark ? 'dark' : 'light'}
+                    experimentalBlurMethod="dimezisBlurView"
+                    style={styles.glass}
+                />
+                <View
+                    pointerEvents="none"
+                    style={[styles.glass, { backgroundColor: withAlpha(colors.surfaceContainer, 0.6) }]}
+                />
                 {/* Inner top-highlight rim — only the top edge is lit, giving the
                     surface a convex, lit-from-above sheen. */}
                 <View
@@ -246,6 +263,15 @@ const styles = StyleSheet.create({
     },
     shadowLayer: {
         borderRadius: radius.xl,
+    },
+    glass: {
+        position: 'absolute',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        borderRadius: radius.xl,
+        overflow: 'hidden', // clip the blur/tint to the bar's rounded corners
     },
     rim: {
         position: 'absolute',

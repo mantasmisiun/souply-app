@@ -21,13 +21,19 @@
  * none of those affect which `MaximaProduct[]` the parser emits.
  */
 
-import { Ionicons } from '@expo/vector-icons';
+import {
+    Ionicons } from '@expo/vector-icons';
 import TextRecognition from '@react-native-ml-kit/text-recognition';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
-import { Stack, useRouter } from 'expo-router';
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { activateKeepAwakeAsync,
+    deactivateKeepAwake } from 'expo-keep-awake';
+import { Stack,
+    useRouter } from 'expo-router';
+import { useCallback,
+    useMemo,
+    useRef,
+    useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
@@ -39,7 +45,8 @@ import {
     Text,
     TouchableOpacity,
     View,
-} from 'react-native';
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { ocrImageTiled } from '../../utils/mlkitOcr';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
@@ -1015,7 +1022,7 @@ export default function ReceiptBatchScreen() {
         return (
             <View style={styles.centered}>
                 <Stack.Screen options={{ title: 'Kvitų paketinis testas' }} />
-                <ActivityIndicator size="large" color={colors.primary} />
+                <MaterialProgress size="large" color={colors.primary} />
             </View>
         );
     }
@@ -1105,7 +1112,7 @@ export default function ReceiptBatchScreen() {
 
 const StatusIcon = ({ state, colors }: { state: RowStatus['state']; colors: AppTheme }) => {
     if (state === 'pending') return <Ionicons name="time-outline" size={18} color={colors.textMuted} />;
-    if (state === 'running') return <ActivityIndicator size="small" color={colors.primary} />;
+    if (state === 'running') return <MaterialProgress size="small" color={colors.primary} />;
     if (state === 'done') return <Ionicons name="checkmark-circle" size={18} color={colors.success} />;
     if (state === 'no-chain') return <Ionicons name="help-circle-outline" size={18} color={colors.textSecondary} />;
     return <Ionicons name="alert-circle" size={18} color={colors.error} />;

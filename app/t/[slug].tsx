@@ -12,9 +12,16 @@
  * resolved templateId from the API) and routes to the spawned basket.
  */
 import {
-    View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator,
-    Alert, Image, Modal,
-} from 'react-native';
+    View,
+    Text,
+    FlatList,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    Image,
+    Modal,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -165,7 +172,7 @@ export default function SharedTemplatePreviewScreen() {
                     headerLeft: () => <ScreenBackButton />,
                 }} />
                 <View style={styles.errorWrap}>
-                    <ActivityIndicator size="large" color={colors.primary} />
+                    <MaterialProgress size="large" color={colors.primary} />
                     <Text style={styles.errorTitle}>{t('basketTab.templates.sharePreviewCta')}…</Text>
                 </View>
             </>
@@ -268,7 +275,7 @@ export default function SharedTemplatePreviewScreen() {
                         disabled={busy}
                     >
                         {busy
-                            ? <ActivityIndicator color={colors.onPrimary} />
+                            ? <MaterialProgress color={colors.onPrimary} />
                             : <Text style={styles.ctaText}>{t('basketTab.templates.sharePreviewCta')}</Text>}
                     </TouchableOpacity>
                 </View>
