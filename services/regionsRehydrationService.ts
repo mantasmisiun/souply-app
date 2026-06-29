@@ -216,6 +216,10 @@ export interface RehydratedRegions {
     total: number | null;
     totalSavings: number | null;
     receiptNo: string | null;
+    /** The FULL identifier set from the re-parse — sent so the server can refresh the
+     *  receiptNos column (a re-parse that finds more ids than the original must not leave
+     *  the functional column stuck on the stale single value — receipt-143). */
+    receiptNos: string[] | null;
     date: string | null;
     time: string | null;
 }
@@ -267,6 +271,7 @@ interface ChainParseSummary {
     total: number | null;
     totalSavings: number | null;
     receiptNo: string | null;
+    receiptNos: string[] | null;
     date: string | null;
     time: string | null;
 }
@@ -296,6 +301,9 @@ const runChainParser = (
             total: typeof r.footer.total === 'number' ? r.footer.total : null,
             totalSavings: typeof r.footer.totalSavings === 'number' ? r.footer.totalSavings : null,
             receiptNo: trimOrNull(r.footer.receiptNo),
+            receiptNos: Array.isArray((r.footer as any).receiptNos)
+                ? (r.footer as any).receiptNos.filter((v: unknown): v is string => typeof v === 'string' && v.trim().length > 0)
+                : null,
             date: trimOrNull(r.footer.date),
             time: trimOrNull(r.footer.time),
         };
@@ -348,6 +356,7 @@ export const computeRehydratedRegions = async (
             total: result.total,
             totalSavings: result.totalSavings,
             receiptNo: result.receiptNo,
+            receiptNos: result.receiptNos,
             date: result.date,
             time: result.time,
         };

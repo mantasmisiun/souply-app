@@ -135,6 +135,7 @@ export default function RestoreAccountScreen() {
             const result = await attemptRestore(
                 filled.map(s => ({
                     receiptNo: s.extract.receiptNo,
+                    receiptNos: s.extract.receiptNos,
                     date: s.extract.date,
                     total: s.extract.total,
                 })),

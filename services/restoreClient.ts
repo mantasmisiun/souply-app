@@ -15,7 +15,8 @@ import { getDeviceFingerprint } from './deviceFingerprint';
  */
 
 export interface SubmittedReceipt {
-    receiptNo: string;
+    receiptNo: string;          // canonical id (= receiptNos[0])
+    receiptNos?: string[];      // all identifiers — lets the server resolve a rare date+total collision
     date: string;   // YYYY-MM-DD
     total: number;
 }

@@ -28,7 +28,8 @@ import { detectChainByVatCode } from '../shared/parsers/chainVatFallback';
  */
 
 export interface RecoveryReceiptExtract {
-    receiptNo: string;
+    receiptNo: string;          // canonical id (= receiptNos[0]); shown on the slot card
+    receiptNos?: string[];      // every identifier the receipt printed (sent for the server tiebreaker)
     date: string;   // YYYY-MM-DD
     total: number;
     /** Resolved chain id (1=Maxima, 2=Rimi, 3=Iki, 4=Norfa, 5=Lidl).
@@ -105,11 +106,16 @@ function detectAndParse(
  * another file.
  */
 function packFields(
-    footer: { total: number | null; date: string; receiptNo: string },
+    footer: { total: number | null; date: string; receiptNo: string; receiptNos?: string[] },
     chainId: 1 | 2 | 3 | 4 | 5,
     chainName: RecoveryReceiptExtract['chainName'],
 ): RecoveryReceiptExtract | null {
-    const receiptNo = (footer.receiptNo ?? '').trim();
+    // The "needs a receipt number" requirement is satisfied by ANY identifier — a receipt that
+    // printed only a "Kvitas" (Kvito Nr. OCR-dropped) is still usable for recovery.
+    const receiptNos = (Array.isArray(footer.receiptNos) ? footer.receiptNos : [])
+        .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+        .map((v) => v.trim());
+    const receiptNo = (footer.receiptNo ?? '').trim() || receiptNos[0] || '';
     if (!receiptNo) return null;
 
     // Parsers emit date as YYYY-MM-DD on success, '' on failure.
@@ -119,7 +125,7 @@ function packFields(
     const total = footer.total;
     if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return null;
 
-    return { receiptNo, date, total, chainHint: chainId, chainName };
+    return { receiptNo, receiptNos: receiptNos.length ? receiptNos : undefined, date, total, chainHint: chainId, chainName };
 }
 
 /**
