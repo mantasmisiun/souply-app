@@ -7,11 +7,12 @@ import {
     Alert,
     TextInput,
     Modal,
+    Platform,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { isWeighableDisplay } from '../../utils/weighable';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import Animated from 'react-native-reanimated';
@@ -78,7 +79,15 @@ export default function BasketDetailScreen() {
     const header = useCollapsingHeader();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const { bottom: bottomInset } = useSafeAreaInsets();
+    // This screen's native-header context can report a 0 bottom inset even
+    // though edge-to-edge draws the content under the gesture/nav bar — that
+    // left the action bar clipped. When the per-screen inset under-reports, use
+    // the launch-time window inset (the device's real nav-bar height) rather
+    // than a magic number; small Android floor only if both are unavailable.
+    const { bottom: rawBottomInset } = useSafeAreaInsets();
+    const bottomInset =
+        Math.max(rawBottomInset, initialWindowMetrics?.insets?.bottom ?? 0)
+        || (Platform.OS === 'android' ? 24 : 0);
     const { id } = useLocalSearchParams();
     const router = useRouter();
     const { mode: displayMode } = useDisplayMode();

@@ -5,6 +5,7 @@ import { useRef, useState, useMemo, useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { MapPickerScaffold } from '../../../components/map/MapPickerScaffold';
+import { ScreenBackButton } from '../../../components/ScreenBackButton';
 import { setPreset, type PresetKey } from '../../../utils/locationStorage';
 import { geocodeAddress, reverseGeocode } from '../../../utils/nominatim';
 import { tryGpsCoords, VILNIUS_FALLBACK } from '../../../utils/location';
@@ -127,6 +128,8 @@ export default function PresetMapScreen() {
                 headerTintColor: colors.primary,
                 headerStyle: { backgroundColor: colors.cardBackground },
                 headerShadowVisible: false,
+                // Match the app-wide pink chevron (this route was using the default arrow).
+                headerLeft: () => <ScreenBackButton />,
             }} />
             <MapPickerScaffold
                 mapRef={mapRef}

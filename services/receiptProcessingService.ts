@@ -91,6 +91,9 @@ interface MatchedProduct {
   amount: number | null;
   sizeUnit: string | null;
   pricePerUnit: number | null;
+  // Carried from the parser so the server resolver sees that a by-weight line
+  // is weighable (without it the resolver treats null as a form mismatch).
+  isWeighable?: boolean | null;
   rawLines: string[];
   region: Region;
 }
@@ -289,6 +292,7 @@ async function matchProducts(
       amount: resolvedAmount,
       sizeUnit: resolvedUnit,
       pricePerUnit: p.pricePerUnit,
+      isWeighable: p.isWeighable ?? null,
       rawLines: p.rawLines,
       region: p.region,
     } as MatchedProduct;

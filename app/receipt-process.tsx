@@ -5,7 +5,6 @@ import { usePreventRemove,
     useNavigation,
     useFocusEffect } from "@react-navigation/native";
 import { useTranslation } from "react-i18next";
-import TextRecognition from "@react-native-ml-kit/text-recognition";
 import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import * as ImageManipulator from "expo-image-manipulator";
@@ -16,15 +15,9 @@ import { Stack,
     useRouter } from "expo-router";
 import { useCallback,
     useEffect,
-    useId,
     useMemo,
     useRef,
     useState } from "react";
-import Svg,
-    { Defs,
-    ClipPath,
-    Polygon,
-    Image as SvgImage } from "react-native-svg";
 import {
     ActivityIndicator,
     Alert,
@@ -49,6 +42,15 @@ import { SkeletonBox } from "../components/SkeletonBox";
 import { formatEuro, formatDate } from "../utils/formatCurrency";
 import { capVoluntaryQueue } from "../utils/swipeQueueCap";
 import { devLog } from "../utils/devLog";
+import { BandCropImage } from "../components/receipt/BandCropImage";
+import { ProcessingLoader, type LoadingStage } from "../components/ProcessingLoader";
+import { SwipeQueue } from "../components/swipe/SwipeQueue";
+import {
+    type PageMeta,
+    ensurePortraitOrientation,
+    normalizeLoadedImage,
+    deriveImageDimsFromGeometry,
+} from "../utils/receiptImage";
 import { API_BASE_URL } from "../config/api";
 import { getUserId } from "../config/user";
 import { useReceiptComparison } from "../hooks/useReceiptComparison";
@@ -57,7 +59,7 @@ import {
     persistRehydratedRegions,
     REGIONS_VERSION,
 } from "../services/regionsRehydrationService";
-import { DEV_MODE } from "../constants/flags";
+import { DEV_MODE, CONFIDENCE_BAND_DISPLAY } from "../constants/flags";
 import { useTheme, type AppTheme } from "../constants/theme";
 import {
     useReceiptCreateContext,
@@ -84,6 +86,8 @@ import {
     type IkiHeader,
     type IkiProduct,
 } from "@shared/parsers/ikiParser";
+import { RECOGNITION, type ItemConfidence } from "@shared/recognitionConfig";
+import ConfidenceBadge from "../components/ConfidenceBadge";
 import {
     isMaximaReceipt,
     parseMaximaHeaderOnly,
@@ -122,7 +126,8 @@ import { parseProductName } from "@shared/parsers/productNameParser";
 import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
 import { redactReceiptText, detectCardMaskBands, clampMaskBandsToProtected, wordCentreInMaskBand, looksLikePiiText, type MaskBand } from "@shared/parsers/cardMaskDetection";
 import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
-import { requestStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
+import { requestStoreResolution, completeStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
+import { StoreResolutionOverlay } from "../components/receipt/StoreResolutionOverlay";
 import { ocrImageEnhanced } from "../utils/mlkitOcr";
 import { refineFooterBands } from "../utils/footerBandRefine";
 import { launchDocumentScanner } from "../utils/launchDocumentScanner";
@@ -210,6 +215,13 @@ interface ProductLine {
   pricePerUnit: number | null;
   rawLines: string[];
   region: Region;
+  /**
+   * Server-computed per-line confidence (DISPLAY-ONLY). Present on receipts
+   * saved after the score shipped; null on live-scan lines (the score is
+   * computed during save) and on older receipts. Drives the band-based display
+   * behind {@link CONFIDENCE_BAND_DISPLAY} and the always-on `__DEV__` badge.
+   */
+  itemConfidence?: ItemConfidence | null;
 }
 
 interface HeaderData {
@@ -249,320 +261,9 @@ interface FooterData {
   lineRegions?: LabeledRegion[];
 }
 
-/**
- * Per-page OCR context needed to render RegionPreview correctly for both
- * single-image scans and multi-page PDFs. Regions carry yTop/yBottom in the
- * merged-scaled OCR space; this maps them back to page-local image pixels.
- */
-interface PageMeta {
-  uri: string;
-  pixelWidth: number;
-  pixelHeight: number;
-  /** scale applied to MLKit coords when populating lines/regions */
-  frameScale: number;
-  /** start of this page in merged-y space */
-  yOffsetScaled: number;
-  /** how much merged-y this page occupies (excludes +50 buffer) */
-  pageMaxYScaled: number;
-  /** horizontal bounds of the receipt text on this page, in merged/scaled space */
-  receiptXLeftScaled: number;
-  receiptXRightScaled: number;
-}
-
-interface RegionPreviewProps {
-  pages: PageMeta[];
-  region: Region;
-  cardWidth: number;
-}
 type AsyncStatus = "idle" | "pending" | "done" | "error";
 
 const CARD_WIDTH = Dimensions.get("window").width - 32 - 32;
-
-/**
- * Camera photos of receipts often land in landscape (user holding phone
- * sideways, EXIF auto-rotation already baked into the bitmap). The downstream
- * parser + region preview assume a portrait receipt — horizontal rows from
- * different parts of the receipt otherwise merge on the same y and become
- * unparseable. If the image is landscape, try rotating both ±90° and pick
- * the rotation whose OCR produces more lines (the upright one always wins
- * because letters are legible). Returns the URI to use downstream (original
- * if already portrait, rotated variant otherwise).
- */
-async function ensurePortraitOrientation(uri: string): Promise<string> {
-  const dims = await new Promise<{ width: number; height: number }>(
-    (resolve, reject) => {
-      Image.getSize(uri, (width, height) => resolve({ width, height }), reject);
-    },
-  );
-  if (dims.height >= dims.width) return uri;
-
-  const [rotatedCW, rotatedCCW] = await Promise.all([
-    ImageManipulator.manipulateAsync(
-      uri,
-      [{ rotate: 90 }],
-      { compress: 1, format: ImageManipulator.SaveFormat.JPEG },
-    ),
-    ImageManipulator.manipulateAsync(
-      uri,
-      [{ rotate: -90 }],
-      { compress: 1, format: ImageManipulator.SaveFormat.JPEG },
-    ),
-  ]);
-
-  const [ocrCW, ocrCCW] = await Promise.all([
-    TextRecognition.recognize(rotatedCW.uri),
-    TextRecognition.recognize(rotatedCCW.uri),
-  ]);
-  const scoreLines = (r: { blocks: { lines: { text: string }[] }[] }) =>
-    r.blocks.reduce((sum, b) => sum + b.lines.length, 0);
-  const cwScore = scoreLines(ocrCW);
-  const ccwScore = scoreLines(ocrCCW);
-  console.log(
-    `[ensurePortraitOrientation] landscape ${dims.width}x${dims.height} -> CW lines=${cwScore}, CCW lines=${ccwScore}`,
-  );
-  return cwScore >= ccwScore ? rotatedCW.uri : rotatedCCW.uri;
-}
-
-/**
- * Re-project a saved receipt's stored image back into the coordinate space its
- * parsed regions live in. The OCR pipeline rotates every capture to PORTRAIT (and
- * records the region geometry + parsed.image dims in that space), but the image
- * uploaded/stored can be the pre-rotation LANDSCAPE original — or a different
- * scale. Displayed/cropped as-is, every band lands in the wrong place and the
- * per-band crops fall outside the image ("crop failed … rectangle inside source
- * image"). This rotates to portrait the SAME way the OCR did (line-count vote) and
- * resizes to the exact parsed pixel dims, so regions align 1:1 again. A no-op when
- * the stored image already matches (the common, freshly-scanned case).
- */
-async function normalizeLoadedImage(
-  uri: string,
-  parsedW: number,
-  parsedH: number,
-): Promise<{ uri: string; width: number; height: number }> {
-  try {
-    // ROTATE the stored image to portrait, then RESIZE it to the exact parsed
-    // pixel dims. EVERY stored region (products + masks + header + footer) lives
-    // in parsed.image space, so the displayed image content must occupy that exact
-    // space for the overlay to line up. Measure with ImageManipulator (the decoder
-    // TRUE dims — the same measure OCR used), NOT Image.getSize (which can report a
-    // decoder-SAMPLED size). Aspect is ~identical so the resize is near-uniform.
-    const portraitUri = await ensurePortraitOrientation(uri);
-    if (parsedW > 0 && parsedH > 0) {
-      const info = await ImageManipulator.manipulateAsync(portraitUri, []);
-      if (Math.abs(info.width - parsedW) > 1 || Math.abs(info.height - parsedH) > 1) {
-        const r = await ImageManipulator.manipulateAsync(
-          portraitUri,
-          [{ resize: { width: parsedW, height: parsedH } }],
-          { compress: 0.92, format: ImageManipulator.SaveFormat.JPEG },
-        );
-        return { uri: r.uri, width: parsedW, height: parsedH };
-      }
-      return { uri: portraitUri, width: info.width, height: info.height };
-    }
-    const info = await ImageManipulator.manipulateAsync(portraitUri, []);
-    return { uri: portraitUri, width: info.width, height: info.height };
-  } catch {
-    return { uri, width: parsedW, height: parsedH };
-  }
-}
-
-/**
- * Sharp per-product band crop using `ImageManipulator.manipulateAsync`.
- *
- * Why this exists alongside `RegionPreview`: RegionPreview slides a
- * full-page Image inside an overflow:hidden container with negative
- * margins. RN on Android downsamples large bitmaps at decode time based
- * on the visible rectangle — feeding a 1080×5000 page into a 400×24 slot
- * throws away ~99% of the source pixels before render, producing
- * unreadable mush for tiny product bands. Pre-cropping to a small file
- * dodges the downsample heuristic so the band renders at native
- * resolution. Same fix the `Kvitų paketinis testas` detail screen uses.
- *
- * Only used in DEV builds (gated by `__DEV__` at the call site) — the
- * extra crop file per product isn't worth it for end users, who already
- * see the matched product image instead.
- */
-function BandCropImage({ pages, region, cardWidth }: RegionPreviewProps) {
-  const themeColors = useTheme();
-  const clipId = useId();
-  const [croppedUri, setCroppedUri] = useState<string | null>(null);
-  const [cropError, setCropError] = useState<string | null>(null);
-
-  // Resolve which page the region lands on + its local pixel coords.
-  // Same algorithm as RegionPreview so the two stay in lockstep.
-  const cropPlan = useMemo(() => {
-    if (region.yBottom <= region.yTop) return null;
-    if (pages.length === 0) return null;
-    let page: PageMeta = pages[0];
-    for (let i = 0; i < pages.length; i++) {
-      const p = pages[i];
-      if (
-        region.yTop >= p.yOffsetScaled &&
-        region.yTop < p.yOffsetScaled + p.pageMaxYScaled + 50
-      ) {
-        page = p;
-        break;
-      }
-      page = p;
-    }
-    // Crop the full QUAD extent, not just yTop/yBottom: a skewed band's corner
-    // Y (yLeftBottom/yRightBottom) can sit below region.yBottom (they're borrowed
-    // from the next band's top edge by the parser's no-gap tiler). Cropping only
-    // yTop..yBottom would clip the parallelogram's lower edge so the clipped
-    // thumbnail renders as a near-rectangle. Span min-top..max-bottom of all
-    // corners so the clip polygon below fits entirely inside the crop.
-    const topSpace = Math.min(
-      region.yTop,
-      region.yLeftTop ?? region.yTop,
-      region.yRightTop ?? region.yTop,
-    );
-    const bottomSpace = Math.max(
-      region.yBottom,
-      region.yLeftBottom ?? region.yBottom,
-      region.yRightBottom ?? region.yBottom,
-    );
-    const localYTop = Math.max(0, Math.floor(topSpace - page.yOffsetScaled));
-    const localYBottom = Math.min(
-      Math.ceil(bottomSpace - page.yOffsetScaled),
-      page.pageMaxYScaled,
-      page.pixelHeight,
-    );
-    const heightPx = Math.max(1, localYBottom - localYTop);
-    const pad = 20;
-    const xLeft = Math.max(0, Math.floor(page.receiptXLeftScaled - pad));
-    const xRight = Math.min(
-      page.pixelWidth,
-      Math.ceil(page.receiptXRightScaled + pad),
-    );
-    const widthPx = Math.max(1, xRight - xLeft);
-    return {
-      uri: page.uri,
-      originX: xLeft,
-      originY: localYTop,
-      width: widthPx,
-      height: heightPx,
-      // Region-space Y of the crop's top edge — the clip polygon is measured
-      // from here (NOT region.yTop, which may be below the top quad corner).
-      cropTopSpace: localYTop + page.yOffsetScaled,
-    };
-  }, [pages, region]);
-
-  useEffect(() => {
-    if (!cropPlan) return;
-    let cancelled = false;
-    // JPEG output: PNG via expo-image-manipulator v14 on iOS trips
-    // `calling the 'renderAsync' function has failed` regardless of
-    // legacy vs new context API. JPEG output works in rotatePortrait
-    // and mlkitOcr's tile crop with the same source URIs, so it's the
-    // PNG encoder path that's broken — not the source, not the crop.
-    // Quality 0.9 is fine for an admin-preview thumbnail.
-    const { uri, originX, originY, width, height } = cropPlan;
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
-      setCropError('invalid crop bounds');
-      return;
-    }
-    const cropArgs = {
-      uri,
-      originX: Math.floor(originX),
-      originY: Math.floor(originY),
-      width: Math.floor(width),
-      height: Math.floor(height),
-    };
-    devLog('BandCropImage.attempt', cropArgs);
-    ImageManipulator.manipulateAsync(
-      uri,
-      [{
-        crop: {
-          originX: cropArgs.originX,
-          originY: cropArgs.originY,
-          width: cropArgs.width,
-          height: cropArgs.height,
-        },
-      }],
-      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
-    )
-      .then((res) => {
-        devLog('BandCropImage.success', { uri, resultUri: res?.uri });
-        if (!cancelled) setCroppedUri(res.uri);
-      })
-      .catch((e) => {
-        const errMsg = e?.message ?? String(e);
-        console.warn('[BandCropImage] crop failed', { ...cropArgs, err: errMsg });
-        devLog('BandCropImage.failed', { ...cropArgs, err: errMsg });
-        if (!cancelled) setCropError(String(e?.message ?? e));
-      });
-    return () => { cancelled = true; };
-  }, [cropPlan]);
-
-  if (!cropPlan) return null;
-  const aspect = cropPlan.width / cropPlan.height;
-  const dispH = cardWidth / aspect;
-
-  // Skew clip: when the region carries per-corner Y (IKI photographed bands),
-  // clip the rectangular crop to the actual parallelogram so the tilted band
-  // doesn't show triangular slivers of the neighbouring rows. The corner Y are
-  // in merged-OCR space; offset by the band's top and scale to the card.
-  const s = cardWidth / cropPlan.width;
-  const r = region;
-  const hasQuad =
-    r.yLeftTop != null && r.yRightTop != null && r.yLeftBottom != null && r.yRightBottom != null;
-  // Measure corner Y from the crop's actual top edge (cropTopSpace), which spans
-  // the full quad — so the parallelogram lands fully inside the thumbnail.
-  const top0 = cropPlan.cropTopSpace;
-  const clipPts = hasQuad
-    ? [
-        [0, (r.yLeftTop! - top0) * s],
-        [cardWidth, (r.yRightTop! - top0) * s],
-        [cardWidth, (r.yRightBottom! - top0) * s],
-        [0, (r.yLeftBottom! - top0) * s],
-      ]
-        .map((p) => `${p[0].toFixed(1)},${p[1].toFixed(1)}`)
-        .join(" ")
-    : null;
-
-  return (
-    <View
-      style={{
-        width: cardWidth,
-        height: dispH,
-        borderRadius: 6,
-        overflow: "hidden",
-        backgroundColor: "#0001",
-      }}
-    >
-      {croppedUri && clipPts && (
-        <Svg width={cardWidth} height={dispH}>
-          <Defs>
-            <ClipPath id={clipId}>
-              <Polygon points={clipPts} />
-            </ClipPath>
-          </Defs>
-          <SvgImage
-            href={{ uri: croppedUri }}
-            x={0}
-            y={0}
-            width={cardWidth}
-            height={dispH}
-            preserveAspectRatio="none"
-            clipPath={`url(#${clipId})`}
-          />
-        </Svg>
-      )}
-      {croppedUri && !clipPts && (
-        <Image
-          source={{ uri: croppedUri }}
-          style={{ width: "100%", height: "100%" }}
-          resizeMode="stretch"
-        />
-      )}
-      {cropError && (
-        <Text style={{ fontSize: 10, color: themeColors.error, padding: 2 }} numberOfLines={5}>
-          crop failed: {cropError}
-        </Text>
-      )}
-    </View>
-  );
-}
 
 /** Spec C2 — receipt-process screen tabs. */
 type ReceiptTab = "suvestine" | "prekes" | "kvitas";
@@ -685,6 +386,12 @@ function FooterStatGrid({
       </View>
     </View>
   );
+}
+
+interface RegionPreviewProps {
+  pages: PageMeta[];
+  region: Region;
+  cardWidth: number;
 }
 
 function RegionPreview({ pages, region, cardWidth }: RegionPreviewProps) {
@@ -817,13 +524,18 @@ function buildParsedData(
   // Old receipts keep the fat shape — every reader stays backward-compatible.
   const { matchLoading: _matchLoading, ...slimHeader } = header;
   const { rawText: _footerRawText, region: _footerRegion, ...slimFooter } = footer;
+  // Never persist image:null when we have geometry. Losing the OCR coordinate-
+  // space dims forces the reopen path into a decoder-sampled re-measure that
+  // drifts every band + mask; fall back to the region/word extents so the space
+  // is always recoverable.
+  const imgDims = imageMeta ?? deriveImageDimsFromGeometry({ header, products, footer, maskBands, wordsDump });
   return {
     version: 1,
-    image: imageMeta
+    image: imgDims
       ? {
           filePath: imageFilePath,
-          width: imageMeta.width,
-          height: imageMeta.height,
+          width: imgDims.width,
+          height: imgDims.height,
         }
       : null,
     header: { ...slimHeader, rawText: redactReceiptText(header.rawText) },
@@ -857,12 +569,11 @@ function buildParsedData(
 
 export default function ProcessReceiptScreen() {
   const { t } = useTranslation();
-  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, swipeDone: swipeDoneParam, shoppingListId: shoppingListIdParam, expectedChainId: expectedChainIdParam, listMap: listMapParam } = useLocalSearchParams<{
+  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, shoppingListId: shoppingListIdParam, expectedChainId: expectedChainIdParam, listMap: listMapParam } = useLocalSearchParams<{
     uri?: string;
     uris?: string;
     receiptId?: string;
     preview?: string;
-    swipeDone?: string;
     /** Single-store list upload: the list row to link the Receipt to. */
     shoppingListId?: string;
     /** Single-store: the list's chain — gate the scan against it. */
@@ -894,9 +605,6 @@ export default function ProcessReceiptScreen() {
     ? Number(shoppingListIdParam) : null;
   const existingReceiptId = receiptIdParam ? Number(receiptIdParam) : null;
   const isExistingMode = Number.isFinite(existingReceiptId);
-  // Set to true when navigating here FROM the swipe screen — prevents the
-  // mandatory-swipe gate from immediately redirecting back to swipe.
-  const swipeDone = swipeDoneParam === '1';
 
   // `uris` (comma-separated) is used for multi-page PDF receipts where each
   // page is OCR'd separately; `uri` stays for the single-image cases.
@@ -919,7 +627,9 @@ export default function ProcessReceiptScreen() {
   const colors = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
-  const [loadingMessage, setLoadingMessage] = useState("Nuskaitomas kvitas...");
+  // Honest OCR/processing sub-step shown under the silly ProcessingLoader headline.
+  // Empty initially (the rotating headline carries the load); the OCR pipeline sets it.
+  const [loadingMessage, setLoadingMessage] = useState("");
   // Chain-match gate (list-upload flow): when the scanned receipt's chain
   // doesn't match the list's store, processReceipt parks here and awaits the
   // user's decision via chainGateResolveRef (proceed = "different store", or
@@ -931,6 +641,18 @@ export default function ProcessReceiptScreen() {
   // user picks the date printed on the receipt; capped at today so it can never
   // land a future-dated price (which would pin a wrong "latest" price).
   const [dateGate, setDateGate] = useState(false);
+  // Store-resolution shown as an on-top modal (was the separate /receipt/store-resolution
+  // route). The OCR pipeline awaits the storeResolution handoff promise; this just toggles
+  // the modal's visibility.
+  const [storeGate, setStoreGate] = useState(false);
+  // Mandatory swipes are hosted IN-PLACE as a phase of this screen (was the
+  // /swipe/queue route bounce + swipeDone round-trip). `swiping` flips the whole
+  // screen to <SwipeQueue>; `postSwipeActionRef` holds the continuation to run
+  // when the session completes (fetch comparison for a fresh scan, or re-load the
+  // receipt in existing mode). No route, no swipeDone param, no redirect guard.
+  const [swiping, setSwiping] = useState(false);
+  const [swipingReceiptId, setSwipingReceiptId] = useState<number | null>(null);
+  const postSwipeActionRef = useRef<(() => void) | null>(null);
   const dateGateResolveRef = useRef<((picked: Date | null) => void) | null>(null);
   const [dateGateTemp, setDateGateTemp] = useState<Date | null>(null); // null = empty field (no prefill)
   const [dateGateShowPicker, setDateGateShowPicker] = useState(false);
@@ -1177,28 +899,54 @@ export default function ProcessReceiptScreen() {
     };
   }, []);
 
+  // Enter the in-place mandatory-swipe phase. `after` is the continuation to run
+  // when the session finishes (or the user backs out) — typically fetch the price
+  // comparison (fresh scan) or re-load the receipt detail (existing mode).
+  const enterSwipePhase = (id: number, after: () => void) => {
+    postSwipeActionRef.current = after;
+    setSwipingReceiptId(id);
+    setSwiping(true);
+  };
+
+  // Leave the swipe phase and run whatever continuation was queued. Used by both
+  // <SwipeQueue>'s onAllDone (session complete) and onExit (user bailed).
+  const leaveSwipePhase = () => {
+    const after = postSwipeActionRef.current;
+    postSwipeActionRef.current = null;
+    setSwiping(false);
+    after?.();
+  };
+
   const loadExistingReceipt = async (id: number) => {
     try {
       setLoading(true);
       isHydratingRef.current = true;
       setLoadingMessage(t('receiptProcess.loading'));
+      // WARM reopen: this screen instance can be reused with imageDims/imageUri still
+      // holding a PREVIOUS image (after a fresh scan, or a cached nav stack). The mask
+      // overlay scales by imageDims, but setImageDims only fires later in the async
+      // block below — so a stale imageDims would project THIS receipt's masks at the
+      // wrong scale for ~100-300 ms (the stray black band mid-receipt the user saw).
+      // Null the image state up-front so ReceiptPhotoView gates to its fallback until
+      // the async sets the correct, current dims — i.e. behave like a cold start.
+      setImageDims(null);
+      setImageUri(null);
+      setPageMetas([]);
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${id}`, {
         timeoutMs: TIMEOUT_STANDARD_MS,
       });
       const receipt = await res.json();
 
-      // If the receipt still has pending mandatory swipes, redirect to the
-      // swipe screen unless we just came from it (swipeDone=1). The swipe
-      // screen sets swipeDone when it navigates here so we don't loop.
+      // If the receipt still has pending mandatory swipes, host the swipe phase
+      // in-place. When the session finishes we re-load THIS receipt — now with the
+      // swipes completed server-side, so pendingSwipes is false and we fall through
+      // to render the detail + comparison.
       const pendingSwipes =
-        !swipeDone &&
         (receipt.mandatorySwipesRequired ?? 0) > 0 &&
         (receipt.mandatorySwipesCompleted ?? 0) < (receipt.mandatorySwipesRequired ?? 0);
       if (pendingSwipes) {
-        const remaining =
-          (receipt.mandatorySwipesRequired ?? 0) -
-          (receipt.mandatorySwipesCompleted ?? 0);
-        router.replace({ pathname: "/swipe/queue", params: { receiptId: String(id) } } as any);
+        setLoading(false);
+        enterSwipePhase(id, () => loadExistingReceipt(id));
         return;
       }
 
@@ -1292,6 +1040,10 @@ export default function ProcessReceiptScreen() {
           pricePerUnit: p.pricePerUnit == null ? null : Number(p.pricePerUnit),
           rawLines: Array.isArray(p.rawLines) ? p.rawLines : [],
           region: p.region ?? { yTop: 0, yBottom: 0, xLeft: 0, xRight: 0 },
+          itemConfidence:
+            p.itemConfidence && typeof p.itemConfidence.band === "string"
+              ? (p.itemConfidence as ItemConfidence)
+              : null,
         })),
       );
 
@@ -1403,11 +1155,25 @@ export default function ProcessReceiptScreen() {
             }
             devLog('loadExistingReceipt.localUri', { id, localUri });
 
-            const parsedWidth = Number(parsed?.image?.width);
-            const parsedHeight = Number(parsed?.image?.height);
-            const hasParsedDims =
+            let parsedWidth = Number(parsed?.image?.width);
+            let parsedHeight = Number(parsed?.image?.height);
+            let hasParsedDims =
               Number.isFinite(parsedWidth) && Number.isFinite(parsedHeight) &&
               parsedWidth > 0 && parsedHeight > 0;
+            if (!hasParsedDims) {
+              // Legacy receipt saved with image:null — the OCR coordinate space
+              // wasn't persisted. Reconstruct it from the stored region/word
+              // extents so every band scales by a STABLE factor, instead of the
+              // decoder-sampled re-measure below (which drifts and shifts on each
+              // reopen).
+              const derived = deriveImageDimsFromGeometry(parsed);
+              if (derived) {
+                parsedWidth = derived.width;
+                parsedHeight = derived.height;
+                hasParsedDims = true;
+                devLog('loadExistingReceipt.derivedDims', { id, derived });
+              }
+            }
 
             // Re-project the stored image into the parsed (portrait/OCR) coordinate
             // space so bands and per-band crops line up. ROTATE the stored landscape
@@ -1495,7 +1261,7 @@ export default function ProcessReceiptScreen() {
   // this, StrictMode's dev double-mount issues two parallel GETs for the
   // same receipt id (and runs hydration twice, which racing against the
   // setTimeout(0) that clears isHydratingRef can slip a stray save through).
-  const hasLoadedExistingRef = useRef(false);
+  const hasLoadedExistingRef = useRef<number | null>(null);
 
   // Keep refs in sync with state
   useEffect(() => {
@@ -1540,8 +1306,11 @@ export default function ProcessReceiptScreen() {
   // Kick off OCR when uri is provided
   useEffect(() => {
     if (isExistingMode && existingReceiptId) {
-      if (hasLoadedExistingRef.current) return; // StrictMode dev double-mount
-      hasLoadedExistingRef.current = true;
+      // Per-id guard: block only a StrictMode dev double-mount of the SAME receipt.
+      // The boolean version never reset, so navigating receipt A→B in a reused screen
+      // instance never reloaded B — it kept A's stale data/masks/imageDims.
+      if (hasLoadedExistingRef.current === existingReceiptId) return;
+      hasLoadedExistingRef.current = existingReceiptId;
       loadExistingReceipt(existingReceiptId);
       return;
     }
@@ -1612,23 +1381,52 @@ export default function ProcessReceiptScreen() {
             }
           }
           if (cancelled) return;
-          setProducts(prev => prev.map(p => {
-            if (!Array.isArray(p.altMatches) || p.altMatches.length === 0) return p;
-            let touched = false;
-            const nextAm: ProductMatchOption[] = p.altMatches.map(am => {
-              const sp = Number(am?.storeProductId);
-              if (!Number.isFinite(sp) || sp <= 0) return am;
-              const live = liveBySpId.get(sp);
-              if (!live || live.categoryId === null) return am;
-              if (
-                am.categoryId === live.categoryId
-                && am.categoryName === live.categoryName
-                && am.categoryL2Name === live.categoryL2Name
-              ) return am;
-              touched = true;
-              return { ...am, categoryId: live.categoryId, categoryName: live.categoryName, categoryL2Name: live.categoryL2Name };
-            });
-            return touched ? { ...p, altMatches: nextAm } : p;
+          setProducts(prev => prev.map((p, i) => {
+            // (1) Patch category fields onto altMatches by spId (existing).
+            let nextAm: ProductMatchOption[] = p.altMatches;
+            if (Array.isArray(p.altMatches) && p.altMatches.length > 0) {
+              let touched = false;
+              const mapped: ProductMatchOption[] = p.altMatches.map(am => {
+                const sp = Number(am?.storeProductId);
+                if (!Number.isFinite(sp) || sp <= 0) return am;
+                const live = liveBySpId.get(sp);
+                if (!live || live.categoryId === null) return am;
+                if (
+                  am.categoryId === live.categoryId
+                  && am.categoryName === live.categoryName
+                  && am.categoryL2Name === live.categoryL2Name
+                ) return am;
+                touched = true;
+                return { ...am, categoryId: live.categoryId, categoryName: live.categoryName, categoryL2Name: live.categoryL2Name };
+              });
+              if (touched) nextAm = mapped;
+            }
+            // (2) Re-sync the PRIMARY match fields when the server changed them
+            // out from under us — a swipe "different" demotion re-points the line
+            // to a runner-up or clears it to OCR. Keyed by INDEX (a demoted line
+            // has storeProductId=null, so an spId key can't find it).
+            const lp = liveProducts[i];
+            const liveSpId = lp && Number.isFinite(Number(lp.storeProductId)) ? Number(lp.storeProductId) : null;
+            const demoted = !!lp && (
+              liveSpId !== (p.storeProductId ?? null)
+              || !!lp.matchConfirmed !== !!p.matchConfirmed
+            );
+            if (nextAm === p.altMatches && !demoted) return p;
+            return {
+              ...p,
+              altMatches: nextAm,
+              ...(demoted ? {
+                storeProductId: liveSpId,
+                matchedName: lp.matchedName ?? null,
+                storeProductImageUrl: lp.storeProductImageUrl ?? null,
+                matchConfidence: typeof lp.matchConfidence === 'number' ? lp.matchConfidence : null,
+                matchConfirmed: !!lp.matchConfirmed,
+                priceVerified: !!lp.priceVerified,
+                itemConfidence: lp.itemConfidence && typeof lp.itemConfidence.band === 'string'
+                  ? (lp.itemConfidence as ItemConfidence)
+                  : null,
+              } : {}),
+            };
           }));
         } catch {
           /* swallow — best-effort refresh */
@@ -1830,10 +1628,13 @@ export default function ProcessReceiptScreen() {
           .catch(() => {});
       }
       if (data.mandatorySwipesRequired > 0) {
-        // User must swipe before seeing the price comparison — navigate to the
-        // swipe screen now. Comparison will be fetched when they return to the
-        // receipt view in existing mode after completing the swipes.
-        router.replace({ pathname: "/swipe/queue", params: { receiptId: String(data.id) } } as any);
+        // User must swipe before seeing the price comparison — host the swipe
+        // phase in-place. When the session finishes we fetch the comparison and
+        // flip straight to the detail (no route bounce, no new screen instance).
+        enterSwipePhase(data.id, () => {
+          setComparisonStatus("pending");
+          fetchComparison(data.id);
+        });
       } else {
         setComparisonStatus("pending");
         fetchComparison(data.id);
@@ -1863,6 +1664,16 @@ export default function ProcessReceiptScreen() {
 
   // Step 2: MinIO upload — runs in parallel with POST, PATCH filePath once done.
   const runUpload = async () => {
+    // HARD GUARD: only ever burn+upload on a FRESH SCAN. In existing mode the
+    // image is already uploaded (and already redacted). Re-running here re-burns
+    // the masks onto the already-burned MinIO image — the "random black band on
+    // reopen". The imageFilePath guard below was insufficient because
+    // parsed.image.filePath is frozen at POST time (still null then; the real
+    // filePath is PATCHed to a separate column AFTER the upload), so on reopen
+    // imageFilePath stays null and the burn leaked through. The orphan case
+    // (filePath === "") only surfaces an error badge — it never re-uploads — so
+    // there is no legitimate existing-mode upload to preserve.
+    if (isExistingMode) return;
     if (!imageUri || !receiptId) return;
     setUploadStatus("pending");
     setUploadErr(null);
@@ -1892,15 +1703,19 @@ export default function ProcessReceiptScreen() {
       // redaction abort with "invalid image dims 0x0" — esp. on the multi-segment
       // path. Measure the actual upload image instead of trusting that state; the
       // mask bands (filtered to this page's height) map onto these pixels.
+      // This burn ONLY runs on a fresh scan (runUpload bails in existing mode),
+      // so imageDims is the OCR pixel space the mask bands were detected in —
+      // burn the bands at percent of those same dims.
       let uploadW = imageDims?.width ?? 0;
       let uploadH = imageDims?.height ?? 0;
       if (!(uploadW > 0) || !(uploadH > 0)) {
         try {
-          const measured = await new Promise<{ width: number; height: number }>((resolve, reject) =>
-            Image.getSize(imageUri, (width, height) => resolve({ width, height }), reject),
-          );
-          uploadW = measured.width;
-          uploadH = measured.height;
+          // TRUE decoder pixels via ImageManipulator — NOT Image.getSize, which
+          // BitmapFactory down-samples tall images to (an undersized denominator
+          // would misposition the burned bands).
+          const info = await ImageManipulator.manipulateAsync(imageUri, []);
+          if (!(uploadW > 0)) uploadW = info.width;
+          if (!(uploadH > 0)) uploadH = info.height;
         } catch { /* leave 0 — buildRedactedUploadUri fail-closes if bands exist */ }
       }
       let uploadUri = imageUri;
@@ -1956,10 +1771,11 @@ export default function ProcessReceiptScreen() {
 
   useEffect(() => {
     if (isPreviewMode) return; // preview: skip MinIO upload + PATCH
+    if (isExistingMode) return; // never re-burn/upload an already-saved receipt
     if (!imageUri || !receiptId || imageFilePath) return;
     if (uploadStatus === "pending" || uploadStatus === "error") return;
     runUpload();
-  }, [imageUri, receiptId, imageFilePath, isPreviewMode]);
+  }, [imageUri, receiptId, imageFilePath, isPreviewMode, isExistingMode]);
 
   const retryUpload = () => {
     runUpload();
@@ -2015,6 +1831,42 @@ export default function ProcessReceiptScreen() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
     } catch (e: any) {
       console.warn("Issue report failed:", e?.message ?? e);
+      Alert.alert(t('receiptProcess.errorSendTitle'), t('receiptProcess.errorSendBody'));
+    }
+  };
+
+  /**
+   * Direct "this isn't the right product" rejection of a line's match. The server
+   * demotes the line — re-points it to a same-chain runner-up (≥ auto-apply) or
+   * clears it to the OCR name with a userRejected veto — and returns the mutated
+   * line, which we patch into this row in place (no reload needed).
+   */
+  const handleRejectMatch = async (lineIdx: number) => {
+    if (!receiptId) return;
+    try {
+      const res = await fetch(
+        `${API_BASE_URL}/api/receipts/${receiptId}/lines/${lineIdx}/reject-match`,
+        { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json().catch(() => null);
+      const live = data?.line;
+      if (live) {
+        setProducts(prev => prev.map((p, i) => i === lineIdx ? {
+          ...p,
+          storeProductId: live.storeProductId ?? null,
+          matchedName: live.matchedName ?? null,
+          storeProductImageUrl: live.storeProductImageUrl ?? null,
+          matchConfidence: typeof live.matchConfidence === 'number' ? live.matchConfidence : null,
+          matchConfirmed: !!live.matchConfirmed,
+          priceVerified: !!live.priceVerified,
+          itemConfidence: live.itemConfidence && typeof live.itemConfidence.band === 'string'
+            ? (live.itemConfidence as ItemConfidence)
+            : null,
+        } : p));
+      }
+    } catch (e: any) {
+      console.warn("Reject match failed:", e?.message ?? e);
       Alert.alert(t('receiptProcess.errorSendTitle'), t('receiptProcess.errorSendBody'));
     }
   };
@@ -2473,7 +2325,19 @@ export default function ProcessReceiptScreen() {
       console.log(
         `[MASK] card-ish OCR lines (${cardish.length}/${allLines.length} total):`,
       );
-      for (const l of cardish) console.log(`   y${Math.round(l.yTop)} » ${JSON.stringify(l.text)}`);
+      for (const l of cardish) {
+        console.log(`   y${Math.round(l.yTop)} » ${JSON.stringify(l.text)}`);
+        // Per-word boxes — needed to verify the cashier mask starts at the cashier
+        // value and never covers the Kvito Nr (which shares the row).
+        if (l.words?.length) {
+          console.log(
+            `      words: ${l.words.map((w: any) => `${JSON.stringify(w.text)}[${Math.round(w.xLeft)}-${Math.round(w.xRight)}]`).join(' ')}`,
+          );
+        }
+      }
+      for (const b of detectedMaskBands.filter((b) => b.kind === 'cashier')) {
+        console.log(`[MASK] cashier band x${Math.round(b.xLeft)}-${Math.round(b.xRight)} y${Math.round(b.yTop)}-${Math.round(b.yBottom)}`);
+      }
       setMaskBands(detectedMaskBands);
 
       const mergedLines: LineWithFrame[] = [];
@@ -2795,8 +2659,14 @@ export default function ProcessReceiptScreen() {
   const promptStoreResolution = async (chainId: number, chainName: string, ocrAddress: string | null, rawText?: string | null) => {
     const prefill = ocrAddress || pickAddressFromRawText(rawText);
     const pending = requestStoreResolution(chainId, chainName, prefill);
-    router.push("/receipt/store-resolution" as any);
-    return await pending;
+    // Drop the OCR loader early-return so the modal mounts (mirrors the date gate), then
+    // show the store-resolution modal on top and await the user's pick.
+    setLoading(false);
+    setStoreGate(true);
+    const result = await pending;
+    setStoreGate(false);
+    if (result) setLoading(true); // resume the processing indicator after a pick
+    return result;
   };
 
   const applyRimiResult = async (
@@ -2862,7 +2732,7 @@ export default function ProcessReceiptScreen() {
       regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
     });
 
-    const AUTO_APPLY_THRESHOLD = 0.85;
+    const AUTO_APPLY_THRESHOLD = RECOGNITION.match.autoApplyThreshold;
 
     // Initialise the loading-overlay progress counter. Each per-product
     // match promise below bumps `done` on completion so the user sees
@@ -2902,11 +2772,14 @@ export default function ProcessReceiptScreen() {
       }
 
       const matchName = strippedName || rp.name;
+      // by-WEIGHT line (sold per kg) → matcher skips packaged SPs (and vice-versa).
+      const wParam = rp.unit === 'kg' ? '1' : null;
 
       try {
         const params = new URLSearchParams({
           chainId: String(chainId),
           name: matchName,
+          ...(wParam ? { weighable: wParam } : {}),
         });
         const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
@@ -3027,7 +2900,7 @@ export default function ProcessReceiptScreen() {
       regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
     });
 
-    const AUTO_APPLY_THRESHOLD = 0.85;
+    const AUTO_APPLY_THRESHOLD = RECOGNITION.match.autoApplyThreshold;
 
     setMatchProgress({ done: 0, total: mProducts.length });
 
@@ -3038,6 +2911,8 @@ export default function ProcessReceiptScreen() {
       // were extracted from the raw name before cleaning.
       const { strippedName } = parseProductName(mp.name);
       const matchName = strippedName || mp.name;
+      // by-WEIGHT line (sold per kg) → matcher skips packaged SPs (and vice-versa).
+      const wParam = mp.unit === 'kg' ? '1' : null;
       const resolvedAmount = mp.parsedAmount ?? null;
       const resolvedUnit = mp.parsedUnit ?? null;
 
@@ -3045,6 +2920,7 @@ export default function ProcessReceiptScreen() {
         const params = new URLSearchParams({
           chainId: String(chainId),
           name: matchName,
+          ...(wParam ? { weighable: wParam } : {}),
         });
         const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
@@ -3174,7 +3050,7 @@ export default function ProcessReceiptScreen() {
       regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
     });
 
-    const AUTO_APPLY_THRESHOLD = 0.85;
+    const AUTO_APPLY_THRESHOLD = RECOGNITION.match.autoApplyThreshold;
 
     setMatchProgress({ done: 0, total: nProducts.length });
 
@@ -3183,11 +3059,14 @@ export default function ProcessReceiptScreen() {
 
       const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(np.name);
       const matchName = strippedName || np.name;
+      // by-WEIGHT line (sold per kg) → matcher skips packaged SPs (and vice-versa).
+      const wParam = np.unit === 'kg' ? '1' : null;
 
       try {
         const params = new URLSearchParams({
           chainId: String(chainId),
           name: matchName,
+          ...(wParam ? { weighable: wParam } : {}),
         });
         const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
@@ -3303,7 +3182,7 @@ export default function ProcessReceiptScreen() {
       regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
     });
 
-    const AUTO_APPLY_THRESHOLD = 0.85;
+    const AUTO_APPLY_THRESHOLD = RECOGNITION.match.autoApplyThreshold;
 
     setMatchProgress({ done: 0, total: lProducts.length });
 
@@ -3312,11 +3191,14 @@ export default function ProcessReceiptScreen() {
 
       const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(lp.name);
       const matchName = strippedName || lp.name;
+      // by-WEIGHT line (sold per kg) → matcher skips packaged SPs (and vice-versa).
+      const wParam = lp.unit === 'kg' ? '1' : null;
 
       try {
         const params = new URLSearchParams({
           chainId: String(chainId),
           name: matchName,
+          ...(wParam ? { weighable: wParam } : {}),
         });
         const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
@@ -3443,7 +3325,7 @@ export default function ProcessReceiptScreen() {
       regionsVersion: REGIONS_VERSION,
     });
 
-    const AUTO_APPLY_THRESHOLD = 0.85;
+    const AUTO_APPLY_THRESHOLD = RECOGNITION.match.autoApplyThreshold;
 
     setMatchProgress({ done: 0, total: iProducts.length });
 
@@ -3452,11 +3334,14 @@ export default function ProcessReceiptScreen() {
 
       const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(ip.name);
       const matchName = strippedName || ip.name;
+      // by-WEIGHT line (sold per kg) → matcher skips packaged SPs (and vice-versa).
+      const wParam = ip.unit === 'kg' ? '1' : null;
 
       try {
         const params = new URLSearchParams({
           chainId: String(chainId),
           name: matchName,
+          ...(wParam ? { weighable: wParam } : {}),
         });
         const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
@@ -3691,50 +3576,43 @@ export default function ProcessReceiptScreen() {
     );
   });
 
+  // Mandatory-swipe phase: the swipe cards ARE this screen for the duration. When
+  // the session finishes (onAllDone) or the user backs out (onExit) we run the
+  // queued continuation and flip back to the detail render below. <SwipeQueue>
+  // owns its own header, loader, crops and per-receipt advance internally.
+  if (swiping && swipingReceiptId != null) {
+    return (
+      <SwipeQueue
+        receiptIds={[String(swipingReceiptId)]}
+        voluntary={false}
+        renderHeader
+        onAllDone={leaveSwipePhase}
+        onExit={leaveSwipePhase}
+      />
+    );
+  }
+
   if (loading) {
-    const pct =
-      matchProgress && matchProgress.total > 0
-        ? Math.min(100, Math.round((matchProgress.done / matchProgress.total) * 100))
-        : 0;
+    // ONE unified loader — identical to the POST/upload overlay below and the swipe-queue
+    // loader. The headline reflects the CURRENT action (reading vs matching); the sub-step
+    // carries the live match counter when matching.
+    const matching = !!(matchProgress && matchProgress.total > 0);
     return (
       <View style={styles.loadingContainer}>
-        <MaterialProgress size={52} color={colors.primary} />
-        <Text style={styles.loadingText}>{loadingMessage}</Text>
-        {matchProgress && matchProgress.total > 0 && (
-          <View style={{ marginTop: 12, alignItems: "center", gap: 8 }}>
-            <Text style={{ color: colors.textMuted, fontSize: 13 }}>
-              {t('receiptProcess.matchProgress', { done: matchProgress.done, total: matchProgress.total })}
-            </Text>
-            <View
-              style={{
-                width: 220,
-                height: 4,
-                borderRadius: 2,
-                backgroundColor: colors.surfaceMuted ?? "#eee",
-                overflow: "hidden",
-              }}
-            >
-              <View
-                style={{
-                  width: `${pct}%`,
-                  height: "100%",
-                  backgroundColor: colors.primary,
-                }}
-              />
-            </View>
-          </View>
-        )}
+        <ProcessingLoader
+          stage={matching ? "matching" : "scanning"}
+          subStep={matching ? t('receiptProcess.matchProgress', { done: matchProgress!.done, total: matchProgress!.total }) : null}
+        />
       </View>
     );
   }
 
-  const processingStep = postStatus === "pending"
-    ? t('receiptProcess.loadingSending')
+  // Which action the POST/upload/comparison overlay reflects right now.
+  const processingStage: LoadingStage = postStatus === "pending"
+    ? "sending"
     : uploadStatus === "pending"
-    ? t('receiptProcess.loadingPhoto')
-    : comparisonStatus === "pending"
-    ? t('receiptProcess.loadingComparison')
-    : null;
+    ? "uploading"
+    : "comparing";
 
   return (
     <>
@@ -3916,6 +3794,18 @@ export default function ProcessReceiptScreen() {
                 : isUnrecognised
                 ? "S4"
                 : "S3";
+              // Per-line confidence band (DISPLAY-ONLY). When CONFIDENCE_BAND_DISPLAY
+              // is on AND the server scored this line, the band — not the legacy
+              // matchConfirmed flag — decides whether we trust the SP name/image
+              // (S1) or fall back to the OCR text with a review nudge (S2) / alone
+              // (S3). Off by default until thresholds are calibrated, so showSpInfo
+              // stays bit-identical to the old `state === "S1"`. The `state`-driven
+              // borders/placeholders/price below are unchanged (parse quality, not
+              // identity confidence).
+              const ic = product.itemConfidence ?? null;
+              const useBand = CONFIDENCE_BAND_DISPLAY && ic != null;
+              const showSpInfo = useBand ? ic!.band === "S1" : state === "S1";
+              const showReviewBadge = useBand && ic!.band === "S2";
               const totalPrice =
                 product.promoPrice != null && product.promoPrice < product.price
                   ? product.promoPrice * product.quantity
@@ -3963,7 +3853,7 @@ export default function ProcessReceiptScreen() {
                     </View>
                   )}
                 <View style={styles.productRow}>
-                  {state === "S1" && product.storeProductImageUrl ? (
+                  {showSpInfo && product.storeProductImageUrl ? (
                     <Image
                       source={{ uri: product.storeProductImageUrl }}
                       style={styles.productThumb}
@@ -3984,7 +3874,7 @@ export default function ProcessReceiptScreen() {
                         colour ("matched"), partial / unrecognised stay
                         textPrimary. Inline state icons removed — the
                         row's border + background communicate state now. */}
-                    {state === "S1" && product.matchedName ? (
+                    {showSpInfo && product.matchedName ? (
                       <Text style={styles.matchedName} numberOfLines={2}>
                         {product.matchedName}
                       </Text>
@@ -3996,6 +3886,17 @@ export default function ProcessReceiptScreen() {
                     <Text style={styles.productQuantity}>
                       {formatAmountLabel(product)}
                     </Text>
+                    {/* S2 review nudge (user-facing, behind the flag): OCR name is
+                        shown but the matched SP wants a human glance. */}
+                    {showReviewBadge && ic && (
+                      <ConfidenceBadge ic={ic} colors={colors} variant="review" />
+                    )}
+                    {/* Dev-only band readout — always on in dev builds so we can
+                        watch the score on-device while calibrating. Stripped from
+                        release bundles by __DEV__. */}
+                    {__DEV__ && ic && (
+                      <ConfidenceBadge ic={ic} colors={colors} variant="dev" />
+                    )}
                   </View>
                   <View style={styles.productPriceCol}>
                     {state === "S4" ? (
@@ -4140,6 +4041,10 @@ export default function ProcessReceiptScreen() {
                   : []
               }
               maskRegions={maskBandsClamped}
+              // Fresh scan: draw the overlay over the un-redacted camera image. Saved
+              // receipt: the displayed image is already burned-in, so skip the overlay
+              // entirely — that's the warm-reopen "stray black band" the user hit.
+              drawMasks={!isExistingMode}
             />
           </>
         )}
@@ -4149,11 +4054,7 @@ export default function ProcessReceiptScreen() {
       {isProcessing && (
         <View style={styles.processingOverlay} pointerEvents="auto">
           <View style={styles.processingCard}>
-            <MaterialProgress size={52} color={colors.primary} />
-            <Text style={styles.processingTitle}>Kvitas apdorojamas</Text>
-            {!!processingStep && (
-              <Text style={styles.processingStep}>{processingStep}</Text>
-            )}
+            <ProcessingLoader stage={processingStage} />
           </View>
         </View>
       )}
@@ -4209,6 +4110,27 @@ export default function ProcessReceiptScreen() {
                       <Ionicons name="flag-outline" size={20} color={colors.textPrimary} />
                       <Text style={styles.sheetItemText}>Neteisingi duomenys</Text>
                     </TouchableOpacity>
+                    {!!target.storeProductId && (
+                      <TouchableOpacity
+                        style={styles.sheetItem}
+                        onPress={() => {
+                          const idx = menuOpenForIndex;
+                          setMenuOpenForIndex(null);
+                          if (idx === null) return;
+                          Alert.alert(
+                            'Netinkamas produktas?',
+                            'Susiejimas su šiuo produktu bus pašalintas.',
+                            [
+                              { text: t('common.cancel'), style: 'cancel' },
+                              { text: 'Pašalinti', style: 'destructive', onPress: () => handleRejectMatch(idx) },
+                            ],
+                          );
+                        }}
+                      >
+                        <Ionicons name="close-circle-outline" size={20} color={colors.textPrimary} />
+                        <Text style={styles.sheetItemText}>Netinkamas produktas</Text>
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                       style={[styles.sheetItem, styles.sheetCancel]}
                       onPress={() => setMenuOpenForIndex(null)}
@@ -4311,6 +4233,17 @@ export default function ProcessReceiptScreen() {
             </TouchableOpacity>
           </View>
         </View>
+      </Modal>
+
+      {/* Store resolution (chain recognised, store not): a full-screen map-pick modal on
+          top of the loader. Replaces the old /receipt/store-resolution route. */}
+      <Modal
+        visible={storeGate}
+        animationType="slide"
+        presentationStyle="fullScreen"
+        onRequestClose={() => completeStoreResolution(null)}
+      >
+        <StoreResolutionOverlay />
       </Modal>
 
       {/* Manual date entry: receipt readable (receiptNo + time) but DATE unreadable. */}

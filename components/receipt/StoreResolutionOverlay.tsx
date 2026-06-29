@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import MapView, { Marker, type Region } from 'react-native-maps';
-import { Stack, useRouter } from 'expo-router';
 import { useTranslation } from 'react-i18next';
-import { useTheme, spacing, radius, typography, type AppTheme } from '../../constants/theme';
-import { MapPickerScaffold } from '../../components/map/MapPickerScaffold';
-import { ChainLogoChip } from '../../components/ChainLogoChip';
+import { useTheme, spacing, typography, type AppTheme } from '../../constants/theme';
+import { MapPickerScaffold } from '../map/MapPickerScaffold';
+import { ChainLogoChip } from '../ChainLogoChip';
 import { chainPinImage } from '../../utils/chainLogoAssets';
 import { chainBrandName } from '../../utils/chainBrandName';
 import { geocodeAddress } from '../../utils/nominatim';
@@ -21,23 +21,20 @@ interface ChainStore {
     longitude: number;
 }
 
-// Wide span for the initial GPS/Vilnius fallback (no address yet); CLOSE_DELTA
-// is the tight zoom we snap to once an actual address geocodes, so the user
-// lands right on the cluster of chain pins around it rather than a city view.
 const DELTA = 0.05;
 const CLOSE_DELTA = 0.008;
 
 /**
- * Recoverable `store_unrecognized` fallback: the chain is known (so its logo is
- * shown, fixed) but the store wasn't matched. The user searches/zooms the map
- * and taps one of the chain's store pins; Confirm hands the chosen store back
- * to the receipt pipeline (via storeResolution handoff) which then continues.
+ * Recoverable `store_unrecognized` fallback, as an in-flow MODAL overlay (was the
+ * separate `/receipt/store-resolution` route). The chain is known (logo shown, fixed)
+ * but the store wasn't matched. The user searches/zooms the map and taps one of the
+ * chain's pins; Confirm (or close/dismiss) hands the result back to the awaiting receipt
+ * pipeline via the storeResolution handoff (`completeStoreResolution`, which is idempotent).
  */
-export default function StoreResolutionScreen() {
+export function StoreResolutionOverlay() {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const router = useRouter();
     const mapRef = useRef<MapView>(null);
 
     const req = useMemo(() => getStoreResolutionRequest(), []);
@@ -46,11 +43,10 @@ export default function StoreResolutionScreen() {
     const [searchText, setSearchText] = useState(req?.ocrAddress ?? '');
     const [searching, setSearching] = useState(false);
     const [searchError, setSearchError] = useState<string | null>(null);
-    const completedRef = useRef(false);
 
     // Fetch the chain's stores + centre the map on the OCR address (else GPS/Vilnius).
     useEffect(() => {
-        if (!req) { router.back(); return; }
+        if (!req) { completeStoreResolution(null); return; }
         let cancelled = false;
         (async () => {
             try {
@@ -84,11 +80,11 @@ export default function StoreResolutionScreen() {
             }
         })();
         return () => { cancelled = true; };
-    }, [req, router]);
+    }, [req]);
 
-    // If the screen is dismissed (back) without confirming, cancel the handoff
-    // so the awaiting pipeline doesn't hang.
-    useEffect(() => () => { if (!completedRef.current) completeStoreResolution(null); }, []);
+    // Dismissed without confirming → cancel the handoff so the pipeline doesn't hang.
+    // completeStoreResolution is idempotent, so this is a safe backstop after Confirm too.
+    useEffect(() => () => { completeStoreResolution(null); }, []);
 
     const onSearch = useCallback(async () => {
         const q = searchText.trim();
@@ -107,10 +103,8 @@ export default function StoreResolutionScreen() {
     const onConfirm = useCallback(() => {
         const s = stores.find((x) => x.id === selectedId);
         if (!s) return;
-        completedRef.current = true;
         completeStoreResolution({ storeId: s.id, storeName: s.name, storeAddress: s.address });
-        router.back();
-    }, [stores, selectedId, router]);
+    }, [stores, selectedId]);
 
     const initialRegion: Region = {
         latitude: VILNIUS_FALLBACK.lat,
@@ -123,14 +117,12 @@ export default function StoreResolutionScreen() {
 
     return (
         <View style={styles.root}>
-            <Stack.Screen
-                options={{
-                    title: t('storeResolution.title'),
-                    headerTintColor: colors.primary,
-                    headerStyle: { backgroundColor: colors.cardBackground },
-                    headerShadowVisible: false,
-                }}
-            />
+            <View style={styles.header}>
+                <Text style={styles.headerTitle} numberOfLines={1}>{t('storeResolution.title')}</Text>
+                <TouchableOpacity onPress={() => completeStoreResolution(null)} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                    <Ionicons name="close" size={26} color={colors.textMuted} />
+                </TouchableOpacity>
+            </View>
             {/* Recognised chain — shown, NOT changeable. */}
             <View style={styles.chainBar}>
                 <ChainLogoChip chainId={req.chainId} name={req.chainName} size={32} />
@@ -153,8 +145,6 @@ export default function StoreResolutionScreen() {
                 onConfirm={onConfirm}
                 mapChildren={stores.map((s) => {
                     const sel = s.id === selectedId;
-                    // Key includes selection so the native marker remounts with the
-                    // bigger pink-ringed selected pin image on tap (Android-safe).
                     return (
                         <Marker
                             key={`${s.id}-${sel ? 'sel' : ''}`}
@@ -174,6 +164,15 @@ export default function StoreResolutionScreen() {
 const makeStyles = (c: AppTheme) =>
     StyleSheet.create({
         root: { flex: 1, backgroundColor: c.pageBackground },
+        header: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingHorizontal: spacing.lg,
+            paddingVertical: spacing.md,
+            backgroundColor: c.cardBackground,
+        },
+        headerTitle: { ...typography.bodyStrong, color: c.textPrimary, flex: 1 },
         chainBar: {
             flexDirection: 'row',
             alignItems: 'center',

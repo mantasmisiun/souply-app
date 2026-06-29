@@ -111,6 +111,14 @@ export default {
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       package: BUNDLE_ID,
+      // Android Maps SDK key — set via Expo's native android config because
+      // react-native-maps 1.20.x ships no config plugin (free key: Google Cloud
+      // Console → enable "Maps SDK for Android" → GOOGLE_MAPS_API_KEY_ANDROID).
+      config: {
+        googleMaps: {
+          apiKey: process.env.GOOGLE_MAPS_API_KEY_ANDROID || '',
+        },
+      },
       // Precise + approximate location for accurate nearest-store results and
       // map centering. FINE requires a Play Console "Location permissions"
       // declaration + prominent in-app disclosure (handled at submission).
@@ -202,15 +210,9 @@ export default {
           },
         },
       ],
-      [
-        'react-native-maps',
-        {
-          // Android requires a Maps SDK API key (free, Google Cloud Console →
-          // enable "Maps SDK for Android" → create key → set GOOGLE_MAPS_API_KEY_ANDROID).
-          // iOS uses Apple Maps by default — no key needed.
-          androidGoogleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY_ANDROID || '',
-        },
-      ],
+      // NOTE: react-native-maps 1.20.x (pinned for new-arch interop — 1.21+ broke Android
+      // marker/tile rendering) ships NO Expo config plugin, so the Android Maps SDK key is
+      // set via `android.config.googleMaps.apiKey` below instead of a plugin entry here.
       [
         'expo-share-intent',
         {

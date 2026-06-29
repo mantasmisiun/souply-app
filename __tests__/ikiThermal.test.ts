@@ -846,6 +846,50 @@ describe('IKI column engine — row reconstruction from words', () => {
         words,
     });
 
+    test('receipt-116: a GARBLED "PVM mokėtojo kodas" header does NOT fold into product 1', () => {
+        // OCR garbled the VAT line to "Py meketrjo kadas Li101937219" (kodas→kadas, LT→Li).
+        // Before the fuzzy fix, pStart stayed 0 and the store name / address / PVM lines
+        // all fused into products[0].name, and a product line was mis-picked as the address.
+        const lines: IkiLine[] = [
+            wl('IKI Lietuva, UA8', 286, [word('IKI', 320, 374, 286), word('Lietuva,', 388, 543, 286), word('UA8', 576, 635, 286)]),
+            wl('rdinn 9. 2-2. šiaul iai', 329, [word('rdinn', 237, 365, 329), word('9.', 404, 430, 329), word('2-2.', 453, 523, 329), word('šiaul', 556, 651, 329), word('iai', 666, 713, 329)]),
+            wl('Py meketrjo kadas Li101937219', 369, [word('Py', 169, 206, 369), word('meketrjo', 245, 410, 369), word('kadas', 431, 533, 369), word('Li101937219', 556, 784, 369)]),
+            wl('SKANĖ JA AYŽIA 9iMall, 8', 447, [word('SKANĖ', 52, 146, 447), word('JA', 150, 189, 447), word('AYŽIA', 219, 312, 447), word('9iMall,', 347, 503, 447), word('8', 536, 553, 447)]),
+            wl('3. 29 A', 451, [word('3.', 789, 815, 451), word('29', 829, 867, 451), word('A', 890, 907, 451)]),
+            wl('NAMINĮS 2,5- PIENAS', 606, [word('NAMINĮS', 35, 179, 606), word('2,5-', 202, 290, 606), word('PIENAS', 301, 424, 606)]),
+            wl('1, 49 A', 611, [word('1,', 791, 814, 611), word('49', 826, 867, 611), word('A', 888, 909, 611)]),
+        ];
+        const { products } = parseIkiReceipt(lines);
+        // No product name may carry the header text (store name / VAT line / address).
+        for (const p of products) {
+            expect(p.name).not.toMatch(/Lietuva|k[oa]das|PVM|rdinn|šiaul/i);
+        }
+        // The real first product (the ryžiai) survives as its own item.
+        expect(products.some((p) => /SKAN/i.test(p.name))).toBe(true);
+    });
+
+    test('receipt-117: address FUSED onto the PVM line is still extracted (no needless map screen)', () => {
+        // OCR put the address and the VAT line on one OCR line: "sardino 9. 2-2, Si aul
+        // iai Pyw mokttoo kodas I101027210". Before the fix the address was rejected for
+        // containing "kodas" → storeAddress="" → the store-resolution map screen popped.
+        const lines: IkiLine[] = [
+            wl('IKI Lietuva, UAB', 292, [word('IKI', 292, 349, 292), word('Lietuva,', 362, 506, 292), word('UAB', 529, 594, 292)]),
+            { ...wl('placeholder', 334, [word('sardino', 207, 342, 334), word('9.', 362, 389, 334), word('2-2,', 422, 487, 334), word('Si', 523, 559, 334), word('aul', 565, 613, 334), word('iai', 622, 667, 334)]),
+              text: 'sardino 9. 2-2, Si aul iai Pyw mokttoo kodas I101027210' },
+            wl('SKANĖJA RYŽ14 BASMAll, 8', 446, [word('SKANĖJA', 29, 164, 446), word('RYŽ14', 186, 275, 446), word('BASMAll,', 310, 467, 446), word('8', 500, 516, 446)]),
+            wl('3, 29 A', 450, [word('3,', 736, 760, 450), word('29', 775, 811, 450), word('A', 832, 848, 450)]),
+            wl('NAMINĮS 2,5- PIENAS', 606, [word('NAMINĮS', 35, 179, 606), word('PIENAS', 301, 424, 606)]),
+            wl('1, 49 A', 611, [word('1,', 791, 814, 611), word('49', 826, 867, 611), word('A', 888, 909, 611)]),
+        ];
+        const { header, products } = parseIkiReceipt(lines);
+        // Address survives (→ store auto-matches, no map screen) and is NOT a product/VAT line.
+        expect(header.storeAddress).toMatch(/sardino|2-2/i);
+        expect(header.storeAddress).not.toMatch(/kodas|SKAN|EUR/i);
+        // And the header still does not fold into a product.
+        expect(products.some((p) => /SKAN/i.test(p.name))).toBe(true);
+        for (const p of products) expect(p.name).not.toMatch(/Lietuva|k[oa]das/i);
+    });
+
     test('a price OCR’d as a separate line is matched to its name by Y (scramble resolved)', () => {
         const lines: IkiLine[] = [
             wl('PVM mokėtojo kodas LT101937219', 0, [
@@ -1284,7 +1328,7 @@ describe('IKI column engine — row reconstruction from words', () => {
         expect(raud).toBeTruthy();
         expect(raud.unit).toBe('kg');               // recognised as weighed, not a unit item
         expect(raud.price).toBeCloseTo(3.4, 2);      // €/kg parsed despite the stray ":"
-        expect(raud.quantity).toBeCloseTo(0.482, 2); // 1,64 / 3,4
+        expect(raud.quantity).toBeCloseTo(0.47, 2);  // PRINTED "0,470 kg" (not 1,64÷3,4 rounding)
     });
 
     test('receipt-57: a space-split / accent-garbled discount label ("NUỚL AT DA ŠU") is not a phantom', () => {
@@ -1442,15 +1486,13 @@ describe('IKI column engine — row reconstruction from words', () => {
         const raud = products.find((p) => /RAUDONOS/i.test(p.name))!;
         expect(pom).toBeTruthy();
         expect(raud).toBeTruthy();
-        // RAUDONOSIOS's band reaches UP to its name line (~y220), so the name (left) is inside it
-        expect(raud.region.yTop).toBeLessThanOrEqual(225);
         // VALUE: POMIDORAI's -0,72 discount still applies → promo = (2,87 − 0,72) / 0,719 ≈ 2,99
         expect(pom.promoPrice).toBeCloseTo(2.99, 1);
-        // GEOMETRY: POMIDORAI's band is a parallelogram (seam tilt == top tilt → never twists)
-        const topTilt = pom.region.yRightTop! - pom.region.yLeftTop!;
-        const seamTilt = pom.region.yRightBottom! - pom.region.yLeftBottom!;
-        expect(seamTilt).toBeCloseTo(topTilt, 5);
-        // and the seam is gapless on BOTH corners
+        // GEOMETRY (straight-band model): POMIDORAI's two-box is collapsed to a single FLAT
+        // band by averaging the name/price borders (no step). Non-inverted, and it tiles
+        // EXACTLY with RAUDONOSIOS below — gapless, no overlap → no discount bleed across.
+        expect(pom.region.xMid).toBeUndefined();
+        expect(pom.region.yBottom!).toBeGreaterThan(pom.region.yTop!);
         expect(pom.region.yLeftBottom).toBeCloseTo(raud.region.yLeftTop!, 5);
         expect(pom.region.yRightBottom).toBeCloseTo(raud.region.yRightTop!, 5);
     });
@@ -1540,14 +1582,15 @@ describe('IKI column engine — row reconstruction from words', () => {
         expect(naminis).toBeTruthy();
         // VALUE: the -7,48 discount still applies → promo = (18,15 − 7,48) / 1,068 ≈ 9,99 €/kg
         expect(salmon.promoPrice).toBeCloseTo(9.99, 1);
-        // NAMINIS's recovered name (left, ~y180) is covered by its band, not cut
-        expect(naminis.region.yLeftTop!).toBeLessThanOrEqual(185);
-        // GEOMETRY: salmon's band is a parallelogram — its seam (bottom) has the SAME tilt
-        // as its top edge, so the band can never twist or invert
-        const topTilt = salmon.region.yRightTop! - salmon.region.yLeftTop!;
-        const seamTilt = salmon.region.yRightBottom! - salmon.region.yLeftBottom!;
-        expect(seamTilt).toBeCloseTo(topTilt, 5);
-        // gapless on BOTH corners
+        // NAMINIS's name is still recovered from the fused discount line (its boxes were dropped)
+        expect(naminis).toBeTruthy();
+        // GEOMETRY (straight-band model): salmon's two-box is collapsed to a single FLAT band
+        // (no step), non-inverted, tiling gaplessly with NAMINIS below.
+        expect(salmon.region.xMid).toBeUndefined();
+        expect(salmon.region.yBottom!).toBeGreaterThan(salmon.region.yTop!);
+        expect(salmon.region.yLeftBottom).toBeCloseTo(naminis.region.yLeftTop!, 5);
+        expect(salmon.region.yRightBottom).toBeCloseTo(naminis.region.yRightTop!, 5);
+        // gapless PER COLUMN (left↔left, right↔right)
         expect(salmon.region.yLeftBottom).toBeCloseTo(naminis.region.yLeftTop!, 5);
         expect(salmon.region.yRightBottom).toBeCloseTo(naminis.region.yRightTop!, 5);
     });
@@ -1580,12 +1623,20 @@ describe('IKI column engine — row reconstruction from words', () => {
         expect(products.length).toBeGreaterThanOrEqual(2);
         const sorted = products.sort((a, b) => a.region.yTop - b.region.yTop);
         for (const p of sorted) {
-            // PARALLELOGRAM: bottom edge has the SAME tilt as the top edge → cannot twist
-            const topTilt = p.region.yRightTop! - p.region.yLeftTop!;
-            const botTilt = p.region.yRightBottom! - p.region.yLeftBottom!;
-            expect(botTilt).toBeCloseTo(topTilt, 3);
-            // tilt has the correct SIGN (right edge lower, like the receipt) — never inverted
-            expect(topTilt).toBeGreaterThan(0);
+            if (p.region.xMid != null) {
+                // a fused discount+name conflict → TWO-BOX band: the full-width tilt no
+                // longer applies, but each column must be non-inverted (no twist).
+                expect(p.region.yLeftBottom!).toBeGreaterThan(p.region.yLeftTop!);
+                expect(p.region.yMidBottom!).toBeGreaterThan(p.region.yMidTop!);
+                expect(p.region.yRightBottom!).toBeGreaterThan(p.region.yRightTop!);
+            } else {
+                // PARALLELOGRAM: bottom edge has the SAME tilt as the top edge → cannot twist
+                const topTilt = p.region.yRightTop! - p.region.yLeftTop!;
+                const botTilt = p.region.yRightBottom! - p.region.yLeftBottom!;
+                expect(botTilt).toBeCloseTo(topTilt, 3);
+                // tilt has the correct SIGN (right edge lower, like the receipt) — never inverted
+                expect(topTilt).toBeGreaterThan(0);
+            }
         }
         for (let i = 1; i < sorted.length; i++) {
             // gapless on both corners

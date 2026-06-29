@@ -568,7 +568,14 @@
     "freshHours_other": "Updated {{count}} hours ago",
     "loadFailed": "Couldn't load discounts",
     "loadFailedWithCache": "Showing saved data — couldn't refresh",
-    "retry": "Try again"
+    "retry": "Try again",
+    "title": "Discounts",
+    "filterStores": "Stores",
+    "filterCategories": "Categories",
+    "filterSubcategories": "Subcategories",
+    "filterAllStores": "All stores",
+    "filterAllCategories": "All categories",
+    "filterAllSubcategories": "All subcategories"
   },
   "browse": {
     "addToBasket": "Add",
@@ -1003,7 +1010,43 @@
     "doneAllSeen": "You've reviewed all the cards in this session.",
     "fromGlobalFill": "This receipt's cards are done — helping all users",
     "undoCancel": "Undo",
-    "moreCta": "More?"
+    "moreCta": "More?",
+    "cardMatchLabel": "Recognised product",
+    "cardReceiptLabel": "Your receipt",
+    "cardQuestion": "Is this the same product?",
+    "helpButton": "I don't know what to do",
+    "cardActionDifferent": "Different",
+    "cardActionSkip": "Skip",
+    "cardActionSimilar": "Similar",
+    "cardActionIdentical": "Identical",
+    "helpTitle": "How to choose?",
+    "helpIntro": "Is the recognised product the one you bought?",
+    "helpIdentical": "Identical — exactly the same product.",
+    "helpSimilar": "Similar — a product I'd sometimes swap for it.",
+    "helpDifferent": "Different — another product.",
+    "helpSkip": "Skip — I'm not sure.",
+    "helpUnreadable": "If the name is unreadable — swipe left (different).",
+    "helpMatters": "What matters: the product itself, the maker, and your own judgement.",
+    "helpDoesntMatter": "Doesn't matter: pack size and price.",
+    "helpHint": "Honest answers improve your experience and give more accurate cart comparisons.",
+    "helpClose": "Got it",
+    "loadingUploading": "Uploading receipt…",
+    "loadingCropping": "Cropping items…",
+    "loadingMatching": "Matching products…",
+    "loadingApples": "Comparing apples to apples…",
+    "loadingSavings": "Counting your savings…",
+    "loadingBasket": "Loading the basket…",
+    "loadingAI": "Teaching the AI to read your receipt…",
+    "loadingPrices": "Hunting the best prices…",
+    "loadingBread": "Weighing the bread…",
+    "loadingNegotiate": "Negotiating prices with the tomatoes…",
+    "loadingMilk": "Checking the milk hasn't run off…",
+    "loadingDiscount": "Arguing with the cashier about a discount…",
+    "cropBuilding": "Cropping the receipt…",
+    "stageLoadingCards": "Dealing the cards…",
+    "cropNoGeometry": "No band geometry for this line…",
+    "cropFailed": "Crop failed: {{error}}",
+    "cropUnavailable": "Crop unavailable — receipt photo build failed."
   },
   "voteHistory": {
     "filterAll": "All",
@@ -1115,6 +1158,11 @@
     "tabReceipt": "Receipt",
     "loading": "Loading data...",
     "loadingScan": "Scanning and recognising data",
+    "stageScanning": "Teaching the AI to read your receipt…",
+    "stageMatching": "Comparing apples to apples…",
+    "stageSending": "Saving the receipt to the database…",
+    "stageUploading": "Filing away the receipt photo…",
+    "stageComparing": "Hunting down the best prices…",
     "loadingSending": "Sending receipt data…",
     "loadingPhoto": "Sending photo…",
     "loadingComparison": "Calculating comparison…",
@@ -1232,15 +1280,33 @@
     "introTitle": "Creator account",
     "introSubtitle": "Who it's for",
     "cards": {
-      "1": { "title": "Meal planner", "body": "Your weekly meal plan becomes a basket in one tap." },
-      "2": { "title": "Dietitian", "body": "Your recommended products found in seconds; clients see where they're cheapest." },
-      "3": { "title": "Recipe writer", "body": "A QR under your recipe becomes a basket on the reader's phone." },
-      "4": { "title": "Social creator", "body": "Followers tap your link and find the products at their preferred store." },
-      "5": { "title": "For creators only", "body": "These features are for content creators. Regular users don't need an account — Souply works great without one." }
+      "1": {
+        "title": "Meal planner",
+        "body": "Your weekly meal plan becomes a basket in one tap."
+      },
+      "2": {
+        "title": "Dietitian",
+        "body": "Your recommended products found in seconds; clients see where they're cheapest."
+      },
+      "3": {
+        "title": "Recipe writer",
+        "body": "A QR under your recipe becomes a basket on the reader's phone."
+      },
+      "4": {
+        "title": "Social creator",
+        "body": "Followers tap your link and find the products at their preferred store."
+      },
+      "5": {
+        "title": "For creators only",
+        "body": "These features are for content creators. Regular users don't need an account — Souply works great without one."
+      }
     }
   },
   "profilis": {
-    "creatorCta": { "title": "Creator account", "desc": "Share baskets and templates with your followers" },
+    "creatorCta": {
+      "title": "Creator account",
+      "desc": "Share baskets and templates with your followers"
+    },
     "signOut": "Sign out",
     "signOutConfirm": {
       "title": "Sign out?",

@@ -539,7 +539,14 @@
     "freshHours_other": "Atnaujinta prieš {{count}} val.",
     "loadFailed": "Nepavyko įkelti nuolaidų",
     "loadFailedWithCache": "Rodomi išsaugoti duomenys — nepavyko atnaujinti",
-    "retry": "Bandyti dar kartą"
+    "retry": "Bandyti dar kartą",
+    "title": "Nuolaidos",
+    "filterStores": "Parduotuvės",
+    "filterCategories": "Kategorijos",
+    "filterSubcategories": "Subkategorijos",
+    "filterAllStores": "Visos parduotuvės",
+    "filterAllCategories": "Visos kategorijos",
+    "filterAllSubcategories": "Visos subkategorijos"
   },
   "browse": {
     "addToBasket": "Į krepšelį",
@@ -978,7 +985,43 @@
     "doneAllSeen": "Peržiūrėjote visas korteles šioje sesijoje.",
     "fromGlobalFill": "Šio kvito kortelės baigtos — padedi visiems vartotojams",
     "undoCancel": "Atšaukti",
-    "moreCta": "Gal dar?"
+    "moreCta": "Gal dar?",
+    "cardMatchLabel": "Atpažinta prekė",
+    "cardReceiptLabel": "Jūsų kvitas",
+    "cardQuestion": "Ar tai ta pati prekė?",
+    "helpButton": "Nežinau ką daryti",
+    "cardActionDifferent": "Skirtingi",
+    "cardActionSkip": "Praleisti",
+    "cardActionSimilar": "Panašūs",
+    "cardActionIdentical": "Vienodi",
+    "helpTitle": "Kaip pasirinkti?",
+    "helpIntro": "Ar atpažinta prekė yra ta pati, kurią pirkote?",
+    "helpIdentical": "Vienodi — tiksliai ta pati prekė.",
+    "helpSimilar": "Panašūs — prekė, kurią kartais galėčiau pakeisti.",
+    "helpDifferent": "Skirtingi — kita prekė.",
+    "helpSkip": "Praleisti — nežinau.",
+    "helpUnreadable": "Jei pavadinimo neįmanoma perskaityti — braukite kairėn (skirtingi).",
+    "helpMatters": "Svarbu: pati prekė, gamintojas ir jūsų asmeninis vertinimas.",
+    "helpDoesntMatter": "Nesvarbu: pakuotės dydis ir kaina.",
+    "helpHint": "Sąžiningi atsakymai pagerina jūsų patirtį ir suteikia tikslesnius krepšelių palyginimus.",
+    "helpClose": "Supratau",
+    "loadingUploading": "Įkeliamas kvitas…",
+    "loadingCropping": "Iškerpamos prekės…",
+    "loadingMatching": "Atpažįstamos prekės…",
+    "loadingApples": "Lyginame obuolius su obuoliais…",
+    "loadingSavings": "Skaičiuojame, kiek sutaupėte…",
+    "loadingBasket": "Kraunamas krepšelis…",
+    "loadingAI": "Mokome DI skaityti tavo kvitą…",
+    "loadingPrices": "Medžiojame geriausias kainas…",
+    "loadingBread": "Sveriame duoną…",
+    "loadingNegotiate": "Deramės su pomidorais dėl kainos…",
+    "loadingMilk": "Tikriname, ar pienas nepabėgo…",
+    "loadingDiscount": "Ginčijamės su kasininke dėl nuolaidos…",
+    "cropBuilding": "Karpome kvitą…",
+    "stageLoadingCards": "Dėliojame korteles…",
+    "cropNoGeometry": "Nėra kvito srities geometrijos…",
+    "cropFailed": "Iškarpos klaida: {{error}}",
+    "cropUnavailable": "Iškarpa nepasiekiama – nepavyko paruošti kvito nuotraukos."
   },
   "voteHistory": {
     "filterAll": "Visi",
@@ -1091,6 +1134,11 @@
     "tabReceipt": "Kvitas",
     "loading": "Įkeliami duomenys...",
     "loadingScan": "Nuskaitomi ir atpažįstami duomenys",
+    "stageScanning": "Mokome DI skaityti tavo kvitą…",
+    "stageMatching": "Lyginame obuolius su obuoliais…",
+    "stageSending": "Išsaugome kvitą duomenų bazėje…",
+    "stageUploading": "Įamžiname kvito nuotrauką…",
+    "stageComparing": "Medžiojame geriausias kainas…",
     "loadingSending": "Siunčiami kvito duomenys…",
     "loadingPhoto": "Siunčiama nuotrauka…",
     "loadingComparison": "Skaičiuojamas palyginimas…",
@@ -1208,15 +1256,33 @@
     "introTitle": "Kūrėjo paskyra",
     "introSubtitle": "Kam tai skirta",
     "cards": {
-      "1": { "title": "Mitybos planuotojas", "body": "Savaitės valgiaraštis virsta krepšeliu vienu paspaudimu." },
-      "2": { "title": "Dietologas", "body": "Tavo rekomenduoti produktai surandami per sekundes; klientas mato, kur pigiausia." },
-      "3": { "title": "Receptų autorius", "body": "QR kodas po receptu tampa krepšeliu sekėjo telefone." },
-      "4": { "title": "Soc. tinklų kūrėjas", "body": "Sekėjai paliečia nuorodą ir randa prekes jiems patogioje parduotuvėje." },
-      "5": { "title": "Skirta tik kūrėjams", "body": "Šios funkcijos skirtos turinio kūrėjams. Įprastam naudotojui paskyros nereikia — Souply puikiai veikia ir be jos." }
+      "1": {
+        "title": "Mitybos planuotojas",
+        "body": "Savaitės valgiaraštis virsta krepšeliu vienu paspaudimu."
+      },
+      "2": {
+        "title": "Dietologas",
+        "body": "Tavo rekomenduoti produktai surandami per sekundes; klientas mato, kur pigiausia."
+      },
+      "3": {
+        "title": "Receptų autorius",
+        "body": "QR kodas po receptu tampa krepšeliu sekėjo telefone."
+      },
+      "4": {
+        "title": "Soc. tinklų kūrėjas",
+        "body": "Sekėjai paliečia nuorodą ir randa prekes jiems patogioje parduotuvėje."
+      },
+      "5": {
+        "title": "Skirta tik kūrėjams",
+        "body": "Šios funkcijos skirtos turinio kūrėjams. Įprastam naudotojui paskyros nereikia — Souply puikiai veikia ir be jos."
+      }
     }
   },
   "profilis": {
-    "creatorCta": { "title": "Kūrėjo paskyra", "desc": "Dalinkis krepšeliais ir šablonais su sekėjais" },
+    "creatorCta": {
+      "title": "Kūrėjo paskyra",
+      "desc": "Dalinkis krepšeliais ir šablonais su sekėjais"
+    },
     "signOut": "Atsijungti",
     "signOutConfirm": {
       "title": "Atsijungti?",

@@ -12,9 +12,10 @@ import {
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import MapView, { type Region } from 'react-native-maps';
+import { DARK_MAP_STYLE } from '../../constants/darkMapStyle';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme, spacing, radius, typography, elevation, type AppTheme } from '../../constants/theme';
+import { useTheme, useResolvedScheme, spacing, radius, typography, elevation, type AppTheme } from '../../constants/theme';
 
 /**
  * Shared map-picker shell — the map + address search row + bottom confirm
@@ -57,6 +58,7 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
+    const isDark = useResolvedScheme() === 'dark';
 
     const mapBlock = (
         <View style={styles.mapBlock}>
@@ -67,6 +69,7 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                 onMapReady={props.onMapReady}
                 onRegionChangeComplete={props.onRegionChangeComplete}
                 showsUserLocation={props.showsUserLocation ?? true}
+                customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
                 toolbarEnabled={false}
             >
                 {props.mapChildren}

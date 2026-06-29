@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Polygon } from 'react-native-svg';
+import { bandQuadPoints } from '../../utils/bandQuad';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useTheme, spacing, radius, typography, type AppTheme } from '../../constants/theme';
@@ -52,12 +53,16 @@ export interface ReceiptRegion {
     yRightTop?: number;
     yLeftBottom?: number;
     yRightBottom?: number;
-    /** Mid-column connection (column engine's two-box product band): renders as a
-     *  6-point polygon — name box [xLeft..xMid] joined to price box [xMid..xRight]
-     *  at this Y. Absent → ordinary 4-corner quad. */
+    /** Mid-column step (column engine's two-box product band): renders as an 8-point
+     *  polygon — name box [xLeft..xMid] and price/discount box [xMid..xRight], each a clean
+     *  parallelogram, joined by a VERTICAL step at xMid. yMidTop/yMidBottom = LEFT column at
+     *  xMid; yMidTopR/yMidBottomR = RIGHT column. If the …R values are absent or equal, it
+     *  collapses to the legacy 6-point. Absent xMid → ordinary 4-corner quad. */
     xMid?: number;
     yMidTop?: number;
     yMidBottom?: number;
+    yMidTopR?: number;
+    yMidBottomR?: number;
 }
 
 /** Display-space padding added to header/footer bands so the border
@@ -139,6 +144,12 @@ interface Props {
      *  black bands so the private data is covered in this view too (the
      *  uploaded image is separately redacted before it ever leaves the phone). */
     maskRegions?: ReceiptRegion[];
+    /** Draw the black mask polygons as an overlay. ONLY meaningful for a fresh scan,
+     *  where the displayed image is the un-redacted camera capture. On a SAVED receipt
+     *  the shown image is the already-burned MinIO file, so the overlay is REDUNDANT —
+     *  and re-projecting it risks a transient mis-scaled band on a warm reopen. Off for
+     *  existing receipts: the burned-in masks already show, with zero drift. */
+    drawMasks?: boolean;
 }
 
 export default function ReceiptPhotoView({
@@ -149,6 +160,7 @@ export default function ReceiptPhotoView({
     footerRegions,
     skippedRegions = [],
     maskRegions = [],
+    drawMasks = true,
 }: Props) {
     const colors = useTheme();
     const { t } = useTranslation();
@@ -216,23 +228,12 @@ export default function ReceiptPhotoView({
         if (!imageDims || !onPageOne(r)) return null;
         const dx = (x: number) => Math.max(0, Math.min(containerW, x * scale));
         const dy = (y: number) => Math.max(0, Math.min(stageH, y * scale - cropOffsetY));
-        const xL = dx(r.xLeft);
-        const xR = dx(r.xRight);
-        const yTL = dy(r.yLeftTop ?? r.yTop);
-        const yTR = dy(r.yRightTop ?? r.yTop);
-        const yBR = dy(r.yRightBottom ?? r.yBottom);
-        const yBL = dy(r.yLeftBottom ?? r.yBottom);
-        // Two-box product band → 6-point polygon: name box [xL..xMid] joined to the
-        // price box [xMid..xR] at the mid column, so each half hugs its own curve.
-        if (r.xMid != null && r.yMidTop != null && r.yMidBottom != null) {
-            const xM = dx(r.xMid);
-            const yMT = dy(r.yMidTop);
-            const yMB = dy(r.yMidBottom);
-            const poly = `${xL},${yTL} ${xM},${yMT} ${xR},${yTR} ${xR},${yBR} ${xM},${yMB} ${xL},${yBL}`;
-            return { points: poly, left: xL, midY: (yTL + yBL) / 2 };
-        }
-        const points = `${xL},${yTL} ${xR},${yTR} ${xR},${yBR} ${xL},${yBL}`;
-        return { points, left: xL, midY: (yTL + yBL) / 2 };
+        // Shared with the Items-tab crop clip (utils/bandQuad) so the two never diverge.
+        return {
+            points: bandQuadPoints(r, dx, dy),
+            left: dx(r.xLeft),
+            midY: (dy(r.yLeftTop ?? r.yTop) + dy(r.yLeftBottom ?? r.yBottom)) / 2,
+        };
     };
 
     // Legend chips list the kinds actually present on this receipt,
@@ -365,7 +366,7 @@ export default function ReceiptPhotoView({
                             {/* Privacy masks — solid black, tilt-following (same
                                 quad as the burned-in box) so the overlay matches
                                 the uploaded image. */}
-                            {maskRegions.map((r, i) => {
+                            {drawMasks && maskRegions.map((r, i) => {
                                 const q = toQuadPoints(r);
                                 if (!q) return null;
                                 return (

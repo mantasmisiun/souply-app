@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Image, Platform, StyleSheet, useColorScheme, TouchableOpacity, Dimensions } from 'react-native';
+import { View, Text, Image, Platform, StyleSheet, TouchableOpacity, Dimensions, type ImageSourcePropType } from 'react-native';
 import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Asset } from 'expo-asset';
+import { captureRef } from 'react-native-view-shot';
 import { Ionicons } from '@expo/vector-icons';
-import { spacing, radius, elevation, iconSize, type AppTheme } from '../../constants/theme';
+import { spacing, radius, elevation, iconSize, useResolvedScheme, type AppTheme } from '../../constants/theme';
 import { chainBrandColorById } from '../../utils/chainBrandName';
 import { chainPinImage, chainBadgeImage } from '../../utils/chainLogoAssets';
 import { DARK_MAP_STYLE } from '../../constants/darkMapStyle';
@@ -76,61 +77,64 @@ type Styles = ReturnType<typeof makeStyles>;
  * Colour encodes value: cheapest = pink ring, others = white ring; selected =
  * solid pink pill. The badge marker sits one z above its pill so it stays on top.
  */
-function StorePin({ pin, styles, colors, selected, dimmed, zRank, onPress }: {
-    pin: MapPin; styles: Styles; colors: AppTheme; selected: boolean; dimmed: boolean; zRank: number; onPress: (id: number) => void;
+// Visual identity of a priced pin → cache key for its baked image. Regenerates the image
+// only when the price or the cheapest/selected state changes.
+const pillKey = (pin: MapPin) => `${pin.storeId}|${pin.euro}|${pin.active ? 's' : pin.recommended ? 'r' : 'n'}`;
+
+/**
+ * OFF-SCREEN price-pill "bakery". A price pill is dynamic text → it must be a custom View,
+ * which react-native-maps does NOT render as a marker child on Android (new arch, #5877). So
+ * we render the (logo + price) row here, off-screen, snapshot it to a PNG with react-native-
+ * view-shot, and hand the file to the marker's native `image` prop — which DOES render.
+ */
+function PillShot({ ck, pin, styles, colors, selected, onShot }: {
+    ck: string; pin: MapPin; styles: Styles; colors: AppTheme; selected: boolean; onShot: (ck: string, uri: string) => void;
 }) {
+    const ref = useRef<View>(null);
     const badge = chainBadgeImage(pin.chainId);
-    const cheapest = pin.recommended;
-    const priced = pin.euro != null;
-    const tap = () => onPress(pin.storeId);
-
-    const variant = selected ? styles.pillSelected : cheapest ? styles.pillCheapest : styles.pillNeutral;
+    const variant = selected ? styles.pillSelected : pin.recommended ? styles.pillCheapest : styles.pillNeutral;
     const priceColor = selected ? '#FFFFFF' : colors.textPrimary;
-
-    // Price pill is text-only → re-snapshot briefly on visual change, then freeze.
-    const [tracks, setTracks] = useState(true);
-    useEffect(() => {
-        setTracks(true);
-        const t = setTimeout(() => setTracks(false), 450);
-        return () => clearTimeout(t);
-    }, [pin.euro, pin.recommended, selected, dimmed]);
-
-    const coordinate = { latitude: pin.latitude, longitude: pin.longitude };
-
+    // Snapshot once the row (and its logo) have laid out. Both onLayout and the logo's onLoad
+    // call it — whichever is last wins, so the capture always includes the loaded logo.
+    const grab = () => {
+        captureRef(ref, { format: 'png', result: 'tmpfile', quality: 1 })
+            .then((uri) => onShot(ck, uri))
+            .catch(() => {});
+    };
     return (
-        <>
-            {priced && (
-                <Marker
-                    coordinate={coordinate}
-                    anchor={{ x: 0, y: 0.5 }}
-                    tracksViewChanges={tracks}
-                    opacity={dimmed ? 0.4 : 1}
-                    zIndex={zRank * 2}
-                    onPress={tap}
-                >
-                    <View style={[styles.pill, variant]}>
-                        <Text style={[styles.pillPrice, { color: priceColor }]} numberOfLines={1} allowFontScaling={false}>
-                            {formatEuro(pin.euro as number)}
-                        </Text>
-                    </View>
-                </Marker>
-            )}
-            {badge != null && (
-                <Marker
-                    coordinate={coordinate}
-                    // Negative x → the badge's left edge sits ~5.5dp RIGHT of the
-                    // coord (= the pill's left edge), so the logo has the same
-                    // gap on the left as it does top/bottom. Google Maps honours
-                    // out-of-range anchor fractions; this is Android's seat.
-                    anchor={{ x: -0.18, y: 0.5 }}
-                    image={badge}
-                    opacity={dimmed ? 0.4 : 1}
-                    tracksViewChanges={false}
-                    zIndex={zRank * 2 + 1}
-                    onPress={tap}
-                />
-            )}
-        </>
+        <View ref={ref} collapsable={false} style={[styles.pillRow, variant]} onLayout={grab}>
+            {badge != null && <Image source={badge} style={styles.pillRowBadge} onLoad={grab} />}
+            <Text style={[styles.pillPrice, { color: priceColor }]} numberOfLines={1} allowFontScaling={false}>
+                {formatEuro(pin.euro as number)}
+            </Text>
+        </View>
+    );
+}
+
+/**
+ * A store marker. Priced → the baked (logo + price) image once captured; until then, or for
+ * an unpriced store, the native chain badge alone. Always a NATIVE `image` marker (renders on
+ * Android), never a child View.
+ */
+function StorePin({ pin, pillUri, dimmed, zRank, onPress }: {
+    pin: MapPin; pillUri: string | undefined; dimmed: boolean; zRank: number; onPress: (id: number) => void;
+}) {
+    const baked = pin.euro != null && pillUri ? { uri: pillUri } : null;
+    const badge = chainBadgeImage(pin.chainId);
+    const source: ImageSourcePropType | null = baked ?? badge ?? null;
+    if (source == null) return null;
+    return (
+        <Marker
+            coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
+            // Baked image = badge on the LEFT + price → seat the point near the badge; the
+            // badge-only fallback is centred.
+            anchor={baked ? { x: 0.16, y: 0.5 } : { x: 0.5, y: 0.5 }}
+            image={source}
+            opacity={dimmed ? 0.4 : 1}
+            tracksViewChanges={false}
+            zIndex={zRank * 2}
+            onPress={() => onPress(pin.storeId)}
+        />
     );
 }
 
@@ -254,7 +258,7 @@ export default function StoreResultsMap({
     occlusionRef.current = occlusion;
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const mapRef = useRef<MapView>(null);
-    const isDark = useColorScheme() === 'dark';
+    const isDark = useResolvedScheme() === 'dark';
     const insets = useSafeAreaInsets();
 
     // react-native-maps fires the map's onPress right after a marker's onPress
@@ -326,6 +330,11 @@ export default function StoreResultsMap({
     // Current map region drives the directory grid clustering. Seeded from the
     // initial fit; updated when the user pans/zooms (after the gesture settles).
     const [region, setRegion] = useState<GridRegion>(initialRegion);
+    // Baked price-pill images (storeId|price|variant → file uri), produced off-screen by PillShot.
+    const [pillUris, setPillUris] = useState<Record<string, string>>({});
+    const onPillShot = useCallback((ck: string, uri: string) => {
+        setPillUris(prev => (prev[ck] === uri ? prev : { ...prev, [ck]: uri }));
+    }, []);
 
     // Directory layer: every un-priced store, bucketed into clusters/singles for
     // the current zoom. Priced stores are excluded (they render as pills).
@@ -448,6 +457,7 @@ export default function StoreResultsMap({
                 moveOnMarkerPress={false}
                 showsCompass={false}
                 showsMyLocationButton={false}
+                showsUserLocation={true}
             >
                 {/* Split-combo route line (user → stops), under the markers. */}
                 {routeCoords && routeCoords.length >= 2 && (
@@ -472,48 +482,39 @@ export default function StoreResultsMap({
                         onPress={handleDirTap}
                     />
                 ))}
-                {/* Route mode → start/end endpoint markers (the trip's two
-                    locations). Otherwise the user's current-location dot. */}
-                {routeEndpoints ? (
+                {/* Route mode → start/end endpoint markers as NATIVE pin markers (custom-View
+                    child markers don't render on Android with react-native-maps on the new arch,
+                    even at 1.20.x). The user's own location is the native blue dot
+                    (showsUserLocation above) — not a custom marker. */}
+                {routeEndpoints && (
                     <>
-                        <Marker coordinate={routeEndpoints.from} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} zIndex={5}>
-                            <View style={[styles.endpointDot, { backgroundColor: colors.success }]} />
-                        </Marker>
-                        <Marker coordinate={routeEndpoints.to} anchor={{ x: 0.5, y: 0.5 }} tracksViewChanges={false} zIndex={5}>
-                            <View style={[styles.endpointDot, { backgroundColor: colors.primary }]} />
-                        </Marker>
+                        <Marker coordinate={routeEndpoints.from} pinColor={colors.primary} zIndex={5} />
+                        <Marker coordinate={routeEndpoints.to} pinColor={colors.primary} zIndex={5} />
                     </>
-                ) : userCoords && (
-                    <Marker
-                        coordinate={{ latitude: userCoords.lat, longitude: userCoords.lng }}
-                        anchor={{ x: 0.5, y: 0.5 }}
-                        tracksViewChanges={false}
-                        zIndex={5}
-                    >
-                        <View style={styles.userDotRing}>
-                            <View style={styles.userDot} />
-                        </View>
-                    </Marker>
                 )}
                 {pinsByZ.map(pin => (
                     <StorePin
-                        // Key encodes z-rank AND the visual variant. z-rank: on a
-                        // selection change ranks reshuffle → pins remount and
-                        // re-insert in sorted (pinsByZ) order (react-native-maps
-                        // adds remounted markers on top, so highlighted pins render
-                        // LAST = on top). Variant (s/r/n + dim): forces a remount —
-                        // and thus a re-rasterise of the frozen marker — whenever a
-                        // pin's pill colour changes, even if its rank didn't (e.g.
-                        // tapping the already-recommended store: cheapest → selected).
-                        key={`${pin.storeId}-${zRankMap.get(pin.storeId) ?? 0}-${pin.active ? 's' : pin.recommended ? 'r' : 'n'}${anySelected && !pin.active ? 'd' : ''}`}
-                        pin={pin} styles={styles} colors={colors}
-                        selected={pin.active}
+                        // Remount (→ re-rasterise) on z-rank change OR baked-image change
+                        // (price / cheapest / selected → a new pillKey, hence a new image).
+                        key={`${pin.storeId}-${zRankMap.get(pin.storeId) ?? 0}-${pin.euro != null ? pillKey(pin) : 'np'}`}
+                        pin={pin}
+                        pillUri={pin.euro != null ? pillUris[pillKey(pin)] : undefined}
                         dimmed={anySelected && !pin.active}
                         zRank={zRankMap.get(pin.storeId) ?? 0}
                         onPress={handleStoreTap}
                     />
                 ))}
             </MapView>
+
+            {/* OFF-SCREEN price-pill bakery — renders each priced pin's (logo + price) row and
+                snapshots it to an image the marker can use natively (see PillShot). */}
+            <View style={styles.bakery} pointerEvents="none">
+                {pinsByZ.filter(p => p.euro != null).map(pin => {
+                    const ck = pillKey(pin);
+                    if (pillUris[ck]) return null;
+                    return <PillShot key={ck} ck={ck} pin={pin} styles={styles} colors={colors} selected={pin.active} onShot={onPillShot} />;
+                })}
+            </View>
 
             {/* Floating controls — top-right, clear of the status bar. */}
             <View style={[styles.controls, { top: insets.top + spacing.md }]} pointerEvents="box-none">
@@ -557,6 +558,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderWidth: 2,
         elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3,
     },
+    pillRowBadge: { width: 28, height: 28, borderRadius: 14 },
+    // Off-screen stage where price-pill rows render so view-shot can snapshot them.
+    bakery: { position: 'absolute', top: -10000, left: 0 },
     // iOS un-priced directory pin: bigger logo + transparent padding so it's
     // easy to see and gives a comfortable tap target.
     dirHit: { padding: 6, alignItems: 'center', justifyContent: 'center' },
