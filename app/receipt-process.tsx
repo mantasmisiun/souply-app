@@ -2320,7 +2320,7 @@ export default function ProcessReceiptScreen() {
       // but `detected=0`, it's a DETECTOR bug; if they're absent, OCR never read
       // the payment section (photo cut off / blurry) → nothing to mask.
       const cardish = allLines.filter((l) =>
-        /[*xX•·]{2,}|mokejim|moket|kortel|lojalum|kasinink|\bbanko\b|maestro|visa|master/i.test(l.text),
+        /[*xX•·]{2,}|mokejim|moket|kortel|lojalum|kasin\w{0,3}k|\bbanko\b|maestro|visa|master/i.test(l.text),
       );
       console.log(
         `[MASK] card-ish OCR lines (${cardish.length}/${allLines.length} total):`,

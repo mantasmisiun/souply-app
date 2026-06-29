@@ -76,6 +76,14 @@ describe('detectCardMaskBands', () => {
         expect(bands[0].text).toBe('Kasininkas [•••]');
     });
 
+    it('masks the cashier name even when OCR mangles the label (receipt-146: "Kasinirkas (-e): SIMKUTE")', () => {
+        // OCR misread the 2nd n as r ("Kasininkas" → "Kasinirkas"); the gendered "(-e):" tail too.
+        const bands = detectCardMaskBands([L('Kasinirkas (-e): SIMKUTE 4')]);
+        expect(bands).toHaveLength(1);
+        expect(bands[0].kind).toBe('cashier');
+        expect(bands[0].text).not.toMatch(/SIMKUTE/i); // the name is redacted out of the stored text
+    });
+
     it('does NOT mask asterisk separator walls (no digit = nothing to hide)', () => {
         expect(detectCardMaskBands([L('************************')])).toHaveLength(0);
         expect(detectCardMaskBands([L('* * * * * * * *')])).toHaveLength(0);
