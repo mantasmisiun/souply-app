@@ -37,7 +37,12 @@ const getDevHost = (): string => {
         cfg?.manifest?.debuggerHost ??
         '';
     const host = String(hostUri).split(':')[0].trim();
-    return host || 'localhost';
+    // When Metro is served over USB (adb reverse) the host is localhost/127.0.0.1 — but the API is
+    // NOT on the device's own loopback. Fall back to the laptop's LAN IP so the JS bundle can stream
+    // over USB (fast) while API calls still go over Wi-Fi — including AFTER you unplug to photograph a
+    // receipt. (On Wi-Fi Metro this returns the LAN IP directly, unchanged.)
+    if (!host || host === 'localhost' || host === '127.0.0.1') return DEV_VARIANT_LAN_HOST;
+    return host;
 };
 
 const DEV_LAN_URL = `http://${getDevHost()}:3000`;
