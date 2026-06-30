@@ -1,13 +1,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Image, Platform, StyleSheet, TouchableOpacity, Dimensions, type ImageSourcePropType } from 'react-native';
+import { View, Text, Image, Platform, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
 import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Asset } from 'expo-asset';
-import { captureRef } from 'react-native-view-shot';
 import { Ionicons } from '@expo/vector-icons';
 import { spacing, radius, elevation, iconSize, useResolvedScheme, type AppTheme } from '../../constants/theme';
 import { chainBrandColorById } from '../../utils/chainBrandName';
-import { chainPinImage, chainBadgeImage } from '../../utils/chainLogoAssets';
+import { chainPinImage } from '../../utils/chainLogoAssets';
+import { useBakedPills, MapPillMarker, type MapPillSpec, type MapPillVariant } from '../map/MapPill';
 import { DARK_MAP_STYLE } from '../../constants/darkMapStyle';
 import { formatEuro } from '../../utils/formatCurrency';
 import { type StoreLite } from '../../utils/candidatePool';
@@ -77,66 +77,20 @@ type Styles = ReturnType<typeof makeStyles>;
  * Colour encodes value: cheapest = pink ring, others = white ring; selected =
  * solid pink pill. The badge marker sits one z above its pill so it stays on top.
  */
-// Visual identity of a priced pin → cache key for its baked image. Regenerates the image
-// only when the price or the cheapest/selected state changes.
-const pillKey = (pin: MapPin) => `${pin.storeId}|${pin.euro}|${pin.active ? 's' : pin.recommended ? 'r' : 'n'}`;
-
-/**
- * OFF-SCREEN price-pill "bakery". A price pill is dynamic text → it must be a custom View,
- * which react-native-maps does NOT render as a marker child on Android (new arch, #5877). So
- * we render the (logo + price) row here, off-screen, snapshot it to a PNG with react-native-
- * view-shot, and hand the file to the marker's native `image` prop — which DOES render.
- */
-function PillShot({ ck, pin, styles, colors, selected, onShot }: {
-    ck: string; pin: MapPin; styles: Styles; colors: AppTheme; selected: boolean; onShot: (ck: string, uri: string) => void;
-}) {
-    const ref = useRef<View>(null);
-    const badge = chainBadgeImage(pin.chainId);
-    const variant = selected ? styles.pillSelected : pin.recommended ? styles.pillCheapest : styles.pillNeutral;
-    const priceColor = selected ? '#FFFFFF' : colors.textPrimary;
-    // Snapshot once the row (and its logo) have laid out. Both onLayout and the logo's onLoad
-    // call it — whichever is last wins, so the capture always includes the loaded logo.
-    const grab = () => {
-        captureRef(ref, { format: 'png', result: 'tmpfile', quality: 1 })
-            .then((uri) => onShot(ck, uri))
-            .catch(() => {});
-    };
-    return (
-        <View ref={ref} collapsable={false} style={[styles.pillRow, variant]} onLayout={grab}>
-            {badge != null && <Image source={badge} style={styles.pillRowBadge} onLoad={grab} />}
-            <Text style={[styles.pillPrice, { color: priceColor }]} numberOfLines={1} allowFontScaling={false}>
-                {formatEuro(pin.euro as number)}
-            </Text>
-        </View>
-    );
-}
-
-/**
- * A store marker. Priced → the baked (logo + price) image once captured; until then, or for
- * an unpriced store, the native chain badge alone. Always a NATIVE `image` marker (renders on
- * Android), never a child View.
- */
-function StorePin({ pin, pillUri, dimmed, zRank, onPress }: {
-    pin: MapPin; pillUri: string | undefined; dimmed: boolean; zRank: number; onPress: (id: number) => void;
-}) {
-    const baked = pin.euro != null && pillUri ? { uri: pillUri } : null;
-    const badge = chainBadgeImage(pin.chainId);
-    const source: ImageSourcePropType | null = baked ?? badge ?? null;
-    if (source == null) return null;
-    return (
-        <Marker
-            coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
-            // Baked image = badge on the LEFT + price → seat the point near the badge; the
-            // badge-only fallback is centred.
-            anchor={baked ? { x: 0.16, y: 0.5 } : { x: 0.5, y: 0.5 }}
-            image={source}
-            opacity={dimmed ? 0.4 : 1}
-            tracksViewChanges={false}
-            zIndex={zRank * 2}
-            onPress={() => onPress(pin.storeId)}
-        />
-    );
-}
+// A priced pin → its baked-pill spec (logo + price). The key is the visual identity
+// (storeId|price|variant) so the image re-bakes only when the price or cheapest/selected
+// state changes. Unpriced pins have no pill → the marker falls back to the bare badge.
+const pinVariant = (pin: MapPin): MapPillVariant =>
+    pin.active ? 'selected' : pin.recommended ? 'cheapest' : 'neutral';
+const specForPin = (pin: MapPin): MapPillSpec | null =>
+    pin.euro == null
+        ? null
+        : {
+              key: `${pin.storeId}|${pin.euro}|${pin.active ? 's' : pin.recommended ? 'r' : 'n'}`,
+              chainId: pin.chainId,
+              lines: [formatEuro(pin.euro)],
+              variant: pinVariant(pin),
+          };
 
 /**
  * A clustered group of un-priced directory stores. The count is a text View
@@ -303,6 +257,13 @@ export default function StoreResultsMap({
         [pins, zRankMap],
     );
 
+    // Bake each priced pin's (logo + price) pill off-screen → never-clipped native marker images.
+    const pillSpecs = useMemo(
+        () => pinsByZ.map(specForPin).filter((s): s is MapPillSpec => s != null),
+        [pinsByZ],
+    );
+    const { uriFor, bakery } = useBakedPills(pillSpecs);
+
     const allCoords = useMemo(() => {
         const c: LatLng[] = pins.map(p => ({ latitude: p.latitude, longitude: p.longitude }));
         if (routeEndpoints) { c.push(routeEndpoints.from, routeEndpoints.to); }
@@ -330,11 +291,7 @@ export default function StoreResultsMap({
     // Current map region drives the directory grid clustering. Seeded from the
     // initial fit; updated when the user pans/zooms (after the gesture settles).
     const [region, setRegion] = useState<GridRegion>(initialRegion);
-    // Baked price-pill images (storeId|price|variant → file uri), produced off-screen by PillShot.
-    const [pillUris, setPillUris] = useState<Record<string, string>>({});
-    const onPillShot = useCallback((ck: string, uri: string) => {
-        setPillUris(prev => (prev[ck] === uri ? prev : { ...prev, [ck]: uri }));
-    }, []);
+    // Baked price-pill images, produced off-screen by the shared MapPill baker.
 
     // Directory layer: every un-priced store, bucketed into clusters/singles for
     // the current zoom. Priced stores are excluded (they render as pills).
@@ -492,29 +449,29 @@ export default function StoreResultsMap({
                         <Marker coordinate={routeEndpoints.to} pinColor={colors.primary} zIndex={5} />
                     </>
                 )}
-                {pinsByZ.map(pin => (
-                    <StorePin
-                        // Remount (→ re-rasterise) on z-rank change OR baked-image change
-                        // (price / cheapest / selected → a new pillKey, hence a new image).
-                        key={`${pin.storeId}-${zRankMap.get(pin.storeId) ?? 0}-${pin.euro != null ? pillKey(pin) : 'np'}`}
-                        pin={pin}
-                        pillUri={pin.euro != null ? pillUris[pillKey(pin)] : undefined}
-                        dimmed={anySelected && !pin.active}
-                        zRank={zRankMap.get(pin.storeId) ?? 0}
-                        onPress={handleStoreTap}
-                    />
-                ))}
+                {pinsByZ.map(pin => {
+                    const spec = specForPin(pin);
+                    const zRank = zRankMap.get(pin.storeId) ?? 0;
+                    return (
+                        <MapPillMarker
+                            // Remount (→ re-rasterise) on z-rank change OR baked-image change
+                            // (price / cheapest / selected → a new spec key, hence a new image).
+                            key={`${pin.storeId}-${zRank}-${spec ? spec.key : 'np'}`}
+                            coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
+                            chainId={pin.chainId}
+                            pillUri={spec ? uriFor(spec.key) : undefined}
+                            dimmed={anySelected && !pin.active}
+                            zIndex={zRank * 2}
+                            anchorBaked={{ x: 0.16, y: 0.5 }}
+                            onPress={() => handleStoreTap(pin.storeId)}
+                        />
+                    );
+                })}
             </MapView>
 
-            {/* OFF-SCREEN price-pill bakery — renders each priced pin's (logo + price) row and
-                snapshots it to an image the marker can use natively (see PillShot). */}
-            <View style={styles.bakery} pointerEvents="none">
-                {pinsByZ.filter(p => p.euro != null).map(pin => {
-                    const ck = pillKey(pin);
-                    if (pillUris[ck]) return null;
-                    return <PillShot key={ck} ck={ck} pin={pin} styles={styles} colors={colors} selected={pin.active} onShot={onPillShot} />;
-                })}
-            </View>
+            {/* OFF-SCREEN price-pill bakery (shared MapPill baker) — snapshots each priced pin's
+                (logo + price) row to an image the marker can use natively. */}
+            {bakery}
 
             {/* Floating controls — top-right, clear of the status bar. */}
             <View style={[styles.controls, { top: insets.top + spacing.md }]} pointerEvents="box-none">
@@ -534,33 +491,6 @@ export default function StoreResultsMap({
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     dim: { opacity: 0.4 },
 
-    // Price pill. The 30dp chain badge is a separate native-image marker
-    // left-anchored at the same coordinate, so it sits over the pill's left;
-    // paddingLeft clears it and leaves a gap before the price.
-    pill: {
-        alignItems: 'center', justifyContent: 'center',
-        borderRadius: 999, paddingLeft: 38, paddingRight: 12, paddingVertical: 8,
-        borderWidth: 2,
-        elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3,
-    },
-    // Not selected: neutral surface bg; cheapest gets a PINK ring, rest WHITE.
-    pillNeutral: { backgroundColor: c.cardBackground, borderColor: '#FFFFFF' },
-    pillCheapest: { backgroundColor: c.cardBackground, borderColor: c.primary },
-    // Selected: solid pink bg + pink border (no scale — that caused white corners).
-    pillSelected: { backgroundColor: c.primary, borderColor: c.primary },
-    pillPrice: { fontSize: 13, fontWeight: '800' },
-
-    // Single-marker pill: badge + price in one row, badge left-aligned by flex
-    // (variants pillNeutral/pillCheapest/pillSelected supply bg + border).
-    pillRow: {
-        flexDirection: 'row', alignItems: 'center', gap: 5,
-        borderRadius: 999, paddingLeft: 4, paddingRight: 11, paddingVertical: 4,
-        borderWidth: 2,
-        elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.3, shadowRadius: 3,
-    },
-    pillRowBadge: { width: 28, height: 28, borderRadius: 14 },
-    // Off-screen stage where price-pill rows render so view-shot can snapshot them.
-    bakery: { position: 'absolute', top: -10000, left: 0 },
     // iOS un-priced directory pin: bigger logo + transparent padding so it's
     // easy to see and gives a comfortable tap target.
     dirHit: { padding: 6, alignItems: 'center', justifyContent: 'center' },
