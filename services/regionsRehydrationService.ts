@@ -393,3 +393,24 @@ export const persistRehydratedRegions = async (
         console.warn("[regionsRehydration] PATCH failed:", e);
     }
 };
+
+/**
+ * CONVERGENCE stamp: mark a receipt's stored regions as the CURRENT parser revision
+ * WITHOUT re-deriving geometry. Sent with empty region arrays — the server skips a
+ * zero-length lineRegions update (keeps the stored bands) and applies only the
+ * version. Called when re-OCR is unavailable (image not cached / OCR too sparse) so a
+ * stale or kindless receipt stops re-firing the rehydration — and therefore stops
+ * accumulating the per-reopen band drift — instead of retrying (and re-deriving a
+ * slightly different geometry) on every open.
+ */
+export const markRegionsVersionCurrent = async (receiptId: number): Promise<void> => {
+    try {
+        await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/regions`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ headerLineRegions: [], footerLineRegions: [], regionsVersion: REGIONS_VERSION }),
+        });
+    } catch (e) {
+        console.warn("[regionsRehydration] version stamp failed:", e);
+    }
+};

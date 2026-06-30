@@ -28,6 +28,12 @@ import { useSettingsStore } from '../../state/settingsStore';
 export interface BreakdownProduct {
     /** Whether the product was confidently matched to a StoreProduct. */
     matchConfirmed: boolean;
+    /** Line-level category of the CURRENT primary match (server-set at save + on
+     *  every demotion). Preferred over altMatches[0] — which is a borrowed candidate,
+     *  not necessarily the linked SP — so a swiped-'different' line re-buckets
+     *  correctly. Absent on legacy receipts → falls back to altMatches[0] below. */
+    categoryName?: string | null;
+    categoryL2Name?: string | null;
     /** Server returns categoryName (leaf) and categoryL2Name (the L2
      *  ancestor) on altMatches[0] when matched. L2 is the display
      *  source of truth; leaf is the fallback for not-yet-rehydrated
@@ -116,8 +122,13 @@ function buildBuckets(products: BreakdownProduct[]): {
         // leaf categoryName so receipts that haven't been rehydrated
         // server-side still produce a usable breakdown (just at finer
         // granularity until the next hydration pass writes L2 back).
+        // Prefer the LINE-LEVEL category (the current primary match, kept correct
+        // across swipe demotions). Fall back to altMatches[0] only for legacy receipts
+        // that predate the line-level field.
         const top = p.altMatches?.[0];
-        const name = top?.categoryL2Name?.trim() || top?.categoryName?.trim();
+        const name =
+            p.categoryL2Name?.trim() || p.categoryName?.trim() ||
+            top?.categoryL2Name?.trim() || top?.categoryName?.trim();
         // Three signals collapse into the unrecognised bucket so it
         // surfaces as one row at the end of the list, never as a
         // ranked top category:
@@ -128,7 +139,7 @@ function buildBuckets(products: BreakdownProduct[]): {
         //      = the hidden catch-all the cross-chain bootstrap dumps products
         //      into when no real category fits). Same semantic as #1 — "we
         //      don't actually know what this is".
-        if (!name || name.toLowerCase() === 'nepriskirta') {
+        if (!name || name.toLowerCase() === 'nepriskirta' || name.toLowerCase() === 'uncategorised') {
             unrecognisedTotal += lineTotal;
             continue;
         }
