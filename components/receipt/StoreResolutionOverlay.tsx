@@ -75,6 +75,9 @@ export function StoreResolutionOverlay() {
     const [searchText, setSearchText] = useState(req?.ocrAddress ?? '');
     const [searching, setSearching] = useState(false);
     const [searchError, setSearchError] = useState<string | null>(null);
+    // Gates the white-map cover + the off-screen bake burst until the native map's first
+    // paint, so map init / Modal slide / view-shot captures don't all contend at once.
+    const [mapReady, setMapReady] = useState(false);
 
     const initialRegion: Region = {
         latitude: VILNIUS_FALLBACK.lat,
@@ -128,6 +131,26 @@ export function StoreResolutionOverlay() {
     // Dismissed without confirming → cancel the handoff so the pipeline doesn't hang.
     // completeStoreResolution is idempotent, so this is a safe backstop after Confirm too.
     useEffect(() => () => { completeStoreResolution(null); }, []);
+
+    // Reveal the map + start baking once it's painted. Fallback timer in case onMapReady
+    // never fires on some device, so content can't be stuck behind the cover.
+    const handleMapReady = useCallback(() => setMapReady(true), []);
+    useEffect(() => {
+        const t = setTimeout(() => setMapReady(true), 2500);
+        return () => clearTimeout(t);
+    }, []);
+
+    // A single animateToRegion emits onRegionChangeComplete several times on Android; ignore
+    // near-identical regions so one settle triggers at most one re-cluster + re-bake (kills the
+    // zoom/typing jank). The epsilon is far below the cluster→singles threshold (0.045).
+    const handleRegionChange = useCallback((r: Region) => {
+        setRegion((prev) =>
+            Math.abs(r.latitude - prev.latitude) < 1e-4 &&
+            Math.abs(r.longitude - prev.longitude) < 1e-4 &&
+            Math.abs(r.longitudeDelta - prev.longitudeDelta) < 1e-4
+                ? prev
+                : r);
+    }, []);
 
     const onSearch = useCallback(async () => {
         const q = searchText.trim();
@@ -208,7 +231,9 @@ export function StoreResolutionOverlay() {
             <MapPickerScaffold
                 mapRef={mapRef}
                 initialRegion={initialRegion}
-                onRegionChangeComplete={setRegion}
+                onMapReady={handleMapReady}
+                mapReady={mapReady}
+                onRegionChangeComplete={handleRegionChange}
                 searchText={searchText}
                 onSearchTextChange={(v) => { setSearchText(v); setSearchError(null); }}
                 onSearch={onSearch}
@@ -252,9 +277,10 @@ export function StoreResolutionOverlay() {
                     </>
                 }
             />
-            {/* Off-screen bakeries — must live OUTSIDE the map (normal Views, not Markers). */}
-            {bakery}
-            {clusterBakery}
+            {/* Off-screen bakeries — must live OUTSIDE the map (normal Views, not Markers).
+                Gated on mapReady so the view-shot capture burst doesn't run during map init. */}
+            {mapReady && bakery}
+            {mapReady && clusterBakery}
         </View>
     );
 }

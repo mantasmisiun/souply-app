@@ -36,6 +36,10 @@ export interface MapPickerScaffoldProps {
     onRegionChangeComplete?: (r: Region) => void;
     showsUserLocation?: boolean;
 
+    /** While false, an opaque themed cover + spinner hides the raw white MapView
+     *  during native GL init. Undefined (callers that don't pass it) = no cover. */
+    mapReady?: boolean;
+
     searchText: string;
     onSearchTextChange: (v: string) => void;
     onSearch: () => void;
@@ -75,6 +79,11 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                 {props.mapChildren}
             </MapView>
             {props.overlay}
+            {props.mapReady === false && (
+                <View style={[StyleSheet.absoluteFillObject, styles.mapCover]}>
+                    <MaterialProgress size="large" color={colors.primary} />
+                </View>
+            )}
         </View>
     );
 
@@ -142,6 +151,9 @@ const makeStyles = (c: AppTheme) =>
     StyleSheet.create({
         root: { flex: 1 },
         mapBlock: { flex: 1, overflow: 'hidden' },
+        // Opaque themed cover over the MapView until onMapReady — hides the raw white
+        // GL surface + the marker/pill pop-in during native init.
+        mapCover: { backgroundColor: c.pageBackground, alignItems: 'center', justifyContent: 'center' },
         searchRowFloating: {
             position: 'absolute', top: spacing.md, left: spacing.md, right: spacing.md,
             flexDirection: 'row', alignItems: 'center', gap: spacing.sm, zIndex: 10,

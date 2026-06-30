@@ -1,5 +1,5 @@
-import React, { useCallback, useMemo, useRef, useState } from 'react';
-import { Image, StyleSheet, Text, View, type ImageSourcePropType } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Image, StyleSheet, Text, View, type ImageSourcePropType, type LayoutChangeEvent } from 'react-native';
 import { Marker } from 'react-native-maps';
 import { captureRef } from 'react-native-view-shot';
 import { chainBadgeImage } from '../../utils/chainLogoAssets';
@@ -36,54 +36,75 @@ export interface MapPillSpec {
 }
 
 // ── Off-screen renderer: lays a pill out at natural size + snapshots it ──────
-function PillShot({ spec, onShot }: { spec: MapPillSpec; onShot: (key: string, uri: string) => void }) {
+function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: string, uri: string) => void; onFail: (key: string) => void }) {
   const colors = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const ref = useRef<View>(null);
   const badge = chainBadgeImage(spec.chainId);
   const twoRow = spec.lines.length >= 2;
-  const variantStyle =
-    spec.variant === 'selected' ? styles.selected : spec.variant === 'cheapest' ? styles.cheapest : styles.neutral;
+  const ringStyle = spec.variant === 'selected' || spec.variant === 'cheapest' ? styles.ringAccent : styles.ringNeutral;
+  const fillStyle = spec.variant === 'selected' ? styles.fillPrimary : styles.fillCard;
   const primaryColor = spec.variant === 'selected' ? '#FFFFFF' : colors.textPrimary;
   const secondaryColor = spec.variant === 'selected' ? 'rgba(255,255,255,0.85)' : colors.textSecondary;
 
-  // Snapshot once the row (and its logo) have laid out. Both onLayout and the
-  // logo's onLoad call it — whichever is last wins, so the capture always
-  // includes the loaded logo.
-  const grab = useCallback(() => {
+  // GATE the rounded background on a real layout. RN 0.81's new-arch BackgroundDrawable
+  // crashes the whole app ("Required value was null", BackgroundDrawable.kt:121) if a
+  // borderRadius view is drawn at a transient 0×0/NaN size — which these continuously-remounted
+  // bake views hit during the map's relayout. So borderRadius is applied ONLY once onLayout
+  // reports real bounds; until then the view is a plain (un-rounded) bg fill, which is safe.
+  const [ready, setReady] = useState(false);
+  const [badgeLoaded, setBadgeLoaded] = useState(badge == null);
+
+  const onLayout = useCallback((e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    if (width > 1 && height > 1) setReady(true);
+  }, []);
+
+  // Snapshot once the pill is rounded at a real size AND its logo has loaded. onFail (on error
+  // or if it never sizes) advances the throttle window so a stuck pill can't block the rest.
+  useEffect(() => {
+    if (!ready || !badgeLoaded) return;
     const node = ref.current;
     if (!node) return;
     captureRef(node, { format: 'png', result: 'tmpfile', quality: 1 })
       .then((uri) => onShot(spec.key, uri))
-      .catch(() => {});
-  }, [spec.key, onShot]);
+      .catch(() => onFail(spec.key));
+  }, [ready, badgeLoaded, spec.key, onShot, onFail]);
+
+  useEffect(() => {
+    if (ready) return;
+    const t = setTimeout(() => onFail(spec.key), 1500);
+    return () => clearTimeout(t);
+  }, [ready, onFail, spec.key]);
 
   return (
     <View
       ref={ref}
       collapsable={false}
-      style={[styles.pill, twoRow ? styles.pillTwoRow : styles.pillOneRow, variantStyle]}
-      onLayout={grab}
+      style={[styles.pillBorder, ready && (twoRow ? styles.pillRadiusTwoRow : styles.pillRadiusOneRow), ringStyle]}
+      onLayout={onLayout}
     >
-      {badge != null && (
-        <Image source={badge} style={twoRow ? styles.badgeTwoRow : styles.badgeOneRow} onLoad={grab} />
-      )}
-      {twoRow ? (
-        <View style={styles.textColTwoRow}>
-          <Text style={[styles.streetText, { color: primaryColor }]} numberOfLines={1} allowFontScaling={false}>
+      <View style={[styles.pillInner, twoRow ? styles.pillInnerTwoRow : styles.pillInnerOneRow, ready && (twoRow ? styles.pillInnerRadiusTwoRow : styles.pillInnerRadiusOneRow), fillStyle]}>
+        {badge != null && (
+          <Image source={badge} style={twoRow ? styles.badgeTwoRow : styles.badgeOneRow} onLoad={() => setBadgeLoaded(true)} />
+        )}
+        {twoRow ? (
+          <View style={styles.textColTwoRow}>
+            <Text style={[styles.streetText, { color: primaryColor }]} numberOfLines={1} allowFontScaling={false}>
+              {spec.lines[0]}
+            </Text>
+            {spec.lines[1] ? (
+              <Text style={[styles.numberText, { color: secondaryColor }]} numberOfLines={1} allowFontScaling={false}>
+                {spec.lines[1]}
+              </Text>
+            ) : null}
+          </View>
+        ) : (
+          <Text style={[styles.valueText, { color: primaryColor }]} numberOfLines={1} allowFontScaling={false}>
             {spec.lines[0]}
           </Text>
-          {spec.lines[1] ? (
-            <Text style={[styles.numberText, { color: secondaryColor }]} numberOfLines={1} allowFontScaling={false}>
-              {spec.lines[1]}
-            </Text>
-          ) : null}
-        </View>
-      ) : (
-        <Text style={[styles.valueText, { color: primaryColor }]} numberOfLines={1} allowFontScaling={false}>
-          {spec.lines[0]}
-        </Text>
-      )}
+        )}
+      </View>
     </View>
   );
 }
@@ -99,18 +120,33 @@ export function useBakedPills(specs: MapPillSpec[]): {
   bakery: React.ReactNode;
 } {
   const [uris, setUris] = useState<Record<string, string>>({});
+  // `done` (captured OR failed) drives the throttle window so it advances even on a failed capture.
+  const [done, setDone] = useState<Record<string, true>>({});
   const onShot = useCallback((key: string, uri: string) => {
     setUris((prev) => (prev[key] === uri ? prev : { ...prev, [key]: uri }));
+    setDone((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
   }, []);
+  const onFail = useCallback((key: string) => {
+    setDone((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+  }, []);
+  // THROTTLE: bake at most BAKE_CONCURRENCY pills at once. Capturing many rounded views via
+  // react-native-view-shot simultaneously floods native/Skia memory and segfaults
+  // (SkPath::rewind in View.rebuildOutline) — and froze the UI mid-render. The window advances
+  // as each capture finishes or fails, so all pills still bake, just a few at a time.
+  const active = specs.filter((s) => !done[s.key]).slice(0, BAKE_CONCURRENCY);
   const bakery = (
     <View style={styles_bakeryHost} pointerEvents="none">
-      {specs.map((spec) => (uris[spec.key] ? null : <PillShot key={spec.key} spec={spec} onShot={onShot} />))}
+      {active.map((spec) => <PillShot key={spec.key} spec={spec} onShot={onShot} onFail={onFail} />)}
     </View>
   );
   return { uriFor: (key) => uris[key], bakery };
 }
 
-const styles_bakeryHost = { position: 'absolute' as const, top: -10000, left: 0 };
+const BAKE_CONCURRENCY = 4;
+// alignItems:'flex-start' so each off-screen pill sizes to its OWN content width. Without it the
+// host's default 'stretch' expands every short pill to the WIDEST pill's width — the "lots of space
+// between the name and the right edge" on one-line pills.
+const styles_bakeryHost = { position: 'absolute' as const, top: -10000, left: 0, alignItems: 'flex-start' as const };
 
 /**
  * A native-image map marker for a baked pill. Until its image is baked (or for a
@@ -170,20 +206,40 @@ export interface MapClusterSpec {
   big?: boolean;
 }
 
-function ClusterShot({ spec, onShot }: { spec: MapClusterSpec; onShot: (key: string, uri: string) => void }) {
+function ClusterShot({ spec, onShot, onFail }: { spec: MapClusterSpec; onShot: (key: string, uri: string) => void; onFail: (key: string) => void }) {
   const colors = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const ref = useRef<View>(null);
-  const grab = useCallback(() => {
+  // Same bounds-gated radius as PillShot (see there): borderRadius applied only once the view
+  // has real bounds, so a transient 0×0/NaN frame never hits the new-arch BackgroundDrawable crash.
+  const [ready, setReady] = useState(false);
+  const onLayout = useCallback((e: LayoutChangeEvent) => {
+    const { width, height } = e.nativeEvent.layout;
+    if (width > 1 && height > 1) setReady(true);
+  }, []);
+  useEffect(() => {
+    if (!ready) return;
     const node = ref.current;
     if (!node) return;
     captureRef(node, { format: 'png', result: 'tmpfile', quality: 1 })
       .then((uri) => onShot(spec.key, uri))
-      .catch(() => {});
-  }, [spec.key, onShot]);
+      .catch(() => onFail(spec.key));
+  }, [ready, spec.key, onShot, onFail]);
+  useEffect(() => {
+    if (ready) return;
+    const t = setTimeout(() => onFail(spec.key), 1500);
+    return () => clearTimeout(t);
+  }, [ready, onFail, spec.key]);
   return (
-    <View ref={ref} collapsable={false} style={[styles.cluster, spec.big && styles.clusterBig]} onLayout={grab}>
-      <Text style={styles.clusterText} allowFontScaling={false}>{spec.count}</Text>
+    <View
+      ref={ref}
+      collapsable={false}
+      style={[styles.clusterBorder, ready && (spec.big ? styles.clusterRadiusBig : styles.clusterRadius)]}
+      onLayout={onLayout}
+    >
+      <View style={[styles.clusterInner, spec.big && styles.clusterInnerBig, ready && (spec.big ? styles.clusterInnerRadiusBig : styles.clusterInnerRadius)]}>
+        <Text style={styles.clusterText} allowFontScaling={false}>{spec.count}</Text>
+      </View>
     </View>
   );
 }
@@ -193,12 +249,19 @@ export function useBakedClusters(specs: MapClusterSpec[]): {
   bakery: React.ReactNode;
 } {
   const [uris, setUris] = useState<Record<string, string>>({});
+  const [done, setDone] = useState<Record<string, true>>({});
   const onShot = useCallback((key: string, uri: string) => {
     setUris((prev) => (prev[key] === uri ? prev : { ...prev, [key]: uri }));
+    setDone((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
   }, []);
+  const onFail = useCallback((key: string) => {
+    setDone((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+  }, []);
+  // Same throttle as the pills (see useBakedPills): cap concurrent view-shot captures.
+  const active = specs.filter((s) => !done[s.key]).slice(0, BAKE_CONCURRENCY);
   const bakery = (
     <View style={styles_bakeryHost} pointerEvents="none">
-      {specs.map((spec) => (uris[spec.key] ? null : <ClusterShot key={spec.key} spec={spec} onShot={onShot} />))}
+      {active.map((spec) => <ClusterShot key={spec.key} spec={spec} onShot={onShot} onFail={onFail} />)}
     </View>
   );
   return { uriFor: (key) => uris[key], bakery };
@@ -227,32 +290,31 @@ export function MapClusterMarker({ coordinate, pillUri, zIndex = 1, onPress }: {
 
 const makeStyles = (c: AppTheme) =>
   StyleSheet.create({
-    pill: {
-      flexDirection: 'row',
-      alignItems: 'center',
-      borderWidth: 2,
-      elevation: 6,
-      shadowColor: '#000',
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.3,
-      shadowRadius: 3,
-    },
-    // Price pill. FINITE radius (== half its ~40px height) for a stadium shape — a
-    // huge raw borderRadius + borderWidth crashes Android's new-arch BorderDrawable
-    // ("Required value was null"), same as the 2-row pill did at 999. RN clamps to
-    // min(w,h)/2 so 22 still renders fully-rounded ends.
-    pillOneRow: { gap: 5, borderRadius: 22, paddingLeft: 4, paddingRight: 11, paddingVertical: 4 },
-    // Address pill — taller but still a true stadium pill (fully-rounded ends). Uses a
-    // FINITE radius == half the pill height (content 30 + 2×5 pad + 2×2 border ≈ 44 → 22+),
-    // NOT 999: a huge raw borderRadius + borderWidth crashes Android's new-arch BorderDrawable
-    // (drawRoundedBorders "Required value was null") on this taller view. RN clamps to
-    // min(w,h)/2 anyway, so 24 still renders fully-rounded ends.
-    // Equal 6px-ish inset for the logo on left/top/bottom (badge height == the two text rows = 30).
-    pillTwoRow: { gap: 8, borderRadius: 24, paddingLeft: 6, paddingRight: 14, paddingVertical: 5 },
+    // FAKE BORDER via NESTING — the pill is an OUTER ring view (bg = border colour) wrapping an
+    // INNER fill view, each with ONLY backgroundColor + borderRadius and NO borderWidth. We do NOT
+    // use `borderWidth` because `backgroundColor + borderWidth + borderRadius` makes RN 0.81's
+    // new-arch background a LayerDrawable whose BackgroundDrawable.draw crashes ("Required value was
+    // null", BackgroundDrawable.kt:121) mid-draw on this map. The borderless confirm button (bg +
+    // radius, no border) never crashed → mirroring that here removes the crash. No elevation/shadow:
+    // it never rasterised into the baked PNG and its outline rebuild segfaulted view-shot.
+    pillBorder: { padding: 2 },                                   // the 2px ring = the old borderWidth
+    pillInner: { flexDirection: 'row', alignItems: 'center' },
+    pillInnerOneRow: { gap: 5, paddingLeft: 4, paddingRight: 11, paddingVertical: 4 },
+    pillInnerTwoRow: { gap: 8, paddingLeft: 6, paddingRight: 14, paddingVertical: 5 },
+    // Radius styles are SPLIT OUT + applied only once the view has real bounds (see PillShot´s
+    // `ready` gate) — a borderRadius drawn at a transient 0×0/NaN size crashes RN 0.81 new-arch
+    // BackgroundDrawable. Inner radius = outer − 2 (concentric with the 2px ring); RN clamps to
+    // min(w,h)/2 → stadium.
+    pillRadiusOneRow: { borderRadius: 22 },
+    pillRadiusTwoRow: { borderRadius: 24 },
+    pillInnerRadiusOneRow: { borderRadius: 20 },
+    pillInnerRadiusTwoRow: { borderRadius: 22 },
 
-    neutral: { backgroundColor: c.cardBackground, borderColor: '#FFFFFF' },
-    cheapest: { backgroundColor: c.cardBackground, borderColor: c.primary },
-    selected: { backgroundColor: c.primary, borderColor: c.primary },
+    // Ring (outer) colours + fill (inner) colours per variant.
+    ringNeutral: { backgroundColor: '#FFFFFF' },
+    ringAccent: { backgroundColor: c.primary },                  // cheapest + selected
+    fillCard: { backgroundColor: c.cardBackground },             // neutral + cheapest
+    fillPrimary: { backgroundColor: c.primary },                 // selected → solid primary
 
     badgeOneRow: { width: 28, height: 28, borderRadius: 14 },
     badgeTwoRow: { width: 30, height: 30, borderRadius: 15 },
@@ -262,12 +324,20 @@ const makeStyles = (c: AppTheme) =>
     streetText: { fontSize: 12, fontWeight: '700', lineHeight: 16 },
     numberText: { fontSize: 11, fontWeight: '600', lineHeight: 14 },
 
-    // Cluster count bubble (baked off-screen → no shadow, which doesn't rasterise anyway).
-    cluster: {
-      minWidth: 36, height: 36, paddingHorizontal: 8, borderRadius: 18,
-      backgroundColor: c.cardBackground, borderWidth: 2, borderColor: c.primary,
+    // Cluster count bubble — same nested fake-border (no borderWidth) + no shadow + bounds-gated radius.
+    clusterBorder: {
+      padding: 2, backgroundColor: c.primary,
       alignItems: 'center', justifyContent: 'center',
     },
-    clusterBig: { minWidth: 46, height: 46, borderRadius: 23 },
+    clusterInner: {
+      minWidth: 32, height: 32, paddingHorizontal: 6,
+      backgroundColor: c.cardBackground, alignItems: 'center', justifyContent: 'center',
+    },
+    clusterInnerBig: { minWidth: 42, height: 42 },
+    // Radius split out + applied only once sized (see ClusterShot´s `ready` gate).
+    clusterRadius: { borderRadius: 18 },
+    clusterRadiusBig: { borderRadius: 23 },
+    clusterInnerRadius: { borderRadius: 16 },
+    clusterInnerRadiusBig: { borderRadius: 21 },
     clusterText: { fontSize: 13, fontWeight: '800', color: c.primary },
   });
