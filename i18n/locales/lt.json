@@ -1188,6 +1188,8 @@
     "errorOcrParse": "Įvyko klaida skaitant kvitą. Pabandyk dar kartą arba įkelk kitą kvitą.",
     "errorChain": "Parduotuvės tinklas nebuvo atpažintas. Pabandyk įkelti geresnę nuotrauką arba kitą kvitą.",
     "errorStore": "Parduotuvė nebuvo atpažinta. Pabandyk įkelti geresnę nuotrauką arba kitą kvitą.",
+    "errorNoProducts": "Nepavyko atpažinti nė vienos prekės. Pabandyk nufotografuoti dar kartą – laikyk kvitą tiesų ir gerai apšviestą.",
+    "errorDoubledScan": "Šioje nuotraukoje kvitas matomas daugiau nei kartą. Pabandyk nufotografuoti, kad kadre būtų vienas kvitas.",
     "leaveProcessingTitle": "Kvitas dar apdorojamas",
     "leaveProcessingBody": "Jei išeisite dabar, apdorojimas tęsis fone, bet galite matyti nepilną rezultatą.",
     "leaveWait": "Palaukti",
@@ -1196,6 +1198,7 @@
     "swipeEntryCount": "{{count}} kortelių · tikslesniam atpažinimui",
     "swipeEntryShort": "Tikslesniam atpažinimui",
     "productsEmpty": "Prekės neatpažintos",
+    "prodSkipBadge": "Paslepta gamyboje",
     "namePlaceholder": "Įveskite produkto pavadinimą",
     "addPhoto": "Pridėti nuotrauką",
     "send": "Siųsti"

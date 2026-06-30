@@ -11,6 +11,8 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import Svg, { Polygon } from 'react-native-svg';
+import { MaterialProgress } from '../MaterialProgress';
+import { SkeletonBox } from '../SkeletonBox';
 import { bandQuadPoints } from '../../utils/bandQuad';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
@@ -150,6 +152,11 @@ interface Props {
      *  and re-projecting it risks a transient mis-scaled band on a warm reopen. Off for
      *  existing receipts: the burned-in masks already show, with zero drift. */
     drawMasks?: boolean;
+    /** A SAVED receipt's photo streams in from MinIO after the detail renders.
+     *  While true, show a skeleton instead of the "photo not available" fallback —
+     *  that fallback is otherwise indistinguishable from "still fetching" (both are
+     *  imageUri/imageDims null) and flashes before the photo lands. */
+    loading?: boolean;
 }
 
 export default function ReceiptPhotoView({
@@ -161,11 +168,17 @@ export default function ReceiptPhotoView({
     skippedRegions = [],
     maskRegions = [],
     drawMasks = true,
+    loading = false,
 }: Props) {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [explainerOpen, setExplainerOpen] = useState(false);
+    // A saved receipt's photo is fetched from MinIO over the network — show a spinner over the
+    // stage while it loads. Seeded true for a remote (http) URI so the spinner is up before the
+    // Image even fires onLoadStart; local file:// images skip it (they paint instantly).
+    const isRemoteImage = !!imageUri && /^https?:/i.test(imageUri);
+    const [imgLoading, setImgLoading] = useState(isRemoteImage);
 
     // We measure the container's actual rendered width at runtime
     // because the card's content padding makes the math sensitive to
@@ -263,6 +276,24 @@ export default function ReceiptPhotoView({
     }, [headerRegions, productRegions.length, footerRegions, skippedRegions.length, colors, t]);
 
     if (!imageUri || !imageDims) {
+        // Still fetching the saved photo from MinIO → skeleton (title + legend hints +
+        // a tall image placeholder) so the layout is set and nothing flashes. Only once
+        // the fetch settles WITHOUT an image do we show the honest "not available".
+        if (loading) {
+            return (
+                <View style={styles.card}>
+                    <View style={styles.titleRow}>
+                        <Text style={styles.title}>{t('receiptPhoto.title')}</Text>
+                    </View>
+                    <View style={styles.legend}>
+                        <SkeletonBox width={72} height={12} borderRadius={6} />
+                        <SkeletonBox width={56} height={12} borderRadius={6} />
+                        <SkeletonBox width={64} height={12} borderRadius={6} />
+                    </View>
+                    <SkeletonBox width="100%" height={360} borderRadius={6} />
+                </View>
+            );
+        }
         return (
             <View style={styles.card}>
                 <View style={styles.fallbackWrap}>
@@ -325,7 +356,16 @@ export default function ReceiptPhotoView({
                                 height: displayedH,
                             }}
                             resizeMode="stretch"
+                            onLoadStart={() => setImgLoading(true)}
+                            onLoadEnd={() => setImgLoading(false)}
+                            onError={() => setImgLoading(false)}
                         />
+                        {/* Spinner while the saved-receipt photo streams in from MinIO. */}
+                        {isRemoteImage && imgLoading && (
+                            <View style={styles.imgLoadingOverlay} pointerEvents="none">
+                                <MaterialProgress size="large" color={colors.primary} />
+                            </View>
+                        )}
                         {/* Tilt-following band walls: product (green) + skipped
                             (grey dashed) bands as SVG polygons built from each
                             region's per-corner Y, so the overlay follows a
@@ -630,6 +670,12 @@ const makeStyles = (c: AppTheme) =>
             backgroundColor: c.surfaceMuted,
             borderRadius: 6,
             overflow: 'hidden',
+        },
+        imgLoadingOverlay: {
+            ...StyleSheet.absoluteFillObject,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: c.surfaceMuted,
         },
         overlay: {
             position: 'absolute',

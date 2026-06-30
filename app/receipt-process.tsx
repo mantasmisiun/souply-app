@@ -10,9 +10,10 @@ import * as Haptics from "expo-haptics";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
-import { Stack,
+import {
     useLocalSearchParams,
     useRouter } from "expo-router";
+import Animated from "react-native-reanimated";
 import { useCallback,
     useEffect,
     useMemo,
@@ -26,7 +27,6 @@ import {
     Modal,
     Platform,
     Pressable,
-    ScrollView,
     StyleSheet,
     Text,
     TextInput,
@@ -34,7 +34,8 @@ import {
     View,
 } from "react-native";
 import { GlassIconButton } from "../components/GlassIconButton";
-import { ScreenBackButton } from "../components/ScreenBackButton";
+import { useCollapsingHeader, CollapsingHeader } from "../components/CollapsingHeader";
+import { ScreenHeading } from "../components/ScreenHeading";
 import ReceiptComparisonSection from "../components/receipt/ReceiptComparisonSection";
 import ReceiptCategoryBreakdown from "../components/receipt/ReceiptCategoryBreakdown";
 import ReceiptPhotoView from "../components/receipt/ReceiptPhotoView";
@@ -697,6 +698,13 @@ export default function ProcessReceiptScreen() {
     width: number;
     height: number;
   } | null>(null);
+  // True while a SAVED receipt's photo is being fetched from MinIO (download +
+  // re-project into OCR space) in loadExistingReceipt's background block. Lets the
+  // Kvitas-tab photo view show a skeleton instead of flashing the "photo not
+  // available" fallback — which renders whenever imageUri/imageDims are null,
+  // indistinguishable from "still loading". Fresh scans never set it (their image
+  // is local + ready before the detail renders).
+  const [imageLoading, setImageLoading] = useState(false);
   // Per-page metadata for RegionPreview (multi-page PDFs + horizontal
   // receipt-area crop to skip A4 whitespace).
   const [pageMetas, setPageMetas] = useState<PageMeta[]>([]);
@@ -800,11 +808,20 @@ export default function ProcessReceiptScreen() {
   const isCompletelyUnrecognized = (p: ProductLine) =>
     !p.matchConfirmed && !p.storeProductId && p.altMatches.length === 0;
 
-  // "Messed up" = the lowest confidence band (S3, score < S2) — a line the parser couldn't read into
-  // a confident product (a band-merged garbage name, a stray "?" deposit, etc.). On PRODUCTION these
-  // are hidden from the Items list (don't surface garbage to real users); on dev/staging they stay
-  // visible with a "would be hidden on production" marker so the team can see what got dropped.
-  const isMessedUp = (p: ProductLine) => p.itemConfidence?.band === "S3";
+  // "Messed up" = the parser missed a HARD field: the NAME (a stray "?" phantom — no
+  // letters at all) or the PRICE (anything that would render "0,00 EUR" — price <= 0).
+  // Only these two genuinely-broken cases are hidden from the Items list on PRODUCTION
+  // — NOT a merely-uncertain match. A clean line whose match is only moderate (low
+  // confidence band) is still a real, useful product row and stays visible. Weighable
+  // (kg) items are NOT exempt: an unrecoverable €/kg shows "0,00" and is dropped on prod
+  // like any other priceless line (the "never write price" server guard is separate and
+  // unaffected). On dev/staging the dropped lines still render with a "would be hidden on
+  // production" marker.
+  const isMessedUp = (p: ProductLine) => {
+    const noName = !/[a-ząčęėįšųūž]/i.test(p.name ?? "");
+    const noPrice = !(p.price != null && p.price > 0);
+    return noName || noPrice;
+  };
 
   const clearRematchTimers = (index: number) => {
     const spinnerTimer = rematchSpinnerTimersRef.current[index];
@@ -1115,6 +1132,10 @@ export default function ProcessReceiptScreen() {
       // loaded above — fire both in the background so the loading spinner
       // drops as soon as the receipt content is ready (~300 ms instead of
       // waiting for the full comparison round-trip).
+      // Gate the photo view on imageLoading until this whole fetch→download→
+      // re-project settles, so it shows a skeleton instead of the "not available"
+      // fallback (cleared in finally for every exit: success, no-image, or error).
+      setImageLoading(true);
       void (async () => {
         try {
           const imageRes = await fetch(
@@ -1232,6 +1253,8 @@ export default function ProcessReceiptScreen() {
           }
         } catch (e) {
           console.warn("Failed to load receipt image for region preview:", e);
+        } finally {
+          setImageLoading(false);
         }
       })();
 
@@ -3518,6 +3541,16 @@ export default function ProcessReceiptScreen() {
   // C2: active tab. Default Suvestinė on every fresh open; resets when
   // the user navigates away and back (the screen remounts).
   const [activeTab, setActiveTab] = useState<ReceiptTab>("suvestine");
+  // Collapsing header (shop name + address/date band that hides on scroll, segmented
+  // control pinned below it). The parsed receipt header is the `header` var, so the
+  // controller is `headerCtl`. Switching tabs resets the scroll offset so a fresh tab
+  // always opens with the header expanded.
+  const headerCtl = useCollapsingHeader();
+  const switchTab = useCallback((tab: ReceiptTab) => {
+    headerCtl.offset.value = 0;
+    setActiveTab(tab);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Legacy-receipt region rehydration. Triggers when ANY of:
   //   1. lineRegions is missing/empty (pre-Phase-5 receipts).
@@ -3693,53 +3726,44 @@ export default function ProcessReceiptScreen() {
     ? "uploading"
     : "comparing";
 
+  // Collapsing-header title band: shop name + "address · date" (same ScreenHeading
+  // every screen uses). The segmented control is the pinned section below it.
+  const headerShopLine = isPreviewMode
+    ? t('receiptProcess.titlePreview')
+    : header?.storeName || header?.chainName || t('receiptProcess.title');
+  const headerSubtitle = isPreviewMode
+    ? undefined
+    : [header?.storeAddressMatched || header?.storeAddress || null, footer?.date ? formatDate(footer.date) : null]
+        .filter(Boolean)
+        .join(" · ") || undefined;
+
   return (
     <>
-      <Stack.Screen
-        options={{
-          headerStyle: { backgroundColor: colors.cardBackground },
-          headerShadowVisible: false,
-          headerLeft: () => <ScreenBackButton />,
-          headerTitle: () => {
-            if (isPreviewMode) {
-              return (
-                <Text style={styles.navTitle} numberOfLines={1}>
-                  {t('receiptProcess.titlePreview')}
-                </Text>
-              );
-            }
-            const shopLine = header?.storeName || header?.chainName || t('receiptProcess.title');
-            const addr = header?.storeAddressMatched || header?.storeAddress || null;
-            const dateLabel = footer?.date ? formatDate(footer.date) : null;
-            const subtitle = [addr, dateLabel].filter(Boolean).join(" · ");
-            return (
-              <View style={styles.navHeaderWrap}>
-                <Text style={styles.navTitle} numberOfLines={1}>
-                  {shopLine}
-                </Text>
-                {!!subtitle && (
-                  <Text style={styles.navSubtitle} numberOfLines={1}>
-                    {subtitle}
-                  </Text>
-                )}
-              </View>
-            );
-          },
-        }}
-      />
-      {/* C2: segmented control pinned below the navbar. Lives OUTSIDE the
-          per-tab ScrollViews so it stays visible while the body scrolls. */}
-      <SegmentedControl
-        active={activeTab}
-        onChange={setActiveTab}
-        productCount={products.length}
-        styles={styles}
-        colors={colors}
+      <CollapsingHeader
+        controller={headerCtl}
+        back
+        background={colors.cardBackground}
+        collapsing={<ScreenHeading title={headerShopLine} subtitle={headerSubtitle} />}
+        // Segmented control stays pinned below the collapsing title so tabs are
+        // always reachable while the body scrolls.
+        pinned={
+          <SegmentedControl
+            active={activeTab}
+            onChange={switchTab}
+            productCount={products.length}
+            styles={styles}
+            colors={colors}
+          />
+        }
       />
 
       {/* ───── TAB: Suvestinė ───── */}
       {activeTab === "suvestine" && (
-      <ScrollView style={styles.container}>
+      <Animated.ScrollView
+        {...headerCtl.scroll}
+        style={styles.container}
+        contentContainerStyle={{ paddingTop: headerCtl.paddingTop }}
+      >
         {showLoadSkeleton ? (
           <View style={styles.sectionCard}>
             <SkeletonBox width="55%" height={16} borderRadius={6} />
@@ -3830,12 +3854,16 @@ export default function ProcessReceiptScreen() {
         </>
         )}
         <View style={{ height: 40 }} />
-      </ScrollView>
+      </Animated.ScrollView>
       )}
 
       {/* ───── TAB: Prekės ───── */}
       {activeTab === "prekes" && (
-      <ScrollView style={styles.container}>
+      <Animated.ScrollView
+        {...headerCtl.scroll}
+        style={styles.container}
+        contentContainerStyle={{ paddingTop: headerCtl.paddingTop }}
+      >
         {showLoadSkeleton ? (
           <View style={styles.sectionCard}>
             <SkeletonBox width="40%" height={16} borderRadius={6} />
@@ -4080,7 +4108,7 @@ export default function ProcessReceiptScreen() {
           </View>
         )}
         <View style={{ height: 40 }} />
-      </ScrollView>
+      </Animated.ScrollView>
       )}
 
       {/* ───── TAB: Kvitas ─────
@@ -4089,7 +4117,11 @@ export default function ProcessReceiptScreen() {
           chevron-to-reveal-OCR-region was dropped — the photo + bands
           are now the user-facing visual artifact, no separate dev path. */}
       {activeTab === "kvitas" && (
-      <ScrollView style={styles.container}>
+      <Animated.ScrollView
+        {...headerCtl.scroll}
+        style={styles.container}
+        contentContainerStyle={{ paddingTop: headerCtl.paddingTop }}
+      >
         {showLoadSkeleton ? (
           <View style={styles.sectionCard}>
             <SkeletonBox width="35%" height={16} borderRadius={6} />
@@ -4115,6 +4147,7 @@ export default function ProcessReceiptScreen() {
             <ReceiptPhotoView
               imageUri={imageUri}
               imageDims={imageDims}
+              loading={imageLoading}
               headerRegions={
                 header?.lineRegions && header.lineRegions.length > 0
                   ? header.lineRegions
@@ -4140,7 +4173,7 @@ export default function ProcessReceiptScreen() {
           </>
         )}
         <View style={{ height: 40 }} />
-      </ScrollView>
+      </Animated.ScrollView>
       )}
       {isProcessing && (
         <View style={styles.processingOverlay} pointerEvents="auto">
@@ -4446,9 +4479,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   dateGateField: { flexDirection: "row", alignItems: "center", gap: 8, alignSelf: "stretch", borderWidth: 1, borderColor: c.border, borderRadius: 12, paddingVertical: 13, paddingHorizontal: 14, marginVertical: 4 },
   dateGateFieldText: { fontSize: 16, fontWeight: "600", color: c.textPrimary },
   dateGatePlaceholder: { color: c.textSecondary, fontWeight: "500" },
-  navHeaderWrap: { alignItems: "flex-start", maxWidth: 240 },
-  navTitle: { fontSize: 15, fontWeight: "700", color: c.textPrimary },
-  navSubtitle: { fontSize: 11, color: c.textSecondary, marginTop: 1 },
   swipeEntryCard: {
     marginTop: 12,
     marginHorizontal: 16,
