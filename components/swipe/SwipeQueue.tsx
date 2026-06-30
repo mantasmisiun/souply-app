@@ -358,6 +358,21 @@ function ActionButton({
 
 // ── Main screen ────────────────────────────────────────────────────────────
 
+/** The line a Card-B vote endpoint returns (demoted to OCR / re-pointed / confirmed). */
+export interface ResolvedLine {
+  storeProductId?: number | null;
+  matchedName?: string | null;
+  storeProductImageUrl?: string | null;
+  matchConfidence?: number | null;
+  matchConfirmed?: boolean;
+  priceVerified?: boolean;
+  itemConfidence?: any;
+  // Line-level category of the new pick (so the receipt summary re-buckets live).
+  categoryId?: number | null;
+  categoryName?: string | null;
+  categoryL2Name?: string | null;
+}
+
 export interface SwipeQueueProps {
   /** Receipts to resolve this session (already-parsed ids). [] = standalone global session. */
   receiptIds: string[];
@@ -381,6 +396,14 @@ export interface SwipeQueueProps {
    * receipt.
    */
   localPages?: { receiptId: string; pages: PageMeta[] } | null;
+  /**
+   * In-flow LIVE patch: fired when a Card-B receipt-line vote resolves server-side,
+   * carrying the line the vote endpoint returns (a 'different' demotes it to the OCR
+   * name; identical/similar confirm it). The host (receipt-process) patches that
+   * product row immediately so the detail reflects the vote without waiting for a
+   * navigation-focus re-sync. No-op on the standalone route (no host to patch).
+   */
+  onLineResolved?: (receiptId: string, lineIdx: number, line: ResolvedLine | null) => void;
 }
 
 export function SwipeQueue({
@@ -391,6 +414,7 @@ export function SwipeQueue({
   onExit,
   renderHeader = true,
   localPages = null,
+  onLineResolved,
 }: SwipeQueueProps) {
   const { t } = useTranslation();
 
@@ -701,14 +725,23 @@ export function SwipeQueue({
         if (dwell < MIN_DWELL_MS) return;
         const rid = itemsReceiptId ?? currentReceiptId;
         if (!rid) return;
-        await fetch(
+        const res = await fetch(
           `${API_BASE_URL}/api/receipts/${encodeURIComponent(rid)}/lines/${item.receiptLineIdx}/vote`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ vote }),
+            // userId attributes the vote to a distinct user for vocabulary capture
+            // (Issue H) — an 'identical' on a matcher-struggled line learns the alias.
+            body: JSON.stringify({ vote, userId }),
           },
         );
+        // The vote endpoint returns the resolved line ({ ok, line }). Hand it to the
+        // host so the in-flow receipt detail patches that row live (a 'different'
+        // demotes it to OCR) instead of waiting for a focus re-sync on reopen.
+        if (res.ok && onLineResolved) {
+          const data = await res.json().catch(() => null);
+          if (data && "line" in data) onLineResolved(rid, item.receiptLineIdx, data.line ?? null);
+        }
         return;
       }
       let res: Response;

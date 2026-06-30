@@ -41,7 +41,6 @@ import ReceiptCategoryBreakdown from "../components/receipt/ReceiptCategoryBreak
 import ReceiptPhotoView from "../components/receipt/ReceiptPhotoView";
 import { SkeletonBox } from "../components/SkeletonBox";
 import { formatEuro, formatDate } from "../utils/formatCurrency";
-import { capVoluntaryQueue } from "../utils/swipeQueueCap";
 import { devLog } from "../utils/devLog";
 import { BandCropImage } from "../components/receipt/BandCropImage";
 import { ProcessingLoader, type LoadingStage } from "../components/ProcessingLoader";
@@ -59,6 +58,7 @@ import { useReceiptComparison } from "../hooks/useReceiptComparison";
 import {
     computeRehydratedRegions,
     persistRehydratedRegions,
+    markRegionsVersionCurrent,
     REGIONS_VERSION,
 } from "../services/regionsRehydrationService";
 import { DEV_MODE, CONFIDENCE_BAND_DISPLAY, PRODUCT_REOCR_ENABLED } from "../constants/flags";
@@ -132,7 +132,7 @@ import { requestStoreResolution, completeStoreResolution, pickAddressFromRawText
 import { StoreResolutionOverlay } from "../components/receipt/StoreResolutionOverlay";
 import { ocrImageEnhanced } from "../utils/mlkitOcr";
 import { refineFooterBands } from "../utils/footerBandRefine";
-import { maybeReocrProducts } from "../utils/productReocr";
+import { maybeReocrProducts, maybeReocrFooter, maybeReocrHeader, type ReocrOutcome } from "../utils/productReocr";
 import { makeProductStripReocr, reportReocrOutcome } from "../utils/productReocrDevice";
 import { launchDocumentScanner } from "../utils/launchDocumentScanner";
 import { MaterialProgress } from "../components/MaterialProgress";
@@ -226,6 +226,56 @@ interface ProductLine {
    * behind {@link CONFIDENCE_BAND_DISPLAY} and the always-on `__DEV__` badge.
    */
   itemConfidence?: ItemConfidence | null;
+  /**
+   * Line-level category of the CURRENT primary match — set by the server at save +
+   * on every demotion (runner-up → its category; orphan/OCR → null). The summary
+   * breakdown prefers these over altMatches[0] (which is a borrowed candidate, not
+   * necessarily the linked SP) so a swipe-'different' moves the line to the right
+   * bucket. Absent on legacy receipts → breakdown falls back to altMatches[0].
+   */
+  categoryId?: number | null;
+  categoryName?: string | null;
+  categoryL2Name?: string | null;
+}
+
+/**
+ * Map a product line's top match candidate to its stored display/link fields.
+ *
+ * A WEAK cross-chain fallback match — the candidate came from the cross-chain
+ * catalog (`data.crossChain`) AND scored below the auto-apply bar — is too
+ * speculative to advertise as "this product": it's another chain's catalog with a
+ * sub-autoApply name hit (the slyvos / "IKI mince → another chain's mince" trap).
+ * We ORPHAN it here: null matchedName/image/confidence so the receipt row shows
+ * the OCR name from the start, while the candidates stay in `altMatches` for
+ * orphan-rescue voting. The server then mints a fresh same-chain SP and the line
+ * routes to orphan rescue instead of a confident "is this right?" Card-B.
+ *
+ * Strong (≥ autoApply) cross-chain matches still apply; same-chain matches are
+ * untouched (a weak same-chain hit shares the catalog and IS the intended Card-B
+ * confirm case).
+ */
+function topMatchDisplayFields(
+  top: ProductMatchOption | null,
+  isCrossChain: boolean,
+  autoApply: boolean,
+): Pick<
+  ProductLine,
+  | "matchedName"
+  | "storeProductId"
+  | "storeProductImageUrl"
+  | "matchConfidence"
+  | "matchConfirmed"
+  | "priceVerified"
+> {
+  const weakCrossChain = isCrossChain && top !== null && !autoApply;
+  return {
+    matchedName: weakCrossChain ? null : top?.name ?? null,
+    storeProductId: autoApply ? top!.storeProductId : null,
+    storeProductImageUrl: weakCrossChain ? null : top?.imageUrl ?? null,
+    matchConfidence: weakCrossChain ? null : top?.confidence ?? null,
+    matchConfirmed: autoApply,
+    priceVerified: autoApply,
+  };
 }
 
 interface HeaderData {
@@ -1070,6 +1120,9 @@ export default function ProcessReceiptScreen() {
             p.itemConfidence && typeof p.itemConfidence.band === "string"
               ? (p.itemConfidence as ItemConfidence)
               : null,
+          categoryId: p.categoryId ?? null,
+          categoryName: p.categoryName ?? null,
+          categoryL2Name: p.categoryL2Name ?? null,
         })),
       );
 
@@ -1456,6 +1509,9 @@ export default function ProcessReceiptScreen() {
                 itemConfidence: lp.itemConfidence && typeof lp.itemConfidence.band === 'string'
                   ? (lp.itemConfidence as ItemConfidence)
                   : null,
+                categoryId: lp.categoryId ?? null,
+                categoryName: lp.categoryName ?? null,
+                categoryL2Name: lp.categoryL2Name ?? null,
               } : {}),
             };
           }));
@@ -1486,34 +1542,22 @@ export default function ProcessReceiptScreen() {
           (async () => {
             try {
               const userId = await getUserId();
-              // Use the same endpoint the button click target uses
-              // (voluntary mode, this receipt). Otherwise the count and
-              // the cards-on-tap diverge — e.g. the legacy
-              // /api/receipts/:id/swipe-queue endpoint advertised 23
-              // cards but tapping landed on an empty queue because
-              // navigation went to a `standalone` mode the queue screen
-              // no longer handles.
-              const [receiptRes, globalRes] = await Promise.all([
-                fetch(
-                  `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue?receiptId=${receiptId}&voluntary=1`,
-                  { signal: controller.signal }
-                ),
-                fetch(
-                  `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue`,
-                  { signal: controller.signal }
-                ),
-              ]);
+              // SINGLE SOURCE OF TRUTH: the server runs the EXACT served-queue
+              // assembly (relatedTo-gated receipt + global pools through
+              // capVoluntaryQueue, plus ≤5 prepended Card-B resolve cards) and
+              // returns the count — so the badge equals what the swipe screen
+              // actually opens. The old client-side count omitted the relatedTo
+              // gate AND the resolve cards, hence "advertises N → opens empty".
+              const res = await fetch(
+                `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/voluntary-queue-count?receiptId=${encodeURIComponent(receiptId)}`,
+                { signal: controller.signal }
+              );
               clearTimeout(abortTimer);
-              if (!receiptRes.ok || cancelled) return;
-              const receiptData = await receiptRes.json();
-              const globalData = globalRes.ok ? await globalRes.json() : { items: [] };
-              const receiptItems = Array.isArray(receiptData?.items) ? receiptData.items : [];
-              const globalItems = Array.isArray(globalData?.items) ? globalData.items : [];
-              // Reuse the same cap the queue screen applies so the count
-              // matches exactly what the user will swipe through.
-              const capped = capVoluntaryQueue({ receiptItems, globalItems }).items;
+              if (!res.ok || cancelled) return;
+              const data = await res.json();
+              const count = Number.isFinite(data?.count) ? Number(data.count) : 0;
               if (!cancelled) {
-                setSwipeQueueCount(capped.length);
+                setSwipeQueueCount(count);
                 setSwipeQueueFetched(true);
               }
             } catch {
@@ -1911,6 +1955,9 @@ export default function ProcessReceiptScreen() {
           itemConfidence: live.itemConfidence && typeof live.itemConfidence.band === 'string'
             ? (live.itemConfidence as ItemConfidence)
             : null,
+          categoryId: live.categoryId ?? null,
+          categoryName: live.categoryName ?? null,
+          categoryL2Name: live.categoryL2Name ?? null,
         } : p));
       }
     } catch (e: any) {
@@ -2718,23 +2765,34 @@ export default function ProcessReceiptScreen() {
         logParsedReview('IKI', parsed);
         if (!(await ensureHasProducts(parsed.products, 'IKI'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
-        // Phase 1 PRODUCT re-OCR (dev-flagged, Android only): a product with a dropped name
-        // ("?") gets its image strip re-OCR'd in isolation; the recovered boxes splice back in
-        // and the WHOLE receipt re-parses (so all global post-passes re-apply). Kept only if it
-        // strictly improves — fewer garbage, reconciliation no worse, footer total unchanged.
-        // Fail-safe: any error/reject keeps `parsed`. See utils/productReocr.ts.
+        // WHOLE-SECTION PRODUCT re-OCR (flagged, Android only): when a product is a suspect
+        // (dropped name "?", garbled/no price, amount-in-name, collapsed band) OR the receipt
+        // doesn't reconcile beyond ~€1, the ENTIRE product section is re-cropped+upscaled+re-OCR'd
+        // in one isolated pass, the fresh lines splice back in, and the WHOLE receipt re-parses (so
+        // all global post-passes re-apply). Kept only if it strictly improves — fewer garbage,
+        // reconciliation no worse, footer total unchanged. Fail-safe: any error/reject keeps
+        // `parsed`. Whole-section (not per-band) is what fixes cross-row OCR scrambles. See
+        // utils/productReocr.ts.
         if (PRODUCT_REOCR_ENABLED && Platform.OS === 'android' && firstPageUri && firstPageDims) {
           const reOcr = makeProductStripReocr(firstPageUri, firstPageDims.width, firstPageDims.height);
-          const outcome = await maybeReocrProducts(parsed, mergedLines, reOcr, {
-            // Phase 2: all four per-product signals, plus the receipt-level reconciliation pre-gate.
-            // Threshold 1.0 sits ABOVE deposit-fold gaps (deposits fold as no-value), so it fires
-            // only on a real mis-priced product, not on every deposit receipt.
-            reasons: ['no-name', 'no-price', 'amount-in-name', 'collapsed-band'],
-            reconcileThreshold: 1.0,
-          });
-          devLog('productReocr.outcome', { accepted: outcome.accepted, detail: outcome.detail });
-          void reportReocrOutcome(parsed.footer.receiptNo, outcome.accepted, outcome.detail);
-          if (outcome.accepted) parsed = outcome.parsed;
+          let lines = mergedLines;
+          // Re-OCR each receipt SECTION whose defect signal fires, in order, chaining the accepted
+          // line stream. Each pass is fail-safe (rejects keep the prior parse). The defect ROUTES the
+          // tool at the right section: garbled products → product strip; clean products that don't
+          // reconcile → the payment block (the TOTAL is wrong, not a product); garbled address →
+          // header. threshold 1.0 sits above deposit-fold noise.
+          const passes: [string, () => Promise<ReocrOutcome>][] = [
+            ['products', () => maybeReocrProducts(parsed, lines, reOcr, { reasons: ['no-name', 'no-price', 'amount-in-name', 'collapsed-band', 'garbled-name'] })],
+            ['footer', () => maybeReocrFooter(parsed, lines, reOcr, { reconcileThreshold: 1.0 })],
+            ['header', () => maybeReocrHeader(parsed, lines, reOcr)],
+            ['products-recon', () => maybeReocrProducts(parsed, lines, reOcr, { reconcileThreshold: 1.0 })],
+          ];
+          for (const [label, run] of passes) {
+            const o = await run();
+            devLog(`productReocr.${label}`, { accepted: o.accepted, detail: o.detail });
+            void reportReocrOutcome(parsed.footer.receiptNo, o.accepted, o.detail);
+            if (o.accepted) { parsed = o.parsed; lines = o.lines; }
+          }
         }
         // Option A: rebuild footer field bands (date/time/receiptNo/total) from a fresh
         // ISOLATED re-OCR of each strip — fixes guessed bands when MLKit dropped the
@@ -2853,6 +2911,7 @@ export default function ProcessReceiptScreen() {
 
     const matchPromises = rProducts.map(async (rp) => {
       let altMatches: ProductMatchOption[] = [];
+      let isCrossChain = false;
 
       // Strip trailing size tokens from the product name so the fuzzy matcher
       // isn't biased by the number. Also extract amount/unit when present.
@@ -2901,6 +2960,10 @@ export default function ProcessReceiptScreen() {
         );
         const data = await res.json();
         if (Array.isArray(data?.matches)) altMatches = data.matches;
+        // Cross-chain fallback flag (whole match set): the same-chain catalog
+        // returned nothing, so these candidates come from OTHER chains. Used to
+        // orphan a weak (non-auto-applied) cross-chain pick — see topMatchDisplayFields.
+        isCrossChain = !!data?.crossChain;
       } catch (e) {
         console.warn(`Product match failed for "${rp.name}":`, e);
       }
@@ -2914,14 +2977,10 @@ export default function ProcessReceiptScreen() {
 
       return {
         name: matchName,
-        matchedName: top?.name ?? null,
-        storeProductId: autoApply ? top!.storeProductId : null,
-        storeProductImageUrl: top?.imageUrl ?? null,
-        matchConfidence: top?.confidence ?? null,
-        matchConfirmed: autoApply,
-        // Auto-matched items start as "system-verified" — flipped to false the
-        // moment the user intervenes (alt pick, browse pick, create, edit).
-        priceVerified: autoApply,
+        // Weak cross-chain auto-matches are orphaned (OCR shown, candidates kept
+        // for orphan-rescue); auto-matched lines start "system-verified"
+        // (priceVerified=autoApply), flipped false on any user edit. See topMatchDisplayFields.
+        ...topMatchDisplayFields(top, isCrossChain, autoApply),
         altMatches,
         price: rp.price,
         promoPrice: rp.promoPrice,
@@ -3017,6 +3076,7 @@ export default function ProcessReceiptScreen() {
 
     const matchPromises = mProducts.map(async (mp) => {
       let altMatches: ProductMatchOption[] = [];
+      let isCrossChain = false;
 
       // mp.name is already cleaned (size stripped). mp.parsedAmount/parsedUnit
       // were extracted from the raw name before cleaning.
@@ -3042,6 +3102,7 @@ export default function ProcessReceiptScreen() {
         );
         const data = await res.json();
         if (Array.isArray(data?.matches)) altMatches = data.matches;
+        isCrossChain = !!data?.crossChain;
       } catch (e) {
         console.warn(`Product match failed for "${mp.name}":`, e);
       }
@@ -3055,12 +3116,9 @@ export default function ProcessReceiptScreen() {
 
       return {
         name: matchName,
-        matchedName: top?.name ?? null,
-        storeProductId: autoApply ? top!.storeProductId : null,
-        storeProductImageUrl: top?.imageUrl ?? null,
-        matchConfidence: top?.confidence ?? null,
-        matchConfirmed: autoApply,
-        priceVerified: autoApply,
+        // Weak cross-chain auto-matches are orphaned (OCR shown, candidates kept
+        // for orphan-rescue). See topMatchDisplayFields.
+        ...topMatchDisplayFields(top, isCrossChain, autoApply),
         altMatches,
         price: mp.price,
         promoPrice: mp.promoPrice,
@@ -3167,6 +3225,7 @@ export default function ProcessReceiptScreen() {
 
     const matchPromises = nProducts.map(async (np) => {
       let altMatches: ProductMatchOption[] = [];
+      let isCrossChain = false;
 
       const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(np.name);
       const matchName = strippedName || np.name;
@@ -3188,6 +3247,7 @@ export default function ProcessReceiptScreen() {
         );
         const data = await res.json();
         if (Array.isArray(data?.matches)) altMatches = data.matches;
+        isCrossChain = !!data?.crossChain;
       } catch (e) {
         console.warn(`Product match failed for "${np.name}":`, e);
       }
@@ -3201,12 +3261,9 @@ export default function ProcessReceiptScreen() {
 
       return {
         name: matchName,
-        matchedName: top?.name ?? null,
-        storeProductId: autoApply ? top!.storeProductId : null,
-        storeProductImageUrl: top?.imageUrl ?? null,
-        matchConfidence: top?.confidence ?? null,
-        matchConfirmed: autoApply,
-        priceVerified: autoApply,
+        // Weak cross-chain auto-matches are orphaned (OCR shown, candidates kept
+        // for orphan-rescue). See topMatchDisplayFields.
+        ...topMatchDisplayFields(top, isCrossChain, autoApply),
         altMatches,
         price: np.price,
         promoPrice: np.promoPrice,
@@ -3299,6 +3356,7 @@ export default function ProcessReceiptScreen() {
 
     const matchPromises = lProducts.map(async (lp) => {
       let altMatches: ProductMatchOption[] = [];
+      let isCrossChain = false;
 
       const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(lp.name);
       const matchName = strippedName || lp.name;
@@ -3320,6 +3378,7 @@ export default function ProcessReceiptScreen() {
         );
         const data = await res.json();
         if (Array.isArray(data?.matches)) altMatches = data.matches;
+        isCrossChain = !!data?.crossChain;
       } catch (e) {
         console.warn(`Product match failed for "${lp.name}":`, e);
       }
@@ -3333,12 +3392,9 @@ export default function ProcessReceiptScreen() {
 
       return {
         name: matchName,
-        matchedName: top?.name ?? null,
-        storeProductId: autoApply ? top!.storeProductId : null,
-        storeProductImageUrl: top?.imageUrl ?? null,
-        matchConfidence: top?.confidence ?? null,
-        matchConfirmed: autoApply,
-        priceVerified: autoApply,
+        // Weak cross-chain auto-matches are orphaned (OCR shown, candidates kept
+        // for orphan-rescue). See topMatchDisplayFields.
+        ...topMatchDisplayFields(top, isCrossChain, autoApply),
         altMatches,
         price: lp.price,
         promoPrice: lp.promoPrice,
@@ -3442,6 +3498,7 @@ export default function ProcessReceiptScreen() {
 
     const matchPromises = iProducts.map(async (ip) => {
       let altMatches: ProductMatchOption[] = [];
+      let isCrossChain = false;
 
       const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(ip.name);
       const matchName = strippedName || ip.name;
@@ -3463,6 +3520,7 @@ export default function ProcessReceiptScreen() {
         );
         const data = await res.json();
         if (Array.isArray(data?.matches)) altMatches = data.matches;
+        isCrossChain = !!data?.crossChain;
       } catch (e) {
         console.warn(`Product match failed for "${ip.name}":`, e);
       }
@@ -3476,12 +3534,9 @@ export default function ProcessReceiptScreen() {
 
       return {
         name: matchName,
-        matchedName: top?.name ?? null,
-        storeProductId: autoApply ? top!.storeProductId : null,
-        storeProductImageUrl: top?.imageUrl ?? null,
-        matchConfidence: top?.confidence ?? null,
-        matchConfirmed: autoApply,
-        priceVerified: autoApply,
+        // Weak cross-chain auto-matches are orphaned (OCR shown, candidates kept
+        // for orphan-rescue). See topMatchDisplayFields.
+        ...topMatchDisplayFields(top, isCrossChain, autoApply),
         altMatches,
         price: ip.price,
         promoPrice: ip.promoPrice,
@@ -3606,14 +3661,27 @@ export default function ProcessReceiptScreen() {
     const targetImageUri = imageUri;
     void (async () => {
       const result = await computeRehydratedRegions(targetImageUri, chainId);
-      if (!result) return;
+
+      // CONVERGENCE (idempotent reopen): the per-reopen band drift came from
+      // re-deriving header/footer geometry afresh on EVERY open of a stale/kindless
+      // receipt, because the version stamp only landed on re-OCR success — a failed
+      // re-OCR bailed and the receipt re-fired forever. Now we ALWAYS stamp the
+      // current version (success OR failure), so a receipt is re-derived at most ONCE
+      // and then short-circuits like a healthy v-current one. When re-OCR is
+      // unavailable, keep the stored bands and just stamp the version.
+      if (!result) {
+        setHeader((h) => (h ? { ...h, regionsVersion: REGIONS_VERSION } : h));
+        void markRegionsVersionCurrent(targetReceiptId);
+        return;
+      }
       // Region overwrite ONLY when the stored bands are unusable (missing/
       // kindless). A re-OCR of the uploaded image lands in a slightly different
       // pixel scale than the STORED product/mask bands (which we don't re-derive),
       // so overwriting just header/footer with re-OCR'd regions visibly misaligns
       // them against the products. When the stored regions are already kinded we
       // KEEP them — same coordinate space as the products — and still backfill the
-      // re-parsed VALUES (total/date/…) + bump the version below.
+      // re-parsed VALUES (total/date/…) + bump the version below. The overwrite
+      // makes the bands kinded, so next reopen Needs=false → no further re-derive.
       setHeader((h) => {
         if (!h) return h;
         const next: HeaderData = { ...h, regionsVersion: REGIONS_VERSION };
@@ -3720,6 +3788,28 @@ export default function ProcessReceiptScreen() {
         }
         onAllDone={leaveSwipePhase}
         onExit={leaveSwipePhase}
+        // LIVE patch: a Card-B vote ('different' demotes to OCR, identical/similar
+        // confirm) updates this row immediately so flipping back to the detail shows
+        // the resolved state — no wait for the focus re-sync on reopen. Guarded by the
+        // active receipt id (the swipe phase is single-receipt).
+        onLineResolved={(rid, lineIdx, live) => {
+          if (String(rid) !== String(swipingReceiptId) || !live) return;
+          setProducts(prev => prev.map((p, i) => i === lineIdx ? {
+            ...p,
+            storeProductId: live.storeProductId ?? null,
+            matchedName: live.matchedName ?? null,
+            storeProductImageUrl: live.storeProductImageUrl ?? null,
+            matchConfidence: typeof live.matchConfidence === 'number' ? live.matchConfidence : null,
+            matchConfirmed: !!live.matchConfirmed,
+            priceVerified: !!live.priceVerified,
+            itemConfidence: live.itemConfidence && typeof live.itemConfidence.band === 'string'
+              ? (live.itemConfidence as ItemConfidence)
+              : null,
+            categoryId: live.categoryId ?? null,
+            categoryName: live.categoryName ?? null,
+            categoryL2Name: live.categoryL2Name ?? null,
+          } : p));
+        }}
       />
     );
   }
