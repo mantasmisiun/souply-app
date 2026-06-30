@@ -37,15 +37,17 @@ export const DEV_RANDOM_USER_UUID = false;
 export const CONFIDENCE_BAND_DISPLAY = false;
 
 /**
- * Phase 1 PRODUCT-region re-OCR (IKI, Android only). When a parsed product comes
- * back with a dropped name ("?"), crop+upscale+re-OCR its image strip in isolation,
- * splice the recovered boxes back into the line stream, re-run the whole parse, and
- * keep it only if it strictly improves (fewer garbage, reconciliation no worse,
- * footer total unchanged) — see utils/productReocr.ts + project_roadmap_product_reocr.
+ * WHOLE-SECTION PRODUCT re-OCR (IKI, Android only). When a parsed product is a suspect
+ * (dropped name "?", no/garbled price, amount-in-name, collapsed band) OR the receipt
+ * doesn't reconcile beyond ~€1, crop+upscale+re-OCR the ENTIRE product section in one
+ * fresh isolated pass, splice the recovered lines back, re-run the whole parse, and keep
+ * it only if it STRICTLY improves (fewer garbage, smaller |Σ−total|, footer total
+ * unchanged) — see utils/productReocr.ts + project_roadmap_product_reocr.
  *
- * Default false: the splice+gate core is unit-tested, but the on-device pixel re-OCR
- * needs golden-set validation (real MLKit data isn't in jest). Flip true to dogfood;
- * it adds ~1-2s per degraded receipt (Android), zero cost on clean receipts (gate
- * fires nothing), and is fail-safe (any error/reject keeps the original parse).
+ * ENABLED for dogfooding. It adds ~1-3s per *degraded* IKI receipt on Android (zero cost
+ * on clean receipts — the gate fires nothing), and is fail-safe: any error / non-improving
+ * candidate keeps the original parse. Watch logcat `productReocr.outcome` to see accept/
+ * reject + the garbage/gap deltas. Set false to disable (e.g. before a perf-sensitive prod
+ * release) once validated.
  */
-export const PRODUCT_REOCR_ENABLED = false;
+export const PRODUCT_REOCR_ENABLED = true;

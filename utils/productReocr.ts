@@ -27,8 +27,12 @@ import {
 const NAME_HAS_AMOUNT = /-?\d{1,4}[.,]\s?\d{2}\b/;
 // A real product band is tens of px tall; below this is a degenerate/collapsed band.
 const MIN_BAND_H = 8;
+// A DIGIT wedged BETWEEN two letters inside a word ("DŽ10VINTOS"←DŽIOVINTOS, "RYZA1S") is almost
+// always an OCR letter→digit substitution (I→1, O→0, IO→10), i.e. a garbled NAME. Letters on BOTH
+// sides keep it tight: a leading "5L"/"30%"/"2,5kg" (digit at a word edge) is NOT flagged.
+const NAME_GARBLE = /[A-Za-zĄČĘĖĮŠŲŪŽąčęėįšųūž]\d+[A-Za-zĄČĘĖĮŠŲŪŽąčęėįšųūž]/;
 
-export type SuspectReason = 'no-name' | 'amount-in-name' | 'no-price' | 'collapsed-band' | 'reconciliation';
+export type SuspectReason = 'no-name' | 'amount-in-name' | 'no-price' | 'collapsed-band' | 'garbled-name' | 'reconciliation';
 
 /** A product is "garbage" by the reparse-harness definition (no-name / amount-in-name / no-price). */
 export function isGarbageProduct(p: IkiProduct): boolean {
@@ -39,7 +43,7 @@ export function isGarbageProduct(p: IkiProduct): boolean {
     return false;
 }
 
-/** Why a product should be re-OCR'd (garbage signals + a collapsed band), or null if clean. */
+/** Why a product should be re-OCR'd (garbage signals + collapsed band + garbled name), or null. */
 export function suspectReason(p: IkiProduct): SuspectReason | null {
     const nm = (p.name ?? '').trim();
     if (!nm || nm === '?') return 'no-name';
@@ -47,7 +51,17 @@ export function suspectReason(p: IkiProduct): SuspectReason | null {
     if (!(p.price != null && p.price > 0)) return 'no-price';
     const r = p.region;
     if (r && (r.yBottom - r.yTop) < MIN_BAND_H) return 'collapsed-band';
+    if (NAME_GARBLE.test(nm)) return 'garbled-name';
     return null;
+}
+
+/** A name with a digit wedged inside a word ("DŽ10VINTOS") — an OCR garble worth re-OCR'ing. */
+export function isNameGarbled(p: IkiProduct): boolean {
+    return NAME_GARBLE.test((p.name ?? '').trim());
+}
+
+export function nameGarbleCount(parsed: IkiParseResult): number {
+    return parsed.products.reduce((n, p) => n + (isNameGarbled(p) ? 1 : 0), 0);
 }
 
 export interface SuspectStrip {
@@ -132,57 +146,164 @@ export function acceptReocr(
     const candGarb = garbageCount(candidate);
     const origGap = reconcileGap(original);
     const candGap = reconcileGap(candidate);
+    // Also reward CLEARING a garbled name ("DŽ10VINTOS" → "DŽIOVINTOS"): a name fix changes neither
+    // garbage count nor reconciliation, so without this signal the accept gate would reject it.
+    const origNameG = nameGarbleCount(original);
+    const candNameG = nameGarbleCount(candidate);
 
     const reconImproved = origGap != null && candGap != null && candGap < origGap - 1e-9;
     const reconWorse = origGap != null && candGap != null && candGap > origGap + epsilon;
-    const improved = candGarb < origGarb || reconImproved;
+    const improved = candGarb < origGarb || candNameG < origNameG || reconImproved;
     return improved && !reconWorse;
 }
 
 /** Injected device re-OCR: given a strip's source y-span, return clean fresh IkiLines (or null on failure). */
 export type ReOcrFn = (
     ySpan: [number, number],
-    reason: SuspectReason,
+    reason: string,            // a label for logging (the trigger reason / section)
     productIndex: number,
 ) => Promise<IkiLine[] | null>;
 
+/**
+ * The y-span covering the WHOLE product section — first product's top to last product's bottom.
+ * Whole-section re-OCR re-images this entire strip in ONE fresh isolated pass, so a mis-OCR that
+ * displaced a price/name ACROSS bands (a vertical scramble like receipt-197's orphaned price, or
+ * a horizontal name/weight interleave like receipt-198) comes back in the right place — which
+ * per-band re-OCR (cropping a single suspect's band) cannot fix, because the displaced content
+ * lives in a DIFFERENT band than the suspect. The footer is deliberately excluded (it parses more
+ * reliably from the original lines + footerBandRefine).
+ */
+export function productSectionSpan(parsed: IkiParseResult): [number, number] | null {
+    let top = Infinity, bottom = -Infinity;
+    for (const p of parsed.products) {
+        const r = p.region;
+        if (r && r.yBottom > r.yTop) { top = Math.min(top, r.yTop); bottom = Math.max(bottom, r.yBottom); }
+    }
+    return bottom > top ? [top, bottom] : null;
+}
+
+/** Lines whose y-CENTRE falls within the span (drops any header/footer the crop's pad picked up). */
+function linesInSpan(lines: IkiLine[], [yTop, yBottom]: [number, number]): IkiLine[] {
+    return lines.filter((l) => {
+        const yc = (l.yTop + l.yBottom) / 2;
+        return yc >= yTop && yc <= yBottom;
+    });
+}
+
+/**
+ * HEADER section span — everything above the first product (store name + address). Re-OCR'd to
+ * recover a garbled/dropped store address (the street-word split "Vilniaus"→"Vi IniauS").
+ */
+export function headerSectionSpan(parsed: IkiParseResult): [number, number] | null {
+    const sec = productSectionSpan(parsed);
+    if (!sec) return null;
+    return sec[0] > 1 ? [0, sec[0]] : null;
+}
+
+// The payment block names the total / VAT / cash. Re-OCR'ing that strip recovers a scrambled
+// payment TABLE (the wrong-total case, receipt-199: a column-shuffle gave a phantom 8,42).
+const PAYMENT_KEYWORD = /Mok[eė]t[ia]|Mokestis|\bSUMA\b|Suma\s+su\s+P[VU]M|Grynieji|Gr[aą][žz]a|Be\s+PVM|PVM\s+suma|Pirkini/i;
+/** FOOTER/payment section span — the y-range of payment-keyword lines BELOW the products. */
+export function footerSectionSpan(parsed: IkiParseResult, lines: IkiLine[]): [number, number] | null {
+    const sec = productSectionSpan(parsed);
+    const after = sec ? sec[1] : 0;
+    let top = Infinity, bottom = -Infinity;
+    for (const l of lines) {
+        if ((l.yTop + l.yBottom) / 2 > after && PAYMENT_KEYWORD.test(l.text)) {
+            top = Math.min(top, l.yTop); bottom = Math.max(bottom, l.yBottom);
+        }
+    }
+    return bottom > top ? [top, bottom] : null;
+}
+
+/** A crude "how good is this store address" score (street word + a house number + length). */
+function addressScore(addr?: string | null): number {
+    const a = (addr ?? '').trim();
+    if (!a) return 0;
+    let s = Math.min(a.length, 40);
+    if (/\b(g\.|gatv[ėe]|pr\.|al[ėe]ja|prospekt|pl\.)/i.test(a)) s += 50;   // a street word
+    if (/\d/.test(a)) s += 20;                                              // a house number
+    return s;
+}
+const GOOD_ADDRESS_SCORE = 60;   // street word + a number is already good enough → don't re-OCR
+
+/**
+ * FOOTER accept: the footer re-OCR is ALLOWED to change the total (that's the point). Keep the
+ * candidate iff the products are untouched (same count, no new garbage) AND the new total makes the
+ * receipt reconcile STRICTLY better. A bad re-read can't win — only a smaller |Σpaid − total| does.
+ */
+export function acceptFooterReocr(original: IkiParseResult, candidate: IkiParseResult, epsilon = 0.05): boolean {
+    if (candidate.products.length !== original.products.length) return false;
+    if (garbageCount(candidate) > garbageCount(original)) return false;
+    const ogap = reconcileGap(original), cgap = reconcileGap(candidate);
+    if (ogap == null || cgap == null) return false;
+    return cgap < ogap - epsilon;
+}
+
+/** HEADER accept: products + total untouched; keep iff the store address scores HIGHER (recovered). */
+export function acceptHeaderReocr(original: IkiParseResult, candidate: IkiParseResult, epsilon = 0.05): boolean {
+    if (candidate.products.length !== original.products.length) return false;
+    if (garbageCount(candidate) > garbageCount(original)) return false;
+    const ot = original.footer?.total, ct = candidate.footer?.total;
+    if (ot != null && ct != null && Math.abs(ot - ct) > epsilon) return false;
+    return addressScore(candidate.header?.storeAddress) > addressScore(original.header?.storeAddress);
+}
+
 export interface ReocrOptions {
-    /** Cap on suspect strips re-OCR'd per receipt (protects the tail). */
-    maxStrips?: number;
     /** Reconciliation tolerance for the accept gate. */
     epsilon?: number;
-    /** Restrict which per-product signals fire re-OCR (Phase 1 ships 'no-name' only). Default: all. */
+    /** Restrict which per-product signals fire the PRODUCT re-OCR. Default: all of them. */
     reasons?: SuspectReason[];
-    /**
-     * Receipt-level pre-gate (Phase 2): when NO per-product signal fires but the receipt doesn't
-     * reconcile by MORE than this (|Σpaid − total|), re-OCR the product strips anyway — a product
-     * has a clean-looking but mis-OCR'd PRICE. Undefined = off.
-     *
-     * Keep it ABOVE typical deposit-fold gaps: a bottle DEPOSIT folds as no-value, so every
-     * deposit receipt already shows a gap = Σdeposits (0,10 each). ~1.00 cleanly separates a
-     * mis-priced product (a single bad price shifts the total by €1-10) from deposit folding, so
-     * the pre-gate doesn't waste a re-OCR on every deposit receipt. (The accept gate would reject
-     * those anyway — re-OCR can't change a folded deposit — but this avoids the wasted latency.)
-     */
+    /** Receipt-level gap (|Σpaid − total|) above which the FOOTER re-OCR fires (default 1.0 — above
+     *  deposit-fold noise). Also used as the product re-OCR's reconciliation pre-gate when passed. */
     reconcileThreshold?: number;
-    /** Cap on strips when only the receipt-level pre-gate fired (it re-OCRs every product). */
-    maxReconStrips?: number;
 }
 
 export interface ReocrOutcome {
     parsed: IkiParseResult;
-    /** True iff the candidate was accepted and is returned. */
+    /** The line stream after this pass — spliced if accepted, else the input (so passes can chain). */
+    lines: IkiLine[];
     accepted: boolean;
-    /** How many strips were re-OCR'd + the gate decision, for devLog/audit. */
+    /** The trigger + gate decision + deltas, for devLog/telemetry. */
     detail: string;
 }
 
 /**
- * Orchestrate one re-OCR pass: detect suspect products → re-OCR each via the injected
- * callback → splice all fresh lines into mergedLines → re-run the UNMODIFIED parseIkiReceipt
- * over the WHOLE receipt ONCE → accept only if it strictly improves. FAIL-SAFE: any error,
- * empty re-OCR, or a non-improving / reconciliation-worsening candidate returns the ORIGINAL
- * untouched. `mergedLines` must be the SAME full IkiLine[] originally passed to parseIkiReceipt.
+ * The shared engine for ALL section re-OCR: re-OCR `span` in one isolated pass via the injected
+ * callback → splice the fresh lines (clamped to the span) over the originals → re-run the UNMODIFIED
+ * parseIkiReceipt → keep it ONLY if `accept` says it strictly improves. FAIL-SAFE: any error / empty
+ * re-OCR / rejected candidate returns the ORIGINAL parse + lines untouched.
+ */
+async function runSectionReocr(
+    parsed: IkiParseResult,
+    mergedLines: IkiLine[],
+    reOcr: ReOcrFn,
+    span: [number, number],
+    label: string,
+    accept: (orig: IkiParseResult, cand: IkiParseResult) => boolean,
+): Promise<ReocrOutcome> {
+    let fresh: IkiLine[] | null = null;
+    try { fresh = await reOcr(span, label, -1); } catch { fresh = null; }
+    const freshInSpan = fresh ? linesInSpan(fresh, span) : [];
+    if (freshInSpan.length === 0) return { parsed, lines: mergedLines, accepted: false, detail: `${label}:re-ocr-empty` };
+
+    const lines = spliceIkiLines(mergedLines, freshInSpan, span);
+    let candidate: IkiParseResult;
+    try { candidate = parseIkiReceipt(lines); } catch { return { parsed, lines: mergedLines, accepted: false, detail: `${label}:re-parse-error` }; }
+
+    const og = garbageCount(parsed), cg = garbageCount(candidate);
+    const ogap = reconcileGap(parsed), cgap = reconcileGap(candidate);
+    const detail = `${label} lines=${freshInSpan.length} garb ${og}->${cg} gap ${ogap}->${cgap} total ${parsed.footer?.total}->${candidate.footer?.total}`;
+    if (accept(parsed, candidate)) return { parsed: candidate, lines, accepted: true, detail: `accept: ${detail}` };
+    return { parsed, lines: mergedLines, accepted: false, detail: `reject: ${detail}` };
+}
+
+/**
+ * PRODUCT-section re-OCR: fire on a per-product suspect (dropped name / garbled name / no-price /
+ * amount-in-name / collapsed band), or — when `reconcileThreshold` is set and nothing is flagged
+ * per product — a reconciliation gap. Re-OCRs the WHOLE product section in one pass, which fixes
+ * cross-band scrambles (a price boxed above its name, a name/weight interleave) that a single
+ * suspect's band can't. Footer total must stay unchanged.
  */
 export async function maybeReocrProducts(
     parsed: IkiParseResult,
@@ -190,62 +311,57 @@ export async function maybeReocrProducts(
     reOcr: ReOcrFn,
     opts: ReocrOptions = {},
 ): Promise<ReocrOutcome> {
-    const maxStrips = opts.maxStrips ?? 4;
     const epsilon = opts.epsilon ?? 0.05;
     const reasons = opts.reasons;
-
     let suspects = detectSuspectProducts(parsed);
     if (reasons) suspects = suspects.filter((s) => reasons.includes(s.reason));
-    let cap = maxStrips;
-    // RECEIPT-LEVEL pre-gate: nothing flagged per-product, but the receipt doesn't reconcile by
-    // more than the threshold → a clean-looking product has a mis-OCR'd price. Re-OCR every
-    // product strip (the accept gate keeps it only if the gap actually shrinks). Skipped when the
-    // gap is deposit-sized (≤ threshold), so it never fires on a normal deposit receipt.
-    if (suspects.length === 0 && opts.reconcileThreshold != null) {
+    let trigger: string | null = suspects[0]?.reason ?? null;
+    if (!trigger && opts.reconcileThreshold != null) {
         const gap = reconcileGap(parsed);
-        const n = parsed.products.length;
-        const reconCap = opts.maxReconStrips ?? 8;
-        if (gap != null && gap > opts.reconcileThreshold && n > 0 && n <= reconCap) {
-            suspects = parsed.products
-                .map((p, index): SuspectStrip | null =>
-                    p.region && p.region.yBottom > p.region.yTop
-                        ? { index, reason: 'reconciliation', ySpan: [p.region.yTop, p.region.yBottom] }
-                        : null)
-                .filter((s): s is SuspectStrip => s != null);
-            cap = reconCap;
-        }
+        if (gap != null && gap > opts.reconcileThreshold) trigger = 'reconciliation';
     }
-    suspects = suspects.slice(0, cap);
-    if (suspects.length === 0) return { parsed, accepted: false, detail: 'no-suspects' };
+    if (!trigger) return { parsed, lines: mergedLines, accepted: false, detail: 'no-suspects' };
+    const span = productSectionSpan(parsed);
+    if (!span) return { parsed, lines: mergedLines, accepted: false, detail: 'no-span' };
+    return runSectionReocr(parsed, mergedLines, reOcr, span, `products(${trigger})`, (o, c) => acceptReocr(o, c, epsilon));
+}
 
-    let lines = mergedLines;
-    let reOcrd = 0;
-    for (const s of suspects) {
-        let fresh: IkiLine[] | null = null;
-        try {
-            fresh = await reOcr(s.ySpan, s.reason, s.index);
-        } catch {
-            fresh = null;
-        }
-        if (fresh && fresh.length > 0) {
-            lines = spliceIkiLines(lines, fresh, s.ySpan);
-            reOcrd++;
-        }
-    }
-    if (reOcrd === 0) return { parsed, accepted: false, detail: 're-ocr-empty' };
+/**
+ * FOOTER-section re-OCR (smart routing): fire ONLY when the products are CLEAN but the receipt
+ * doesn't reconcile by more than `reconcileThreshold` → the TOTAL is the suspect, not a product
+ * (receipt-199's phantom 8,42). Re-OCR the payment block; keep it iff the new total reconciles
+ * better. If products are dirty, fix them with maybeReocrProducts first.
+ */
+export async function maybeReocrFooter(
+    parsed: IkiParseResult,
+    mergedLines: IkiLine[],
+    reOcr: ReOcrFn,
+    opts: ReocrOptions = {},
+): Promise<ReocrOutcome> {
+    const epsilon = opts.epsilon ?? 0.05;
+    const threshold = opts.reconcileThreshold ?? 1.0;
+    if (detectSuspectProducts(parsed).length > 0) return { parsed, lines: mergedLines, accepted: false, detail: 'footer:products-dirty' };
+    const gap = reconcileGap(parsed);
+    if (gap == null || gap <= threshold) return { parsed, lines: mergedLines, accepted: false, detail: 'footer:reconciled' };
+    const span = footerSectionSpan(parsed, mergedLines);
+    if (!span) return { parsed, lines: mergedLines, accepted: false, detail: 'footer:no-span' };
+    return runSectionReocr(parsed, mergedLines, reOcr, span, 'footer', (o, c) => acceptFooterReocr(o, c, epsilon));
+}
 
-    let candidate: IkiParseResult;
-    try {
-        candidate = parseIkiReceipt(lines);
-    } catch {
-        return { parsed, accepted: false, detail: 're-parse-error' };
-    }
-
-    const og = garbageCount(parsed), cg = garbageCount(candidate);
-    const ogap = reconcileGap(parsed), cgap = reconcileGap(candidate);
-    const detail = `strips=${reOcrd} garb ${og}->${cg} gap ${ogap}->${cgap}`;
-    if (acceptReocr(parsed, candidate, epsilon)) {
-        return { parsed: candidate, accepted: true, detail: `accept: ${detail}` };
-    }
-    return { parsed, accepted: false, detail: `reject: ${detail}` };
+/**
+ * HEADER-section re-OCR: fire only when the parsed store address looks garbled/missing. Re-OCR the
+ * header strip; keep it iff the recovered address scores higher (products + total untouched). The
+ * store usually matches by id anyway, so this mainly improves the displayed/searchable address.
+ */
+export async function maybeReocrHeader(
+    parsed: IkiParseResult,
+    mergedLines: IkiLine[],
+    reOcr: ReOcrFn,
+    opts: ReocrOptions = {},
+): Promise<ReocrOutcome> {
+    const epsilon = opts.epsilon ?? 0.05;
+    if (addressScore(parsed.header?.storeAddress) >= GOOD_ADDRESS_SCORE) return { parsed, lines: mergedLines, accepted: false, detail: 'header:address-ok' };
+    const span = headerSectionSpan(parsed);
+    if (!span) return { parsed, lines: mergedLines, accepted: false, detail: 'header:no-span' };
+    return runSectionReocr(parsed, mergedLines, reOcr, span, 'header', (o, c) => acceptHeaderReocr(o, c, epsilon));
 }

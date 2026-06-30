@@ -13,7 +13,9 @@ import type { ReOcrFn } from './productReocr';
  * no-op case (the gate fired nothing). Never throws / never blocks the parse.
  */
 export function reportReocrOutcome(receiptNo: string | null | undefined, accepted: boolean, detail: string): void {
-    if (!detail || detail === 'no-suspects') return;
+    // Only report passes that ACTUALLY re-OCR'd (accept:/reject:) — gate-skips (no-suspects,
+    // footer:reconciled, header:address-ok, …) mean the pass never ran, so they're not worth a POST.
+    if (!detail || !/^(accept|reject):/.test(detail)) return;
     fetch(`${API_BASE_URL}/api/receipts/reocr-telemetry`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -36,13 +38,18 @@ export function makeProductStripReocr(pageUri: string, pageWidth: number, pageHe
     return async (ySpan, reason, productIndex) => {
         if (Platform.OS !== 'android' || !pageUri || !(pageWidth > 0) || !(pageHeight > 0)) return null;
         const [yTop, yBottom] = ySpan;
-        const padY = Math.max(10, (yBottom - yTop) * 0.6);
+        // Pad is 0.6× the strip height for a small band, CAPPED at 80px so a tall whole-section
+        // crop doesn't swallow the header/footer (the orchestrator's linesInSpan also drops
+        // anything outside the section, so a little extra pad is harmless).
+        const padY = Math.min(Math.max(10, (yBottom - yTop) * 0.6), 80);
         const cropY0 = Math.max(0, Math.floor(yTop - padY));
         const cropH = Math.min(pageHeight, Math.ceil(yBottom + padY)) - cropY0;
         if (cropH < 6 || pageWidth < 4) return null;
 
-        const targetW = Math.min(Math.round(pageWidth * 3), 2600);
-        const f = targetW / pageWidth;
+        // Upscale ~3× so each glyph clears ML Kit's size floor, but cap BOTH dimensions so a tall
+        // whole-section crop can't blow up native memory: ≤2600px wide AND ≤4000px tall; never downscale.
+        const f = Math.max(1, Math.min(3, 2600 / pageWidth, 4000 / cropH));
+        const targetW = Math.round(pageWidth * f);
         const mx = (x: number) => x / f;
         const my = (y: number) => y / f + cropY0;
 
