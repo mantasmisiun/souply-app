@@ -244,13 +244,17 @@ export const spacing = {
   xxxl: 48,
 } as const;
 
-/** Corner-radius scale. `pill` is intentionally huge for fully-rounded shapes. */
+/** Corner-radius scale. `pill` is a large-but-FINITE value for fully-rounded (stadium)
+ *  shapes: RN clamps every corner to min(w,h)/2, so 100 renders identically to a huge
+ *  value for any pill/button/avatar we use (all ≤200px in their smaller dimension), while
+ *  avoiding the pathological 999 that has repeatedly crashed Android's new-arch
+ *  Border/BackgroundDrawable ("Required value was null"). Do NOT raise this back to 999. */
 export const radius = {
   sm: 8,
   md: 12,
   lg: 20,
   xl: 28,
-  pill: 999,
+  pill: 100,
 } as const;
 
 /** Icon sizes (Ionicons & co). `xs` for inline meta chips, `md` for standard
