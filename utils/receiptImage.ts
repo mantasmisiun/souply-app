@@ -97,6 +97,23 @@ export async function normalizeLoadedImage(
     // decoder-SAMPLED size). Aspect is ~identical so the resize is near-uniform.
     const portraitUri = await ensurePortraitOrientation(uri);
     if (parsedW > 0 && parsedH > 0) {
+      // Fast pre-check: a cheap header read (Image.getSize) that ALREADY reports the
+      // parsed dims means no resize is needed — skip the full ImageManipulator measure
+      // decode (a decode+re-encode of the whole JPEG, pure overhead on the common
+      // freshly-uploaded case where stored dims == parsed dims). We only TRUST getSize
+      // when it matches parsedW/H within 1px: if BitmapFactory returns a decoder-SAMPLED
+      // (smaller) size it won't match the exact parsed dims, so we fall through to the
+      // authoritative measure+resize below — never aligning on a sampled size.
+      try {
+        const gs = await new Promise<{ width: number; height: number }>((resolve, reject) =>
+          Image.getSize(portraitUri, (width, height) => resolve({ width, height }), reject),
+        );
+        if (Math.abs(gs.width - parsedW) <= 1 && Math.abs(gs.height - parsedH) <= 1) {
+          return { uri: portraitUri, width: parsedW, height: parsedH };
+        }
+      } catch {
+        /* getSize failed → fall through to the authoritative measure */
+      }
       const info = await ImageManipulator.manipulateAsync(portraitUri, []);
       if (Math.abs(info.width - parsedW) > 1 || Math.abs(info.height - parsedH) > 1) {
         const r = await ImageManipulator.manipulateAsync(
@@ -187,6 +204,14 @@ export async function buildReceiptPageMeta(
     let localUri = '';
     let downloaded = false;
     let lastErr = '';
+    // FAST PATH: the redacted upload (runUpload caches it here right after the PUT) or a
+    // prior download may already sit at the canonical cache path — reuse it instead of a
+    // MinIO round-trip. Makes a same-session reopen instant and guarantees the crop shows
+    // the SAME redacted pixels that were persisted.
+    try {
+      const cached = await FileSystem.getInfoAsync(dest);
+      if (cached.exists && (cached.size ?? 0) > 0) { localUri = dest; downloaded = true; }
+    } catch { /* fall through to download */ }
     // The receipt photo uploads to MinIO ASYNC, and the receipt row's filePath is PATCHed
     // only AFTER that upload finishes — but the swipe screen opens right after the POST.
     // So an early request can hit either (a) GET /image → 404 "image missing" (filePath
@@ -195,7 +220,7 @@ export async function buildReceiptPageMeta(
     // moment the upload lands; presigned URLs are short-lived anyway). ~14s budget covers a
     // normal LAN upload; the card shows the silly "building crop" loader meanwhile.
     const MAX_RETRIES = 8;
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+    for (let attempt = 0; attempt <= MAX_RETRIES && !downloaded; attempt++) {
       try {
         const imageRes = await fetch(`${API_BASE_URL}/api/receipts/${receiptId}/image`);
         const imageData = imageRes.ok ? await imageRes.json().catch(() => null) : null;

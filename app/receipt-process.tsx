@@ -52,6 +52,7 @@ import {
     deriveImageDimsFromGeometry,
 } from "../utils/receiptImage";
 import { API_BASE_URL } from "../config/api";
+import { IS_PROD } from "../config/env";
 import { getUserId } from "../config/user";
 import { useReceiptComparison } from "../hooks/useReceiptComparison";
 import {
@@ -799,6 +800,12 @@ export default function ProcessReceiptScreen() {
   const isCompletelyUnrecognized = (p: ProductLine) =>
     !p.matchConfirmed && !p.storeProductId && p.altMatches.length === 0;
 
+  // "Messed up" = the lowest confidence band (S3, score < S2) — a line the parser couldn't read into
+  // a confident product (a band-merged garbage name, a stray "?" deposit, etc.). On PRODUCTION these
+  // are hidden from the Items list (don't surface garbage to real users); on dev/staging they stay
+  // visible with a "would be hidden on production" marker so the team can see what got dropped.
+  const isMessedUp = (p: ProductLine) => p.itemConfidence?.band === "S3";
+
   const clearRematchTimers = (index: number) => {
     const spinnerTimer = rematchSpinnerTimersRef.current[index];
     if (spinnerTimer) clearTimeout(spinnerTimer);
@@ -1280,7 +1287,6 @@ export default function ProcessReceiptScreen() {
   // screen instance doesn't inherit the previous receipt's receiptId /
   // imageFilePath / status flags.
   useEffect(() => {
-    console.log("[receipt-process] uri effect", { uri, isExistingMode });
     if (isExistingMode) return;
     if (!uri) return;
     setReceiptId(null);
@@ -1762,6 +1768,23 @@ export default function ProcessReceiptScreen() {
 
       setImageFilePath(filePath);
       setUploadStatus("done");
+
+      // Cache the EXACT redacted bytes we just persisted at the canonical reopen path
+      // (buildReceiptPageMeta's download dest) so a later reopen of THIS receipt — or
+      // any fallback crop build — short-circuits to the local file instead of a MinIO
+      // round-trip, and renders the SAME redacted pixels that were stored. Best-effort.
+      try {
+        const cacheDir = FileSystem.cacheDirectory ?? "";
+        if (cacheDir && uploadUri) {
+          const dest = `${cacheDir}receipt-${receiptId}.jpg`;
+          if (uploadUri !== dest) {
+            await FileSystem.deleteAsync(dest, { idempotent: true });
+            await FileSystem.copyAsync({ from: uploadUri, to: dest });
+          }
+        }
+      } catch {
+        /* non-fatal: the reopen path will just download as before */
+      }
     } catch (e: any) {
       console.warn("MinIO upload failed:", e);
       setUploadStatus("error");
@@ -2065,13 +2088,17 @@ export default function ProcessReceiptScreen() {
     | "ocr_no_text"
     | "ocr_error"
     | "chain_unrecognized"
-    | "store_unrecognized";
+    | "store_unrecognized"
+    | "no_products"
+    | "doubled_scan";
 
   const USER_FACING_BAIL_MSG: Record<BailReason, string> = {
     ocr_no_text: t('receiptProcess.errorOcrUnreadable'),
     ocr_error: t('receiptProcess.errorOcrParse'),
     chain_unrecognized: t('receiptProcess.errorChain'),
     store_unrecognized: t('receiptProcess.errorStore'),
+    no_products: t('receiptProcess.errorNoProducts'),
+    doubled_scan: t('receiptProcess.errorDoubledScan'),
   };
 
   interface BailContext {
@@ -2161,6 +2188,16 @@ export default function ProcessReceiptScreen() {
       await bailWithLog('ocr_no_text', {
         ocrPreview: `missing key fields: receiptNo=${footer?.receiptNo ?? '-'} date=${footer?.date ?? '-'} time=${footer?.time ?? '-'}`,
       });
+      return false;
+    };
+
+    // A real purchase always has at least one product line. ZERO parsed products means the photo
+    // was too garbled to recover ANY item (e.g. a doubled/blurred scan whose footer still read OK) —
+    // bail with a "retake the photo" prompt instead of saving an empty receipt. Runs BEFORE the date
+    // gate so a junk scan doesn't pointlessly ask the user to pick a date for a receipt we'll reject.
+    const ensureHasProducts = async (products: any[], chainName: string): Promise<boolean> => {
+      if (Array.isArray(products) && products.length > 0) return true;
+      await bailWithLog('no_products', { detectedChainName: chainName, ocrPreview: `0 products parsed (${chainName})` });
       return false;
     };
 
@@ -2358,6 +2395,14 @@ export default function ProcessReceiptScreen() {
               last.yBottom = Math.max(last.yBottom, line.yBottom);
               last.xLeft = Math.min(last.xLeft, line.xLeft);
               last.xRight = Math.max(last.xRight, line.xRight);
+              // Carry the merged line's WORD boxes too (kept x-sorted). Without this the merged
+              // line exposes only the FIRST row's words, so when MLKit fuses two STACKED print-rows
+              // (dense product/payment sections on a narrow capture), the parser's word re-clustering
+              // can't split them back apart and two products collapse into one (receipt-160). This
+              // mirrors the shared utils/receiptOcrPipeline.ts merge, from which this copy diverged.
+              if (line.words?.length) {
+                last.words = [...(last.words ?? []), ...line.words].sort((a, b) => a.xLeft - b.xLeft);
+              }
             }
             continue;
           }
@@ -2366,6 +2411,24 @@ export default function ProcessReceiptScreen() {
       }
 
       const lineTexts = mergedLines.map((l) => l.text);
+
+      // DOUBLED-SCAN gate: the camera caught the SAME receipt twice in one frame (receipt-167) — its
+      // full slashed receipt number ("71/612/114973") then appears in ≥2 lines. The two copies can't
+      // be reconciled: the header reads from copy 1, the products from copy 2, and the stored image
+      // covers only one — so product bands land OFF-image (no crops in the Items tab) and the address
+      // bands a garbled product line. Bail with a retake prompt rather than save a mangled receipt.
+      // (A single receipt prints the full slashed number once; the short "Kvito numeris" form has no
+      // slashes, and the terminal id "0429/0022/802" has a 3-digit tail → neither false-triggers.)
+      {
+        const rcptTokens = lineTexts
+          .map((tx) => tx.match(/\b\d{2,4}\/\d{2,4}\/\d{4,8}\b/)?.[0])
+          .filter((x): x is string => !!x);
+        const dup = rcptTokens.find((tok, i) => rcptTokens.indexOf(tok) !== i);
+        if (dup) {
+          await bailWithLog("doubled_scan", { ocrPreview: `doubled scan: receiptNo ${dup} ×${rcptTokens.filter((tk) => tk === dup).length}` });
+          return;
+        }
+      }
 
       if (__DEV__) {
         // DEV-only verbose OCR dump for parser debugging. Raw OCR holds pre-mask
@@ -2478,6 +2541,7 @@ export default function ProcessReceiptScreen() {
 
         const parsed = parseRimiReceipt(allLines);
         logParsedReview('RIMI', parsed);
+        if (!(await ensureHasProducts(parsed.products, 'RIMI'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyRimiResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
@@ -2523,6 +2587,7 @@ export default function ProcessReceiptScreen() {
           );
         }
         logParsedReview('MAXIMA', parsed);
+        if (!(await ensureHasProducts(parsed.products, 'MAXIMA'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyMaximaResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
@@ -2547,6 +2612,7 @@ export default function ProcessReceiptScreen() {
 
         const parsed = parseNorfaReceipt(allLines);
         logParsedReview('NORFA', parsed);
+        if (!(await ensureHasProducts(parsed.products, 'NORFA'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyNorfaResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
@@ -2574,6 +2640,7 @@ export default function ProcessReceiptScreen() {
 
         const parsed = parseLidlReceipt(allLines, PARSER_OPTS);
         logParsedReview('LIDL', parsed);
+        if (!(await ensureHasProducts(parsed.products, 'LIDL'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyLidlResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
@@ -2624,6 +2691,7 @@ export default function ProcessReceiptScreen() {
           `date=${parsed.footer.date}, receiptNo=${parsed.footer.receiptNo}`,
         );
         logParsedReview('IKI', parsed);
+        if (!(await ensureHasProducts(parsed.products, 'IKI'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         // Option A: rebuild footer field bands (date/time/receiptNo/total) from a fresh
         // ISOLATED re-OCR of each strip — fixes guessed bands when MLKit dropped the
@@ -3586,6 +3654,17 @@ export default function ProcessReceiptScreen() {
         receiptIds={[String(swipingReceiptId)]}
         voluntary={false}
         renderHeader
+        // FRESH-SCAN FAST PATH: hand the swipe screen the OCR-canonical page images we
+        // JUST produced (and are uploading to MinIO) so the Card-B band crop renders
+        // instantly from local files instead of waiting on the async upload + a ~14s
+        // GET /image download-retry ladder. receiptId-tagged so a stale image from a
+        // previous receipt can't be reused; empty on reopen (pageMetas cleared) → the
+        // swipe screen falls back to the download path.
+        localPages={
+          pageMetas.length > 0
+            ? { receiptId: String(swipingReceiptId), pages: pageMetas }
+            : null
+        }
         onAllDone={leaveSwipePhase}
         onExit={leaveSwipePhase}
       />
@@ -3777,13 +3856,18 @@ export default function ProcessReceiptScreen() {
           </View>
         ) : (
           <View style={styles.prekesListWrap}>
-            {products.length === 0 ? (
+            {(products.length === 0 || (IS_PROD && products.every(isMessedUp))) ? (
               <View style={styles.emptyProducts}>
                 <Ionicons name="alert-circle-outline" size={32} color={colors.border} />
                 <Text style={styles.emptyText}>{t('receiptProcess.productsEmpty')}</Text>
               </View>
             ) : (
               products.map((product, index) => {
+              // PRODUCTION: hide a "messed up" (band-S3) line entirely. Keep the map over the full
+              // `products` array (returning null) so every other row's `index` — used by the edit /
+              // menu / rematch handlers — stays correct. dev/staging fall through and render it
+              // with a marker (below).
+              if (IS_PROD && isMessedUp(product)) return null;
               // B3: three visual states drive border / background.
               //   S1 confirmed  — matchConfirmed=true. Clean white, soft-accent border.
               //   S3 partial    — line parsed but no SP match. warning border + tint.
@@ -3896,6 +3980,13 @@ export default function ProcessReceiptScreen() {
                         release bundles by __DEV__. */}
                     {__DEV__ && ic && (
                       <ConfidenceBadge ic={ic} colors={colors} variant="dev" />
+                    )}
+                    {/* dev/staging marker: this low-confidence line WOULD be hidden on production. */}
+                    {!IS_PROD && isMessedUp(product) && (
+                      <View style={styles.prodSkipBadge}>
+                        <Ionicons name="eye-off-outline" size={11} color={colors.warning} />
+                        <Text style={styles.prodSkipBadgeText}>{t('receiptProcess.prodSkipBadge')}</Text>
+                      </View>
                     )}
                   </View>
                   <View style={styles.productPriceCol}>
@@ -4270,15 +4361,23 @@ export default function ProcessReceiptScreen() {
               <DateTimePicker
                 value={dateGateTemp ?? new Date()}
                 mode="date"
-                // iOS: show the full graphical calendar straight away (Apple's
-                // native inline date picker) instead of the default "compact"
-                // chip that needs a second tap to expand. One tap → calendar.
-                display="inline"
+                // iOS: the full graphical calendar straight away (Apple's native
+                // inline picker) — one tap → calendar. Android: 'inline' is an
+                // iOS-only value; passing it leaves the bound unenforced (future
+                // days stay tappable), so use the native 'calendar' dialog there,
+                // which greys out + disables anything past maximumDate.
+                display={Platform.OS === 'ios' ? 'inline' : 'calendar'}
+                // A receipt can't be from the future → today is the latest selectable
+                // day; everything after is greyed out and unselectable.
                 maximumDate={new Date()}
                 minimumDate={new Date(new Date().getFullYear() - 2, new Date().getMonth(), new Date().getDate())}
                 onChange={(e, d) => {
                   setDateGateShowPicker(false);
-                  if (e.type === 'set' && d) setDateGateTemp(d);
+                  // Belt-and-braces: never accept a future date even if a platform
+                  // picker let one through (maximumDate already greys them out).
+                  const endOfToday = new Date();
+                  endOfToday.setHours(23, 59, 59, 999);
+                  if (e.type === 'set' && d && d.getTime() <= endOfToday.getTime()) setDateGateTemp(d);
                 }}
               />
             )}
@@ -4698,6 +4797,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   matchedName: { fontSize: 14, color: c.primary, fontWeight: "600" },
   ocrName: { fontSize: 11, color: c.textMuted, marginTop: 2 },
   productQuantity: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
+  prodSkipBadge: {
+    flexDirection: "row", alignItems: "center", gap: 4, alignSelf: "flex-start", marginTop: 4,
+    paddingHorizontal: 6, paddingVertical: 2, borderRadius: 4,
+    backgroundColor: "rgba(217,119,6,0.12)", borderWidth: StyleSheet.hairlineWidth, borderColor: c.warning,
+  },
+  prodSkipBadgeText: { fontSize: 10, fontWeight: "700", color: c.warning },
   productPriceCol: { alignItems: "flex-end", marginRight: 4 },
   productPrice: { fontSize: 15, fontWeight: "700", color: c.textPrimary },
   productPriceStrike: {

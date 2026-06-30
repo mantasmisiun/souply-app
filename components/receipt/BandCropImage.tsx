@@ -16,6 +16,46 @@ export interface BandCropImageProps {
 }
 
 /**
+ * One-decode-per-page cache. Previously every band ran ImageManipulator on the
+ * FULL-page uri (a ~4-5MP / 16-22MB transient ARGB bitmap) and threw away ~99% of
+ * the pixels — N bands on the same page = N full decodes, a real Android OOM/jank
+ * risk on long IKI receipts. Instead we decode each page ONCE to a downscaled
+ * working width, cache the intermediate, and crop every band from that small file.
+ * Cache holds tiny {uri, scale, dims} promises (the files live in the OS cache dir);
+ * a soft cap clears it so it can't grow unbounded across a long session.
+ */
+const pageScaleCache = new Map<
+  string,
+  Promise<{ uri: string; scale: number; width: number; height: number }>
+>();
+
+async function getDownscaledPage(
+  uri: string,
+  pixelWidth: number,
+  workingWidth: number,
+): Promise<{ uri: string; scale: number; width: number; height: number }> {
+  // No upscaling: if the page is already at/under the working width, crop it directly.
+  if (!(workingWidth > 0) || !(pixelWidth > 0) || workingWidth >= pixelWidth) {
+    return { uri, scale: 1, width: pixelWidth, height: 0 };
+  }
+  const key = `${uri}@${workingWidth}`;
+  let p = pageScaleCache.get(key);
+  if (!p) {
+    if (pageScaleCache.size > 48) pageScaleCache.clear();
+    p = ImageManipulator.manipulateAsync(
+      uri,
+      [{ resize: { width: workingWidth } }],
+      { compress: 0.92, format: ImageManipulator.SaveFormat.JPEG },
+    )
+      .then((r) => ({ uri: r.uri, scale: r.width / pixelWidth, width: r.width, height: r.height }))
+      // Fall back to cropping the full page directly if the downscale fails.
+      .catch(() => ({ uri, scale: 1, width: pixelWidth, height: 0 }));
+    pageScaleCache.set(key, p);
+  }
+  return p;
+}
+
+/**
  * Per-product band crop using `ImageManipulator.manipulateAsync` + an SVG clip.
  *
  * Why pre-crop to a file: sliding a full-page Image inside an overflow:hidden
@@ -87,6 +127,10 @@ export function BandCropImage({ pages, region, cardWidth, onSettled }: BandCropI
       originY: localYTop,
       width: widthPx,
       height: heightPx,
+      // Full page pixel dims — used to derive the downscale factor + clamp the
+      // scaled crop rect inside the intermediate.
+      pageWidth: page.pixelWidth,
+      pageHeight: page.pixelHeight,
       // Region-space Y of the crop's top edge — the clip polygon is measured
       // from here (NOT region.yTop, which may be below the top quad corner).
       cropTopSpace: localYTop + page.yOffsetScaled,
@@ -99,45 +143,65 @@ export function BandCropImage({ pages, region, cardWidth, onSettled }: BandCropI
   useEffect(() => {
     if (!cropPlan) return;
     let cancelled = false;
-    // JPEG output: PNG via expo-image-manipulator v14 on iOS trips
-    // `calling the 'renderAsync' function has failed`. JPEG output works.
-    const { uri, originX, originY, width, height } = cropPlan;
+    const { uri, originX, originY, width, height, pageWidth, pageHeight } = cropPlan;
     if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
       setCropError('invalid crop bounds');
       return;
     }
-    const cropArgs = {
-      uri,
-      originX: Math.floor(originX),
-      originY: Math.floor(originY),
-      width: Math.floor(width),
-      height: Math.floor(height),
-    };
-    devLog('BandCropImage.attempt', cropArgs);
-    ImageManipulator.manipulateAsync(
-      uri,
-      [{
-        crop: {
-          originX: cropArgs.originX,
-          originY: cropArgs.originY,
-          width: cropArgs.width,
-          height: cropArgs.height,
-        },
-      }],
-      { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
-    )
-      .then((res) => {
-        devLog('BandCropImage.success', { uri, resultUri: res?.uri });
+    (async () => {
+      // 1) Decode the FULL page ONCE to a downscaled intermediate (cached per page),
+      //    so N bands on the same page share a single decode instead of N full-page
+      //    decodes. Working width ≥ 2× the display width keeps the strip crisp (still
+      //    above display res, so the overflow:hidden "mush" heuristic never fires).
+      const workingWidth = Math.min(
+        pageWidth > 0 ? pageWidth : Math.round(cardWidth * 2),
+        Math.max(Math.round(cardWidth * 2), 640),
+      );
+      let srcUri = uri;
+      let scale = 1;
+      let interW = pageWidth;
+      let interH = pageHeight;
+      try {
+        const ds = await getDownscaledPage(uri, pageWidth, workingWidth);
+        srcUri = ds.uri;
+        scale = ds.scale;
+        if (ds.width > 0) interW = ds.width;
+        if (ds.height > 0) interH = ds.height;
+      } catch {
+        /* fall back to cropping the full page directly */
+      }
+      if (cancelled) return;
+
+      // 2) Crop the band from the intermediate, scaling the page-space rect by the
+      //    downscale factor and clamping it inside the intermediate's true bounds
+      //    (floor origins / ceil sizes can otherwise overrun by ±1px → a crop error).
+      let ox = Math.max(0, Math.floor(originX * scale));
+      let oy = Math.max(0, Math.floor(originY * scale));
+      let w = Math.max(1, Math.ceil(width * scale));
+      let h = Math.max(1, Math.ceil(height * scale));
+      if (interW > 0) { ox = Math.min(ox, interW - 1); w = Math.min(w, interW - ox); }
+      if (interH > 0) { oy = Math.min(oy, interH - 1); h = Math.min(h, interH - oy); }
+      const cropArgs = { uri: srcUri, originX: ox, originY: oy, width: w, height: h };
+      devLog('BandCropImage.attempt', cropArgs);
+      try {
+        // JPEG output: PNG via expo-image-manipulator v14 on iOS trips
+        // `calling the 'renderAsync' function has failed`. JPEG output works.
+        const res = await ImageManipulator.manipulateAsync(
+          srcUri,
+          [{ crop: { originX: ox, originY: oy, width: w, height: h } }],
+          { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
+        );
+        devLog('BandCropImage.success', { uri: srcUri, resultUri: res?.uri });
         if (!cancelled) setCroppedUri(res.uri);
-      })
-      .catch((e) => {
+      } catch (e: any) {
         const errMsg = e?.message ?? String(e);
         console.warn('[BandCropImage] crop failed', { ...cropArgs, err: errMsg });
         devLog('BandCropImage.failed', { ...cropArgs, err: errMsg });
         if (!cancelled) setCropError(String(e?.message ?? e));
-      });
+      }
+    })();
     return () => { cancelled = true; };
-  }, [cropPlan]);
+  }, [cropPlan, cardWidth]);
 
   // Notify the host (e.g. the swipe readiness gate) once the crop has settled —
   // rendered, errored, or there is nothing to crop — so it never hangs waiting.

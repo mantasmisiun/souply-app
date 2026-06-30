@@ -95,10 +95,12 @@ interface ReceiptResolveCard {
   needsHuman: number;
 }
 
-/** Band-crop source for a receipt's OCR-side cards: the stored photo re-projected
- *  into OCR space (download + normalize once per receipt). 'loading' until built,
- *  'failed' → fall back to the flat server crop. */
-type ReceiptCropState = { status: "loading" | "ready" | "failed"; pageMeta: PageMeta | null; error?: string | null };
+/** Band-crop source for a receipt's OCR-side cards: the page images re-projected
+ *  into OCR space. On a FRESH scan these are reused from the device's just-produced
+ *  pageMetas (instant, no network); on a reopen they're downloaded + normalized once
+ *  per receipt. Carries the FULL page array so multi-page (long) receipts crop the
+ *  correct page. 'loading' until built, 'failed' → fall back to the flat server crop. */
+type ReceiptCropState = { status: "loading" | "ready" | "failed"; pages: PageMeta[]; error?: string | null };
 
 type QueueCard = SwipeQueueCard | ReceiptResolveCard;
 const isReceiptCard = (c: QueueCard | undefined | null): c is ReceiptResolveCard =>
@@ -296,13 +298,13 @@ function OcrReceiptSide({
   //   • failed    → the photo download/normalize failed (see buildReceiptPageMeta)
   //   • crop error→ BandCropImage's own "crop failed: …" (ImageManipulator on the photo).
   const { t } = useTranslation();
-  const pages = useMemo(() => (crop.pageMeta ? [crop.pageMeta] : []), [crop.pageMeta]);
+  const pages = crop.pages;
   let body: React.ReactNode;
   if (!region) {
     body = <CropDiag styles={styles} colors={colors} onSettled={onSettled} text={t('swipe.cropNoGeometry')} />;
   } else if (crop.status === "loading") {
     body = <CropDiag styles={styles} colors={colors} onSettled={onSettled} spinner text={t('swipe.cropBuilding')} />;
-  } else if (crop.status === "failed" || !crop.pageMeta) {
+  } else if (crop.status === "failed" || pages.length === 0) {
     body = <CropDiag styles={styles} colors={colors} onSettled={onSettled} text={crop.error ? t('swipe.cropFailed', { error: crop.error }) : t('swipe.cropUnavailable')} />;
   } else {
     body = (
@@ -368,6 +370,17 @@ export interface SwipeQueueProps {
   onExit: () => void;
   /** Render the screen's own Stack.Screen header — true on the standalone route, false when hosted. */
   renderHeader?: boolean;
+  /**
+   * FRESH-SCAN FAST PATH: the device's just-produced, OCR-canonical page images for
+   * a receipt it scanned this session — the SAME pixels being uploaded to MinIO.
+   * When `receiptId` matches the receipt being resolved, the OCR-side band crop is
+   * built from these directly, skipping the GET /image presign + download + retry
+   * ladder entirely (the ~14s "spinner that never clears"). Absent on reopen / older
+   * / multi-receipt sessions → falls through to buildReceiptPageMeta as before.
+   * Guarded by receiptId so a stale image (warm reopen) can never crop the wrong
+   * receipt.
+   */
+  localPages?: { receiptId: string; pages: PageMeta[] } | null;
 }
 
 export function SwipeQueue({
@@ -377,6 +390,7 @@ export function SwipeQueue({
   onAllDone,
   onExit,
   renderHeader = true,
+  localPages = null,
 }: SwipeQueueProps) {
   const { t } = useTranslation();
 
@@ -417,7 +431,7 @@ export function SwipeQueue({
    * renders the SAME skewed-parallelogram crop as the receipt-detail "Items" tab,
    * instead of the flat server crop. 'failed'/no-region → flat server-crop fallback.
    */
-  const [receiptCrop, setReceiptCrop] = useState<ReceiptCropState>({ status: "ready", pageMeta: null });
+  const [receiptCrop, setReceiptCrop] = useState<ReceiptCropState>({ status: "ready", pages: [] });
   const [slotCounts, setSlotCounts] = useState<SlotCounts>({
     slot1: 0,
     slot2: 0,
@@ -438,6 +452,13 @@ export function SwipeQueue({
   /** The receiptId whose band-crop page-meta build is current — guards a slow
    *  download from clobbering `receiptCrop` after the user advanced to another receipt. */
   const cropBuildIdRef = useRef<string | null>(null);
+  /** parsed.image dims used for the current DOWNLOAD-path build, so the bounded
+   *  re-arm (a crop that failed only because the upload hadn't landed) can rebuild
+   *  with the right dims. Null on the local fast path (it never fails this way). */
+  const cropDimsRef = useRef<{ receiptId: string; width: number; height: number } | null>(null);
+  /** receiptId we've already scheduled ONE bounded re-arm for — caps the recovery
+   *  retry at one attempt per receipt. */
+  const cropRearmedRef = useRef<string | null>(null);
   const pendingVoteRef = useRef<{
     item: QueueCard;
     vote: Vote;
@@ -602,33 +623,52 @@ export function SwipeQueue({
       setItemsReceiptId(currentReceiptId);
       cardShownAtRef.current = Date.now();
 
-      // Build the OCR-side band-crop source ONCE for this receipt (download the stored
-      // photo + re-project into OCR space) so each Card-B renders the SAME skewed
-      // parallelogram crop as the receipt-detail Items tab — not the flat server crop.
+      // Build the OCR-side band-crop source ONCE for this receipt so each Card-B renders
+      // the SAME skewed parallelogram crop as the receipt-detail Items tab — not the flat
+      // server crop. Two sources, in priority:
+      //   (1) FRESH-SCAN FAST PATH: the host already handed us the device's just-produced
+      //       page images (localPages) — the SAME pixels uploading to MinIO. Reuse them
+      //       in-memory: instant, no GET /image, no download retry ladder, multi-page safe.
+      //       Guarded by receiptId so a stale (warm-reopen) image can't crop the wrong receipt.
+      //   (2) FALLBACK (reopen / older / multi-receipt): download the stored photo + normalize.
       // Fire-and-forget: the readiness gate keeps a flat fallback + timeout so a slow or
-      // failed download never hangs a card. Guarded by cropBuildIdRef against a late
-      // resolution clobbering a newer receipt's crop.
-      if (capped.some(isReceiptCard) && currentReceiptId && resolveImage) {
+      // failed download never hangs a card. cropBuildIdRef guards a late resolution from
+      // clobbering a newer receipt's crop.
+      if (capped.some(isReceiptCard) && currentReceiptId) {
         const rid = currentReceiptId;
-        const dims = resolveImage;
-        cropBuildIdRef.current = rid;
-        setReceiptCrop({ status: "loading", pageMeta: null });
-        buildReceiptPageMeta(rid, dims.width, dims.height)
-          .then((res) => {
-            if (cropBuildIdRef.current === rid) {
-              setReceiptCrop({ status: res.pageMeta ? "ready" : "failed", pageMeta: res.pageMeta, error: res.error });
-            }
-          })
-          .catch((e) => {
-            if (cropBuildIdRef.current === rid) {
-              setReceiptCrop({ status: "failed", pageMeta: null, error: String(e?.message ?? e) });
-            }
-          });
+        if (localPages && localPages.receiptId === rid && localPages.pages.length > 0) {
+          // (1) Local fast path — already in OCR space, nothing to download.
+          cropBuildIdRef.current = rid;
+          cropDimsRef.current = null;
+          setReceiptCrop({ status: "ready", pages: localPages.pages });
+        } else if (resolveImage) {
+          // (2) Download path — guarded build, dims retained for the bounded re-arm.
+          const dims = resolveImage;
+          cropBuildIdRef.current = rid;
+          cropDimsRef.current = { receiptId: rid, width: dims.width, height: dims.height };
+          setReceiptCrop({ status: "loading", pages: [] });
+          buildReceiptPageMeta(rid, dims.width, dims.height)
+            .then((res) => {
+              if (cropBuildIdRef.current === rid) {
+                setReceiptCrop({ status: res.pageMeta ? "ready" : "failed", pages: res.pageMeta ? [res.pageMeta] : [], error: res.error });
+              }
+            })
+            .catch((e) => {
+              if (cropBuildIdRef.current === rid) {
+                setReceiptCrop({ status: "failed", pages: [], error: String(e?.message ?? e) });
+              }
+            });
+        } else {
+          // Receipt cards but no local image AND no server dims → can't build.
+          cropBuildIdRef.current = null;
+          cropDimsRef.current = null;
+          setReceiptCrop({ status: "failed", pages: [], error: "server sent no image dims" });
+        }
       } else {
-        // No receipt cards, or the server sent no image dims → nothing to build.
-        const why = capped.some(isReceiptCard) && !resolveImage ? "server sent no image dims" : null;
+        // No receipt cards → nothing to build.
         cropBuildIdRef.current = null;
-        setReceiptCrop({ status: "failed", pageMeta: null, error: why });
+        cropDimsRef.current = null;
+        setReceiptCrop({ status: "ready", pages: [] });
       }
     } catch (e: any) {
       setError(e?.message ?? t('swipe.errorQueue'));
@@ -882,9 +922,16 @@ export function SwipeQueue({
   // slots (crop + product, or left + right) have each settled — loaded or given
   // up — so "spinner gone = card is fully actionable". A timeout backstops a
   // failed upload so it can never hang.
-  const EXPECTED_CARD_IMAGES = 2;
+  // A card has exactly TWO image slots — receipt card: 'crop' + 'product';
+  // pair card: 'left' + 'right'. We count DISTINCT settled slots in a Set (NOT a
+  // bare counter): the OCR crop side swaps its inner element TYPE on loading→ready
+  // (CropDiag spinner → BandCropImage) with no stable key, so its onSettled fires
+  // MORE than once. A counter double-counted that single slot and could reach 2 from
+  // the crop alone — flipping cardReady before the matched-product image settled. A
+  // Set keyed by slot id is idempotent: the gate clears only when both slots report.
+  const EXPECTED_CARD_SLOTS = 2;
   const [cardReady, setCardReady] = useState(false);
-  const settledRef = useRef(0);
+  const settledSlotsRef = useRef<Set<string>>(new Set());
   const cardKey = currentItem?.cardId ?? null;
   // Reset the gate in the RENDER phase when the active card changes — this runs
   // BEFORE the new card's image children mount, so their onSettled callbacks count
@@ -893,24 +940,61 @@ export function SwipeQueue({
   const prevCardKeyRef = useRef<string | null>(null);
   if (prevCardKeyRef.current !== cardKey) {
     prevCardKeyRef.current = cardKey;
-    settledRef.current = 0;
-    // Gate ONLY the FIRST card (idx 0): its crop may still be uploading to MinIO
-    // post-scan. Cards reached AFTER a swipe show immediately (their crop was
-    // prefetched), so the Tinder entrance animation isn't hidden by the spinner.
+    settledSlotsRef.current = new Set();
+    // Gate ONLY the FIRST card (idx 0): its crop may still be building post-scan.
+    // Cards reached AFTER a swipe show immediately (their crop reuses the per-receipt
+    // pages already built), so the Tinder entrance animation isn't hidden by the spinner.
     setCardReady(idx !== 0);
   }
-  const handleImageSettled = () => {
-    settledRef.current += 1;
-    if (settledRef.current >= EXPECTED_CARD_IMAGES) setCardReady(true);
+  const handleImageSettled = (slotId: string) => {
+    settledSlotsRef.current.add(slotId);
+    if (settledSlotsRef.current.size >= EXPECTED_CARD_SLOTS) setCardReady(true);
   };
   useEffect(() => {
     if (!currentItem) return;
-    // (The next card's band crop reuses the per-receipt photo already built for this
-    // receipt, so there's nothing server-side left to prefetch.)
-    const t = setTimeout(() => setCardReady(true), 10000); // never hang on a failed build
+    // Backstop so the spinner can never hang on a slow/failed crop build. With the
+    // local fast path this almost never fires; sized above the download fallback's
+    // ~14s budget so it doesn't clear the gate while a fallback crop is still building.
+    const t = setTimeout(() => setCardReady(true), 16000);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cardKey, idx]);
+
+  // ── Bounded crop re-arm ────────────────────────────────────────────────
+  // A DOWNLOAD-path crop is otherwise terminal: once buildReceiptPageMeta exhausts
+  // its retry budget (status:'failed') nothing re-invokes it, so a receipt whose
+  // MinIO upload lands a few seconds after the budget shows 'cropFailed' for the
+  // rest of the session. Schedule ONE delayed rebuild per receipt when the failure
+  // looks upload-pending. The local fast path never reaches this (no dims retained).
+  useEffect(() => {
+    if (receiptCrop.status !== "failed") return;
+    const rid = currentReceiptId;
+    if (!rid) return;
+    const dims = cropDimsRef.current;
+    if (!dims || dims.receiptId !== rid) return; // no download dims → nothing to retry
+    if (cropRearmedRef.current === rid) return; // already retried this receipt once
+    const err = receiptCrop.error ?? "";
+    if (!/pending|not ready|HTTP|download/i.test(err)) return; // only retry upload-pending failures
+    cropRearmedRef.current = rid;
+    const timer = setTimeout(() => {
+      if (cropBuildIdRef.current !== rid && cropBuildIdRef.current !== null) return; // user advanced
+      cropBuildIdRef.current = rid;
+      setReceiptCrop({ status: "loading", pages: [] });
+      buildReceiptPageMeta(rid, dims.width, dims.height)
+        .then((res) => {
+          if (cropBuildIdRef.current === rid) {
+            setReceiptCrop({ status: res.pageMeta ? "ready" : "failed", pages: res.pageMeta ? [res.pageMeta] : [], error: res.error });
+          }
+        })
+        .catch((e) => {
+          if (cropBuildIdRef.current === rid) {
+            setReceiptCrop({ status: "failed", pages: [], error: String(e?.message ?? e) });
+          }
+        });
+    }, 8000);
+    return () => clearTimeout(timer);
+     
+  }, [receiptCrop.status, receiptCrop.error, currentReceiptId]);
   // `itemsReceiptId === currentReceiptId` is the staleness gate. Until
   // loadQueue refreshes after a receiptIdx bump, `items` still holds the
   // previous receipt's cards — without this check, `done` would flip true
@@ -1132,15 +1216,15 @@ export function SwipeQueue({
                 <View style={styles.cardInner} key={cardKey ?? undefined}>
                   {isReceiptCard(currentItem) ? (
                     <>
-                      <OcrReceiptSide key={currentItem.cardId} ocr={currentItem.ocr} region={currentItem.region} crop={receiptCrop} label={t('swipe.cardReceiptLabel')} styles={styles} colors={colors} onSettled={handleImageSettled} />
+                      <OcrReceiptSide key={currentItem.cardId} ocr={currentItem.ocr} region={currentItem.region} crop={receiptCrop} label={t('swipe.cardReceiptLabel')} styles={styles} colors={colors} onSettled={() => handleImageSettled('crop')} />
                       <View style={styles.horizontalDivider} />
-                      <MatchedProductSide matched={currentItem.matched} label={t('swipe.cardMatchLabel')} styles={styles} onSettled={handleImageSettled} />
+                      <MatchedProductSide matched={currentItem.matched} label={t('swipe.cardMatchLabel')} styles={styles} onSettled={() => handleImageSettled('product')} />
                     </>
                   ) : (
                     <>
-                      <CardSide side={currentItem.left} styles={styles} onSettled={handleImageSettled} />
+                      <CardSide side={currentItem.left} styles={styles} onSettled={() => handleImageSettled('left')} />
                       <View style={styles.horizontalDivider} />
-                      <CardSide side={currentItem.right} styles={styles} onSettled={handleImageSettled} />
+                      <CardSide side={currentItem.right} styles={styles} onSettled={() => handleImageSettled('right')} />
                     </>
                   )}
                 </View>
