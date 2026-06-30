@@ -35,3 +35,17 @@ export const DEV_RANDOM_USER_UUID = false;
  * band-driven switch once the thresholds in `recognitionConfig.ts` are tuned.
  */
 export const CONFIDENCE_BAND_DISPLAY = false;
+
+/**
+ * Phase 1 PRODUCT-region re-OCR (IKI, Android only). When a parsed product comes
+ * back with a dropped name ("?"), crop+upscale+re-OCR its image strip in isolation,
+ * splice the recovered boxes back into the line stream, re-run the whole parse, and
+ * keep it only if it strictly improves (fewer garbage, reconciliation no worse,
+ * footer total unchanged) — see utils/productReocr.ts + project_roadmap_product_reocr.
+ *
+ * Default false: the splice+gate core is unit-tested, but the on-device pixel re-OCR
+ * needs golden-set validation (real MLKit data isn't in jest). Flip true to dogfood;
+ * it adds ~1-2s per degraded receipt (Android), zero cost on clean receipts (gate
+ * fires nothing), and is fail-safe (any error/reject keeps the original parse).
+ */
+export const PRODUCT_REOCR_ENABLED = false;

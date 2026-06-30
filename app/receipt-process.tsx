@@ -61,7 +61,7 @@ import {
     persistRehydratedRegions,
     REGIONS_VERSION,
 } from "../services/regionsRehydrationService";
-import { DEV_MODE, CONFIDENCE_BAND_DISPLAY } from "../constants/flags";
+import { DEV_MODE, CONFIDENCE_BAND_DISPLAY, PRODUCT_REOCR_ENABLED } from "../constants/flags";
 import { useTheme, type AppTheme } from "../constants/theme";
 import {
     useReceiptCreateContext,
@@ -132,6 +132,8 @@ import { requestStoreResolution, completeStoreResolution, pickAddressFromRawText
 import { StoreResolutionOverlay } from "../components/receipt/StoreResolutionOverlay";
 import { ocrImageEnhanced } from "../utils/mlkitOcr";
 import { refineFooterBands } from "../utils/footerBandRefine";
+import { maybeReocrProducts } from "../utils/productReocr";
+import { makeProductStripReocr, reportReocrOutcome } from "../utils/productReocrDevice";
 import { launchDocumentScanner } from "../utils/launchDocumentScanner";
 import { MaterialProgress } from "../components/MaterialProgress";
 import { useProfileStore } from '../state/profileStore';
@@ -2708,7 +2710,7 @@ export default function ProcessReceiptScreen() {
         }));
         wordsSrcRef.current = "scan";
 
-        const parsed = parseIkiReceipt(mergedLines);
+        let parsed = parseIkiReceipt(mergedLines);
         console.log(
           `[parse] IKI → ${parsed.products.length} product(s), total=${parsed.footer.total}, ` +
           `date=${parsed.footer.date}, receiptNo=${parsed.footer.receiptNo}`,
@@ -2716,6 +2718,24 @@ export default function ProcessReceiptScreen() {
         logParsedReview('IKI', parsed);
         if (!(await ensureHasProducts(parsed.products, 'IKI'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
+        // Phase 1 PRODUCT re-OCR (dev-flagged, Android only): a product with a dropped name
+        // ("?") gets its image strip re-OCR'd in isolation; the recovered boxes splice back in
+        // and the WHOLE receipt re-parses (so all global post-passes re-apply). Kept only if it
+        // strictly improves — fewer garbage, reconciliation no worse, footer total unchanged.
+        // Fail-safe: any error/reject keeps `parsed`. See utils/productReocr.ts.
+        if (PRODUCT_REOCR_ENABLED && Platform.OS === 'android' && firstPageUri && firstPageDims) {
+          const reOcr = makeProductStripReocr(firstPageUri, firstPageDims.width, firstPageDims.height);
+          const outcome = await maybeReocrProducts(parsed, mergedLines, reOcr, {
+            // Phase 2: all four per-product signals, plus the receipt-level reconciliation pre-gate.
+            // Threshold 1.0 sits ABOVE deposit-fold gaps (deposits fold as no-value), so it fires
+            // only on a real mis-priced product, not on every deposit receipt.
+            reasons: ['no-name', 'no-price', 'amount-in-name', 'collapsed-band'],
+            reconcileThreshold: 1.0,
+          });
+          devLog('productReocr.outcome', { accepted: outcome.accepted, detail: outcome.detail });
+          void reportReocrOutcome(parsed.footer.receiptNo, outcome.accepted, outcome.detail);
+          if (outcome.accepted) parsed = outcome.parsed;
+        }
         // Option A: rebuild footer field bands (date/time/receiptNo/total) from a fresh
         // ISOLATED re-OCR of each strip — fixes guessed bands when MLKit dropped the
         // value's word boxes. Fail-safe (keeps the original band if the re-OCR misses).
