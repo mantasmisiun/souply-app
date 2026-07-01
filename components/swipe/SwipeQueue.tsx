@@ -102,9 +102,25 @@ interface ReceiptResolveCard {
  *  correct page. 'loading' until built, 'failed' → fall back to the flat server crop. */
 type ReceiptCropState = { status: "loading" | "ready" | "failed"; pages: PageMeta[]; error?: string | null };
 
-type QueueCard = SwipeQueueCard | ReceiptResolveCard;
+/**
+ * Pending-alias card (Issue H vocabulary): "is this receipt TEXT the same product as
+ * this SP?". Sourced from GET /alias-cards; votes go to POST /alias-votes (identical
+ * confirms the learned print, reaching 'canonical' at K distinct users). No receipt
+ * crop — the OCR string is shown as text (cross-receipt). See RECEIPT_VOCABULARY.md §6.
+ */
+interface PendingAliasCard {
+  cardKind: "alias";
+  cardId: string; // `alias:${aliasId}`
+  aliasId: number;
+  ocrText: string; // how the chain printed it (rawSample)
+  sp: { spId: number; name: string; imageUrl: string | null };
+}
+
+type QueueCard = SwipeQueueCard | ReceiptResolveCard | PendingAliasCard;
 const isReceiptCard = (c: QueueCard | undefined | null): c is ReceiptResolveCard =>
   !!c && (c as any).cardKind === "receipt";
+const isAliasCard = (c: QueueCard | undefined | null): c is PendingAliasCard =>
+  !!c && (c as any).cardKind === "alias";
 
 interface SlotCounts {
   slot1: number;
@@ -236,6 +252,36 @@ function MatchedProductSide({
       <Text style={styles.productName} numberOfLines={3}>
         {matched.name ?? ""}
       </Text>
+    </View>
+  );
+}
+
+/** OCR-TEXT side for a pending-alias (vocabulary) card: how the chain PRINTED the
+ *  product on a receipt (shown as text — there's no single receipt crop cross-receipt),
+ *  vs the SP below. Settles the readiness gate immediately (text, no image to load). */
+function AliasOcrSide({
+  text,
+  label,
+  styles,
+  onSettled,
+}: {
+  text: string;
+  label: string;
+  styles: ReturnType<typeof makeStyles>;
+  onSettled?: () => void;
+}) {
+  const settledRef = useRef(false);
+  useEffect(() => {
+    if (settledRef.current) return;
+    settledRef.current = true;
+    onSettled?.();
+  }, [onSettled]);
+  return (
+    <View style={styles.sideBlock}>
+      <Text style={styles.sideLabel} numberOfLines={1}>{label}</Text>
+      <View style={[styles.cropBandWrap, styles.cropDiag]}>
+        <Text style={styles.aliasOcrText} numberOfLines={4}>{text}</Text>
+      </View>
     </View>
   );
 }
@@ -579,6 +625,27 @@ export function SwipeQueue({
         if (voluntaryCardB.length > 0) {
           capped = [...voluntaryCardB.slice(0, 5), ...capped].slice(0, 10);
         }
+        // H3 pending-alias community cards: help confirm learned receipt-name aliases
+        // ("is this receipt text the same product as this SP?"). Appended after the
+        // receipt/community cards; no-op until aliases accumulate.
+        try {
+          const ac = await fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/alias-cards?limit=3`);
+          if (ac.ok) {
+            const ad = await ac.json();
+            const aliasCards: PendingAliasCard[] = (Array.isArray(ad?.cards) ? ad.cards : [])
+              .map((c: any): PendingAliasCard => ({
+                cardKind: "alias",
+                cardId: `alias:${c.aliasId}`,
+                aliasId: Number(c.aliasId),
+                ocrText: c.rawSample || c.normalizedAlias || "",
+                sp: { spId: Number(c.storeProductId), name: c.storeProductName ?? "", imageUrl: c.imageUrl ?? null },
+              }))
+              .filter((c: PendingAliasCard) => !!c.ocrText && !!c.sp.name && Number.isFinite(c.aliasId));
+            if (aliasCards.length > 0) capped = [...capped, ...aliasCards];
+          }
+        } catch (e) {
+          console.warn("[SwipeQueue] alias-cards failed:", e);
+        }
       } else if (currentReceiptId) {
         // Mandatory: 3 cards in slot 2 → 1 → 3 priority. EC7 top-up:
         // if the receipt-anchored pool has < 3 cards, blend in global
@@ -717,6 +784,20 @@ export function SwipeQueue({
   const sendVote = async (vote: Vote, item: QueueCard, dwell: number) => {
     const userId = userIdRef.current!;
     try {
+      // Pending-alias card (Issue H vocabulary): the verdict acts on the learned alias
+      // (identical → confirms the print → 'canonical' at K distinct users).
+      if (isAliasCard(item)) {
+        if (dwell < MIN_DWELL_MS) return;
+        await fetch(
+          `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/alias-votes`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ aliasId: item.aliasId, vote }),
+          },
+        );
+        return;
+      }
       // Card B (receipt resolution): the verdict acts on the receipt line.
       // The line was already marked 'asked' when the resolve-queue served it,
       // so a fast (burst) swipe means "not interested" — keep the system's best
@@ -1232,12 +1313,12 @@ export function SwipeQueue({
           </TouchableOpacity>
 
           <View style={styles.stage}>
-            {!isReceiptCard(currentItem) && currentItem.fromGlobalFill && (
+            {!isReceiptCard(currentItem) && !isAliasCard(currentItem) && currentItem.fromGlobalFill && (
               <Text style={styles.fromGlobalSubline} numberOfLines={2}>
                 {t('swipe.fromGlobalFill')}
               </Text>
             )}
-            {isReceiptCard(currentItem) && (
+            {(isReceiptCard(currentItem) || isAliasCard(currentItem)) && (
               <Text style={styles.questionHeader}>{t('swipe.cardQuestion')}</Text>
             )}
             <GestureDetector gesture={pan}>
@@ -1252,6 +1333,12 @@ export function SwipeQueue({
                       <OcrReceiptSide key={currentItem.cardId} ocr={currentItem.ocr} region={currentItem.region} crop={receiptCrop} label={t('swipe.cardReceiptLabel')} styles={styles} colors={colors} onSettled={() => handleImageSettled('crop')} />
                       <View style={styles.horizontalDivider} />
                       <MatchedProductSide matched={currentItem.matched} label={t('swipe.cardMatchLabel')} styles={styles} onSettled={() => handleImageSettled('product')} />
+                    </>
+                  ) : isAliasCard(currentItem) ? (
+                    <>
+                      <AliasOcrSide text={currentItem.ocrText} label={t('swipe.cardReceiptLabel')} styles={styles} onSettled={() => handleImageSettled('aliasText')} />
+                      <View style={styles.horizontalDivider} />
+                      <MatchedProductSide matched={{ spId: currentItem.sp.spId, name: currentItem.sp.name, imageUrl: currentItem.sp.imageUrl }} label={t('swipe.cardMatchLabel')} styles={styles} onSettled={() => handleImageSettled('product')} />
                     </>
                   ) : (
                     <>
@@ -1448,6 +1535,14 @@ const makeStyles = (c: AppTheme) =>
       fontSize: 11,
       color: c.textMuted,
       textAlign: "center",
+    },
+    // Pending-alias card: the receipt's printed OCR text (shown in place of a crop).
+    aliasOcrText: {
+      fontSize: 17,
+      fontWeight: "600",
+      color: c.textPrimary,
+      textAlign: "center",
+      paddingHorizontal: 8,
     },
     ocrCaption: {
       fontSize: 11,
