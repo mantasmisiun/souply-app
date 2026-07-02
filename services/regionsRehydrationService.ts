@@ -1,8 +1,6 @@
 import * as FileSystem from "expo-file-system/legacy";
-import * as ImageManipulator from "expo-image-manipulator";
-import { Image, Platform } from "react-native";
-import TextRecognition from "@react-native-ml-kit/text-recognition";
-import { ocrImageTiled } from "../utils/mlkitOcr";
+import { Platform } from "react-native";
+import { ocrReceiptPages } from "../utils/receiptOcrPipeline";
 import { API_BASE_URL } from "../config/api";
 import { parseRimiReceipt, type LabeledRegion } from "@shared/parsers/rimiParser";
 import { parseMaximaReceipt } from "@shared/parsers/maximaParser";
@@ -187,8 +185,18 @@ const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
  *          x → clean Y), then merged by curve-normalized Y. A wide physical row
  *          can't be split or mis-merged by cross-column tilt error, and a price
  *          OCR'd far from its name re-joins it by Y. Replaces single-pass cluster.
+ *   (v8.5–v8.42 — parser-revision bumps whose individual notes were not logged
+ *          here; see the shared/parsers git history for the changes each covered.
+ *          Bump discipline restored below — log every bump.)
+ *  v8.43 — rehydration re-parses through the SHARED OCR pipeline (ocrReceiptPages:
+ *          rotation + tiling + row merge) and IKI now parses the row-MERGED lines —
+ *          the same funnel as the upload/queue/recovery. The old path fed IKI raw
+ *          unmerged lines from a separate rotate+tile, so the value backfill
+ *          (total/date/receiptNo) could authoritatively overwrite stored fields
+ *          with a DIFFERENT parse of the same photo. Bumped so stale receipts
+ *          re-derive once through the aligned funnel.
  */
-export const REGIONS_VERSION = 'v8.42';
+export const REGIONS_VERSION = 'v8.43';
 
 interface LineWithFrame {
     text: string;
@@ -235,35 +243,6 @@ const downloadToCache = async (url: string): Promise<string | null> => {
     }
 };
 
-const ensurePortrait = async (uri: string): Promise<string> => {
-    const dims = await new Promise<{ width: number; height: number }>(
-        (resolve, reject) => {
-            Image.getSize(uri, (w, h) => resolve({ width: w, height: h }), reject);
-        },
-    );
-    if (dims.height >= dims.width) return uri;
-    const [cw, ccw] = await Promise.all([
-        ImageManipulator.manipulateAsync(uri, [{ rotate: 90 }], {
-            compress: 1,
-            format: ImageManipulator.SaveFormat.JPEG,
-        }),
-        ImageManipulator.manipulateAsync(uri, [{ rotate: -90 }], {
-            compress: 1,
-            format: ImageManipulator.SaveFormat.JPEG,
-        }),
-    ]);
-    const [ocrCW, ocrCCW] = await Promise.all([
-        TextRecognition.recognize(cw.uri),
-        TextRecognition.recognize(ccw.uri),
-    ]);
-    const count = (r: any) =>
-        r.blocks.reduce(
-            (s: number, b: any) =>
-                s + b.lines.filter((l: any) => l.text.trim().length >= 3).length,
-            0,
-        );
-    return count(ocrCW) >= count(ocrCCW) ? cw.uri : ccw.uri;
-};
 
 interface ChainParseSummary {
     headerLineRegions: LabeledRegion[] | undefined;
@@ -284,15 +263,21 @@ const trimOrNull = (s: unknown): string | null => {
 
 const runChainParser = (
     chainId: number,
-    lines: LineWithFrame[],
+    allLines: LineWithFrame[],
+    mergedLines: LineWithFrame[],
 ): ChainParseSummary | null => {
     try {
+        // SAME allLines-vs-mergedLines split as the interactive scan, the headless
+        // queue and account recovery: IKI parses the row-MERGED stream. The old code
+        // fed IKI raw unmerged (and non-row-merged) lines, so the re-parse produced a
+        // DIFFERENT total/date/receiptNo than the upload and then authoritatively
+        // backfilled those wrong values into the stored receipt on reopen.
         const r =
-            chainId === 1 ? parseMaximaReceipt(lines, PARSER_OPTS) :
-            chainId === 2 ? parseRimiReceipt(lines) :
-            chainId === 3 ? parseIkiReceipt(lines) :
-            chainId === 4 ? parseNorfaReceipt(lines) :
-            chainId === 5 ? parseLidlReceipt(lines, PARSER_OPTS) :
+            chainId === 1 ? parseMaximaReceipt(allLines, PARSER_OPTS) :
+            chainId === 2 ? parseRimiReceipt(allLines) :
+            chainId === 3 ? parseIkiReceipt(mergedLines) :
+            chainId === 4 ? parseNorfaReceipt(allLines) :
+            chainId === 5 ? parseLidlReceipt(allLines, PARSER_OPTS) :
             null;
         if (!r) return null;
         return {
@@ -328,11 +313,12 @@ export const computeRehydratedRegions = async (
     if (!localUri) return null;
 
     try {
-        const rotated = await ensurePortrait(localUri);
-        const ocr = await ocrImageTiled(rotated);
-        if (!ocr.lines || ocr.lines.length < 3) return null;
+        // The SHARED OCR pipeline (rotation + tiling + multi-page merge) — the same
+        // funnel the upload and recovery use, so a re-parse can't drift from them.
+        const { allLines, mergedLines } = await ocrReceiptPages([localUri]);
+        if (!allLines || allLines.length < 3) return null;
 
-        const result = runChainParser(chainId, ocr.lines);
+        const result = runChainParser(chainId, allLines, mergedLines);
         if (!result) return null;
 
         const header = Array.isArray(result.headerLineRegions) ? result.headerLineRegions : [];

@@ -136,9 +136,10 @@ export default function ReceiptsScreen() {
   const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
   const [previewOnly, setPreviewOnly] = useState(false);
   const [pdfConverting, setPdfConverting] = useState(false);
-  // DEV-ONLY: long-press a receipt to hard-delete it + all its data.
+  // DEV-ONLY: long-press a receipt for a small action menu (Re-OCR + hard-delete).
   const [deleteTarget, setDeleteTarget] = useState<Receipt | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [reocring, setReocring] = useState(false);
   const queueItems = useReceiptQueueStore((s) => s.items);
   const removeQueueItem = useReceiptQueueStore((s) => s.removeItem);
   const recentIds = useReceiptQueueStore((s) => s.recentIds);
@@ -253,6 +254,36 @@ export default function ReceiptsScreen() {
       Alert.alert("Delete failed", String(e));
     } finally {
       setDeleting(false);
+    }
+  };
+
+  // DEV-ONLY: re-run the FULL pipeline (OCR → parse → match → save) on the receipt's
+  // STORED photo, so a parser fix can be re-tested against the SAME image without a
+  // retake (a retake gives slightly different OCR every time). Downloads the photo, then
+  // hands it to the fresh-scan flow; the OLD receipt (same receiptNo) is deleted just
+  // before the new one is created (in receipt-process), so a re-parse that bails to
+  // "retake" doesn't destroy the receipt. Caveat: the stored photo is the downscaled/
+  // redacted upload, so the OCR won't be byte-identical to the original camera scan — but
+  // it IS deterministic across runs, which is the point.
+  const confirmReOcr = async () => {
+    if (!deleteTarget || reocring || deleting) return;
+    const target = deleteTarget;
+    setReocring(true);
+    try {
+      const imgRes = await fetch(`${API_BASE_URL}/api/receipts/${target.id}/image`);
+      const imgData = await imgRes.json().catch(() => null);
+      if (!imgRes.ok || !imgData?.url) throw new Error(`photo url HTTP ${imgRes.status}`);
+      const dest = `${FileSystem.cacheDirectory}reocr_${target.id}_${Date.now()}.jpg`;
+      const dl = await FileSystem.downloadAsync(imgData.url, dest);
+      if (dl.status !== 200) throw new Error(`photo download HTTP ${dl.status}`);
+      setDeleteTarget(null);
+      router.push(
+        `/receipt-process?uris=${encodeURIComponent(dl.uri)}&reocrReceiptId=${target.id}` as any,
+      );
+    } catch (e) {
+      Alert.alert(t('receipts.devReocr.failed'), String(e));
+    } finally {
+      setReocring(false);
     }
   };
 
@@ -719,19 +750,33 @@ export default function ReceiptsScreen() {
           visible={deleteTarget !== null}
           transparent
           animationType="fade"
-          onRequestClose={() => !deleting && setDeleteTarget(null)}
+          onRequestClose={() => !deleting && !reocring && setDeleteTarget(null)}
         >
-          <Pressable style={styles.menuBackdrop} onPress={() => !deleting && setDeleteTarget(null)}>
+          <Pressable style={styles.menuBackdrop} onPress={() => !deleting && !reocring && setDeleteTarget(null)}>
             <Pressable style={styles.menuCard} onPress={(e) => e.stopPropagation()}>
-              <Text style={styles.menuTitle}>{t('receipts.devDelete.title')}</Text>
+              <Text style={styles.menuTitle}>{t('receipts.devReocr.menuTitle')}</Text>
               <Text style={[styles.cardAddress, { marginBottom: spacing.sm }]}>
-                {t('receipts.devDelete.body', {
-                  store: deleteTarget?.storeName || deleteTarget?.chainName || `#${deleteTarget?.id ?? ''}`,
-                })}
+                {deleteTarget?.storeName || deleteTarget?.chainName || `#${deleteTarget?.id ?? ''}`}
               </Text>
+              {/* Re-OCR: re-run the whole pipeline on the STORED photo (same image, fresh parse). */}
               <TouchableOpacity
-                style={[styles.menuRow, { justifyContent: 'center' }, deleting && { opacity: 0.5 }]}
-                disabled={deleting}
+                style={[styles.menuRow, { justifyContent: 'center' }, (deleting || reocring) && { opacity: 0.5 }]}
+                disabled={deleting || reocring}
+                onPress={confirmReOcr}
+              >
+                {reocring ? (
+                  <MaterialProgress size="small" color={colors.primary} />
+                ) : (
+                  <>
+                    <Ionicons name="refresh-outline" size={iconSize.lg} color={colors.primary} />
+                    <Text style={styles.menuRowText}>{t('receipts.devReocr.action')}</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+              {/* Delete: hard-delete the receipt + everything it spawned. */}
+              <TouchableOpacity
+                style={[styles.menuRow, { justifyContent: 'center' }, (deleting || reocring) && { opacity: 0.5 }]}
+                disabled={deleting || reocring}
                 onPress={confirmDeleteReceipt}
               >
                 {deleting ? (
@@ -747,7 +792,7 @@ export default function ReceiptsScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.menuRow, { justifyContent: 'center' }]}
-                disabled={deleting}
+                disabled={deleting || reocring}
                 onPress={() => setDeleteTarget(null)}
               >
                 <Text style={styles.menuRowText}>{t('common.cancel')}</Text>

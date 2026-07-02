@@ -662,6 +662,12 @@
       "body": "Visam laikui ištrinti „{{store}}“ ir visus susijusius duomenis (kainas, produktus, nuotrauką)?",
       "confirm": "Ištrinti viską"
     },
+    "devReocr": {
+      "menuTitle": "DEV veiksmai",
+      "action": "Perskaityti nuotrauką iš naujo",
+      "running": "Perskaitoma...",
+      "failed": "Nepavyko perskaityti iš naujo"
+    },
     "menu": {
       "pdfConverting": "PDF konvertuojamas į vaizdą",
       "uploadTitle": "Kvito įkėlimas",
@@ -1350,5 +1356,13 @@
       "privateBody": "Banko kortelės, lojalumo kortelės numeriai ir kasininko vardas užtušuojami juodai dar telefone — šie duomenys niekada neišsaugomi ir neįkeliami.",
       "close": "Supratau"
     }
+  },
+  "updateGate": {
+    "hardTitle": "Reikia atnaujinti",
+    "hardBody": "Ši programėlės versija nebeatpalaikoma. Atnaujinkite, kad galėtumėte tęsti.",
+    "softTitle": "Yra atnaujinimas",
+    "softBody": "Išleista naujesnė versija su patobulinimais. Rekomenduojame atnaujinti.",
+    "updateButton": "Atnaujinti",
+    "later": "Vėliau"
   }
 }

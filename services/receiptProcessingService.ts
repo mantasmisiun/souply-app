@@ -41,6 +41,13 @@ import {
 } from "@shared/parsers/rimiParser";
 import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
 import { REGIONS_VERSION } from "./regionsRehydrationService";
+import { Platform } from "react-native";
+
+// iOS MLKit splits rows into 2-4 near-same-y boxes; the Maxima+Lidl parsers carry an
+// xLeft-sorted row merger behind this flag. Every parse surface must pass the SAME flag
+// (interactive receipt-process, region rehydration, recovery, and this headless queue) —
+// a site that omits it produces a DIFFERENT parse of the same photo on iOS.
+const PARSER_OPTS = { iosOcr: Platform.OS === "ios" };
 
 export interface ProcessingResult {
   receiptId: number;
@@ -334,7 +341,7 @@ async function logFail(
 async function postReceipt(
   parsedData: object,
   signal: AbortSignal,
-): Promise<{ receiptId: number; mandatorySwipesRequired: number }> {
+): Promise<{ receiptId: number; mandatorySwipesRequired: number; duplicate?: boolean }> {
   const userId = await getUserId();
   const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts`, {
     method: "POST",
@@ -345,6 +352,14 @@ async function postReceipt(
   });
   const data = await res.json();
   if (res.status === 409) {
+    // The receipt already exists — typically because a PRIOR run of THIS item committed
+    // the create but was killed before the image upload (leaving the row image-less). If
+    // the server hands back the existing id, return it as duplicate so the caller RE-RUNS
+    // the image-upload step against it (recovering the missing photo) instead of dropping
+    // the item permanently image-less. Only bail when there's no id to recover.
+    if (Number.isFinite(data?.existingReceiptId)) {
+      return { receiptId: Number(data.existingReceiptId), mandatorySwipesRequired: 0, duplicate: true };
+    }
     throw new ProcessingError("post_failed", "Kvitas jau įkeltas");
   }
   if (!res.ok || !data?.id) {
@@ -457,7 +472,7 @@ async function processMaxima(
   onProgress?: (done: number, total: number) => void,
 ): Promise<object> {
   const chainId = 1;
-  const parsed = parseMaximaReceipt(allLines);
+  const parsed = parseMaximaReceipt(allLines, PARSER_OPTS);
   let store = await matchStore(chainId, parsed.header.storeAddress, signal);
   if (!store) {
     const chosen = await promptStoreResolution(chainId, "MAXIMA", parsed.header.storeAddress || null, parsed.header.rawText);
@@ -527,7 +542,7 @@ async function processLidl(
   onProgress?: (done: number, total: number) => void,
 ): Promise<object> {
   const chainId = 5;
-  const parsed = parseLidlReceipt(allLines);
+  const parsed = parseLidlReceipt(allLines, PARSER_OPTS);
   let store = await matchStore(chainId, parsed.header.storeAddress, signal);
   if (!store) {
     const chosen = await promptStoreResolution(chainId, "LIDL", parsed.header.storeAddress || null, parsed.header.rawText);

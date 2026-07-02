@@ -691,6 +691,12 @@
       "body": "Permanently delete \"{{store}}\" and all associated data (prices, products, image)?",
       "confirm": "Delete everything"
     },
+    "devReocr": {
+      "menuTitle": "DEV actions",
+      "action": "Re-OCR from photo",
+      "running": "Re-reading…",
+      "failed": "Re-OCR failed"
+    },
     "menu": {
       "pdfConverting": "Converting PDF to image",
       "uploadTitle": "Upload receipt",
@@ -1372,5 +1378,13 @@
       "privateBody": "Bank card, loyalty card numbers and the cashier's name are blacked out on your phone — this data is never stored or uploaded.",
       "close": "Got it"
     }
+  },
+  "updateGate": {
+    "hardTitle": "Update required",
+    "hardBody": "This version of the app is no longer supported. Please update to continue.",
+    "softTitle": "Update available",
+    "softBody": "A newer version with improvements is out. We recommend updating.",
+    "updateButton": "Update",
+    "later": "Later"
   }
 }

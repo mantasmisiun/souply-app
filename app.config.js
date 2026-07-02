@@ -273,6 +273,12 @@ export default {
       },
     },
     owner: 'souply-solutions',
+    // runtimeVersion = the app.json `version` (policy 'appVersion'). This is the OTA
+    // COMPATIBILITY GATE (Phase 3): an EAS Update bundle is only ever offered to a native
+    // build whose runtimeVersion matches, so OTA JS can never land on an incompatible native
+    // ABI. Bump `version` whenever you ship a change that needs a new native binary (a new
+    // native module, or a breaking API contract) — that also cuts the OTA channel so old
+    // natives stop pulling new JS, and it's the same key the server version gate floors on.
     runtimeVersion: {
       policy: 'appVersion',
     },
@@ -281,6 +287,14 @@ export default {
       requestHeaders: {
         'expo-channel-name': IS_DEV ? 'dev' : IS_STAGING ? 'staging' : 'production',
       },
+      // Same-session, behind-the-native-splash OTA apply on COLD START (Phase 3): the
+      // launcher checks for an update on load and waits up to fallbackToCacheTimeout ms for
+      // it to download before rendering — so a fresh bundle applies THIS launch instead of
+      // next. If the check/download exceeds the timeout (slow network), it falls back to the
+      // cached/embedded bundle and the update applies on a later launch. Warm-published
+      // updates (app already running) are handled by the JS hook useAppUpdates.
+      checkAutomatically: 'ON_LOAD',
+      fallbackToCacheTimeout: 12000,
     },
   },
 };

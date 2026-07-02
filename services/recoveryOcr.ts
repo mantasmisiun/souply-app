@@ -1,4 +1,5 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import { Platform } from 'react-native';
 import { API_BASE_URL } from '../config/api';
 import { ocrReceiptPages, type LineWithFrame } from '../utils/receiptOcrPipeline';
 import { isRimiReceipt, parseRimiReceipt } from '../shared/parsers/rimiParser';
@@ -91,10 +92,15 @@ function detectAndParse(
         isIkiReceipt(lineTexts) ? 3 :
         (detectChainByVatCode(lineTexts)?.chainId ?? null);
 
+    // iOS MLKit splits rows into near-same-y fragments; the Maxima+Lidl parsers carry
+    // the merger behind this flag — the SAME flag every interactive parse site passes.
+    // Without it an iOS recovery re-parse produces a different total/receiptNo than the
+    // stored upload and the recovery match key silently misses.
+    const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
     if (chainId === 2) return packFields(parseRimiReceipt(allLines).footer, 2, 'Rimi');
-    if (chainId === 1) return packFields(parseMaximaReceipt(allLines).footer, 1, 'Maxima');
+    if (chainId === 1) return packFields(parseMaximaReceipt(allLines, PARSER_OPTS).footer, 1, 'Maxima');
     if (chainId === 4) return packFields(parseNorfaReceipt(allLines).footer, 4, 'Norfa');
-    if (chainId === 5) return packFields(parseLidlReceipt(allLines).footer, 5, 'Lidl');
+    if (chainId === 5) return packFields(parseLidlReceipt(allLines, PARSER_OPTS).footer, 5, 'Lidl');
     if (chainId === 3) return packFields(parseIkiReceipt(mergedLines).footer, 3, 'Iki');
     return null;
 }

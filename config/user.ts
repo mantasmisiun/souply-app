@@ -2,6 +2,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import { API_BASE_URL } from './api';
 import { DEV_RANDOM_USER_UUID } from '../constants/flags';
+import {
+    loadPersistedAnonToken,
+    saveAnonSessionToken,
+    setAnonSessionTokenMem,
+    clearAnonSessionToken,
+} from './session';
 
 const USER_ID_KEY = 'userId';
 const USER_SYNCED_KEY = 'userSyncedToBackend';
@@ -49,8 +55,16 @@ async function initUserId(): Promise<string> {
 }
 
 async function syncToBackendIfNeeded(userId: string): Promise<void> {
+    // Load any persisted anonymous token into memory FIRST so the fetch interceptor can
+    // send it immediately (even before this POST completes / when offline).
+    const persisted = await loadPersistedAnonToken();
+    if (persisted) setAnonSessionTokenMem(persisted);
+
     const synced = await AsyncStorage.getItem(USER_SYNCED_KEY);
-    if (synced === '1') return;
+    // POST when not yet synced OR when we still have no session token (existing installs
+    // predate token issuance and must claim one). The endpoint is idempotent and returns
+    // { id, token } for anonymous users — that token authenticates every per-user route.
+    if (synced === '1' && persisted) return;
     try {
         const res = await fetch(`${API_BASE_URL}/api/users`, {
             method: 'POST',
@@ -59,6 +73,10 @@ async function syncToBackendIfNeeded(userId: string): Promise<void> {
         });
         if (res.ok) {
             await AsyncStorage.setItem(USER_SYNCED_KEY, '1');
+            const data = await res.json().catch(() => ({} as any));
+            if (data && typeof data.token === 'string' && data.token) {
+                await saveAnonSessionToken(data.token);
+            }
         }
     } catch {
         // Offline / server unreachable — leave the flag unset so the next
@@ -91,6 +109,10 @@ export const getUserId = async (): Promise<string> => {
  */
 export const resetUserId = async (): Promise<void> => {
     await AsyncStorage.multiRemove([USER_ID_KEY, USER_SYNCED_KEY]);
+    // The anonymous token is bound to the OLD id (its JWT sub) — it must not survive into
+    // the next identity, or it would authenticate as the deleted user. The next getUserId()
+    // mints a fresh one for the new UUID.
+    await clearAnonSessionToken();
     // Drop the memoised promise so `getUserId()` re-runs `initUserId()`.
     initPromise = null;
 };
@@ -109,5 +131,9 @@ export const resetUserId = async (): Promise<void> => {
 export const setUserId = async (recoveredId: string): Promise<void> => {
     await AsyncStorage.setItem(USER_ID_KEY, recoveredId);
     await AsyncStorage.setItem(USER_SYNCED_KEY, '1');
+    // The previous anonymous token has the OLD sub — drop it so the next getUserId()
+    // re-mints a token for the recovered id (POST /api/users returns one for anonymous
+    // accounts; a verified recovered account uses its OAuth token instead).
+    await clearAnonSessionToken();
     initPromise = null;
 };

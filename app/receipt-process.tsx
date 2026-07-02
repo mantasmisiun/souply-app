@@ -206,6 +206,10 @@ interface ProductLine {
   matchConfidence: number | null;
   matchConfirmed: boolean;
   priceVerified?: boolean;
+  /** Set when the USER manually re-matched this line (name-edit rematch flow). The
+   *  server's autosave merge honors match fields only for marked lines — see
+   *  applyReceiptAutosave — so stale client state can't undo server-side votes. */
+  manualMatch?: boolean;
   altMatches: ProductMatchOption[];
   price: number;
   promoPrice: number | null;
@@ -623,11 +627,15 @@ function buildParsedData(
 
 export default function ProcessReceiptScreen() {
   const { t } = useTranslation();
-  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, shoppingListId: shoppingListIdParam, expectedChainId: expectedChainIdParam, listMap: listMapParam } = useLocalSearchParams<{
+  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, shoppingListId: shoppingListIdParam, expectedChainId: expectedChainIdParam, listMap: listMapParam, reocrReceiptId: reocrReceiptIdParam } = useLocalSearchParams<{
     uri?: string;
     uris?: string;
     receiptId?: string;
     preview?: string;
+    /** DEV re-OCR: this is a fresh-scan run of an EXISTING receipt's stored photo.
+     *  The old receipt is deleted just before the new one is POSTed (so a re-parse
+     *  that bails to retake doesn't destroy it, and the create isn't a dedup 409). */
+    reocrReceiptId?: string;
     /** Single-store list upload: the list row to link the Receipt to. */
     shoppingListId?: string;
     /** Single-store: the list's chain — gate the scan against it. */
@@ -659,6 +667,9 @@ export default function ProcessReceiptScreen() {
     ? Number(shoppingListIdParam) : null;
   const existingReceiptId = receiptIdParam ? Number(receiptIdParam) : null;
   const isExistingMode = Number.isFinite(existingReceiptId);
+  // DEV re-OCR: fresh-scan run over an existing receipt's stored photo. Not "existing
+  // mode" (we WANT the full scan+POST pipeline) — just the id to retire on save.
+  const reocrReceiptId = reocrReceiptIdParam ? Number(reocrReceiptIdParam) : null;
 
   // `uris` (comma-separated) is used for multi-page PDF receipts where each
   // page is OCR'd separately; `uri` stays for the single-image cases.
@@ -928,6 +939,10 @@ export default function ProcessReceiptScreen() {
           matchConfidence: top?.confidence ?? null,
           matchConfirmed: false,
           altMatches: matches,
+          // Explicit-manual-match marker: the server's autosave merge applies match
+          // fields ONLY for lines carrying this, so a stale (un-edited) line can
+          // never re-adjudicate a match the server changed (votes, rejects, Round-2).
+          manualMatch: true,
         };
         return updated;
       });
@@ -1332,6 +1347,12 @@ export default function ProcessReceiptScreen() {
   // Refs for debounced save machinery (no re-renders, live values for unmount cleanup)
   const saveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingSaveRef = useRef<object | null>(null);
+  // Serialize autosave PUTs: at most one in flight; a save requested while one is running
+  // is queued (newest wins) and flushed on completion. Without this, two debounced PUTs
+  // could be in flight at once and the OLDER snapshot could land last, silently reverting
+  // the user's latest edit (the server serializes but does not order concurrent requests).
+  const saveInFlightRef = useRef(false);
+  const queuedSaveDataRef = useRef<object | null>(null);
   const receiptIdRef = useRef<number | null>(null);
   const userIdRef = useRef<string | null>(null);
   const hasPostedRef = useRef(false); // guard against double POST from re-renders
@@ -1623,6 +1644,18 @@ export default function ProcessReceiptScreen() {
         maskBandsClamped,
         wordsDumpRef.current,
       );
+
+      // DEV re-OCR: retire the OLD receipt right before creating the fresh one — done
+      // HERE (not on entry) so a bail-to-retake earlier in the pipeline leaves the
+      // original intact, and so the create below isn't rejected as a duplicate (same
+      // receiptNo). Best-effort: a delete hiccup would only surface as a 409 next.
+      if (reocrReceiptId != null && Number.isFinite(reocrReceiptId)) {
+        try {
+          await fetch(`${API_BASE_URL}/api/receipts/${reocrReceiptId}`, { method: "DELETE" });
+        } catch (e) {
+          console.warn("[reocr] old-receipt delete failed (continuing):", e);
+        }
+      }
 
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts`, {
         method: "POST",
@@ -2110,6 +2143,13 @@ export default function ProcessReceiptScreen() {
   }, []);
 
   const saveNow = async (id: number, data: object) => {
+    // In-flight guard: if a PUT is already running, stash the newest snapshot and let the
+    // running save flush it on completion — never two PUTs racing.
+    if (saveInFlightRef.current) {
+      queuedSaveDataRef.current = data;
+      return;
+    }
+    saveInFlightRef.current = true;
     try {
       const userId = userIdRef.current ?? (await getUserId());
       userIdRef.current = userId;
@@ -2129,6 +2169,15 @@ export default function ProcessReceiptScreen() {
       }
     } catch (e) {
       console.warn("Save failed:", e);
+    } finally {
+      saveInFlightRef.current = false;
+      // A newer edit arrived while this PUT was in flight — send it now so the latest
+      // snapshot is always the last one written.
+      const queued = queuedSaveDataRef.current;
+      if (queued) {
+        queuedSaveDataRef.current = null;
+        void saveNow(id, queued);
+      }
     }
   };
 
@@ -2263,13 +2312,23 @@ export default function ProcessReceiptScreen() {
       return false;
     };
 
-    // A real purchase always has at least one product line. ZERO parsed products means the photo
-    // was too garbled to recover ANY item (e.g. a doubled/blurred scan whose footer still read OK) —
-    // bail with a "retake the photo" prompt instead of saving an empty receipt. Runs BEFORE the date
-    // gate so a junk scan doesn't pointlessly ask the user to pick a date for a receipt we'll reject.
+    // A usable receipt needs at least ONE product with a COMPLETE identity — a real NAME and a
+    // positive PRICE. Zero products, OR products that ALL lost their name ("?") or their price (a
+    // garbled/blurred scan), means nothing actionable was recovered → bail with a "retake the
+    // photo" prompt instead of saving a junk receipt. Runs BEFORE the date gate + BEFORE any
+    // Receipt row is created (bailWithLog never creates one), so the failed scan never reaches the
+    // DB — nothing to wipe. A garbled-but-PRESENT name still passes: that's a matching problem
+    // (0 catalog matches), not a capture failure, and is not a retake case.
     const ensureHasProducts = async (products: any[], chainName: string): Promise<boolean> => {
-      if (Array.isArray(products) && products.length > 0) return true;
-      await bailWithLog('no_products', { detectedChainName: chainName, ocrPreview: `0 products parsed (${chainName})` });
+      const list = Array.isArray(products) ? products : [];
+      const hasName = (p: any) => typeof p?.name === 'string' && p.name.trim().length > 0 && p.name.trim() !== '?';
+      const hasPrice = (p: any) =>
+        (typeof p?.price === 'number' && p.price > 0) || (typeof p?.promoPrice === 'number' && p.promoPrice > 0);
+      if (list.some((p) => hasName(p) && hasPrice(p))) return true;
+      await bailWithLog('no_products', {
+        detectedChainName: chainName,
+        ocrPreview: `${list.length} parsed, 0 with a complete name+price (${chainName})`,
+      });
       return false;
     };
 
@@ -3640,13 +3699,17 @@ export default function ProcessReceiptScreen() {
   // are visible on EVERY tab — not just Kvitas — without waiting for
   // the user to switch. The ref guard prevents repeat attempts
   // within the same session.
-  const regionRehydrationTriedRef = useRef(false);
+  // Per-RECEIPT-ID (not a session boolean): the screen instance is reused across
+  // receipt A→B navigation, so a plain boolean would rehydrate only the FIRST receipt
+  // viewed and leave B's stale/kindless bands + un-backfilled values (same reuse class
+  // the sibling hasLoadedExistingRef was migrated to a per-id ref for).
+  const regionRehydrationTriedRef = useRef<number | null>(null);
   const sectionNeedsRehydration = (regions: LabeledRegion[] | undefined): boolean => {
     if (!regions || regions.length === 0) return true;
     return !regions.some((r) => typeof (r as { kind?: string }).kind === 'string');
   };
   useEffect(() => {
-    if (regionRehydrationTriedRef.current) return;
+    if (regionRehydrationTriedRef.current === receiptId) return;
     if (!imageUri) return;
     if (!receiptId) return;
     if (!header || header.chainId == null) return;
@@ -3655,7 +3718,7 @@ export default function ProcessReceiptScreen() {
     const versionStale = header.regionsVersion !== REGIONS_VERSION;
     if (!headerNeeds && !footerNeeds && !versionStale) return;
 
-    regionRehydrationTriedRef.current = true;
+    regionRehydrationTriedRef.current = receiptId;
     const chainId = header.chainId;
     const targetReceiptId = receiptId;
     const targetImageUri = imageUri;
@@ -3682,10 +3745,21 @@ export default function ProcessReceiptScreen() {
       // KEEP them — same coordinate space as the products — and still backfill the
       // re-parsed VALUES (total/date/…) + bump the version below. The overwrite
       // makes the bands kinded, so next reopen Needs=false → no further re-derive.
+      // Which sections do we ADOPT the re-OCR'd geometry for? Same test the state
+      // updates below use. ONLY adopted sections may be persisted — a section whose
+      // stored bands we KEEP must not overwrite the DB with the re-OCR set (which lands
+      // in a slightly different pixel scale). That per-open overwrite of good bands with
+      // the misaligned re-OCR set WAS the downward band drift seen after a restart.
+      const headerAdopted = headerNeeds && result.headerLineRegions.length > 0;
+      const hadFooterTotal = (footer?.lineRegions ?? []).some((r) => r.kind === 'total');
+      const willHaveFooterTotal = result.footerLineRegions.some((r) => r.kind === 'total');
+      const footerAdopted =
+        footerNeeds && result.footerLineRegions.length > 0 && (willHaveFooterTotal || !hadFooterTotal);
+
       setHeader((h) => {
         if (!h) return h;
         const next: HeaderData = { ...h, regionsVersion: REGIONS_VERSION };
-        if (headerNeeds && result.headerLineRegions.length > 0) {
+        if (headerAdopted) {
           next.lineRegions = result.headerLineRegions;
         }
         return next;
@@ -3693,17 +3767,11 @@ export default function ProcessReceiptScreen() {
       setFooter((f) => {
         if (!f) return f;
         const next: FooterData = { ...f };
-        // Same as the header: only adopt re-OCR'd regions when the stored footer
-        // bands are unusable, so they stay in the products' coordinate space.
-        if (footerNeeds && result.footerLineRegions.length > 0) {
-          // Guard: the rehydration re-OCRs the downscaled/redacted upload, which
-          // is often WORSE than the original scan for the payment block — never
-          // let it overwrite a total band we already have with a set that lost it.
-          const hadTotal = (f.lineRegions ?? []).some((r) => r.kind === 'total');
-          const willHaveTotal = result.footerLineRegions.some((r) => r.kind === 'total');
-          if (willHaveTotal || !hadTotal) {
-            next.lineRegions = result.footerLineRegions;
-          }
+        // Only adopt re-OCR'd regions when the stored footer bands are unusable, so
+        // they stay in the products' coordinate space. footerAdopted also guards
+        // against replacing a total band we have with a re-OCR set that lost it.
+        if (footerAdopted) {
+          next.lineRegions = result.footerLineRegions;
         }
         // Re-parse is authoritative when it produced a value (number
         // or non-empty string). Covers three scenarios:
@@ -3737,7 +3805,15 @@ export default function ProcessReceiptScreen() {
         }
         return next;
       });
-      void persistRehydratedRegions(targetReceiptId, result);
+      // Persist ONLY the geometry we adopted. For a section we KEPT, send an empty
+      // array — the server skips the lineRegions overwrite (keeps the stored bands,
+      // see updateReceiptRegions) and applies just the backfilled values + version
+      // stamp. This makes reopen idempotent and kills the per-reopen downward drift.
+      void persistRehydratedRegions(targetReceiptId, {
+        ...result,
+        headerLineRegions: headerAdopted ? result.headerLineRegions : [],
+        footerLineRegions: footerAdopted ? result.footerLineRegions : [],
+      });
     })();
   }, [imageUri, receiptId, header, footer]);
 
@@ -4128,16 +4204,21 @@ export default function ProcessReceiptScreen() {
                     )}
                   </View>
                   <View style={styles.productPriceCol}>
-                    {state === "S4" ? (
-                      <Text style={styles.productPrice}>—</Text>
-                    ) : product.promoPrice != null &&
-                      product.promoPrice < product.price ? (
-                      <>
+                    {/* Show the OCR-captured price whenever we HAVE one — even for an
+                        unrecognised (S4) line: the price is a real receipt fact, only the
+                        product IDENTITY is unknown. "—" only when there is genuinely no
+                        price (footer junk / an unrecoverable weighed €/kg → price 0). */}
+                    {totalPrice > 0 ? (
+                      product.promoPrice != null && product.promoPrice < product.price ? (
+                        <>
+                          <Text style={styles.productPrice}>{formatEuro(totalPrice)}</Text>
+                          <Text style={styles.productPriceStrike}>{formatEuro(grossTotal)}</Text>
+                        </>
+                      ) : (
                         <Text style={styles.productPrice}>{formatEuro(totalPrice)}</Text>
-                        <Text style={styles.productPriceStrike}>{formatEuro(grossTotal)}</Text>
-                      </>
+                      )
                     ) : (
-                      <Text style={styles.productPrice}>{formatEuro(totalPrice)}</Text>
+                      <Text style={styles.productPrice}>—</Text>
                     )}
                   </View>
                   <TouchableOpacity

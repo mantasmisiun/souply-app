@@ -16,6 +16,8 @@ import { EnvBadge } from '../components/EnvBadge';
 import { MaskRedactionHost } from '../components/MaskRedactionHost';
 import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { UsernameGate } from '../components/UsernameGate';
+import UpdateGateModal from '../components/UpdateGateModal';
+import { useAppUpdates } from '../hooks/useAppUpdates';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
@@ -185,6 +187,18 @@ function RootLayout() {
       .catch(e => console.warn('[auth] hydrate failed', e));
   }, []);
 
+  // Client version gate: ask the server on launch whether this build is too old for the
+  // current backend. A 'hard' result blocks with a store gate; the per-request 426 catcher
+  // (fetch interceptor) covers a floor flipped mid-session. Fail-open — never blocks offline.
+  useEffect(() => {
+    import('../state/versionGate').then(m => m.useVersionGate.getState().checkVersion())
+      .catch(() => { /* fail open */ });
+  }, []);
+
+  // Prod OTA update-on-resume (Phase 3): download warm-published EAS updates and apply them
+  // on a foreground return after a long background. Cold-start applies natively (splash).
+  useAppUpdates();
+
   // Hydrate admin-mode flag and, if the user last left the app in admin
   // mode, route into the admin section immediately. Cheap — the store
   // reads one AsyncStorage key. No-op when the user has never been an
@@ -245,6 +259,7 @@ function RootLayout() {
       <OfflineBanner />
       <UsernameGate />
       <LevelUpModal />
+      <UpdateGateModal />
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: colors.pageBackground },
