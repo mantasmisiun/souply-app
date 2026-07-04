@@ -3012,12 +3012,17 @@ export default function ProcessReceiptScreen() {
         // the better result. Runs ONLY on flagged parses (the happy path pays nothing);
         // both engines report in source-image pixels, so bands/masks stay valid either
         // way. Android's counterpart is the strip re-OCR pass below. ──
+        // A name with embedded amount tokens ("MAGIJA … 0,65 84 A A") = a mis-segmented
+        // row group — counts as flagged AND penalised, so a false-reconciled parse with
+        // junk names still gets (and loses to) the second opinion.
+        const junkName = (n: string | undefined | null) => !!n && /\d[.,]\s?\d{2}|\s\d{2,}\s+[ABC](?:\s|$)/.test(n);
         const parseQuality = (r: any): number => {
           let q = 0;
           if (r?.footer?.reconciled) q += 100;
           const prods = r?.products ?? [];
           q += Math.min(prods.length, 30);
           q -= prods.filter((pp: any) => !pp.name || pp.name === '?').length * 8;
+          q -= prods.filter((pp: any) => junkName(pp.name)).length * 8;
           q -= prods.filter((pp: any) => !(pp.price > 0)).length * 5;
           if (!r?.footer?.reconciled && Number.isFinite(r?.footer?.reconDelta)) {
             q -= Math.min(30, Math.abs(r.footer.reconDelta) * 10);
@@ -3026,7 +3031,7 @@ export default function ProcessReceiptScreen() {
           return q;
         };
         const flagged = !parsed.footer.reconciled ||
-          parsed.products.some((pp: any) => !pp.name || pp.name === '?' || !(pp.price > 0));
+          parsed.products.some((pp: any) => !pp.name || pp.name === '?' || junkName(pp.name) || !(pp.price > 0));
         if (Platform.OS === 'ios' && flagged && imageUris.length > 0) {
           try {
             const t0 = Date.now();
