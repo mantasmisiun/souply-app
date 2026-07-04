@@ -111,9 +111,8 @@ export function StoreResolutionOverlay() {
                         longitude: parseFloat(s.longitude),
                     }))
                     .filter((s: ChainStore) => Number.isFinite(s.latitude) && Number.isFinite(s.longitude));
-                console.log(`[STOREMAP] fetched ${parsed.length} geo stores for chainId=${req.chainId} (raw=${Array.isArray(data) ? data.length : 'n/a'})`);
                 setStores(parsed);
-            } catch (e) { console.log('[STOREMAP] store fetch FAILED', e); /* leave empty — the map still works for search */ }
+            } catch { /* leave empty — the map still works for search */ }
         })();
         (async () => {
             let center: { lat: number; lng: number } | null = null;
@@ -169,7 +168,6 @@ export function StoreResolutionOverlay() {
         const r = await geocodeAddress(q);
         setSearching(false);
         if (!r) { setSearchError(t('storeResolution.addressNotFound')); return; }
-        console.log(`[STOREMAP] search recenter -> ${r.lat},${r.lng} (camera only; marker set unchanged)`);
         mapRef.current?.animateToRegion(
             { latitude: r.lat, longitude: r.lng, latitudeDelta: CLOSE_DELTA, longitudeDelta: CLOSE_DELTA },
             600,
@@ -201,12 +199,6 @@ export function StoreResolutionOverlay() {
         return specs;
     }, [stores, selectedStore, req]);
     const { uriFor, bakedKeys, bakery } = useBakedPills(pillSpecs);
-
-    // Log as pills bake in — stores fetched vs pills baked vs actually mounted.
-    const bakedNeutralCount = bakedKeys.filter((k) => k.endsWith('|n')).length;
-    useEffect(() => {
-        console.log(`[STOREMAP] render — stores=${stores.length} centered=${centered} mapReady=${mapReady} pillsBaked=${bakedNeutralCount} mounted=${centered ? bakedNeutralCount : 0}`);
-    }, [stores.length, centered, mapReady, bakedNeutralCount]);
 
     if (!req) return null;
 
@@ -254,7 +246,7 @@ export function StoreResolutionOverlay() {
                                     chainId={req.chainId}
                                     pillUri={uriFor(key)}
                                     zIndex={2}
-                                    onPress={() => { console.log(`[STOREMAP] tapped store id=${id} "${s.address}"`); setSelectedId(id); }}
+                                    onPress={() => setSelectedId(id)}
                                 />
                             );
                         })}

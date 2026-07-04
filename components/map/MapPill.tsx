@@ -75,10 +75,9 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
     const raf1 = requestAnimationFrame(() => {
       raf2 = requestAnimationFrame(() => {
         if (cancelled || !ref.current) return;
-        console.log(`[PILLBAKE] capture key=${spec.key} ready=${ready} badgeLoaded=${badgeLoaded} twoRow=${twoRow}`);
         captureRef(ref.current, { format: 'png', result: 'tmpfile', quality: 1 })
-          .then((uri) => { console.log(`[PILLBAKE] OK key=${spec.key}`); onShot(spec.key, uri); })
-          .catch((e) => { console.log(`[PILLBAKE] FAIL key=${spec.key}`, e?.message ?? e); onFail(spec.key); });
+          .then((uri) => onShot(spec.key, uri))
+          .catch(() => onFail(spec.key));
       });
     });
     return () => { cancelled = true; cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };

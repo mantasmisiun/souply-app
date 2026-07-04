@@ -356,9 +356,14 @@ export const computeRehydratedRegions = async (
         console.warn("[regionsRehydration] OCR/parse failed:", e);
         return null;
     } finally {
-        // Best-effort cleanup of the temp file. Failures don't matter —
-        // cacheDirectory gets reclaimed by the OS.
-        FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
+        // Best-effort cleanup — but ONLY of the temp copy THIS service downloaded
+        // (region_rehydrate_*). Since downloadToCache started returning LOCAL file://
+        // sources as-is (the fresh-scan fix), `localUri` can be the CALLER'S image —
+        // deleting it destroyed the re-OCR source mid-session ("File …reocr_298….jpg
+        // is not readable": no receipt photo, no band crops — user report 2026-07-04).
+        if (localUri.includes('region_rehydrate_')) {
+            FileSystem.deleteAsync(localUri, { idempotent: true }).catch(() => {});
+        }
     }
 };
 
