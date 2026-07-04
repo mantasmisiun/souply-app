@@ -233,10 +233,16 @@ export interface RehydratedRegions {
 }
 
 const downloadToCache = async (url: string): Promise<string | null> => {
+    if (!url) return null;
+    // A LOCAL file (a fresh-scan camera image, file://...) is already on disk — feeding it
+    // to downloadAsync makes it resolve to null and the `{ uri }` destructure then throws
+    // "Cannot read property 'uri' of null" (the reported warning). Use it directly; only a
+    // remote http(s) URL (a saved receipt's stored image) needs the download. Both platforms.
+    if (/^file:|^content:|^ph:|^assets-library:/i.test(url)) return url;
     try {
         const dest = `${FileSystem.cacheDirectory}region_rehydrate_${Date.now()}.img`;
-        const { uri } = await FileSystem.downloadAsync(url, dest);
-        return uri;
+        const res = await FileSystem.downloadAsync(url, dest);
+        return res?.uri ?? null; // null-safe: don't destructure a possibly-null result
     } catch (e) {
         console.warn("[regionsRehydration] download failed:", e);
         return null;
