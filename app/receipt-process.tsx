@@ -720,6 +720,9 @@ export default function ProcessReceiptScreen() {
   // route). The OCR pipeline awaits the storeResolution handoff promise; this just toggles
   // the modal's visibility.
   const [storeGate, setStoreGate] = useState(false);
+  // Resolves once the store-resolution map's dismiss animation finishes (Modal.onDismiss,
+  // iOS), so a following modal never presents on top of the still-animating map.
+  const storeGateDismissRef = useRef<(() => void) | null>(null);
   // Mandatory swipes are hosted IN-PLACE as a phase of this screen (was the
   // /swipe/queue route bounce + swipeDone round-trip). `swiping` flips the whole
   // screen to <SwipeQueue>; `postSwipeActionRef` holds the continuation to run
@@ -3048,7 +3051,19 @@ export default function ProcessReceiptScreen() {
     setLoading(false);
     setStoreGate(true);
     const result = await pending;
-    setStoreGate(false);
+    // Hide the map AND wait for its dismiss animation to complete before returning.
+    // The caller may immediately show the fail modal (a cancelled pick → bailWithLog →
+    // setFailGate). Presenting that transparent modal while this fullScreen map is still
+    // sliding out stacks TWO modals on iOS (the map "stays" behind the fail card until
+    // dismissed — the reported double-modal). onDismiss fires when the slide-out finishes;
+    // a timeout backstops Android (no onDismiss) and any missed callback.
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => { if (settled) return; settled = true; storeGateDismissRef.current = null; resolve(); };
+      storeGateDismissRef.current = finish;
+      setStoreGate(false);
+      setTimeout(finish, 500);
+    });
     if (result) setLoading(true); // resume the processing indicator after a pick
     return result;
   };
@@ -4755,6 +4770,7 @@ export default function ProcessReceiptScreen() {
         animationType="slide"
         presentationStyle="fullScreen"
         onRequestClose={() => completeStoreResolution(null)}
+        onDismiss={() => storeGateDismissRef.current?.()}
       >
         <StoreResolutionOverlay />
       </Modal>

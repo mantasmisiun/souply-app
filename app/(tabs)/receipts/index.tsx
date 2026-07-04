@@ -10,6 +10,7 @@ import { StoreChipBar } from "../../../components/StoreChipBar";
 import { useCallback,
     useEffect,
     useMemo,
+    useRef,
     useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -50,6 +51,7 @@ import { fetchWithTimeout, TIMEOUT_HEAVY_MS, TIMEOUT_STANDARD_MS } from "../../.
 import { formatDate } from "../../../utils/formatCurrency";
 import { useNetworkStatus } from "../../../state/networkStatus";
 import { useLevelStore } from "../../../state/levelStore";
+import { useSettingsStore } from "../../../state/settingsStore";
 
 interface Receipt {
   id: number;
@@ -324,12 +326,27 @@ export default function ReceiptsScreen() {
     }
   }, [receipts, recentIds, pruneRecentIds]);
 
+  // Gate the resume prompt on settings hydration: Alert.alert captures its strings
+  // IMPERATIVELY at call time, so firing it before settingsStore has run
+  // i18n.changeLanguage(deviceLanguage) freezes the modal to the hardcoded init
+  // language (lt) even on an English device — the "not language aware" report. A
+  // reactively-rendered <Modal> wouldn't have this, but a native Alert would; so
+  // wait for `hydrated`, by which point i18next is on the resolved language.
+  const settingsHydrated = useSettingsStore((s) => s.hydrated);
+  const resumePromptedRef = useRef(false);
   useEffect(() => {
+    // Claim the one-shot SYNCHRONOUSLY, before the await. Hydration flips
+    // `settingsHydrated` AND changes `t` (languageChanged) in the same beat; with `t`
+    // in the deps this effect fired twice, and because the ref was only set AFTER
+    // `await loadReceiptDraft()`, both runs got past the guard and stacked TWO resume
+    // Alerts (the reported "modal stayed, tapped Continue again"). `t` is dropped from
+    // the deps (read fresh at Alert time) so the effect fires once when hydration lands.
+    if (!settingsHydrated || resumePromptedRef.current) return;
+    resumePromptedRef.current = true;
     let active = true;
     (async () => {
       const draft = await loadReceiptDraft();
-      if (!active) return;
-      if (!draft) return;
+      if (!active || !draft) return;
       Alert.alert(
         t('receipts.resume.title'),
         t('receipts.resume.body'),
@@ -350,7 +367,7 @@ export default function ReceiptsScreen() {
               } else {
                 params.set("uri", draft.imageUris[0]);
               }
-              router.push(`/receipt-process?${params.toString()}` as any);
+              router.navigate(`/receipt-process?${params.toString()}` as any);
             },
           },
         ],
@@ -359,7 +376,10 @@ export default function ReceiptsScreen() {
     return () => {
       active = false;
     };
-  }, []);
+    // `t` intentionally omitted — see the sync-claim comment above; re-running on a
+    // language change would risk a second prompt. Fires once when hydration completes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsHydrated]);
 
   const getStatusColor = (item: Receipt) => {
     if (hasPendingSwipes(item)) return colors.warning;
@@ -595,8 +615,11 @@ export default function ReceiptsScreen() {
         onLongPress={__DEV__ ? () => setDeleteTarget(item) : undefined}
         delayLongPress={500}
         onPress={() => {
+          // navigate, not push: a quick double-tap dispatches twice, and push
+          // stacks a second copy of the screen — navigate no-ops when the same
+          // route+params is already focused.
           if (hasPendingSwipes(item)) {
-            router.push({
+            router.navigate({
               pathname: "/swipe/queue",
               params: {
                 receiptIds: String(item.id),
@@ -604,7 +627,7 @@ export default function ReceiptsScreen() {
               },
             } as any);
           } else {
-            router.push(`/receipt-process?receiptId=${item.id}`);
+            router.navigate(`/receipt-process?receiptId=${item.id}`);
           }
         }}
       >

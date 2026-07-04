@@ -452,14 +452,19 @@ export default function StoreResultsMap({
                 {pinsByZ.map(pin => {
                     const spec = specForPin(pin);
                     const zRank = zRankMap.get(pin.storeId) ?? 0;
+                    const uri = spec ? uriFor(spec.key) : undefined;
                     return (
                         <MapPillMarker
                             // Remount (→ re-rasterise) on z-rank change OR baked-image change
                             // (price / cheapest / selected → a new spec key, hence a new image).
-                            key={`${pin.storeId}-${zRank}-${spec ? spec.key : 'np'}`}
+                            // The bake state ('b'adge → 'p'ill) is in the key too: on iOS an
+                            // IN-PLACE image upgrade decodes into the marker's stale badge-sized
+                            // bounds (AIRMapMarker size:self.bounds.size) → tiny pills; the
+                            // remount decodes at natural size (see StoreResolutionOverlay).
+                            key={`${pin.storeId}-${zRank}-${spec ? spec.key : 'np'}-${uri ? 'p' : 'b'}`}
                             coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
                             chainId={pin.chainId}
-                            pillUri={spec ? uriFor(spec.key) : undefined}
+                            pillUri={uri}
                             dimmed={anySelected && !pin.active}
                             zIndex={zRank * 2}
                             anchorBaked={{ x: 0.16, y: 0.5 }}

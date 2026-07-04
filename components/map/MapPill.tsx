@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Image, StyleSheet, Text, View, type ImageSourcePropType, type LayoutChangeEvent } from 'react-native';
+import { Image, StyleSheet, Text, View, type ImageSourcePropType, type ImageURISource, type LayoutChangeEvent } from 'react-native';
 import { Marker } from 'react-native-maps';
 import { captureRef } from 'react-native-view-shot';
 import { chainBadgeImage } from '../../utils/chainLogoAssets';
@@ -279,20 +279,25 @@ export function useBakedClusters(specs: MapClusterSpec[]): {
   return { uriFor: (key) => uris[key], bakery };
 }
 
-export function MapClusterMarker({ coordinate, pillUri, zIndex = 1, onPress }: {
+export function MapClusterMarker({ coordinate, pillUri, fallback, zIndex = 1, onPress }: {
   coordinate: { latitude: number; longitude: number };
   pillUri?: string;
+  /** Shown until the bake lands (e.g. the chain badge on a single-chain map). Without
+   *  it the marker renders nothing while un-baked — and the resulting null→Marker
+   *  flips insert children mid-array, which is the iOS AIRMap interop crash surface
+   *  (NSRangeException in insertReactSubview; see StoreResolutionOverlay). Passing a
+   *  fallback mounts the marker ONCE and only swaps its image in place. */
+  fallback?: number | ImageURISource;
   zIndex?: number;
   onPress?: () => void;
 }) {
-  // Until the bake lands (a frame or two) there's no native cluster asset to fall
-  // back to, so render nothing rather than a clipped child view.
-  if (!pillUri) return null;
+  const source: number | ImageURISource | null = pillUri ? { uri: pillUri } : fallback ?? null;
+  if (source == null) return null;
   return (
     <Marker
       coordinate={coordinate}
       anchor={{ x: 0.5, y: 0.5 }}
-      image={{ uri: pillUri }}
+      image={source}
       tracksViewChanges={false}
       zIndex={zIndex}
       onPress={onPress}
