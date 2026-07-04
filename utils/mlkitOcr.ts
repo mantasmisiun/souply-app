@@ -521,9 +521,30 @@ async function runMlkitOnUri(
             let textH = line.frame.height;
             if (els.length >= 2) {
                 const L = els[0].frame, R = els[els.length - 1].frame;
-                const dx = (R.left + R.width / 2) - (L.left + L.width / 2);
-                if (dx >= 8) slope = (R.top - L.top) / dx;
                 textH = (L.height + R.height) / 2;
+                // SHEAR-PROOF slope: median of ADJACENT-element-pair slopes, skipping
+                // pairs separated by a large x-gap. A receipt line that glues the NAME
+                // column to the PRICE column ("DEPOZI TAS  0, 10") has one huge
+                // cross-column pair whose leftmost-vs-rightmost "slope" measures the
+                // OCR column SHEAR, not the paper tilt — and steps (2)+(3) below then
+                // spread that poison to neighbouring lines. The corners synthesized
+                // from it scrambled the parser's de-skew (receipt-232: interleaved
+                // names + bands pivoting up on a perfectly straight photo). Intra-
+                // column adjacent pairs pass the gap cap; the cross-gap pair doesn't.
+                const span = (R.left + R.width) - L.left || 1;
+                const gapCap = Math.max(120, span * 0.25);
+                const pairSlopes: number[] = [];
+                for (let k = 1; k < els.length; k++) {
+                    const a = els[k - 1].frame, b = els[k].frame;
+                    const dx = (b.left + b.width / 2) - (a.left + a.width / 2);
+                    if (dx < 8 || b.left - (a.left + a.width) > gapCap) continue;
+                    pairSlopes.push((b.top - a.top) / dx);
+                }
+                if (pairSlopes.length) {
+                    pairSlopes.sort((x, y) => x - y);
+                    const m = Math.floor(pairSlopes.length / 2);
+                    slope = pairSlopes.length % 2 ? pairSlopes[m] : (pairSlopes[m - 1] + pairSlopes[m]) / 2;
+                }
             }
             raws.push({
                 // Normalize to Lithuanian alphabet before any parser sees the text

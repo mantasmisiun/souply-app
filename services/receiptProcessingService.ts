@@ -229,7 +229,7 @@ async function matchProducts(
     pricePerUnit: number | null;
     parsedAmount?: number | null;
     parsedUnit?: string | null;
-    isWeighable?: boolean;
+    isWeighable?: boolean | null;
     rawLines: string[];
     region: Region;
   }[],
@@ -240,7 +240,7 @@ async function matchProducts(
   const promises = rawProducts.map(async (p) => {
     const { strippedName, amount: nameAmount, unit: nameUnit } = parseProductName(
       p.name,
-      p.isWeighable,
+      p.isWeighable ?? undefined,
     );
     const matchName = strippedName || p.name;
     let resolvedAmount = p.parsedAmount ?? nameAmount;
@@ -257,6 +257,11 @@ async function matchProducts(
     }
 
     let altMatches: unknown[] = [];
+    // Absurd-length guard — see receipt-process.tsx (the receipt-272 mega-line hang).
+    if (matchName.length > 80) {
+      console.warn(`[match] skipped absurd-length name (${matchName.length} chars)`);
+      return { altMatches: [] } as any;
+    }
     try {
       const params = new URLSearchParams({ chainId: String(chainId), name: matchName });
       // Send the parser-extracted pack size so the matcher can prefer
@@ -392,11 +397,13 @@ function buildHeader(
 }
 
 function buildFooter(
-  f: { total: number | null; date: string; time: string; receiptNo: string; totalSavings: number | null; rawText: string; region: Region; lineRegions: LabeledRegion[] },
+  f: { total: number | null; date: string; time: string; receiptNo: string; totalSavings: number | null; comboDiscount?: number | null; rawText: string; region: Region; lineRegions: LabeledRegion[] },
 ) {
   // rawText + region dropped from the persisted footer — byte-identical duplicates of
-  // header.rawText/region, which stays the single source of truth.
-  return { total: f.total, date: f.date, time: f.time, receiptNo: f.receiptNo, totalSavings: f.totalSavings, lineRegions: f.lineRegions };
+  // header.rawText/region, which stays the single source of truth. comboDiscount (IKI
+  // bare-RINKINYS set deal) MUST pass through this whitelist — the server subtracts it
+  // from savings + the visited-store comparison basket.
+  return { total: f.total, date: f.date, time: f.time, receiptNo: f.receiptNo, totalSavings: f.totalSavings, comboDiscount: f.comboDiscount ?? null, lineRegions: f.lineRegions };
 }
 
 /**
@@ -488,6 +495,9 @@ async function processMaxima(
     promoPrice: mp.promoPrice,
     quantity: mp.quantity,
     unit: mp.unit,
+    // Weighed-vs-packaged signal — the matcher's weighable gate and the resolver's
+    // self-heal are inert without it (it was silently dropped here for every chain).
+    isWeighable: (mp as MaximaProduct & { isWeighable?: boolean | null }).isWeighable ?? (mp.unit === 'kg' ? true : null),
     pricePerUnit: mp.pricePerUnit,
     rawLines: mp.rawLines,
     region: mp.region,
@@ -523,6 +533,9 @@ async function processNorfa(
     promoPrice: np.promoPrice,
     quantity: np.quantity,
     unit: np.unit,
+    // Weighed-vs-packaged signal — the matcher's weighable gate and the resolver's
+    // self-heal are inert without it (it was silently dropped here for every chain).
+    isWeighable: (np as NorfaProduct & { isWeighable?: boolean | null }).isWeighable ?? (np.unit === 'kg' ? true : null),
     pricePerUnit: np.pricePerUnit,
     rawLines: np.rawLines,
     region: np.region,
@@ -558,6 +571,9 @@ async function processLidl(
     promoPrice: lp.promoPrice,
     quantity: lp.quantity,
     unit: lp.unit,
+    // Weighed-vs-packaged signal — the matcher's weighable gate and the resolver's
+    // self-heal are inert without it (it was silently dropped here for every chain).
+    isWeighable: (lp as LidlProduct & { isWeighable?: boolean | null }).isWeighable ?? (lp.unit === 'kg' ? true : null),
     pricePerUnit: lp.pricePerUnit,
     rawLines: lp.rawLines,
     region: lp.region,
@@ -593,6 +609,9 @@ async function processIki(
     promoPrice: ip.promoPrice,
     quantity: ip.quantity,
     unit: ip.unit,
+    // Weighed-vs-packaged signal — the matcher's weighable gate and the resolver's
+    // self-heal are inert without it (it was silently dropped here for every chain).
+    isWeighable: ip.isWeighable ?? (ip.unit === 'kg' ? true : null),
     pricePerUnit: ip.pricePerUnit,
     rawLines: ip.rawLines,
     region: ip.region,

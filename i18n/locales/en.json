@@ -1231,7 +1231,9 @@
     "prodSkipBadge": "Hidden on production",
     "namePlaceholder": "Enter product name",
     "addPhoto": "Add photo",
-    "send": "Send"
+    "send": "Send",
+    "comboDiscount": "Bundle discount",
+    "reverifyBadge": "Reconfirm match"
   },
   "product": {
     "noDataForPeriod": "No data for the selected period",

@@ -37,7 +37,7 @@ import { API_BASE_URL } from "../../config/api";
 import { getUserId } from "../../config/user";
 import { useTheme, type AppTheme } from "../../constants/theme";
 import { useLevelStore } from "../../state/levelStore";
-import { capMandatoryQueue, capVoluntaryQueue } from "../../utils/swipeQueueCap";
+import { capVoluntaryQueue } from "../../utils/swipeQueueCap";
 import { BandCropImage } from "../receipt/BandCropImage";
 import { ProcessingLoader } from "../ProcessingLoader";
 import { MergeArrowsIcon, ParallelArrowsIcon, DivergeArrowsIcon, type VoteIconProps } from "../VoteIcons";
@@ -93,6 +93,10 @@ interface ReceiptResolveCard {
   region?: BandQuadRegion | null;
   matched: { spId: number; name: string | null; imageUrl: string | null };
   needsHuman: number;
+  /** PROPOSED card: the line is UNLINKED and `matched` shows the server's best
+   *  candidate as a proposal. The vote body must echo `matched.spId` back as
+   *  `proposedSpId` so identical links it / different blacklists the combo. */
+  proposed?: boolean;
 }
 
 /** Band-crop source for a receipt's OCR-side cards: the page images re-projected
@@ -563,6 +567,11 @@ export function SwipeQueue({
       // `voluntary=1` to the server so it knows to trigger the
       // background OSC refill for the user's missing orphans (the
       // refill is fire-and-forget; it benefits the user's NEXT visit).
+      // MANDATORY mode fetches nothing here — the one-shot /mandatory-queue endpoint
+      // below replaces the old 4-request orchestration (receipt swipe-queue → relatedTo
+      // top-up → resolve-queue → orphan-backfill), usually served from the save-time
+      // snapshot. Voluntary keeps its parallel receipt+global fetches for the 3+3+3+1 cap.
+      const isMandatory = !!currentReceiptId && !isVoluntary;
       const receiptParts: string[] = [];
       if (currentReceiptId) {
         receiptParts.push(`receiptId=${encodeURIComponent(currentReceiptId)}`);
@@ -574,20 +583,22 @@ export function SwipeQueue({
       }
       if (isVoluntary) receiptParts.push("voluntary=1");
       const receiptQs = receiptParts.length > 0 ? `?${receiptParts.join("&")}` : "";
-      const [receiptRes, globalRes] = await Promise.all([
-        fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue${receiptQs}`),
-        isVoluntary
-          ? fetch(
-              `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue` +
-                // Gate the voluntary GLOBAL pool to receipt-related cards only.
-                (currentReceiptId ? `?relatedTo=${encodeURIComponent(currentReceiptId)}` : ""),
-            )
-          : Promise.resolve(null as Response | null),
-      ]);
-      if (!receiptRes.ok) throw new Error(`HTTP ${receiptRes.status}`);
-      const receiptData = await receiptRes.json();
+      const [receiptRes, globalRes] = isMandatory
+        ? [null as Response | null, null as Response | null]
+        : await Promise.all([
+            fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue${receiptQs}`),
+            isVoluntary
+              ? fetch(
+                  `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue` +
+                    // Gate the voluntary GLOBAL pool to receipt-related cards only.
+                    (currentReceiptId ? `?relatedTo=${encodeURIComponent(currentReceiptId)}` : ""),
+                )
+              : Promise.resolve(null as Response | null),
+          ]);
+      if (receiptRes && !receiptRes.ok) throw new Error(`HTTP ${receiptRes.status}`);
+      const receiptData = receiptRes ? await receiptRes.json() : null;
       const receiptItems: SwipeQueueCard[] = Array.isArray(receiptData?.items) ? receiptData.items : [];
-      const counts: SlotCounts = receiptData?.slotCounts ?? { slot1: 0, slot2: 0, slot3: 0 };
+      let counts: SlotCounts = receiptData?.slotCounts ?? { slot1: 0, slot2: 0, slot3: 0 };
 
       let globalItems: SwipeQueueCard[] = [];
       if (globalRes && globalRes.ok) {
@@ -647,59 +658,20 @@ export function SwipeQueue({
           console.warn("[SwipeQueue] alias-cards failed:", e);
         }
       } else if (currentReceiptId) {
-        // Mandatory: 3 cards in slot 2 → 1 → 3 priority. EC7 top-up:
-        // if the receipt-anchored pool has < 3 cards, blend in global
-        // cards before capping so the user still does meaningful work.
-        let augmented = receiptItems;
-        if (augmented.length < 3) {
-          try {
-            const res2 = await fetch(
-              // Gate the top-up to receipt-related cards (mirrors the voluntary
-              // path). Without `relatedTo` the server skips the relatedness filter
-              // and the global pool leaks UNRELATED cards (e.g. hygiene SPs into a
-              // grocery receipt). currentReceiptId is truthy in this branch.
-              `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue` +
-                `?relatedTo=${encodeURIComponent(currentReceiptId)}`,
-            );
-            if (res2.ok) {
-              const data2 = await res2.json();
-              const extras: SwipeQueueCard[] = Array.isArray(data2?.items) ? data2.items : [];
-              const seen = new Set(augmented.map((c) => c.cardId));
-              const merged = [...augmented];
-              for (const c of extras) {
-                if (merged.length >= 3) break;
-                if (seen.has(c.cardId)) continue;
-                seen.add(c.cardId);
-                merged.push(c);
-              }
-              augmented = merged;
-            }
-          } catch (e) {
-            console.warn("[SwipeQueue] mandatory top-up failed:", e);
-          }
-        }
-        capped = capMandatoryQueue({ receiptItems: augmented }).items;
-        // Your items first: prepend the receipt-resolution Card-B cards, cap at 3.
-        // The resolve-queue marks each served line 'asked' (one shot on serve).
-        try {
-          const rq = await fetch(
-            `${API_BASE_URL}/api/receipts/${encodeURIComponent(currentReceiptId)}/resolve-queue`,
-          );
-          if (rq.ok) {
-            const rd = await rq.json();
-            const cardB: ReceiptResolveCard[] = Array.isArray(rd?.cards) ? rd.cards : [];
-            if (rd?.image?.width > 0 && rd?.image?.height > 0) resolveImage = rd.image;
-            if (cardB.length > 0) capped = [...cardB, ...capped].slice(0, 3);
-          }
-        } catch (e) {
-          console.warn("[SwipeQueue] resolve-queue fetch failed:", e);
-        }
-        // Diagnostic for the "fewer than 3 cards" case: shows whether the related
-        // pool itself was thin (augmented < 3) or the cap trimmed it. receiptItems =
-        // receipt-anchored+related; augmented = after the related top-up; final = shown.
+        // MANDATORY: one-shot server assembly (Card-B + receipt-anchored pairs +
+        // relatedTo top-up + Slot-2c orphan backfill), usually served from the
+        // save-time snapshot — one request instead of four sequential ones.
+        const mq = await fetch(
+          `${API_BASE_URL}/api/receipts/${encodeURIComponent(currentReceiptId)}/mandatory-queue`,
+        );
+        if (!mq.ok) throw new Error(`HTTP ${mq.status}`);
+        const md = await mq.json();
+        capped = Array.isArray(md?.cards) ? md.cards : [];
+        if (md?.image?.width > 0 && md?.image?.height > 0) resolveImage = md.image;
+        if (md?.slotCounts) counts = md.slotCounts;
         console.log(
-          `[SwipeQueue] mandatory r${currentReceiptId}: receiptItems=${receiptItems.length} ` +
-          `augmented=${augmented.length} final=${capped.length} (target 3)`,
+          `[SwipeQueue] mandatory r${currentReceiptId}: ${capped.length} card(s) ` +
+          `(target 3, fromSnapshot=${!!md?.fromSnapshot})`,
         );
       } else {
         // Defensive: voluntary + standalone are the documented modes.
@@ -813,7 +785,13 @@ export function SwipeQueue({
             headers: { "Content-Type": "application/json" },
             // userId attributes the vote to a distinct user for vocabulary capture
             // (Issue H) — an 'identical' on a matcher-struggled line learns the alias.
-            body: JSON.stringify({ vote, userId }),
+            // proposedSpId (proposed cards only): echoes the card's candidate so an
+            // identical LINKS it server-side / a different blacklists the combo.
+            body: JSON.stringify({
+              vote,
+              userId,
+              ...(item.proposed ? { proposedSpId: item.matched.spId } : {}),
+            }),
           },
         );
         // The vote endpoint returns the resolved line ({ ok, line }). Hand it to the
@@ -1023,7 +1001,7 @@ export function SwipeQueue({
 
   // ── Derived ────────────────────────────────────────────────────────────
 
-  // `items` is now pre-capped by loadQueue (via capMandatoryQueue or
+  // `items` is now pre-capped by loadQueue (server mandatory-queue or
   // capVoluntaryQueue) so the renderer just iterates. Keeping the alias
   // local to avoid churn through the existing references below.
   const cappedItems = items;
@@ -1144,6 +1122,19 @@ export function SwipeQueue({
 
     let cancelled = false;
     (async () => {
+      // Flush any deferred (undo-window) vote FIRST and AWAIT it, so anything downstream —
+      // /complete-swipes and especially the host's post-swipe loadExistingReceipt — sees the
+      // committed (e.g. demoted) line. The undo timer is UNDO_DELAY_MS (3000ms), far longer
+      // than the 400ms grace below, so without this a slow receipt refetch could land stale
+      // pre-vote data over the correct live onLineResolved patch.
+      if (pendingVoteRef.current) {
+        const p = pendingVoteRef.current;
+        clearTimeout(p.timer);
+        pendingVoteRef.current = null;
+        setUndoLabel(null);
+        try { await sendVote(p.vote, p.item, p.dwell); } catch {}
+      }
+      if (cancelled) return;
       if (!isVoluntary) {
         // Mandatory: always mark the current receipt complete — even
         // if cappedItems was 0 (no candidates available), the server
@@ -1165,18 +1156,23 @@ export function SwipeQueue({
 
       // Wrap the session.
       finishedRef.current = true;
-      // Give the latest pending vote a chance to commit before fetching
-      // profile (used to decide level-up modal).
-      await new Promise((r) => setTimeout(r, 400));
-      const userId = userIdRef.current;
-      if (userId) {
-        try {
-          const r = await fetch(
-            `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/profile`
-          );
-          const d = await r.json();
-          if (d?.level) await stashLevel(d.level);
-        } catch {}
+      // If cards WERE shown, give the latest pending vote a chance to commit and fetch the
+      // profile (used to decide the level-up modal). If cappedItems was 0 (all lines
+      // auto-matched or unmatched → nothing to swipe, e.g. receipts 220/221), nothing was
+      // voted and no level-up is possible, so skip the 400ms grace + profile fetch and hand
+      // off immediately — otherwise the empty mandatory session shows a ~1s blank page.
+      if (cappedItems.length > 0) {
+        await new Promise((r) => setTimeout(r, 400));
+        const userId = userIdRef.current;
+        if (userId) {
+          try {
+            const r = await fetch(
+              `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/profile`
+            );
+            const d = await r.json();
+            if (d?.level) await stashLevel(d.level);
+          } catch {}
+        }
       }
       if (cancelled) return;
       // Hand the final navigation to the host. The standalone route pops back (voluntary)
@@ -1217,17 +1213,33 @@ export function SwipeQueue({
     ? t('swipe.headerProgress', { current: receiptIdx + 1, total: receiptIdList.length })
     : t('swipe.header');
 
+  // The done/empty SCREEN is shown only for the standalone session-complete state or a
+  // voluntary receipt with nothing to rescue. Every OTHER "done" state — a mandatory in-place
+  // session (including the 0-card case: receipts 220/221) or a voluntary all-seen session — is
+  // a HAND-OFF: the completion effect above is navigating away (onAllDone → the host flips to
+  // the receipt detail). During that brief window render the loader, NOT a blank page, so the
+  // mandatory empty queue never shows the bare header the user reported.
+  const showDoneScreen =
+    doneWithCurrentReceipt && (!currentReceiptId || (isVoluntary && cappedItems.length === 0));
+  const handOffPending = doneWithCurrentReceipt && !showDoneScreen;
+
   return (
     <GestureHandlerRootView
       style={{ flex: 1, backgroundColor: colors.pageBackground }}
     >
-      {renderHeader && <Stack.Screen options={{ title: headerTitle, headerLeft: () => <ScreenBackButton /> }} />}
+      {/* Back routes through onExit — mode-aware: the standalone route pops back, the
+          in-place receipt-process host runs leaveSwipePhase (which fetches the comparison
+          and flips to the detail). A raw router.back() here would pop the whole host screen
+          and strand the just-saved receipt. */}
+      {renderHeader && <Stack.Screen options={{ title: headerTitle, headerLeft: () => <ScreenBackButton onPress={() => onExit()} /> }} />}
 
       {/* ── Loading ──
-          Covers the screen while the queue data loads AND while the active card's
-          images are still settling (rendered as an overlay so the card mounts
-          underneath and its images can load). "Spinner gone = card actionable." */}
+          Covers the screen while the queue data loads, while the active card's images are
+          still settling (rendered as an overlay so the card mounts underneath and its images
+          can load), AND during a mandatory/voluntary hand-off while the completion effect
+          navigates away. "Spinner gone = card actionable." */}
       {(loading ||
+        handOffPending ||
         (!error && !doneWithCurrentReceipt && !!currentItem && !cardReady)) && (
         <View
           style={[
@@ -1255,7 +1267,7 @@ export function SwipeQueue({
           with 0 cards stays here too — the auto-navigate effect skips
           it so the user sees an honest "nothing to rescue right now"
           message instead of being silently bounced back to the receipt. */}
-      {!loading && !error && doneWithCurrentReceipt && (!currentReceiptId || (isVoluntary && cappedItems.length === 0)) && (
+      {!loading && !error && showDoneScreen && (
         <View style={styles.centered}>
           <Ionicons
             name={cappedItems.length === 0 && isVoluntary ? "leaf-outline" : "checkmark-circle"}

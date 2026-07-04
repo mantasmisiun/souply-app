@@ -84,12 +84,35 @@ const BUCKET_COLOURS = [
     '#D4A55C', // honey
 ];
 
-function bucketColour(key: string, theme: AppTheme): string {
-    if (key === UNRECOGNISED_KEY) return theme.warning;
-    if (key === OTHER_KEY) return theme.textMuted;
+export function bucketHash(key: string): number {
     let h = 0;
     for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-    return BUCKET_COLOURS[h % BUCKET_COLOURS.length];
+    return h % BUCKET_COLOURS.length;
+}
+
+/**
+ * Assign every bucket a DISTINCT palette colour. The hash slot is only the
+ * PREFERENCE (cross-receipt familiarity: a category tends to keep its hue);
+ * when two categories hash to the same slot ("Daržovės ir grybai" and
+ * "Grietinė, grietinėlė" both landed on lilac) the later one probes forward
+ * to the next free slot — deterministic in bucket order, and with TOP_N=4
+ * buckets against an 8-colour palette a free slot always exists. Sentinel
+ * buckets keep their fixed semantic colours and never consume palette slots.
+ */
+export function assignBucketColours(buckets: Bucket[], theme: AppTheme): Map<string, string> {
+    const out = new Map<string, string>();
+    const taken = new Set<number>();
+    for (const b of buckets) {
+        if (b.key === UNRECOGNISED_KEY) { out.set(b.key, theme.warning); continue; }
+        if (b.key === OTHER_KEY) { out.set(b.key, theme.textMuted); continue; }
+        let slot = bucketHash(b.key);
+        for (let i = 0; i < BUCKET_COLOURS.length && taken.has(slot); i++) {
+            slot = (slot + 1) % BUCKET_COLOURS.length;
+        }
+        taken.add(slot);
+        out.set(b.key, BUCKET_COLOURS[slot]);
+    }
+    return out;
 }
 
 /**
@@ -222,6 +245,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
     };
 
     const { buckets, grandTotal } = useMemo(() => buildBuckets(products), [products]);
+    const bucketColours = useMemo(() => assignBucketColours(buckets, colors), [buckets, colors]);
 
     // Don't render at all when there's nothing meaningful — keeps the
     // screen quiet for empty/invalid receipts.
@@ -243,7 +267,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
                                 styles.stackedBarSegment,
                                 {
                                     width: `${pct}%`,
-                                    backgroundColor: bucketColour(b.key, colors),
+                                    backgroundColor: bucketColours.get(b.key),
                                     // 1 px gap between segments via white border-right;
                                     // dropped on the last segment so the bar feels
                                     // visually closed on the right edge.
@@ -291,7 +315,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
                                 <View
                                     style={[
                                         styles.rowDot,
-                                        { backgroundColor: bucketColour(b.key, colors) },
+                                        { backgroundColor: bucketColours.get(b.key) },
                                     ]}
                                 />
                             )}

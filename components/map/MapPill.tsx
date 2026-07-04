@@ -77,6 +77,18 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
     return () => clearTimeout(t);
   }, [ready, onFail, spec.key]);
 
+  // Laid out, but the badge <Image> never settled: RN 0.81 new-arch (Fabric) can drop
+  // onLoad AND onError for a static require()'d image. Without a backstop the capture
+  // effect (ready && badgeLoaded) never runs, so this pill never calls onShot/onFail —
+  // permanently holding one of the BAKE_CONCURRENCY slots and, if a few stack up,
+  // deadlocking the bakery (remaining pills stuck on the bare-badge fallback). Shortly
+  // after layout, force the capture to proceed (a bare pill still bakes).
+  useEffect(() => {
+    if (!ready || badgeLoaded) return;
+    const t = setTimeout(() => setBadgeLoaded(true), 900);
+    return () => clearTimeout(t);
+  }, [ready, badgeLoaded]);
+
   return (
     <View
       ref={ref}
@@ -86,7 +98,7 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
     >
       <View style={[styles.pillInner, twoRow ? styles.pillInnerTwoRow : styles.pillInnerOneRow, ready && (twoRow ? styles.pillInnerRadiusTwoRow : styles.pillInnerRadiusOneRow), fillStyle]}>
         {badge != null && (
-          <Image source={badge} style={twoRow ? styles.badgeTwoRow : styles.badgeOneRow} onLoad={() => setBadgeLoaded(true)} />
+          <Image source={badge} style={twoRow ? styles.badgeTwoRow : styles.badgeOneRow} onLoad={() => setBadgeLoaded(true)} onError={() => setBadgeLoaded(true)} />
         )}
         {twoRow ? (
           <View style={styles.textColTwoRow}>

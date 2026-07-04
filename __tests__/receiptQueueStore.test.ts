@@ -230,6 +230,41 @@ describe("receiptQueueStore — markDone / recentIds", () => {
   });
 });
 
+describe("receiptQueueStore — noteReceiptCreated (fresh-scan parity)", () => {
+  // A camera scan is created by receipt-process directly, bypassing the batch runner
+  // (the only caller of markDone). Without this signal the Analyze list wouldn't refetch
+  // until the tab regains focus and the receipt would never appear in "Nauji".
+  it("bumps lastCompletedAt and registers the id in recentIds", () => {
+    expect(useReceiptQueueStore.getState().lastCompletedAt).toBeNull();
+    useReceiptQueueStore.getState().noteReceiptCreated(221);
+
+    const state = useReceiptQueueStore.getState();
+    expect(state.recentIds).toEqual([221]);
+    expect(state.lastCompletedAt).toEqual(expect.any(Number));
+  });
+
+  it("does NOT touch the processing items list", () => {
+    useReceiptQueueStore.getState().addItems([{ uris: ["a"] }]);
+    const before = useReceiptQueueStore.getState().items;
+    useReceiptQueueStore.getState().noteReceiptCreated(99);
+    // Same array reference — the scan notify only writes session state, so an in-flight
+    // batch item mid-processing is never disturbed.
+    expect(useReceiptQueueStore.getState().items).toBe(before);
+  });
+
+  it("dedupes when the same receipt is noted twice", () => {
+    useReceiptQueueStore.getState().noteReceiptCreated(42);
+    useReceiptQueueStore.getState().noteReceiptCreated(42);
+    expect(useReceiptQueueStore.getState().recentIds).toEqual([42]);
+  });
+
+  it("does not persist to AsyncStorage (items are unchanged)", () => {
+    asyncStorageMock.setItem.mockClear();
+    useReceiptQueueStore.getState().noteReceiptCreated(7);
+    expect(asyncStorageMock.setItem).not.toHaveBeenCalled();
+  });
+});
+
 describe("receiptQueueStore — markError", () => {
   it("transitions to error with a message and clears progress", () => {
     useReceiptQueueStore.getState().addItems([{ uris: ["a"] }]);

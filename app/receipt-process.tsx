@@ -72,6 +72,7 @@ import {
     saveReceiptDraft,
 } from "../state/receiptDraft";
 import { useNetworkStatus } from "../state/networkStatus";
+import { useReceiptQueueStore } from "../state/receiptQueueStore";
 import { recordStoreVisit } from "../utils/locationStorage";
 import { useLevelStore } from "../state/levelStore";
 import {
@@ -210,6 +211,10 @@ interface ProductLine {
    *  server's autosave merge honors match fields only for marked lines — see
    *  applyReceiptAutosave — so stale client state can't undo server-side votes. */
   manualMatch?: boolean;
+  /** Server-set (read overlay): this line's match contradicts one of the user's old
+   *  'different' votes and that vote is queued for a re-verification swipe. The match
+   *  renders normally with a small "reconfirm" chip until the re-swipe settles it. */
+  pendingReverification?: boolean;
   altMatches: ProductMatchOption[];
   price: number;
   promoPrice: number | null;
@@ -314,6 +319,11 @@ interface FooterData {
   time: string;
   receiptNo: string;
   totalSavings: number | null;
+  /** Receipt-level combo/set-deal discount (IKI bare "RINKINYS -1,90") — POSITIVE
+   *  magnitude off the paid total, owned by no single product. Rendered as an
+   *  adjustment row on the Prekės tab; rides parsedData.footer to the server
+   *  (savings + store comparison subtract it from the visited basket). */
+  comboDiscount: number | null;
   rawText: string;
   region: Region;
   lineRegions?: LabeledRegion[];
@@ -735,18 +745,15 @@ export default function ProcessReceiptScreen() {
     { done: number; total: number } | null
   >(null);
   const isHydratingRef = useRef(false);
-  // Component-scoped AbortController. Aborted on unmount so the 30+
-  // in-flight product-match fetches don't keep the server churning
-  // if the user backs out mid-analysis. Initialised lazily so the
-  // very first call sees a valid signal.
-  const mountAbortRef = useRef<AbortController | null>(null);
-  if (!mountAbortRef.current) mountAbortRef.current = new AbortController();
-  useEffect(() => {
-    return () => {
-      mountAbortRef.current?.abort();
-      mountAbortRef.current = null;
-    };
-  }, []);
+  // NOTE: product-match fetches deliberately carry NO component-scoped abort signal.
+  // A previous `mountAbortRef` aborted them on unmount to spare the server ~30 in-flight
+  // fetches when the user backed out — but a spurious/transient abort of that signal
+  // (dev Fast Refresh, a remount race) emptied every line's altMatches, so the receipt
+  // POSTed with zero matches and the server (which does no fuzzy matching of its own)
+  // persisted it as genuinely unmatched with 0 swipe candidates (receipt 222). The per-call
+  // `timeoutMs` already bounds a stuck fetch; on a genuine back-out the receipt is never
+  // POSTed anyway (the POST effect is gated on `footer`, which never gets set). So we let
+  // the match fetches run to completion rather than risk stranding a matchable receipt.
   const [header, setHeader] = useState<HeaderData | null>(null);
   const [products, setProducts] = useState<ProductLine[]>([]);
   const [footer, setFooter] = useState<FooterData | null>(null);
@@ -761,6 +768,16 @@ export default function ProcessReceiptScreen() {
     width: number;
     height: number;
   } | null>(null);
+  // The OCR-space dims LOADED from the persisted blob, stashed SYNCHRONOUSLY at parse
+  // time (before any effect can run). buildParsedData uses this as the fallback when
+  // `imageDims` state is momentarily null — the ROOT CAUSE of the band-drift class:
+  // a focus-return autosave firing inside loadExistingReceipt's null-dims window used
+  // to fall through to deriveImageDimsFromGeometry (maxGeometry+24, a systematic
+  // UNDERESTIMATE) and PERSIST those fabricated dims; the next open then squashed the
+  // image to fit them while every band stayed in true OCR space → the progressive
+  // downward drift (receipt-230: stored 914x3402 vs real 925x3699 = ×1.087 in y).
+  // deriveImageDimsFromGeometry must only ever apply to TRUE legacy image:null blobs.
+  const loadedImageDimsRef = useRef<{ width: number; height: number } | null>(null);
   // True while a SAVED receipt's photo is being fetched from MinIO (download +
   // re-project into OCR space) in loadExistingReceipt's background block. Lets the
   // Kvitas-tab photo view show a skeleton instead of flashing the "photo not
@@ -1021,6 +1038,7 @@ export default function ProcessReceiptScreen() {
       // Null the image state up-front so ReceiptPhotoView gates to its fallback until
       // the async sets the correct, current dims — i.e. behave like a cold start.
       setImageDims(null);
+      loadedImageDimsRef.current = null; // previous receipt's dims must never leak into a save
       setImageUri(null);
       setPageMetas([]);
       const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${id}`, {
@@ -1084,6 +1102,24 @@ export default function ProcessReceiptScreen() {
       wordsDumpRef.current = (parsed as any).wordsDump;
       wordsSrcRef.current = "load";
 
+      // Restore the OCR coordinate-space dims SYNCHRONOUSLY — same tick as setProducts,
+      // BEFORE any focus/autosave effect can build a save snapshot. The async image
+      // block below re-applies the identical values later (applyDims); this early set
+      // exists so the null-dims window can never fabricate geometry-derived dims into
+      // a persisted blob again (the band-drift root cause). Correct-by-construction for
+      // the stale-mask concern: these are THIS receipt's own dims, and the photo overlay
+      // stays gated on imageUri until the download lands.
+      {
+        const w = Number(parsed?.image?.width);
+        const h = Number(parsed?.image?.height);
+        if (Number.isFinite(w) && Number.isFinite(h) && w > 0 && h > 0) {
+          loadedImageDimsRef.current = { width: w, height: h };
+          setImageDims({ width: w, height: h });
+        } else {
+          loadedImageDimsRef.current = null; // true legacy blob — derive stays allowed
+        }
+      }
+
       setHeader({
         chainName:
           parsed.header.chainName ?? receipt.chainName ?? t('receiptProcess.fallbackChain'),
@@ -1121,6 +1157,7 @@ export default function ProcessReceiptScreen() {
             typeof p.matchConfidence === "number" ? p.matchConfidence : null,
           matchConfirmed: !!p.matchConfirmed,
           priceVerified: !!p.priceVerified,
+          pendingReverification: !!p.pendingReverification,
           altMatches: Array.isArray(p.altMatches) ? p.altMatches : [],
           price: Number(p.price ?? 0),
           promoPrice: p.promoPrice == null ? null : Number(p.promoPrice),
@@ -1147,6 +1184,7 @@ export default function ProcessReceiptScreen() {
         time: parsed.footer.time ?? "",
         receiptNo: parsed.footer.receiptNo ?? receipt.receiptNo ?? "",
         totalSavings: parsed.footer.totalSavings ?? null,
+        comboDiscount: parsed.footer.comboDiscount ?? null,
         // footer.rawText/region were deduped out of new blobs → fall back to header's copy.
         rawText: parsed.footer.rawText ?? parsed.header?.rawText ?? "",
         region: parsed.footer.region ?? parsed.header?.region ?? {
@@ -1391,6 +1429,7 @@ export default function ProcessReceiptScreen() {
     setReceiptId(null);
     setImageFilePath(null);
     setImageDims(null);
+    loadedImageDimsRef.current = null;
     setMaskBands([]);
     setHeader(null);
     setFooter(null);
@@ -1486,7 +1525,14 @@ export default function ProcessReceiptScreen() {
             }
           }
           if (cancelled) return;
-          setProducts(prev => prev.map((p, i) => {
+          // IDENTITY GUARD: return `prev` UNCHANGED when no line was actually modified.
+          // A bare prev.map(...) mints a new array reference on every focus regain, which
+          // fires the autosave effect (deps include `products`) → a gratuitous full-blob
+          // PUT — the exact "navigate away and come back" firing pin of the band-drift
+          // class (it used to catch the null-imageDims window and persist fabricated dims).
+          setProducts(prev => {
+            let anyChanged = false;
+            const next = prev.map((p, i) => {
             // (1) Patch category fields onto altMatches by spId (existing).
             let nextAm: ProductMatchOption[] = p.altMatches;
             if (Array.isArray(p.altMatches) && p.altMatches.length > 0) {
@@ -1517,6 +1563,7 @@ export default function ProcessReceiptScreen() {
               || !!lp.matchConfirmed !== !!p.matchConfirmed
             );
             if (nextAm === p.altMatches && !demoted) return p;
+            anyChanged = true;
             return {
               ...p,
               altMatches: nextAm,
@@ -1535,7 +1582,9 @@ export default function ProcessReceiptScreen() {
                 categoryL2Name: lp.categoryL2Name ?? null,
               } : {}),
             };
-          }));
+            });
+            return anyChanged ? next : prev;
+          });
         } catch {
           /* swallow — best-effort refresh */
         }
@@ -1639,7 +1688,14 @@ export default function ProcessReceiptScreen() {
         header,
         products,
         footer,
-        imageDims ? { uri: imageUri, ...imageDims } : null,
+        // Fallback-of-first-resort: the dims LOADED from the blob. Geometry-derived
+        // dims (inside buildParsedData) are reserved for true legacy image:null
+        // receipts — never for one that already has persisted dims (band-drift class).
+        imageDims
+          ? { uri: imageUri, ...imageDims }
+          : loadedImageDimsRef.current
+            ? { uri: imageUri, ...loadedImageDimsRef.current }
+            : null,
         imageFilePath,
         maskBandsClamped,
         wordsDumpRef.current,
@@ -1670,9 +1726,43 @@ export default function ProcessReceiptScreen() {
       // the Analize tab with a clear message — no half-state on this
       // screen, no sneaky nav to another receipt's view.
       if (res.status === 409) {
+        // SAME-ACCOUNT duplicate on a FRESH SCAN with the photo still in hand: this is
+        // almost always the abort-then-retry case (receipt-238 — the first POST exceeded
+        // the client timeout, the server committed anyway, and the retry collided here).
+        // RESUME the pipeline against the existing row instead of bailing: setting
+        // receiptId lets the upload effect below recover the MISSING PHOTO (the abort
+        // killed the flow before the image step — the "photo not ready 404" crops), and
+        // pending mandatory swipes continue in-place exactly like a fresh create.
+        const existingId = Number(data?.existingReceiptId);
+        if (!data?.crossAccount && Number.isFinite(existingId) && existingId > 0 && imageUri) {
+          console.log(`[post] duplicate of r${existingId} — resuming pipeline against it (photo recovery + swipes)`);
+          setReceiptId(existingId);
+          setPostStatus("done");
+          useReceiptQueueStore.getState().noteReceiptCreated(existingId);
+          if (linkListIdRef.current) {
+            fetch(`${API_BASE_URL}/api/shopping-lists/${linkListIdRef.current}/link-receipt`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ receiptId: existingId }),
+            }).catch(() => {});
+          }
+          clearReceiptDraft().catch(() => {});
+          const pending = Number(data?.mandatorySwipesPending ?? 0);
+          if (pending > 0) {
+            enterSwipePhase(existingId, () => {
+              setComparisonStatus("pending");
+              fetchComparison(existingId);
+            });
+          } else {
+            setComparisonStatus("pending");
+            fetchComparison(existingId);
+          }
+          return;
+        }
         setPostStatus("done");
-        // Receipt already exists server-side. Drop the local draft — there's
-        // nothing to resume; the data lives in someone's receipt list.
+        // Receipt already exists server-side and there's nothing to resume with
+        // (cross-account, or no photo in hand). Drop the local draft — the data
+        // lives in someone's receipt list.
         clearReceiptDraft().catch(() => {});
         useProfileStore.getState().invalidate();
         // Same-ACCOUNT duplicate while uploading for a list: the user already
@@ -1707,6 +1797,11 @@ export default function ProcessReceiptScreen() {
       }
       setReceiptId(data.id);
       setPostStatus("done");
+      // Tell the shared queue store the receipt now exists so the Analyze list refetches
+      // immediately (even while its tab is blurred) and the receipt lands in "Nauji" —
+      // parity with the batch-upload path. Placed on the success branch only (after the
+      // 409-duplicate and !ok early-returns), never before data.id exists.
+      useReceiptQueueStore.getState().noteReceiptCreated(data.id);
       // Link this receipt to the resolved list row (auto-selected by the
       // detected chain for groups). Fire-and-forget — the List-tab card
       // flips to "Kvitas pridėtas" on next refresh.
@@ -1751,7 +1846,11 @@ export default function ProcessReceiptScreen() {
       console.warn("Receipt POST failed:", e);
       setPostStatus("error");
       setPostErr(e?.message || t('receiptProcess.errorSave'));
-      hasPostedRef.current = false;
+      // Do NOT re-arm the auto-POST guard here: the effect below re-fires on any
+      // header/footer/products identity change, so resetting the ref turned a
+      // DETERMINISTIC server rejection (the garbled-date 500, receipt-242 re-scan)
+      // into an endless "saving receipt…" modal loop. Retries stay MANUAL via the
+      // error card's retry button (retryPost re-arms + re-runs deliberately).
     }
   };
 
@@ -2105,7 +2204,13 @@ export default function ProcessReceiptScreen() {
       header,
       products,
       footer,
-      imageDims ? { uri: imageUri, ...imageDims } : null,
+      // Same loaded-dims fallback as the POST path — geometry-derived dims are for
+      // true legacy image:null receipts only (band-drift class).
+      imageDims
+        ? { uri: imageUri, ...imageDims }
+        : loadedImageDimsRef.current
+          ? { uri: imageUri, ...loadedImageDimsRef.current }
+          : null,
       imageFilePath,
       maskBandsClamped,
       wordsDumpRef.current,
@@ -2227,6 +2332,8 @@ export default function ProcessReceiptScreen() {
     ocrPreview?: string | null;
     detectedChainName?: string | null;
     extractedStoreAddress?: string | null;
+    /** OCR/parsed payload captured at fail time (JSON string) — the post-mortem trail. */
+    parsedData?: string | null;
   }
 
   const bailWithLog = async (reason: BailReason, ctx: BailContext = {}) => {
@@ -2246,6 +2353,7 @@ export default function ProcessReceiptScreen() {
           detectedChainName: ctx.detectedChainName ?? null,
           extractedStoreAddress: ctx.extractedStoreAddress ?? null,
           imageFilePath: imageFilePath ?? null,
+          parsedData: ctx.parsedData ?? null,
         }),
         timeoutMs: TIMEOUT_FAST_MS,
       }).catch((e) => console.warn("[bailWithLog] log POST failed:", e));
@@ -2266,19 +2374,32 @@ export default function ProcessReceiptScreen() {
 
   const processReceipt = async (imageUris: string[]) => {
     // Quality gate. A readable receipt always yields a receipt id (now incl. the
-    // "Kvitas"/synthetic fallbacks), a DATE and a TIME. Outcomes:
-    //   • receiptNo + date present → proceed.
-    //   • date MISSING but receiptNo + time present → the bottom block was readable
-    //     except the date (e.g. an ink stain): ask the user to pick the printed date
+    // "Kvitas"/synthetic fallbacks) and a DATE; TIME is OPTIONAL (midday default).
+    // Outcomes:
+    //   • receiptNo + date present → proceed (time defaulted to 12:00 when unread).
+    //   • receiptNo present, date MISSING → ask the user to pick the printed date
     //     (capped at today; flows in exactly like an OCR date). Cancel → bail.
-    //   • otherwise (no receiptNo, or date AND time both missing) → genuinely
-    //     unreadable → fail with a message (no rescan loop). Mutates footer.date on a
-    //     successful manual entry so the rest of the save/price path uses it.
+    //   • no receiptNo → genuinely unreadable → fail with a message (no rescan loop).
+    // Mutates footer.date/footer.time so the rest of the save/price path uses them.
+    // OCR line texts, hoisted for the bail helpers below (the `lineTexts` const lives
+    // inside the try block; assigned right after OCR completes).
+    let ocrLineTexts: string[] = [];
     const ensureKeyReceiptFields = async (
       footer: { receiptNo?: string | null; date?: string | null; time?: string | null } | null,
     ): Promise<boolean> => {
+      // Post-mortem payload for the fail log: rows 37/38 (receipt-278's two dead scans)
+      // stored only the preview message — with no OCR text there was no way to tell a
+      // cropped-off date line from a garbled one. Ship the line count + tail + full text.
+      const keyFieldsDiag = () => ({
+        ocrLineCount: ocrLineTexts.length,
+        parsedData: JSON.stringify({ footer, lineTexts: ocrLineTexts }),
+      });
+      // TIME IS OPTIONAL: some IKI layouts print date+time ONLY in the bottom VMI fiscal
+      // line (receipt-278) — a slightly short frame loses both. The exact hour only
+      // orders same-day receipts, so default to midday rather than dead-ending the scan.
+      if (footer?.receiptNo && !footer.time) footer.time = '12:00';
       if (footer?.receiptNo && footer?.date) return true;
-      if (footer?.receiptNo && footer?.time && !footer?.date) {
+      if (footer?.receiptNo && !footer?.date) {
         // The component early-returns a full-screen loading view while `loading`
         // is true (`if (loading) return <loadingScreen>`), which UN-MOUNTS every
         // modal — including this one. Drop loading first so the date modal actually
@@ -2302,12 +2423,17 @@ export default function ProcessReceiptScreen() {
           return true;
         }
         // dismissed without a date → can't proceed
-        await bailWithLog('ocr_no_text', { ocrPreview: 'manual date entry cancelled' });
+        await bailWithLog('ocr_no_text', { ocrPreview: 'manual date entry cancelled', ...keyFieldsDiag() });
         return false;
       }
-      // No receipt id, or BOTH date and time unreadable → fail (no rescan loop).
+      // No receipt id → fail (no rescan loop). Include the OCR tail in the preview: the
+      // key fields print at the BOTTOM, so the tail answers "cropped off or garbled?"
+      // at a glance (the full text rides in parsedData).
       await bailWithLog('ocr_no_text', {
-        ocrPreview: `missing key fields: receiptNo=${footer?.receiptNo ?? '-'} date=${footer?.date ?? '-'} time=${footer?.time ?? '-'}`,
+        ocrPreview:
+          `missing key fields: receiptNo=- date=${footer?.date ?? '-'} time=${footer?.time ?? '-'}` +
+          ` | tail: ${ocrLineTexts.slice(-8).join(' ⏎ ')}`,
+        ...keyFieldsDiag(),
       });
       return false;
     };
@@ -2327,7 +2453,9 @@ export default function ProcessReceiptScreen() {
       if (list.some((p) => hasName(p) && hasPrice(p))) return true;
       await bailWithLog('no_products', {
         detectedChainName: chainName,
+        ocrLineCount: ocrLineTexts.length,
         ocrPreview: `${list.length} parsed, 0 with a complete name+price (${chainName})`,
+        parsedData: JSON.stringify({ lineTexts: ocrLineTexts }),
       });
       return false;
     };
@@ -2542,6 +2670,7 @@ export default function ProcessReceiptScreen() {
       }
 
       const lineTexts = mergedLines.map((l) => l.text);
+      ocrLineTexts = lineTexts; // expose to the bail helpers defined above the try
 
       // DOUBLED-SCAN gate: the camera caught the SAME receipt twice in one frame (receipt-167) — its
       // full slashed receipt number ("71/612/114973") then appears in ≥2 lines. The two copies can't
@@ -2551,9 +2680,29 @@ export default function ProcessReceiptScreen() {
       // (A single receipt prints the full slashed number once; the short "Kvito numeris" form has no
       // slashes, and the terminal id "0429/0022/802" has a 3-digit tail → neither false-triggers.)
       {
-        const rcptTokens = lineTexts
-          .map((tx) => tx.match(/\b\d{2,4}\/\d{2,4}\/\d{4,8}\b/)?.[0])
-          .filter((x): x is string => !!x);
+        // Per-chain "this token prints exactly ONCE on a real receipt" extractors. The original
+        // slashed form covers IKI/Rimi; the added forms make the gate effective for the other
+        // chains too (it was silently inert there — a doubled Maxima/Lidl/Norfa frame saved a
+        // mangled receipt instead of prompting a retake):
+        //   Maxima  "Kvito Nr. 1234567"      — labelled, unslashed
+        //   Maxima  "Dokumento numeris 123…" — alternative label
+        //   Lidl    "Kvitas 47989/258"       — labelled 2-part (NOT the bare "#00NNNNN", which
+        //                                      legitimately prints twice: header + VMI block)
+        //   Norfa   "# Kvito numeris 123456 #"
+        const ONCE_ONLY_TOKENS: RegExp[] = [
+          /\b\d{2,4}\/\d{2,4}\/\d{4,8}\b/,                       // IKI/Rimi full slashed id
+          /[KA][vouy]ito\s+Nr\S{0,2}\s*(\d{5,})/i,               // Maxima labelled id (stem-tolerant)
+          /Dokumento\s+numeris\s*:?\s*(\d{4,})/i,                // Maxima alt label
+          /\bKvitas\s+(\d{4,}\s*\/\s*\d+)/i,                     // Lidl labelled 2-part
+          /#\s*Kvito\s+numeris\s+(\d{4,})\s*#/i,                 // Norfa
+        ];
+        const rcptTokens: string[] = [];
+        for (const tx of lineTexts) {
+          for (const re of ONCE_ONLY_TOKENS) {
+            const m = tx.match(re);
+            if (m) { rcptTokens.push((m[1] ?? m[0]).replace(/\s+/g, '')); break; }
+          }
+        }
         const dup = rcptTokens.find((tok, i) => rcptTokens.indexOf(tok) !== i);
         if (dup) {
           await bailWithLog("doubled_scan", { ocrPreview: `doubled scan: receiptNo ${dup} ×${rcptTokens.filter((tk) => tk === dup).length}` });
@@ -2805,6 +2954,13 @@ export default function ProcessReceiptScreen() {
           t: redactReceiptText(l.text),
           x: [Math.round(l.xLeft), Math.round(l.xRight)],
           y: [Math.round(l.yTop), Math.round(l.yBottom)],
+          // LINE corner Ys [yLeftTop, yRightTop, yLeftBottom, yRightBottom] — the tilt
+          // data the parser's de-skew consumes. Without it the off-device reparse ran
+          // slope=0 and could NOT reproduce device parses (receipt-232's scramble was
+          // invisible offline until this was traced by hand). Absent → omitted.
+          c: l.yLeftTop != null
+            ? [Math.round(l.yLeftTop), Math.round(l.yRightTop ?? l.yTop), Math.round(l.yLeftBottom ?? l.yBottom), Math.round(l.yRightBottom ?? l.yBottom)]
+            : undefined,
           w: l.words?.map((w) => {
             const pii = wordCentreInMaskBand(w, detectedMaskBands) || looksLikePiiText(w.text);
             return [
@@ -3001,10 +3157,16 @@ export default function ProcessReceiptScreen() {
       }
 
       const matchName = strippedName || rp.name;
+      // ABSURD-LENGTH guard (receipt-272): a mega-line (a phantom that glued trailer
+      // text) makes the matcher score 14k candidates against a 200-char string — the
+      // request runs past its timeout and the abort stalls the UI for seconds. No real
+      // product name is this long; skip the match outright (the line stays unmatched).
+      const absurdName = matchName.length > 80;
+      if (absurdName) console.warn(`[match] skipped absurd-length name (${matchName.length} chars)`);
       // by-WEIGHT line (sold per kg) → matcher skips packaged SPs (and vice-versa).
       const wParam = rp.unit === 'kg' ? '1' : null;
 
-      try {
+      if (!absurdName) try {
         const params = new URLSearchParams({
           chainId: String(chainId),
           name: matchName,
@@ -3014,7 +3176,6 @@ export default function ProcessReceiptScreen() {
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
           {
             timeoutMs: TIMEOUT_FAST_MS,
-            externalSignal: mountAbortRef.current?.signal,
           },
         );
         const data = await res.json();
@@ -3066,6 +3227,7 @@ export default function ProcessReceiptScreen() {
       time: rFooter.time,
       receiptNo: rFooter.receiptNo,
       totalSavings: rFooter.totalSavings,
+      comboDiscount: null,
       rawText: rFooter.rawText,
       region: rFooter.region,
     });
@@ -3156,7 +3318,6 @@ export default function ProcessReceiptScreen() {
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
           {
             timeoutMs: TIMEOUT_FAST_MS,
-            externalSignal: mountAbortRef.current?.signal,
           },
         );
         const data = await res.json();
@@ -3201,6 +3362,7 @@ export default function ProcessReceiptScreen() {
       time: mFooter.time,
       receiptNo: mFooter.receiptNo,
       totalSavings: mFooter.totalSavings,
+      comboDiscount: null,
       rawText: mFooter.rawText,
       region: mFooter.region,
     });
@@ -3301,7 +3463,6 @@ export default function ProcessReceiptScreen() {
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
           {
             timeoutMs: TIMEOUT_FAST_MS,
-            externalSignal: mountAbortRef.current?.signal,
           },
         );
         const data = await res.json();
@@ -3346,6 +3507,7 @@ export default function ProcessReceiptScreen() {
       time: nFooter.time,
       receiptNo: nFooter.receiptNo,
       totalSavings: nFooter.totalSavings,
+      comboDiscount: null,
       rawText: nFooter.rawText,
       region: nFooter.region,
     });
@@ -3432,7 +3594,6 @@ export default function ProcessReceiptScreen() {
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
           {
             timeoutMs: TIMEOUT_FAST_MS,
-            externalSignal: mountAbortRef.current?.signal,
           },
         );
         const data = await res.json();
@@ -3477,6 +3638,7 @@ export default function ProcessReceiptScreen() {
       time: lFooter.time,
       receiptNo: lFooter.receiptNo,
       totalSavings: lFooter.totalSavings,
+      comboDiscount: null,
       rawText: lFooter.rawText,
       region: lFooter.region,
     });
@@ -3574,7 +3736,6 @@ export default function ProcessReceiptScreen() {
           `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
           {
             timeoutMs: TIMEOUT_FAST_MS,
-            externalSignal: mountAbortRef.current?.signal,
           },
         );
         const data = await res.json();
@@ -3619,6 +3780,7 @@ export default function ProcessReceiptScreen() {
       time: iFooter.time,
       receiptNo: iFooter.receiptNo,
       totalSavings: iFooter.totalSavings,
+      comboDiscount: iFooter.comboDiscount ?? null,
       rawText: iFooter.rawText,
       region: iFooter.region,
       lineRegions: iFooter.lineRegions,
@@ -3645,6 +3807,7 @@ export default function ProcessReceiptScreen() {
       date: "",
       time: "",
       receiptNo: "",
+      comboDiscount: null,
       totalSavings: null,
       rawText: lines.slice(-5).join("\n"),
       region: { yTop: 0, yBottom: 0, xLeft: 0, xRight: 0 },
@@ -4115,7 +4278,7 @@ export default function ProcessReceiptScreen() {
                 style={[
                   styles.productRowCard,
                   index === 0 && styles.productRowCardFirst,
-                  index === products.length - 1 && styles.productRowCardLast,
+                  index === products.length - 1 && !(footer?.comboDiscount) && styles.productRowCardLast,
                   state === "S3" && styles.productRowCardS3,
                   state === "S4" && styles.productRowCardS4,
                 ]}
@@ -4200,6 +4363,15 @@ export default function ProcessReceiptScreen() {
                       <View style={styles.prodSkipBadge}>
                         <Ionicons name="eye-off-outline" size={11} color={colors.warning} />
                         <Text style={styles.prodSkipBadgeText}>{t('receiptProcess.prodSkipBadge')}</Text>
+                      </View>
+                    )}
+                    {/* Re-verification pending: this match contradicts one of the user's old
+                        'different' votes; the rejection is SUSPENDED and the pair is queued
+                        as a priority swipe card. The chip keeps the open question visible. */}
+                    {product.pendingReverification && (
+                      <View style={styles.prodSkipBadge}>
+                        <Ionicons name="help-circle-outline" size={11} color={colors.warning} />
+                        <Text style={styles.prodSkipBadgeText}>{t('receiptProcess.reverifyBadge')}</Text>
                       </View>
                     )}
                   </View>
@@ -4296,6 +4468,27 @@ export default function ProcessReceiptScreen() {
               );
               })
             )}
+            {/* Receipt-level set-deal discount (IKI bare "RINKINYS") — an ADJUSTMENT row,
+                not a product: no SP match, no price writes; the server subtracts it from
+                savings and the visited-store comparison total. Rendered last so the paid
+                total story is complete on this tab. */}
+            {footer?.comboDiscount != null && footer.comboDiscount > 0 && (
+              <View style={[styles.productRowCard, styles.productRowCardLast]}>
+                <View style={styles.productRow}>
+                  <View style={styles.productThumbPlaceholder}>
+                    <Text style={styles.productThumbEmoji}>🏷️</Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.productName} numberOfLines={1}>
+                      {t('receiptProcess.comboDiscount')}
+                    </Text>
+                  </View>
+                  <View style={styles.productPriceCol}>
+                    <Text style={styles.productPrice}>−{formatEuro(footer.comboDiscount)}</Text>
+                  </View>
+                </View>
+              </View>
+            )}
           </View>
         )}
         <View style={{ height: 40 }} />
@@ -4346,7 +4539,12 @@ export default function ProcessReceiptScreen() {
                   ? [header.region]
                   : []
               }
-              productRegions={products.map((p) => p.region).filter(Boolean)}
+              // Prod-hide parity: a line hidden from the Items list (isMessedUp) must not
+              // leave its green band on the photo either — dev/staging still draw it.
+              productRegions={products
+                .filter((p) => !(IS_PROD && isMessedUp(p)))
+                .map((p) => p.region)
+                .filter(Boolean)}
               skippedRegions={skippedRegions}
               footerRegions={
                 footer?.lineRegions && footer.lineRegions.length > 0

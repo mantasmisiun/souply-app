@@ -1207,7 +1207,9 @@
     "prodSkipBadge": "Paslepta gamyboje",
     "namePlaceholder": "Įveskite produkto pavadinimą",
     "addPhoto": "Pridėti nuotrauką",
-    "send": "Siųsti"
+    "send": "Siųsti",
+    "comboDiscount": "Rinkinio nuolaida",
+    "reverifyBadge": "Patvirtinkite atitikmenį"
   },
   "product": {
     "noDataForPeriod": "Nėra duomenų pasirinktam laikotarpiui",

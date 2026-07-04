@@ -28,4 +28,16 @@ describe('IKI receipt 169 — a bare RINKINYS combo discount is dropped, not a p
         const tiche = res.products.find((p: any) => /NEGAZUOTA/i.test(p.name) && Math.abs(p.price - 1.69) < 0.01);
         expect(tiche).toBeTruthy();
     });
+
+    // Post pitch-clustering fix (receipt-228 work): the bottle deposits' bare 0,10 amounts
+    // must never surface as a product price — the deposit-targeted re-home folds them into
+    // the DEPOZITAS skip rows even on this sheared receipt (the price column rides a full
+    // line below the names here — the data-ceiling case the re-home must not make worse).
+    test('no product carries a 0,10 deposit price', () => {
+        expect(res.products.some((p: any) => Math.abs(p.price - 0.1) < 0.001)).toBe(false);
+    });
+
+    test('no product is a deposit label', () => {
+        expect(res.products.some((p: any) => /DEP[O0][ZŽž]/i.test(p.name))).toBe(false);
+    });
 });
