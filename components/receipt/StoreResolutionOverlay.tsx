@@ -53,12 +53,12 @@ const addrLines = (address: string | null | undefined): string[] => {
  * chain's stores; Confirm (or close/dismiss) hands the result back to the awaiting receipt
  * pipeline via the storeResolution handoff (`completeStoreResolution`, which is idempotent).
  *
- * Store markers are the N stores NEAREST the anchor (the receipt's address), drawn as
- * address pills (street + number). The set is STABLE — it re-anchors only on open/search,
- * never on pan/zoom — so dragging the map adds/removes no markers. That is deliberate: the
- * unchecked AIRMap insertReactSubview crash only fires when the marker set churns mid-gesture
- * (clustering did that on every zoom), so a stable set is crash-proof even on a build without
- * the react-native-maps patch. Search re-anchors to look elsewhere.
+ * EVERY store is a static chain-badge marker, mounted once and NEVER added/removed — not on
+ * pan, zoom, search or selection. That is deliberate: the unchecked AIRMap insertReactSubview
+ * crash fires whenever the marker set churns during a Fabric mount transaction, so the only
+ * thing guaranteed crash-free on a build WITHOUT the react-native-maps patch is a set that
+ * never changes. The selected store's address pill is drawn on top. No clustering (dense
+ * areas overlap) — that needs the committed patch, which lands on the next build.
  */
 export function StoreResolutionOverlay() {
     const colors = useTheme();
@@ -91,9 +91,6 @@ export function StoreResolutionOverlay() {
         latitudeDelta: DELTA,
         longitudeDelta: DELTA,
     };
-    // Anchor for the NEAREST-N store set — updated ONLY on a deliberate recenter (open,
-    // search), never on pan/zoom, so the marker set is stable during gestures (see `nearest`).
-    const [anchor, setAnchor] = useState<{ lat: number; lng: number }>({ lat: VILNIUS_FALLBACK.lat, lng: VILNIUS_FALLBACK.lng });
 
     // Fetch the chain's stores + centre the map on the OCR address (else GPS/Vilnius).
     useEffect(() => {
@@ -113,8 +110,9 @@ export function StoreResolutionOverlay() {
                         longitude: parseFloat(s.longitude),
                     }))
                     .filter((s: ChainStore) => Number.isFinite(s.latitude) && Number.isFinite(s.longitude));
+                console.log(`[STOREMAP] fetched ${parsed.length} geo stores for chainId=${req.chainId} (raw=${Array.isArray(data) ? data.length : 'n/a'})`);
                 setStores(parsed);
-            } catch { /* leave empty — the map still works for search */ }
+            } catch (e) { console.log('[STOREMAP] store fetch FAILED', e); /* leave empty — the map still works for search */ }
         })();
         (async () => {
             let center: { lat: number; lng: number } | null = null;
@@ -128,15 +126,18 @@ export function StoreResolutionOverlay() {
                     { latitude: c.lat, longitude: c.lng, latitudeDelta: delta, longitudeDelta: delta },
                     600,
                 );
-                // Markers stay unmounted until this centering settles (see `centered`), and
-                // the nearest-N set is anchored on the target — so the first (and only) mount
-                // is one clean batch of the stores nearest the receipt's address.
-                setAnchor({ lat: c.lat, lng: c.lng });
+                // Markers stay unmounted until this centering settles (see `centered`), so the
+                // first (and only) mount is one clean batch — all stores, then never changed.
                 centerTimer.current = setTimeout(() => setCentered(true), 750);
             }
         })();
         return () => { cancelled = true; if (centerTimer.current) clearTimeout(centerTimer.current); };
     }, [req]);
+
+    // Log the marker set once it's settled — how many stores mount, and whether centering fired.
+    useEffect(() => {
+        console.log(`[STOREMAP] render state — stores=${stores.length} centered=${centered} mapReady=${mapReady} → markers mounted=${centered ? stores.length : 0}`);
+    }, [stores.length, centered, mapReady]);
 
     // Dismissed without confirming → cancel the handoff so the pipeline doesn't hang.
     // completeStoreResolution is idempotent, so this is a safe backstop after Confirm too.
@@ -153,9 +154,9 @@ export function StoreResolutionOverlay() {
         return () => { clearTimeout(t); clearTimeout(c); };
     }, []);
 
-    // Pan/zoom must NOT change the marker set (that churn is the crash). onRegionChangeComplete
-    // is a deliberate no-op; the set is re-anchored only on open + search.
-    const handleRegionChange = useCallback((_r: Region) => { /* frozen — see `anchor`/`nearest` */ }, []);
+    // The marker set is fixed (all stores, mounted once) so region changes are irrelevant to
+    // it; onRegionChangeComplete is a no-op. Nothing here ever adds or removes a marker.
+    const handleRegionChange = useCallback((_r: Region) => { /* fixed set — see the block comment above */ }, []);
 
     const onSearch = useCallback(async () => {
         const q = searchText.trim();
@@ -165,11 +166,11 @@ export function StoreResolutionOverlay() {
         const r = await geocodeAddress(q);
         setSearching(false);
         if (!r) { setSearchError(t('storeResolution.addressNotFound')); return; }
+        console.log(`[STOREMAP] search recenter -> ${r.lat},${r.lng} (camera only; marker set unchanged)`);
         mapRef.current?.animateToRegion(
             { latitude: r.lat, longitude: r.lng, latitudeDelta: CLOSE_DELTA, longitudeDelta: CLOSE_DELTA },
             600,
         );
-        setAnchor({ lat: r.lat, lng: r.lng }); // deliberate recenter → re-pick the nearest stores
     }, [searchText, t]);
 
     const onConfirm = useCallback(() => {
@@ -180,37 +181,22 @@ export function StoreResolutionOverlay() {
 
     const selectedStore = useMemo(() => stores.find((s) => s.id === selectedId) ?? null, [stores, selectedId]);
 
-    // NEAREST-N, not clustering. The N stores closest to the frozen `anchor`. This set only
-    // changes when the anchor does (open / search) — NEVER on pan/zoom — so React adds or
-    // removes ZERO map children while you drag the map. That is the whole fix: the crash is
-    // an unchecked insert in AIRMap that only fires when the marker set churns during a
-    // Fabric mount transaction, and clustering churned it on every zoom. A stable set can't
-    // churn, so it can't crash — on ANY build, with or without the native patch. (The
-    // committed patch is still the belt for the price map + deliberate recenters.)
-    const NEAREST_N = 30;
-    const nearest = useMemo(() => {
-        if (!stores.length) return [];
-        const cosLat = Math.cos((anchor.lat * Math.PI) / 180);
-        const d2 = (s: ChainStore) => {
-            const dLat = s.latitude - anchor.lat;
-            const dLng = (s.longitude - anchor.lng) * cosLat;
-            return dLat * dLat + dLng * dLng;
-        };
-        return [...stores].sort((a, b) => d2(a) - d2(b)).slice(0, NEAREST_N);
-    }, [stores, anchor]);
-
-    // Bake the address pills (street + number, two rows, chain logo) off-screen so each
-    // marker renders a never-clipped native image.
+    // NEVER-CHANGING SET. Every store is a marker, keyed by id, mounted ONCE (after the
+    // opening animation settles) and NEVER added/removed again — not on pan, zoom, search,
+    // or selection. This is the only thing that is guaranteed crash-free on a build WITHOUT
+    // the react-native-maps patch: the crash is an unchecked insert in AIRMap that fires
+    // whenever the marker set churns during a Fabric mount transaction (open ok, but search
+    // re-picking a nearest set churned it → the 2026-07-04 search crash). A set that never
+    // changes can't churn. Trade-off: no clustering (dense areas overlap) — that needs the
+    // patch, which is committed and lands on the next build. Search just moves the camera;
+    // all stores are already mounted, so nothing is added/removed.
+    // Bake ONLY the selected store's address pill (1 capture). Unselected stores render as
+    // the static chain badge (no view-shot), so there is no per-store bake and no badge→pill
+    // in-place swap — which was the "rectangle" artifact on the unpatched native.
     const pillSpecs = useMemo<MapPillSpec[]>(() => {
-        if (!req) return [];
-        const specs: MapPillSpec[] = nearest.map((s) => ({
-            key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral',
-        }));
-        if (selectedStore) {
-            specs.push({ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' });
-        }
-        return specs;
-    }, [nearest, selectedStore, req]);
+        if (!req || !selectedStore) return [];
+        return [{ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' }];
+    }, [selectedStore, req]);
     const { uriFor, bakery } = useBakedPills(pillSpecs);
 
     if (!req) return null;
@@ -243,26 +229,20 @@ export function StoreResolutionOverlay() {
                 onConfirm={onConfirm}
                 mapChildren={
                     !centered ? null : <>
-                        {/* Each pill renders ONLY once its image is fully baked, with a STABLE
-                            key (store id). So a marker mounts exactly once, already holding its
-                            final pill — there is no badge→pill in-place image swap (which showed
-                            as a "rectangle"/tiny pill on the unpatched native), and no remount.
-                            The nearest set is frozen during pan/zoom, so no marker is ever added
-                            or removed while dragging → the unchecked AIRMap insert never fires. */}
-                        {nearest.map((s) => {
-                            const uri = uriFor(`${s.id}|n`);
-                            if (!uri) return null;
-                            return (
-                                <MapPillMarker
-                                    key={`s-${s.id}`}
-                                    coordinate={{ latitude: s.latitude, longitude: s.longitude }}
-                                    chainId={req.chainId}
-                                    pillUri={uri}
-                                    zIndex={2}
-                                    onPress={() => setSelectedId(s.id)}
-                                />
-                            );
-                        })}
+                        {/* EVERY store, as a static chain-badge marker, keyed by id, mounted
+                            once and never added/removed (no bake → no rectangle; no churn →
+                            no crash on pan/zoom/search). The selected store gets its baked
+                            address pill drawn on top. */}
+                        {stores.map((s) => (
+                            <MapPillMarker
+                                key={`s-${s.id}`}
+                                coordinate={{ latitude: s.latitude, longitude: s.longitude }}
+                                chainId={req.chainId}
+                                pillUri={undefined}
+                                zIndex={2}
+                                onPress={() => { console.log(`[STOREMAP] tapped store id=${s.id} "${s.address}"`); setSelectedId(s.id); }}
+                            />
+                        ))}
                         {selectedStore && (() => {
                             const uri = uriFor(`${selectedStore.id}|s`);
                             if (!uri) return null;

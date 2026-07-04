@@ -262,9 +262,11 @@ const makeStyles = (c: AppTheme) =>
             gap: spacing.sm,
         },
         glassTopRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-        // See-through glass title chip next to the back chevron.
+        // See-through glass title chip next to the back chevron — hugs its text
+        // (alignSelf so it doesn't stretch to the row height, no flex so it doesn't
+        // stretch to the row width).
         titleChip: {
-            flex: 1, overflow: 'hidden', borderRadius: radius.pill,
+            alignSelf: 'center', overflow: 'hidden', borderRadius: radius.pill,
             borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)',
             paddingHorizontal: spacing.lg, height: 40, justifyContent: 'center',
         },

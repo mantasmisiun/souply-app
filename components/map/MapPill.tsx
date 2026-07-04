@@ -66,10 +66,14 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
     if (!ready || !badgeLoaded) return;
     const node = ref.current;
     if (!node) return;
+    // `ready` gates the borderRadius application; capturing while ready=true means the round
+    // corners ARE applied. If a baked pill still shows as a sharp rectangle, this log tells us
+    // whether ready/badgeLoaded were both true at capture (→ a native-timing issue) or not.
+    console.log(`[PILLBAKE] capture key=${spec.key} ready=${ready} badgeLoaded=${badgeLoaded} twoRow=${twoRow}`);
     captureRef(node, { format: 'png', result: 'tmpfile', quality: 1 })
-      .then((uri) => onShot(spec.key, uri))
-      .catch(() => onFail(spec.key));
-  }, [ready, badgeLoaded, spec.key, onShot, onFail]);
+      .then((uri) => { console.log(`[PILLBAKE] OK key=${spec.key}`); onShot(spec.key, uri); })
+      .catch((e) => { console.log(`[PILLBAKE] FAIL key=${spec.key}`, e?.message ?? e); onFail(spec.key); });
+  }, [ready, badgeLoaded, spec.key, onShot, onFail, twoRow]);
 
   useEffect(() => {
     if (ready) return;

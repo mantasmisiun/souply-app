@@ -10,7 +10,6 @@ import { StoreChipBar } from "../../../components/StoreChipBar";
 import { useCallback,
     useEffect,
     useMemo,
-    useRef,
     useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -52,6 +51,11 @@ import { formatDate } from "../../../utils/formatCurrency";
 import { useNetworkStatus } from "../../../state/networkStatus";
 import { useLevelStore } from "../../../state/levelStore";
 import { useSettingsStore } from "../../../state/settingsStore";
+
+// MODULE-LEVEL one-shot for the resume prompt. A per-component ref resets if the
+// Receipts screen remounts (tab re-focus, Fast Refresh), which can stack a second
+// Alert — this survives remounts so the prompt shows at most once per app session.
+let resumePromptShownThisSession = false;
 
 interface Receipt {
   id: number;
@@ -333,20 +337,18 @@ export default function ReceiptsScreen() {
   // reactively-rendered <Modal> wouldn't have this, but a native Alert would; so
   // wait for `hydrated`, by which point i18next is on the resolved language.
   const settingsHydrated = useSettingsStore((s) => s.hydrated);
-  const resumePromptedRef = useRef(false);
   useEffect(() => {
-    // Claim the one-shot SYNCHRONOUSLY, before the await. Hydration flips
-    // `settingsHydrated` AND changes `t` (languageChanged) in the same beat; with `t`
-    // in the deps this effect fired twice, and because the ref was only set AFTER
-    // `await loadReceiptDraft()`, both runs got past the guard and stacked TWO resume
-    // Alerts (the reported "modal stayed, tapped Continue again"). `t` is dropped from
-    // the deps (read fresh at Alert time) so the effect fires once when hydration lands.
-    if (!settingsHydrated || resumePromptedRef.current) return;
-    resumePromptedRef.current = true;
+    console.log(`[RESUME] effect fire — hydrated=${settingsHydrated} shownThisSession=${resumePromptShownThisSession}`);
+    // Claim the one-shot SYNCHRONOUSLY, before the await, and at MODULE level so a
+    // remount can't stack a second Alert.
+    if (!settingsHydrated || resumePromptShownThisSession) return;
+    resumePromptShownThisSession = true;
     let active = true;
     (async () => {
       const draft = await loadReceiptDraft();
+      console.log(`[RESUME] draft loaded — hasDraft=${!!draft} active=${active} uris=${draft?.imageUris?.length ?? 0}`);
       if (!active || !draft) return;
+      console.log('[RESUME] SHOWING ALERT');
       Alert.alert(
         t('receipts.resume.title'),
         t('receipts.resume.body'),
@@ -355,12 +357,14 @@ export default function ReceiptsScreen() {
             text: t('common.cancel'),
             style: "cancel",
             onPress: () => {
+              console.log('[RESUME] CANCEL tapped');
               clearReceiptDraft().catch(() => {});
             },
           },
           {
             text: t('common.continue'),
             onPress: () => {
+              console.log('[RESUME] CONTINUE tapped -> navigate');
               const params = new URLSearchParams();
               if (draft.imageUris.length > 1) {
                 params.set("uris", draft.imageUris.join(","));
