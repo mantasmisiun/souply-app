@@ -114,9 +114,11 @@ describe('real receipt 269 — structural win + honest refusal', () => {
     });
 
     test('savings pin alone is never committed without the total corroborating (safety)', () => {
-        // Drop the SUMA line → no equation-1 corroboration → the tentative discount must
-        // be discarded: the cabbage keeps promo null rather than an uncorroborated guess.
-        const noTotal = lines.filter((l) => !/SUMA|Mokes|Mokė|Banko/i.test(l.text));
+        // Drop the SUMA line AND the VAT-breakdown row (the VAT-identity lane can now
+        // legitimately recover the total from "…21,00%… <T> <V>" — receipt-326) → truly no
+        // total source → the tentative discount must be discarded: the cabbage keeps promo
+        // null rather than an uncorroborated guess.
+        const noTotal = lines.filter((l) => !/SUMA|Mokes|Mokė|Banko|21\s?[.,]\s?00|PVM|Gryni|Gr[aą][zž]/i.test(l.text));
         const r2: any = parseIkiReceipt(noTotal);
         const cabbage = r2.products.find((p: any) => p.name.includes('KOPUSTAI'));
         if (cabbage) expect(cabbage.promoPrice).toBeNull();

@@ -78,16 +78,28 @@ describe('weighed row solver — OVERRULE vs CORROBORATE', () => {
         expect(p[0].promoPrice).toBeCloseTo(2.08, 2);      // (0.86 − 0.35) / 0.245
     });
 
-    test('a STRICT total is never overruled even when the arithmetic disagrees', () => {
-        // Printed total 1,20 (strict read) vs 0.500 × 2.00 = 1.00: trusted reads win;
-        // mismatches of trusted reads are receipt-level flags, not silent rewrites.
+    test('a STRICT total is never rewritten — a 1-digit-garbled qty is repaired to match it instead', () => {
+        // Printed total 1,20 + €/kg 2,00 agree with each other only under qty 0,600 — and
+        // "0,600" is ONE OCR digit from the read "0,500" (receipt-326: "0,175" for "0,475").
+        // Two independent strict reads outvote one: the qty is the garble; the total stands.
         const p = parse([
             line('KELIONE KILOGRAMAIS', 100),
             line('0, 500 kg X 2,00 EUR/ kg 1, 20 A', 150),
         ]);
         expect(p).toHaveLength(1);
         expect(p[0].price).toBeCloseTo(2.00, 2);
-        // quantity stays the printed one; the strict total remains untouched internally.
+        expect(p[0].quantity).toBeCloseTo(0.6, 3);   // repaired: 0.600 × 2.00 = 1.20 exactly
+    });
+
+    test('a qty further than one digit from any consistent value stays put — flag, not silent fix', () => {
+        // total 1,24 ÷ 2,00 → 0,618…0,622: every candidate is ≥2 digits from "0,500".
+        // The contradiction survives to receipt-level reconciliation instead of a guess.
+        const p = parse([
+            line('KELIONE KILOGRAMAIS', 100),
+            line('0, 500 kg X 2,00 EUR/ kg 1, 24 A', 150),
+        ]);
+        expect(p).toHaveLength(1);
+        expect(p[0].price).toBeCloseTo(2.00, 2);
         expect(p[0].quantity).toBeCloseTo(0.5, 3);
     });
 });
