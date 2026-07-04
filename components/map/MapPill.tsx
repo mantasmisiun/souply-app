@@ -66,13 +66,22 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
     if (!ready || !badgeLoaded) return;
     const node = ref.current;
     if (!node) return;
-    // `ready` gates the borderRadius application; capturing while ready=true means the round
-    // corners ARE applied. If a baked pill still shows as a sharp rectangle, this log tells us
-    // whether ready/badgeLoaded were both true at capture (→ a native-timing issue) or not.
-    console.log(`[PILLBAKE] capture key=${spec.key} ready=${ready} badgeLoaded=${badgeLoaded} twoRow=${twoRow}`);
-    captureRef(node, { format: 'png', result: 'tmpfile', quality: 1 })
-      .then((uri) => { console.log(`[PILLBAKE] OK key=${spec.key}`); onShot(spec.key, uri); })
-      .catch((e) => { console.log(`[PILLBAKE] FAIL key=${spec.key}`, e?.message ?? e); onFail(spec.key); });
+    // Wait TWO frames before the snapshot. `ready` flips borderRadius on in a React commit,
+    // but the native view may not have re-DRAWN the rounded corners yet in the same tick —
+    // capturing immediately grabs the pre-radius shape (the "rectangular pill"). Two rAFs let
+    // the rounded corners + badge actually paint before captureRef reads the pixels.
+    let cancelled = false;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        if (cancelled || !ref.current) return;
+        console.log(`[PILLBAKE] capture key=${spec.key} ready=${ready} badgeLoaded=${badgeLoaded} twoRow=${twoRow}`);
+        captureRef(ref.current, { format: 'png', result: 'tmpfile', quality: 1 })
+          .then((uri) => { console.log(`[PILLBAKE] OK key=${spec.key}`); onShot(spec.key, uri); })
+          .catch((e) => { console.log(`[PILLBAKE] FAIL key=${spec.key}`, e?.message ?? e); onFail(spec.key); });
+      });
+    });
+    return () => { cancelled = true; cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
   }, [ready, badgeLoaded, spec.key, onShot, onFail, twoRow]);
 
   useEffect(() => {
@@ -133,6 +142,10 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
  */
 export function useBakedPills(specs: MapPillSpec[]): {
   uriFor: (key: string) => string | undefined;
+  /** Keys whose pill has baked, in COMPLETION order. Render markers in this order so the
+   *  on-map list only ever grows at the end (append-only) — no mid-list insert (the iOS
+   *  AIRMap crash) and no badge→pill in-place swap (the "rectangle"). */
+  bakedKeys: string[];
   bakery: React.ReactNode;
 } {
   const [uris, setUris] = useState<Record<string, string>>({});
@@ -155,7 +168,9 @@ export function useBakedPills(specs: MapPillSpec[]): {
       {active.map((spec) => <PillShot key={spec.key} spec={spec} onShot={onShot} onFail={onFail} />)}
     </View>
   );
-  return { uriFor: (key) => uris[key], bakery };
+  // Object key order is insertion order, and onShot inserts on capture completion → this is
+  // the bake-completion order.
+  return { uriFor: (key) => uris[key], bakedKeys: Object.keys(uris), bakery };
 }
 
 const BAKE_CONCURRENCY = 4;

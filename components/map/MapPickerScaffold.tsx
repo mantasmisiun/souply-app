@@ -169,8 +169,11 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                         )}
                     </View>
                     {glassSearch}
+                    {/* Error toast BELOW the search (normal flow, not absolute over it) and
+                        pointerEvents:none, so it never blocks tapping/editing the field. The
+                        caller auto-dismisses it after a few seconds. */}
                     {props.searchError && (
-                        <View style={styles.errorBubble}>
+                        <View style={styles.glassErrorToast} pointerEvents="none">
                             <Text style={styles.errorText}>{props.searchError}</Text>
                         </View>
                     )}
@@ -285,4 +288,11 @@ const makeStyles = (c: AppTheme) =>
             position: 'absolute', left: spacing.lg, right: spacing.lg, bottom: 0, zIndex: 10,
         },
         confirmBtnFloating: { ...elevation.level3 },
+        // Search-error toast: sits in the glass top cluster's normal column flow, just under
+        // the search field (so it can't cover it), self-sized, auto-dismissed by the caller.
+        glassErrorToast: {
+            alignSelf: 'flex-start', maxWidth: '100%',
+            backgroundColor: c.error, borderRadius: radius.md,
+            paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
+        },
     });

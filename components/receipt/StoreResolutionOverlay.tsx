@@ -53,11 +53,12 @@ const addrLines = (address: string | null | undefined): string[] => {
  * chain's stores; Confirm (or close/dismiss) hands the result back to the awaiting receipt
  * pipeline via the storeResolution handoff (`completeStoreResolution`, which is idempotent).
  *
- * EVERY store is a static chain-badge marker, mounted once and NEVER added/removed — not on
- * pan, zoom, search or selection. That is deliberate: the unchecked AIRMap insertReactSubview
- * crash fires whenever the marker set churns during a Fabric mount transaction, so the only
- * thing guaranteed crash-free on a build WITHOUT the react-native-maps patch is a set that
- * never changes. The selected store's address pill is drawn on top. No clustering (dense
+ * EVERY store shows an address pill (logo + street + number). Pills are baked off-screen and
+ * mounted in bake-COMPLETION order, so the on-map marker list only ever GROWS AT THE END. That
+ * append-only shape is what keeps it crash-free on a build WITHOUT the react-native-maps patch:
+ * the AIRMap insertReactSubview crash fires on a mid-list insert into a churning set, and a
+ * mount-at-the-end never produces one; mounting each marker already holding its pill also avoids
+ * the badge→pill in-place swap ("rectangle"). Search only moves the camera. No clustering (dense
  * areas overlap) — that needs the committed patch, which lands on the next build.
  */
 export function StoreResolutionOverlay() {
@@ -134,10 +135,12 @@ export function StoreResolutionOverlay() {
         return () => { cancelled = true; if (centerTimer.current) clearTimeout(centerTimer.current); };
     }, [req]);
 
-    // Log the marker set once it's settled — how many stores mount, and whether centering fired.
+    // Auto-dismiss the search error after a few seconds so it never lingers over the UI.
     useEffect(() => {
-        console.log(`[STOREMAP] render state — stores=${stores.length} centered=${centered} mapReady=${mapReady} → markers mounted=${centered ? stores.length : 0}`);
-    }, [stores.length, centered, mapReady]);
+        if (!searchError) return;
+        const to = setTimeout(() => setSearchError(null), 3500);
+        return () => clearTimeout(to);
+    }, [searchError]);
 
     // Dismissed without confirming → cancel the handoff so the pipeline doesn't hang.
     // completeStoreResolution is idempotent, so this is a safe backstop after Confirm too.
@@ -180,24 +183,30 @@ export function StoreResolutionOverlay() {
     }, [stores, selectedId]);
 
     const selectedStore = useMemo(() => stores.find((s) => s.id === selectedId) ?? null, [stores, selectedId]);
+    const storeById = useMemo(() => new Map(stores.map((s) => [s.id, s])), [stores]);
 
-    // NEVER-CHANGING SET. Every store is a marker, keyed by id, mounted ONCE (after the
-    // opening animation settles) and NEVER added/removed again — not on pan, zoom, search,
-    // or selection. This is the only thing that is guaranteed crash-free on a build WITHOUT
-    // the react-native-maps patch: the crash is an unchecked insert in AIRMap that fires
-    // whenever the marker set churns during a Fabric mount transaction (open ok, but search
-    // re-picking a nearest set churned it → the 2026-07-04 search crash). A set that never
-    // changes can't churn. Trade-off: no clustering (dense areas overlap) — that needs the
-    // patch, which is committed and lands on the next build. Search just moves the camera;
-    // all stores are already mounted, so nothing is added/removed.
-    // Bake ONLY the selected store's address pill (1 capture). Unselected stores render as
-    // the static chain badge (no view-shot), so there is no per-store bake and no badge→pill
-    // in-place swap — which was the "rectangle" artifact on the unpatched native.
+    // Bake an ADDRESS PILL (logo + street + number) for every store, plus a 'selected' variant
+    // for the pick. Markers are then rendered in bake-COMPLETION order (bakedKeys) so the on-map
+    // list only ever GROWS AT THE END — an append-only insert can't hit the out-of-bounds
+    // AIRMap crash, and mounting each marker already holding its pill means no badge→pill
+    // in-place swap (no "rectangle"). No clustering (dense areas overlap until the built patch).
     const pillSpecs = useMemo<MapPillSpec[]>(() => {
-        if (!req || !selectedStore) return [];
-        return [{ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' }];
-    }, [selectedStore, req]);
-    const { uriFor, bakery } = useBakedPills(pillSpecs);
+        if (!req) return [];
+        const specs: MapPillSpec[] = stores.map((s) => ({
+            key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral',
+        }));
+        if (selectedStore) {
+            specs.push({ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' });
+        }
+        return specs;
+    }, [stores, selectedStore, req]);
+    const { uriFor, bakedKeys, bakery } = useBakedPills(pillSpecs);
+
+    // Log as pills bake in — stores fetched vs pills baked vs actually mounted.
+    const bakedNeutralCount = bakedKeys.filter((k) => k.endsWith('|n')).length;
+    useEffect(() => {
+        console.log(`[STOREMAP] render — stores=${stores.length} centered=${centered} mapReady=${mapReady} pillsBaked=${bakedNeutralCount} mounted=${centered ? bakedNeutralCount : 0}`);
+    }, [stores.length, centered, mapReady, bakedNeutralCount]);
 
     if (!req) return null;
 
@@ -229,20 +238,26 @@ export function StoreResolutionOverlay() {
                 onConfirm={onConfirm}
                 mapChildren={
                     !centered ? null : <>
-                        {/* EVERY store, as a static chain-badge marker, keyed by id, mounted
-                            once and never added/removed (no bake → no rectangle; no churn →
-                            no crash on pan/zoom/search). The selected store gets its baked
-                            address pill drawn on top. */}
-                        {stores.map((s) => (
-                            <MapPillMarker
-                                key={`s-${s.id}`}
-                                coordinate={{ latitude: s.latitude, longitude: s.longitude }}
-                                chainId={req.chainId}
-                                pillUri={undefined}
-                                zIndex={2}
-                                onPress={() => { console.log(`[STOREMAP] tapped store id=${s.id} "${s.address}"`); setSelectedId(s.id); }}
-                            />
-                        ))}
+                        {/* Address pills, rendered in BAKE-COMPLETION order (append-only) so the
+                            marker list only grows at the end — no mid-list insert (crash) and no
+                            in-place image swap (rectangle). Each mounts once already holding its
+                            baked pill. The selected store's pill is drawn on top. */}
+                        {bakedKeys.map((key) => {
+                            if (!key.endsWith('|n')) return null;
+                            const id = Number(key.slice(0, -2));
+                            const s = storeById.get(id);
+                            if (!s) return null;
+                            return (
+                                <MapPillMarker
+                                    key={`s-${id}`}
+                                    coordinate={{ latitude: s.latitude, longitude: s.longitude }}
+                                    chainId={req.chainId}
+                                    pillUri={uriFor(key)}
+                                    zIndex={2}
+                                    onPress={() => { console.log(`[STOREMAP] tapped store id=${id} "${s.address}"`); setSelectedId(id); }}
+                                />
+                            );
+                        })}
                         {selectedStore && (() => {
                             const uri = uriFor(`${selectedStore.id}|s`);
                             if (!uri) return null;
