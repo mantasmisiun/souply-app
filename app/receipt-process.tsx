@@ -3135,6 +3135,29 @@ export default function ProcessReceiptScreen() {
     return null;
   };
 
+  // RE-OCR STORE INHERIT: a re-OCR reprocesses an EXISTING receipt's photo — when the fresh
+  // OCR pass loses the address text entirely (a second engine can drop whole header lines),
+  // re-asking the user to pick the store on the map is wrong: the original receipt already
+  // resolved it. Chain-checked, so a mis-detected chain still falls through to the prompt.
+  const inheritReocrStore = async (
+    chainId: number,
+  ): Promise<{ storeId: number; storeName: string | null; storeAddress: string | null } | null> => {
+    if (reocrReceiptId == null || !Number.isFinite(reocrReceiptId)) return null;
+    try {
+      const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${reocrReceiptId}`, { timeoutMs: TIMEOUT_STANDARD_MS });
+      if (!res.ok) return null;
+      const r = await res.json();
+      const pd = typeof r?.parsedData === 'string' ? JSON.parse(r.parsedData) : r?.parsedData;
+      const h = pd?.header ?? {};
+      const sid = h?.storeId ?? r?.storeId;
+      if (sid == null || (h?.chainId != null && h.chainId !== chainId)) return null;
+      console.log(`[reocr] inherited store ${sid} (${h?.storeName ?? '?'}) from receipt ${reocrReceiptId}`);
+      return { storeId: Number(sid), storeName: h?.storeName ?? null, storeAddress: h?.storeAddressMatched ?? null };
+    } catch {
+      return null;
+    }
+  };
+
   // The store address didn't auto-match — send the user to the map
   // store-resolution screen (chain known, store not) and await their pick.
   // null = user backed out (caller bails as store_unrecognized).
@@ -3186,6 +3209,16 @@ export default function ProcessReceiptScreen() {
     // un-mapped store downstream breaks price comparison and metric
     // aggregation; easier to make the user re-scan than to thread
     // a null-store receipt through the rest of the system.
+    if (storeId === null) {
+      const inh = await inheritReocrStore(chainId);
+      if (inh) {
+        storeId = inh.storeId;
+        storeName = inh.storeName;
+        storeAddressMatched = inh.storeAddress;
+        matchConfidence = 1;
+        rHeader.lineRegions = (rHeader.lineRegions ?? []).filter((r: any) => r?.kind !== 'storeAddress');
+      }
+    }
     if (storeId === null) {
       const chosen = await promptStoreResolution(chainId, "RIMI", rHeader.storeAddress || null, rHeader.rawText);
       if (!chosen) {
@@ -3352,6 +3385,16 @@ export default function ProcessReceiptScreen() {
     }
 
     if (storeId === null) {
+      const inh = await inheritReocrStore(chainId);
+      if (inh) {
+        storeId = inh.storeId;
+        storeName = inh.storeName;
+        storeAddressMatched = inh.storeAddress;
+        matchConfidence = 1;
+        mHeader.lineRegions = (mHeader.lineRegions ?? []).filter((r: any) => r?.kind !== 'storeAddress');
+      }
+    }
+    if (storeId === null) {
       const chosen = await promptStoreResolution(chainId, "MAXIMA", mHeader.storeAddress || null, mHeader.rawText);
       if (!chosen) {
         await bailWithLog("store_unrecognized", {
@@ -3485,6 +3528,16 @@ export default function ProcessReceiptScreen() {
     }
 
     if (storeId === null) {
+      const inh = await inheritReocrStore(chainId);
+      if (inh) {
+        storeId = inh.storeId;
+        storeName = inh.storeName;
+        storeAddressMatched = inh.storeAddress;
+        matchConfidence = 1;
+        nHeader.lineRegions = (nHeader.lineRegions ?? []).filter((r: any) => r?.kind !== 'storeAddress');
+      }
+    }
+    if (storeId === null) {
       const chosen = await promptStoreResolution(chainId, "NORFA", nHeader.storeAddress || null, nHeader.rawText);
       if (!chosen) {
         if (__DEV__) {
@@ -3612,6 +3665,16 @@ export default function ProcessReceiptScreen() {
     }
 
     if (storeId === null) {
+      const inh = await inheritReocrStore(chainId);
+      if (inh) {
+        storeId = inh.storeId;
+        storeName = inh.storeName;
+        storeAddressMatched = inh.storeAddress;
+        matchConfidence = 1;
+        lHeader.lineRegions = (lHeader.lineRegions ?? []).filter((r: any) => r?.kind !== 'storeAddress');
+      }
+    }
+    if (storeId === null) {
       const chosen = await promptStoreResolution(chainId, "LIDL", lHeader.storeAddress || null, lHeader.rawText);
       if (!chosen) {
         await bailWithLog("store_unrecognized", {
@@ -3734,6 +3797,16 @@ export default function ProcessReceiptScreen() {
       if (m) { storeId = m.storeId; storeName = m.storeName; storeAddressMatched = m.address; matchConfidence = m.confidence; }
     }
 
+    if (storeId === null) {
+      const inh = await inheritReocrStore(chainId);
+      if (inh) {
+        storeId = inh.storeId;
+        storeName = inh.storeName;
+        storeAddressMatched = inh.storeAddress;
+        matchConfidence = 1;
+        iHeader.lineRegions = (iHeader.lineRegions ?? []).filter((r: any) => r?.kind !== 'storeAddress');
+      }
+    }
     if (storeId === null) {
       const chosen = await promptStoreResolution(chainId, "IKI", iHeader.storeAddress || null, iHeader.rawText);
       if (!chosen) {
