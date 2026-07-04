@@ -34,6 +34,7 @@ import { useTranslation } from "react-i18next";
 import { ProductImage } from "../ProductImage";
 import { ScreenBackButton } from "../ScreenBackButton";
 import { API_BASE_URL } from "../../config/api";
+import { fetchWithTimeout, TIMEOUT_STANDARD_MS, TIMEOUT_FAST_MS } from "../../utils/fetchWithTimeout";
 import { getUserId } from "../../config/user";
 import { useTheme, type AppTheme } from "../../constants/theme";
 import { useLevelStore } from "../../state/levelStore";
@@ -760,12 +761,13 @@ export function SwipeQueue({
       // (identical → confirms the print → 'canonical' at K distinct users).
       if (isAliasCard(item)) {
         if (dwell < MIN_DWELL_MS) return;
-        await fetch(
+        await fetchWithTimeout(
           `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/alias-votes`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ aliasId: item.aliasId, vote }),
+            timeoutMs: TIMEOUT_STANDARD_MS,
           },
         );
         return;
@@ -778,11 +780,12 @@ export function SwipeQueue({
         if (dwell < MIN_DWELL_MS) return;
         const rid = itemsReceiptId ?? currentReceiptId;
         if (!rid) return;
-        const res = await fetch(
+        const res = await fetchWithTimeout(
           `${API_BASE_URL}/api/receipts/${encodeURIComponent(rid)}/lines/${item.receiptLineIdx}/vote`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            timeoutMs: TIMEOUT_STANDARD_MS,
             // userId attributes the vote to a distinct user for vocabulary capture
             // (Issue H) — an 'identical' on a matcher-struggled line learns the alias.
             // proposedSpId (proposed cards only): echoes the card's candidate so an
@@ -805,11 +808,12 @@ export function SwipeQueue({
       }
       let res: Response;
       if (item.slot === 2) {
-        res = await fetch(
+        res = await fetchWithTimeout(
           `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-vote/slot2`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            timeoutMs: TIMEOUT_STANDARD_MS,
             body: JSON.stringify({
               orphanSpId: item.left.spId,
               candidateSpId: item.right.spId,
@@ -821,11 +825,12 @@ export function SwipeQueue({
           }
         );
       } else {
-        res = await fetch(
+        res = await fetchWithTimeout(
           `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-vote`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
+            timeoutMs: TIMEOUT_STANDARD_MS,
             body: JSON.stringify({
               spIdA: item.left.spId,
               spIdB: item.right.spId,
@@ -1139,11 +1144,14 @@ export function SwipeQueue({
         // Mandatory: always mark the current receipt complete — even
         // if cappedItems was 0 (no candidates available), the server
         // counter must be cleared so the banner count drops on return.
-        try {
-          await fetch(`${API_BASE_URL}/api/receipts/${currentReceiptId}/complete-swipes`, {
-            method: "POST",
-          });
-        } catch {}
+        // Bounded + non-blocking: the user's path to the receipt must not wait on
+        // this counter write (the host trusts the client-side completion — every
+        // card was swiped here). Fire it capped; a lost response self-heals via the
+        // next queue-count refresh.
+        fetchWithTimeout(`${API_BASE_URL}/api/receipts/${currentReceiptId}/complete-swipes`, {
+          method: "POST",
+          timeoutMs: TIMEOUT_STANDARD_MS,
+        }).catch(() => {});
       }
       if (cancelled) return;
 
@@ -1166,8 +1174,9 @@ export function SwipeQueue({
         const userId = userIdRef.current;
         if (userId) {
           try {
-            const r = await fetch(
-              `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/profile`
+            const r = await fetchWithTimeout(
+              `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/profile`,
+              { timeoutMs: TIMEOUT_FAST_MS },
             );
             const d = await r.json();
             if (d?.level) await stashLevel(d.level);

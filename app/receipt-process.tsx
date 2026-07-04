@@ -731,6 +731,9 @@ export default function ProcessReceiptScreen() {
   // receipt in existing mode). No route, no swipeDone param, no redirect guard.
   const [swiping, setSwiping] = useState(false);
   const [swipingReceiptId, setSwipingReceiptId] = useState<number | null>(null);
+  // Receipt whose mandatory swipes were ALL cast client-side this session (see
+  // leaveSwipePhase / loadExistingReceipt) — survives a slow /complete-swipes.
+  const swipesJustDoneRef = useRef<number | null>(null);
   const postSwipeActionRef = useRef<(() => void) | null>(null);
   const dateGateResolveRef = useRef<((picked: Date | null) => void) | null>(null);
   const [dateGateTemp, setDateGateTemp] = useState<Date | null>(null); // null = empty field (no prefill)
@@ -1028,6 +1031,11 @@ export default function ProcessReceiptScreen() {
   const leaveSwipePhase = () => {
     const after = postSwipeActionRef.current;
     postSwipeActionRef.current = null;
+    // The client just watched every mandatory card get swiped — record it so the
+    // post-swipe reload can't bounce back into the swipe phase when the server's
+    // /complete-swipes write is still in flight (it is fired without blocking the
+    // user's path to the receipt).
+    if (swipingReceiptId != null) swipesJustDoneRef.current = swipingReceiptId;
     setSwiping(false);
     // The in-place phase changes no focus, so the focus-driven count refresh never
     // fires — refetch NOW with the just-cast votes applied, or the "help recognise"
@@ -1064,7 +1072,12 @@ export default function ProcessReceiptScreen() {
       const pendingSwipes =
         (receipt.mandatorySwipesRequired ?? 0) > 0 &&
         (receipt.mandatorySwipesCompleted ?? 0) < (receipt.mandatorySwipesRequired ?? 0);
-      if (pendingSwipes) {
+      // One-shot: the swipe session for this receipt JUST finished on this device —
+      // trust the client-side completion over a lagging /complete-swipes write and
+      // fall through to the detail instead of re-entering the swipe phase.
+      if (pendingSwipes && swipesJustDoneRef.current === id) {
+        swipesJustDoneRef.current = null;
+      } else if (pendingSwipes) {
         setLoading(false);
         enterSwipePhase(id, () => loadExistingReceipt(id));
         return;
@@ -2224,6 +2237,14 @@ export default function ProcessReceiptScreen() {
     if (!receiptId) return; // POST hasn't completed yet
     if (!header || !footer) return;
     if (isHydratingRef.current) return;
+    // SWIPE-PHASE SAVE SUPPRESSION: every Card-B vote patches `products` via
+    // onLineResolved with SERVER-AUTHORITATIVE data — re-PUTting it is redundant, and
+    // the autosave transaction UPDATEs the very ReceiptItem rows the NEXT vote locks
+    // FOR UPDATE. That contention stalled the vote endpoint for tens of seconds after
+    // the 3rd swipe (spinner hang + "Save failed: AbortError"). No saves while the
+    // swipe phase is active; `swiping` in the deps fires this effect once on exit, so
+    // the latest state still flushes normally.
+    if (swiping) return;
 
     const parsedData = buildParsedData(
       header,
@@ -2245,7 +2266,7 @@ export default function ProcessReceiptScreen() {
       nextComparisonKey !== comparisonKeyRef.current;
     comparisonKeyRef.current = nextComparisonKey;
     scheduleDebouncedSave(parsedData);
-  }, [header, products, footer, receiptId, imageFilePath]);
+  }, [header, products, footer, receiptId, imageFilePath, swiping]);
   // Unmount flush
   useEffect(() => {
     return () => {
