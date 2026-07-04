@@ -1,7 +1,7 @@
 import TextRecognition from "@react-native-ml-kit/text-recognition";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Image } from "react-native";
-import { ocrImageEnhanced } from "./mlkitOcr";
+import { ocrImageEnhanced, type OcrEngine } from "./mlkitOcr";
 
 /**
  * SINGLE SOURCE OF TRUTH for turning receipt image/PDF-page URIs into the OCR
@@ -161,7 +161,7 @@ export async function cropToContentBounds(
  * `ocrImageTiled`), concatenate with per-page y-offsets so multi-page e-receipts
  * parse as one document, then run the adjacent-row merge.
  */
-export async function ocrReceiptPages(imageUris: string[]): Promise<ReceiptOcrResult> {
+export async function ocrReceiptPages(imageUris: string[], engine: OcrEngine = 'auto'): Promise<ReceiptOcrResult> {
     const allLines: LineWithFrame[] = [];
     let frameScale = 1;
     let yOffset = 0;
@@ -171,7 +171,7 @@ export async function ocrReceiptPages(imageUris: string[]): Promise<ReceiptOcrRe
 
     for (let pageIdx = 0; pageIdx < imageUris.length; pageIdx++) {
         const pageUri = await rotatePortrait(imageUris[pageIdx]);
-        const ocr = await ocrImageEnhanced(pageUri);
+        const ocr = await ocrImageEnhanced(pageUri, engine);
         if (pageIdx === 0) {
             frameScale = ocr.frameScale;
             firstPageUri = pageUri;

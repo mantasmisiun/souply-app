@@ -130,6 +130,7 @@ import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
 import { redactReceiptText, detectCardMaskBands, clampMaskBandsToProtected, wordCentreInMaskBand, looksLikePiiText, type MaskBand } from "@shared/parsers/cardMaskDetection";
 import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
 import { requestStoreResolution, completeStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
+import { ocrReceiptPages } from "../utils/receiptOcrPipeline";
 import { StoreResolutionOverlay } from "../components/receipt/StoreResolutionOverlay";
 import { ocrImageEnhanced } from "../utils/mlkitOcr";
 import { refineFooterBands } from "../utils/footerBandRefine";
@@ -816,6 +817,9 @@ export default function ProcessReceiptScreen() {
   // Save state
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [imageFilePath, setImageFilePath] = useState<string | null>(null);
+  // TRUE only during a duplicate-409 RESUME whose server row already has its photo
+  // (swipes-only recovery) — gates runUpload so the stored image is never overwritten.
+  const resumedPhotoPresentRef = useRef(false);
   // How many swipe cards are currently waiting for this user on this receipt.
   // Fetched on mount and whenever the screen refocuses (so it updates after
   // the user returns from the swipe screen). `swipeQueueFetched` toggles
@@ -1025,6 +1029,10 @@ export default function ProcessReceiptScreen() {
     const after = postSwipeActionRef.current;
     postSwipeActionRef.current = null;
     setSwiping(false);
+    // The in-place phase changes no focus, so the focus-driven count refresh never
+    // fires — refetch NOW with the just-cast votes applied, or the "help recognise"
+    // button keeps advertising the pre-vote count and opens an empty queue.
+    if (swipingReceiptId != null) refreshSwipeQueueCount(swipingReceiptId);
     after?.();
   };
 
@@ -1596,54 +1604,52 @@ export default function ProcessReceiptScreen() {
     }, [receiptId])
   );
 
-  // Refresh the swipe-queue count every time the receipt screen regains
-  // focus (initial mount + returning from /receipt/swipe/[id]). Backend's
-  // filter already excludes votes this user has cast, so the count we get
-  // back IS exactly "cards remaining for this user".
+  // Fetch "cards remaining for this user on this receipt" from the server's
+  // voluntary-queue-count (the EXACT served-queue assembly — relatedTo-gated pools
+  // through capVoluntaryQueue + ≤5 Card-B resolve cards), so the badge equals what
+  // the swipe screen actually opens. A monotonically-increasing seq drops stale
+  // responses when two refreshes race (focus + post-swipe).
+  const swipeCountSeqRef = useRef(0);
+  const refreshSwipeQueueCount = useCallback((id: number) => {
+    const seq = ++swipeCountSeqRef.current;
+    const controller = new AbortController();
+    const abortTimer = setTimeout(() => controller.abort(), 5000);
+    (async () => {
+      try {
+        const userId = await getUserId();
+        const res = await fetch(
+          `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/voluntary-queue-count?receiptId=${encodeURIComponent(id)}`,
+          { signal: controller.signal }
+        );
+        clearTimeout(abortTimer);
+        if (!res.ok || seq !== swipeCountSeqRef.current) return;
+        const data = await res.json();
+        const count = Number.isFinite(data?.count) ? Number(data.count) : 0;
+        if (seq === swipeCountSeqRef.current) {
+          setSwipeQueueCount(count);
+          setSwipeQueueFetched(true);
+        }
+      } catch {
+        /* swallow — it's advisory UI */
+      }
+    })();
+  }, []);
+
+  // Refresh on focus (initial mount + returning from the /swipe/queue route).
   // Delayed 2 s so the comparison fetch (which drives the main loading state)
   // gets a head start and doesn't compete with this advisory query for DB
-  // pool connections.
+  // pool connections. NOTE: the in-place mandatory swipe phase does NOT change
+  // focus — that path refreshes via leaveSwipePhase instead (the stale-count
+  // bug: the pre-vote count survived the whole mandatory session and the button
+  // advertised cards the user had just consumed).
   useFocusEffect(
     useMemo(
       () => () => {
         if (!receiptId) return;
-        let cancelled = false;
-        let delayTimer: ReturnType<typeof setTimeout> | null = null;
-        delayTimer = setTimeout(() => {
-          const controller = new AbortController();
-          const abortTimer = setTimeout(() => controller.abort(), 5000);
-          (async () => {
-            try {
-              const userId = await getUserId();
-              // SINGLE SOURCE OF TRUTH: the server runs the EXACT served-queue
-              // assembly (relatedTo-gated receipt + global pools through
-              // capVoluntaryQueue, plus ≤5 prepended Card-B resolve cards) and
-              // returns the count — so the badge equals what the swipe screen
-              // actually opens. The old client-side count omitted the relatedTo
-              // gate AND the resolve cards, hence "advertises N → opens empty".
-              const res = await fetch(
-                `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/voluntary-queue-count?receiptId=${encodeURIComponent(receiptId)}`,
-                { signal: controller.signal }
-              );
-              clearTimeout(abortTimer);
-              if (!res.ok || cancelled) return;
-              const data = await res.json();
-              const count = Number.isFinite(data?.count) ? Number(data.count) : 0;
-              if (!cancelled) {
-                setSwipeQueueCount(count);
-                setSwipeQueueFetched(true);
-              }
-            } catch {
-              /* swallow — it's advisory UI */
-            }
-          })();
-        }, 2000);
-        return () => {
-          cancelled = true;
-          if (delayTimer) clearTimeout(delayTimer);
-        };
+        const delayTimer = setTimeout(() => refreshSwipeQueueCount(receiptId), 2000);
+        return () => clearTimeout(delayTimer);
       },
-      [receiptId]
+      [receiptId, refreshSwipeQueueCount]
     )
   );
 
@@ -1683,6 +1689,9 @@ export default function ProcessReceiptScreen() {
     if (header.matchLoading) return;
     setPostStatus("pending");
     setPostErr(null);
+    // Fresh POST attempt → any previous duplicate-resume photo gate is stale
+    // (this screen instance can be reused across scans).
+    resumedPhotoPresentRef.current = false;
     try {
       const userId = userIdRef.current ?? (await getUserId());
       userIdRef.current = userId;
@@ -1729,16 +1738,21 @@ export default function ProcessReceiptScreen() {
       // the Analize tab with a clear message — no half-state on this
       // screen, no sneaky nav to another receipt's view.
       if (res.status === 409) {
-        // SAME-ACCOUNT duplicate on a FRESH SCAN with the photo still in hand: this is
-        // almost always the abort-then-retry case (receipt-238 — the first POST exceeded
-        // the client timeout, the server committed anyway, and the retry collided here).
-        // RESUME the pipeline against the existing row instead of bailing: setting
-        // receiptId lets the upload effect below recover the MISSING PHOTO (the abort
-        // killed the flow before the image step — the "photo not ready 404" crops), and
-        // pending mandatory swipes continue in-place exactly like a fresh create.
+        // SAME-ACCOUNT duplicate on a FRESH SCAN with the photo still in hand — but ONLY
+        // when the existing row is INCOMPLETE: the photo never landed (photoPending, the
+        // receipt-238 abort-then-retry shape) or mandatory swipes are still owed. That's
+        // a genuine recovery → RESUME the pipeline against the existing row (photo upload
+        // + swipe phase). A COMPLETE duplicate — photo present, nothing pending — is a
+        // deliberate re-scan of an already-uploaded receipt: resuming there silently
+        // OVERWROTE the stored photo with the new frame (user report, 2026-07-04); it now
+        // falls through to the honest "already uploaded" alert below.
         const existingId = Number(data?.existingReceiptId);
-        if (!data?.crossAccount && Number.isFinite(existingId) && existingId > 0 && imageUri) {
-          console.log(`[post] duplicate of r${existingId} — resuming pipeline against it (photo recovery + swipes)`);
+        const resumable = data?.photoPending === true || Number(data?.mandatorySwipesPending ?? 0) > 0;
+        if (!data?.crossAccount && resumable && Number.isFinite(existingId) && existingId > 0 && imageUri) {
+          // Swipes-only resume: the server photo EXISTS — the upload step must not
+          // replace it with this scan's frame (see the runUpload guard).
+          resumedPhotoPresentRef.current = data?.photoPending !== true;
+          console.log(`[post] duplicate of r${existingId} — resuming pipeline against it (photoPending=${data?.photoPending === true}, swipes=${Number(data?.mandatorySwipesPending ?? 0)})`);
           setReceiptId(existingId);
           setPostStatus("done");
           useReceiptQueueStore.getState().noteReceiptCreated(existingId);
@@ -1885,6 +1899,14 @@ export default function ProcessReceiptScreen() {
     // there is no legitimate existing-mode upload to preserve.
     if (isExistingMode) return;
     if (!imageUri || !receiptId) return;
+    // Duplicate RESUME where the server photo already exists (swipes-only recovery):
+    // uploading would overwrite the stored, already-redacted image with this scan's
+    // frame. The photo is only ever recovered when the 409 said photoPending.
+    if (resumedPhotoPresentRef.current) {
+      console.log("[upload] skipped — resumed duplicate already has its photo");
+      setUploadStatus("done");
+      return;
+    }
     setUploadStatus("pending");
     setUploadErr(null);
     try {
@@ -2953,14 +2975,15 @@ export default function ProcessReceiptScreen() {
         // '[•••]', keeping its coordinates + corners (geometry is what the dump is for; the
         // parser skips these words anyway). The line text `t` runs through the same
         // redactReceiptText used for rawText so a full number never lands in plaintext.
-        wordsDumpRef.current = mergedLines.map((l) => ({
+        // (LINE corner Ys `c` = the tilt data the de-skew consumes; without it the
+        // off-device reparse ran slope=0 and couldn't reproduce device parses. The
+        // builder is a closure so the PHASE-5 ensemble below can re-emit the dump
+        // from the WINNING engine's lines — a stored dump must reproduce the stored
+        // parse.)
+        const buildWordsDump = (ls: LineWithFrame[]) => ls.map((l) => ({
           t: redactReceiptText(l.text),
           x: [Math.round(l.xLeft), Math.round(l.xRight)],
           y: [Math.round(l.yTop), Math.round(l.yBottom)],
-          // LINE corner Ys [yLeftTop, yRightTop, yLeftBottom, yRightBottom] — the tilt
-          // data the parser's de-skew consumes. Without it the off-device reparse ran
-          // slope=0 and could NOT reproduce device parses (receipt-232's scramble was
-          // invisible offline until this was traced by hand). Absent → omitted.
           c: l.yLeftTop != null
             ? [Math.round(l.yLeftTop), Math.round(l.yRightTop ?? l.yTop), Math.round(l.yLeftBottom ?? l.yBottom), Math.round(l.yRightBottom ?? l.yBottom)]
             : undefined,
@@ -2968,11 +2991,11 @@ export default function ProcessReceiptScreen() {
             const pii = wordCentreInMaskBand(w, detectedMaskBands) || looksLikePiiText(w.text);
             return [
               pii ? "[•••]" : w.text, Math.round(w.xLeft), Math.round(w.xRight), Math.round(w.yTop), Math.round(w.yBottom),
-              // Element corners [TLx,TLy, TRx,TRy, BRx,BRy, BLx,BLy] (or undefined) — kept even when redacted.
-              w.cornerPoints?.length ? w.cornerPoints.flatMap((p) => [Math.round(p.x), Math.round(p.y)]) : undefined,
+              w.cornerPoints?.length ? w.cornerPoints.flatMap((pt) => [Math.round(pt.x), Math.round(pt.y)]) : undefined,
             ];
           }),
         }));
+        wordsDumpRef.current = buildWordsDump(mergedLines);
         wordsSrcRef.current = "scan";
 
         let parsed = parseIkiReceipt(mergedLines);
@@ -2981,6 +3004,44 @@ export default function ProcessReceiptScreen() {
           `date=${parsed.footer.date}, receiptNo=${parsed.footer.receiptNo}`,
         );
         logParsedReview('IKI', parsed);
+
+        // ── PHASE-5 ENSEMBLE (iOS): Apple Vision is the primary reader; ML Kit is the
+        // second opinion. The two engines misread DIFFERENTLY, so when Vision's parse
+        // fails SELF-VERIFICATION (doesn't reconcile, or left phantom/priceless lines),
+        // re-read the same image with ML Kit and let the receipt's own arithmetic pick
+        // the better result. Runs ONLY on flagged parses (the happy path pays nothing);
+        // both engines report in source-image pixels, so bands/masks stay valid either
+        // way. Android's counterpart is the strip re-OCR pass below. ──
+        const parseQuality = (r: any): number => {
+          let q = 0;
+          if (r?.footer?.reconciled) q += 100;
+          const prods = r?.products ?? [];
+          q += Math.min(prods.length, 30);
+          q -= prods.filter((pp: any) => !pp.name || pp.name === '?').length * 8;
+          q -= prods.filter((pp: any) => !(pp.price > 0)).length * 5;
+          if (!r?.footer?.reconciled && Number.isFinite(r?.footer?.reconDelta)) {
+            q -= Math.min(30, Math.abs(r.footer.reconDelta) * 10);
+          }
+          if (r?.footer?.total == null) q -= 20;
+          return q;
+        };
+        const flagged = !parsed.footer.reconciled ||
+          parsed.products.some((pp: any) => !pp.name || pp.name === '?' || !(pp.price > 0));
+        if (Platform.OS === 'ios' && flagged && imageUris.length > 0) {
+          try {
+            const t0 = Date.now();
+            const second = await ocrReceiptPages(imageUris, 'mlkit');
+            const parsed2 = parseIkiReceipt(second.mergedLines as any);
+            const q1 = parseQuality(parsed), q2 = parseQuality(parsed2);
+            console.log(`[ensemble] vision=${q1} mlkit=${q2} (${Date.now() - t0}ms) → keeping ${q2 > q1 ? 'ML KIT' : 'vision'}`);
+            if (q2 > q1) {
+              parsed = parsed2 as typeof parsed;
+              wordsDumpRef.current = buildWordsDump(second.mergedLines as any);
+            }
+          } catch (e) {
+            console.log('[ensemble] second opinion failed (kept vision):', e);
+          }
+        }
         if (!(await ensureHasProducts(parsed.products, 'IKI'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         // WHOLE-SECTION PRODUCT re-OCR (flagged, Android only): when a product is a suspect
@@ -3040,6 +3101,35 @@ export default function ProcessReceiptScreen() {
     }
   };
 
+  // Resolve a store from the OCR address. Tries the parser's header-zone `storeAddress`
+  // FIRST, then the broader raw-text street scan (`pickAddressFromRawText`, the SAME
+  // extraction the map prefill uses) — a degraded header can leave `storeAddress` empty
+  // even when the street is legible elsewhere in the OCR, and we were then showing the map
+  // for a store that is an exact DB match (receipt-293 "Lyros g. 19A-1, Šiauliai"). Deduped
+  // so the endpoint isn't hit twice with the same string. Returns null → caller shows the map.
+  const resolveStoreMatch = async (
+    chainId: number,
+    storeAddress: string | null | undefined,
+    rawText: string | null | undefined,
+  ): Promise<{ storeId: number; storeName: string | null; address: string | null; confidence: number | null } | null> => {
+    const candidates = Array.from(new Set(
+      [(storeAddress ?? '').trim(), (pickAddressFromRawText(rawText) ?? '').trim()].filter(Boolean),
+    ));
+    for (const addr of candidates) {
+      try {
+        const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(addr)}`;
+        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
+        const data = await res.json();
+        if (data?.match) {
+          return { storeId: data.match.storeId, storeName: data.match.storeName, address: data.match.address, confidence: data.match.confidence };
+        }
+      } catch (e) {
+        console.warn('Store match failed:', e);
+      }
+    }
+    return null;
+  };
+
   // The store address didn't auto-match — send the user to the map
   // store-resolution screen (chain known, store not) and await their pick.
   // null = user backed out (caller bails as store_unrecognized).
@@ -3080,20 +3170,10 @@ export default function ProcessReceiptScreen() {
     let storeAddressMatched: string | null = null;
     let matchConfidence: number | null = null;
 
-    if (rHeader.storeAddress) {
-      try {
-        const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(rHeader.storeAddress)}`;
-        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
-        const data = await res.json();
-        if (data?.match) {
-          storeId = data.match.storeId;
-          storeName = data.match.storeName;
-          storeAddressMatched = data.match.address;
-          matchConfidence = data.match.confidence;
-        }
-      } catch (e) {
-        console.warn("Store match failed:", e);
-      }
+    {
+      // Header address first, raw-text street fallback second (see resolveStoreMatch).
+      const m = await resolveStoreMatch(chainId, rHeader.storeAddress, rHeader.rawText);
+      if (m) { storeId = m.storeId; storeName = m.storeName; storeAddressMatched = m.address; matchConfidence = m.confidence; }
     }
 
     // Bail if store couldn't be identified — no Receipt row is created
@@ -3260,20 +3340,10 @@ export default function ProcessReceiptScreen() {
     let storeAddressMatched: string | null = null;
     let matchConfidence: number | null = null;
 
-    if (mHeader.storeAddress) {
-      try {
-        const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(mHeader.storeAddress)}`;
-        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
-        const data = await res.json();
-        if (data?.match) {
-          storeId = data.match.storeId;
-          storeName = data.match.storeName;
-          storeAddressMatched = data.match.address;
-          matchConfidence = data.match.confidence;
-        }
-      } catch (e) {
-        console.warn("Store match failed:", e);
-      }
+    {
+      // Header address first, raw-text street fallback second (see resolveStoreMatch).
+      const m = await resolveStoreMatch(chainId, mHeader.storeAddress, mHeader.rawText);
+      if (m) { storeId = m.storeId; storeName = m.storeName; storeAddressMatched = m.address; matchConfidence = m.confidence; }
     }
 
     if (storeId === null) {
@@ -3402,21 +3472,11 @@ export default function ProcessReceiptScreen() {
       );
     }
 
-    if (nHeader.storeAddress) {
-      try {
-        const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(nHeader.storeAddress)}`;
-        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
-        const data = await res.json();
-        if (__DEV__) console.log("[Norfa] match response:", JSON.stringify(data));
-        if (data?.match) {
-          storeId = data.match.storeId;
-          storeName = data.match.storeName;
-          storeAddressMatched = data.match.address;
-          matchConfidence = data.match.confidence;
-        }
-      } catch (e) {
-        console.warn("Store match failed:", e);
-      }
+    {
+      // Header address first, raw-text street fallback second (see resolveStoreMatch).
+      const m = await resolveStoreMatch(chainId, nHeader.storeAddress, nHeader.rawText);
+      if (__DEV__) console.log("[Norfa] match response:", JSON.stringify(m));
+      if (m) { storeId = m.storeId; storeName = m.storeName; storeAddressMatched = m.address; matchConfidence = m.confidence; }
     }
 
     if (storeId === null) {
@@ -3540,20 +3600,10 @@ export default function ProcessReceiptScreen() {
     let storeAddressMatched: string | null = null;
     let matchConfidence: number | null = null;
 
-    if (lHeader.storeAddress) {
-      try {
-        const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(lHeader.storeAddress)}`;
-        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
-        const data = await res.json();
-        if (data?.match) {
-          storeId = data.match.storeId;
-          storeName = data.match.storeName;
-          storeAddressMatched = data.match.address;
-          matchConfidence = data.match.confidence;
-        }
-      } catch (e) {
-        console.warn("Store match failed:", e);
-      }
+    {
+      // Header address first, raw-text street fallback second (see resolveStoreMatch).
+      const m = await resolveStoreMatch(chainId, lHeader.storeAddress, lHeader.rawText);
+      if (m) { storeId = m.storeId; storeName = m.storeName; storeAddressMatched = m.address; matchConfidence = m.confidence; }
     }
 
     if (storeId === null) {
@@ -3673,20 +3723,10 @@ export default function ProcessReceiptScreen() {
     let storeAddressMatched: string | null = null;
     let matchConfidence: number | null = null;
 
-    if (iHeader.storeAddress) {
-      try {
-        const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(iHeader.storeAddress)}`;
-        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
-        const data = await res.json();
-        if (data?.match) {
-          storeId = data.match.storeId;
-          storeName = data.match.storeName;
-          storeAddressMatched = data.match.address;
-          matchConfidence = data.match.confidence;
-        }
-      } catch (e) {
-        console.warn("Store match failed:", e);
-      }
+    {
+      // Header address first, raw-text street fallback second (see resolveStoreMatch).
+      const m = await resolveStoreMatch(chainId, iHeader.storeAddress, iHeader.rawText);
+      if (m) { storeId = m.storeId; storeName = m.storeName; storeAddressMatched = m.address; matchConfidence = m.confidence; }
     }
 
     if (storeId === null) {
@@ -3702,6 +3742,14 @@ export default function ProcessReceiptScreen() {
       storeName = chosen.storeName;
       storeAddressMatched = chosen.storeAddress;
       matchConfidence = 1;
+      // MANUAL pick ⇒ the OCR address was wrong or absent — its band is noise at
+      // best and lands on a PRODUCT row at worst (receipt-297: the degraded header
+      // made "0,65 AKVILE GAZ" the "address" and banded the product's line as
+      // header). The user-picked store is the truth now; drop the address band
+      // from display AND the persisted blob (buildParsedData reads header state).
+      iHeader.lineRegions = (iHeader.lineRegions ?? []).filter(
+        (r: any) => r?.kind !== 'storeAddress',
+      );
     }
 
     setHeader({
@@ -3887,6 +3935,12 @@ export default function ProcessReceiptScreen() {
     return !regions.some((r) => typeof (r as { kind?: string }).kind === 'string');
   };
   useEffect(() => {
+    // ONLY for receipts loaded from storage. A fresh scan / re-OCR session just ran
+    // the authoritative parse — re-OCRing it again is pure waste, and when the header
+    // is GENUINELY unreadable its lineRegions are legitimately EMPTY (receipt-297),
+    // which sectionNeedsRehydration reads as "needs work" → the effect fired on the
+    // fresh scan and (via the local-file path) consumed the session's source image.
+    if (!isExistingMode) return;
     if (regionRehydrationTriedRef.current === receiptId) return;
     if (!imageUri) return;
     if (!receiptId) return;
@@ -3993,7 +4047,7 @@ export default function ProcessReceiptScreen() {
         footerLineRegions: footerAdopted ? result.footerLineRegions : [],
       });
     })();
-  }, [imageUri, receiptId, header, footer]);
+  }, [imageUri, receiptId, header, footer, isExistingMode]);
 
   // C5 pull-down gesture was removed (Android default ScrollView doesn't
   // surface negative scroll offsets, so the iOS-only bounce mechanic
@@ -4170,15 +4224,14 @@ export default function ProcessReceiptScreen() {
           }}
         />
 
-        {/* Swipe-to-help entry point. Hidden when the queue is fully
-            drained (swipeQueueFetched && swipeQueueCount === 0) so the
-            CTA doesn't lie to users who already did the work. While the
-            count is still loading (first 2 s after focus, see swipe-
-            queue fetch), render optimistically — if the receipt actually
-            has no work, the card disappears on its own once the fetch
-            lands. Preview mode never persists, so the CTA isn't shown
-            there either. */}
-        {receiptId && (!swipeQueueFetched || swipeQueueCount > 0) && (
+        {/* Swipe-to-help entry point. CONFIRMED-ONLY: rendered only once the
+            server count has landed AND is > 0 — never optimistically. The
+            optimistic render advertised cards that the just-finished mandatory
+            session had consumed ("says 3 cards → opens empty → disappears"),
+            which reads as a lying button (user report, 2026-07-04). Appearing
+            ~2 s later but honest beats instant but wrong. Preview mode never
+            persists, so the CTA isn't shown there either. */}
+        {receiptId && swipeQueueFetched && swipeQueueCount > 0 && (
           <TouchableOpacity
             style={styles.swipeEntryCard}
             activeOpacity={0.85}
@@ -4198,9 +4251,7 @@ export default function ProcessReceiptScreen() {
             <View style={{ flex: 1 }}>
               <Text style={styles.swipeEntryCta}>{t('receiptProcess.swipeEntryCta')}</Text>
               <Text style={styles.swipeEntryCount}>
-                {swipeQueueFetched && swipeQueueCount > 0
-                  ? t('receiptProcess.swipeEntryCount', { count: swipeQueueCount })
-                  : t('receiptProcess.swipeEntryShort')}
+                {t('receiptProcess.swipeEntryCount', { count: swipeQueueCount })}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={22} color={colors.onPrimary} />
@@ -4548,7 +4599,13 @@ export default function ProcessReceiptScreen() {
               imageDims={imageDims}
               loading={imageLoading}
               headerRegions={
-                header?.lineRegions && header.lineRegions.length > 0
+                // ARRAY-PRESENCE semantics: an array that EXISTS but is empty means the
+                // parse (or the manual-pick strip) decided there is nothing to band —
+                // show nothing. Only a MISSING array (legacy receipts) falls back to the
+                // block-union region; that fallback used to kick in after the manual-pick
+                // strip emptied lineRegions and drew ONE band across the whole header
+                // (address + company code — receipt-302).
+                Array.isArray(header?.lineRegions)
                   ? header.lineRegions
                   : header?.region
                   ? [header.region]

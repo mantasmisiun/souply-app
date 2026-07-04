@@ -14,8 +14,16 @@ import { makeOcrVariants, preprocessAvailable } from './imagePreprocess';
 // if the module were somehow absent it degrades to ML Kit rather than crash.
 type MlkitResult = Awaited<ReturnType<typeof TextRecognition.recognize>>;
 
-async function recognizeText(uri: string): Promise<MlkitResult> {
-    if (Platform.OS === 'ios' && visionOcrAvailable()) {
+/** Which recognizer reads the pixels. 'auto' = the platform primary (iOS: Apple
+ *  Vision when the module is present; Android: ML Kit). 'mlkit' forces ML Kit —
+ *  the PHASE-5 second opinion on iOS: the two engines misread DIFFERENTLY, so a
+ *  parse that fails self-verification under Vision gets re-read by ML Kit and the
+ *  receipt's own arithmetic picks the better result (see receipt-process). */
+export type OcrEngine = 'auto' | 'vision' | 'mlkit';
+
+async function recognizeText(uri: string, engine: OcrEngine = 'auto'): Promise<MlkitResult> {
+    const wantVision = engine === 'vision' || (engine === 'auto' && Platform.OS === 'ios');
+    if (wantVision && visionOcrAvailable()) {
         return (await visionRecognize(uri)) as unknown as MlkitResult;
     }
     return TextRecognition.recognize(uri);
@@ -220,8 +228,8 @@ const FUSION_UPSCALE_TARGET = 2600;
  * Vision) — so it can never regress the happy path. THIS is the funnel the
  * pipeline calls.
  */
-export async function ocrImageEnhanced(uri: string): Promise<OcrResult> {
-    const base = await ocrImageTiled(uri);
+export async function ocrImageEnhanced(uri: string, engine: OcrEngine = 'auto'): Promise<OcrResult> {
+    const base = await ocrImageTiled(uri, engine);
     if (Platform.OS !== 'android' || !isDegradedOcr(base)) return base;
 
     const variants: OcrResult[] = [];
@@ -235,14 +243,14 @@ export async function ocrImageEnhanced(uri: string): Promise<OcrResult> {
                 [{ resize: { width: Math.round(base.pixelWidth * factor) } }],
                 { compress: 0.95, format: ImageManipulator.SaveFormat.JPEG },
             );
-            variants.push(scaleLinesToWidth(await ocrImageTiled(up.uri), base.pixelWidth));
+            variants.push(scaleLinesToWidth(await ocrImageTiled(up.uri, engine), base.pixelWidth));
         } catch { /* skip — recovery is best-effort */ }
     }
 
     // (2) Skia destain/contrast (same dims as base) — present only after the build.
     if (preprocessAvailable()) {
         for (const v of await makeOcrVariants(uri)) {
-            try { variants.push(await ocrImageTiled(v)); } catch { /* skip */ }
+            try { variants.push(await ocrImageTiled(v, engine)); } catch { /* skip */ }
         }
     }
 
@@ -256,7 +264,7 @@ export async function ocrImageEnhanced(uri: string): Promise<OcrResult> {
     return fused;
 }
 
-export async function ocrImageTiled(uri: string): Promise<OcrResult> {
+export async function ocrImageTiled(uri: string, engine: OcrEngine = 'auto'): Promise<OcrResult> {
     // Probe true pixel dims via ImageManipulator — NOT Image.getSize.
     // On Android, Image.getSize goes through BitmapFactory which auto-
     // downsamples tall bitmaps (a 1080×4885 receipt photo can come
@@ -344,7 +352,7 @@ export async function ocrImageTiled(uri: string): Promise<OcrResult> {
     // Short image — single-shot path matches the legacy pipeline so
     // existing parser/RegionPreview math stays valid.
     if (workingHeight <= TILING_THRESHOLD) {
-        const res = await runMlkitOnUri(srcUri, 0, workingWidth, workingHeight);
+        const res = await runMlkitOnUri(srcUri, 0, workingWidth, workingHeight, engine);
         const remapped = res.lines.map(remap);
         // Parsers assume y-sorted lines (findHeaderEnd scans the first
         // ~20 entries for `#NNNNN` / `Kvitas N/N` markers). MLKit returns
@@ -411,7 +419,7 @@ export async function ocrImageTiled(uri: string): Promise<OcrResult> {
                     format: ImageManipulator.SaveFormat.JPEG,
                 },
             );
-            return runMlkitOnUri(tile.uri, yStart, tile.width, tile.height);
+            return runMlkitOnUri(tile.uri, yStart, tile.width, tile.height, engine);
         }),
     );
 
@@ -468,8 +476,9 @@ async function runMlkitOnUri(
     yOffset: number,
     refWidth: number,
     refHeight: number,
+    engine: OcrEngine = 'auto',
 ): Promise<RawOcrResult> {
-    const pageResult = await recognizeText(uri);
+    const pageResult = await recognizeText(uri, engine);
 
     let mlkitMaxX = 0;
     let mlkitMaxY = 0;
