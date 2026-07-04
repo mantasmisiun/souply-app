@@ -1,16 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, StyleSheet } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MapView, { type Region } from 'react-native-maps';
 import { useTranslation } from 'react-i18next';
-import { useTheme, spacing, type AppTheme } from '../../constants/theme';
-import { ScreenHeading } from '../ScreenHeading';
+import { useTheme, type AppTheme } from '../../constants/theme';
 import { GlassIconButton } from '../GlassIconButton';
 import { MapPickerScaffold } from '../map/MapPickerScaffold';
 import {
     useBakedPills, useBakedClusters, MapPillMarker, MapClusterMarker,
     type MapPillSpec, type MapClusterSpec,
 } from '../map/MapPill';
+import { chainBadgeImage } from '../../utils/chainLogoAssets';
 import { geocodeAddress } from '../../utils/nominatim';
 import { tryGpsCoords, VILNIUS_FALLBACK } from '../../utils/location';
 import { getStoreResolutionRequest, completeStoreResolution } from '../../utils/storeResolution';
@@ -52,6 +51,15 @@ const addrLines = (address: string | null | undefined): string[] => {
 // Cluster bake identity — re-bakes when the count (or big threshold) changes.
 const clusterKey = (c: Cluster): string => `c-${c.id}-${c.count}`;
 
+// STABLE cluster identity for the React marker key: the smallest store id in the
+// bucket. Unique per render (buckets partition the stores) and survives zoom, unlike
+// the grid-cell id (cell size scales with longitudeDelta, so cell keys change on any
+// zoom). Keying markers by cell+count remounted every bubble on each region settle —
+// and those remove+insert storms are what hit the iOS AIRMap interop crash
+// (NSRangeException in insertReactSubview, crash log 2026-07-04; the native clamp
+// patch in patches/react-native-maps is the belt to this suspender).
+const clusterStableId = (c: Cluster): number => Math.min(...c.pointIds);
+
 /**
  * Recoverable `store_unrecognized` fallback, as an in-flow MODAL overlay (was the
  * separate `/receipt/store-resolution` route). The chain is known (logo shown, fixed)
@@ -65,7 +73,6 @@ const clusterKey = (c: Cluster): string => `c-${c.id}-${c.count}`;
 export function StoreResolutionOverlay() {
     const colors = useTheme();
     const { t } = useTranslation();
-    const insets = useSafeAreaInsets();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const mapRef = useRef<MapView>(null);
 
@@ -78,6 +85,15 @@ export function StoreResolutionOverlay() {
     // Gates the white-map cover + the off-screen bake burst until the native map's first
     // paint, so map init / Modal slide / view-shot captures don't all contend at once.
     const [mapReady, setMapReady] = useState(false);
+    // Gates ALL markers until the opening animateToRegion has settled. Mounting them for
+    // the initial (Vilnius) region and then re-clustering for the geocoded target swapped
+    // the whole marker set in one mount transaction — on iOS that remove+insert batch hits
+    // the unpatched AIRMap interop index crash the moment the map opens (2nd .ips,
+    // 2026-07-04; the react-native-maps patch closes it natively on the next build).
+    // Until `centered`, the map shows bare tiles — the first marker mount is then a single
+    // clean set computed for the FINAL viewport.
+    const [centered, setCentered] = useState(false);
+    const centerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
     const initialRegion: Region = {
         latitude: VILNIUS_FALLBACK.lat,
@@ -123,9 +139,14 @@ export function StoreResolutionOverlay() {
                     { latitude: c.lat, longitude: c.lng, latitudeDelta: delta, longitudeDelta: delta },
                     600,
                 );
+                // Markers stay unmounted until this centering settles (see `centered`).
+                // Seed the region to the TARGET so the first mounted marker set is
+                // computed for the final viewport even if onRegionChangeComplete lags.
+                setRegion({ latitude: c.lat, longitude: c.lng, latitudeDelta: delta, longitudeDelta: delta });
+                centerTimer.current = setTimeout(() => setCentered(true), 750);
             }
         })();
-        return () => { cancelled = true; };
+        return () => { cancelled = true; if (centerTimer.current) clearTimeout(centerTimer.current); };
     }, [req]);
 
     // Dismissed without confirming → cancel the handoff so the pipeline doesn't hang.
@@ -137,12 +158,18 @@ export function StoreResolutionOverlay() {
     const handleMapReady = useCallback(() => setMapReady(true), []);
     useEffect(() => {
         const t = setTimeout(() => setMapReady(true), 2500);
-        return () => clearTimeout(t);
+        // Backstop for `centered` too: a hung geocode/GPS lookup must not leave the
+        // map permanently marker-less.
+        const c = setTimeout(() => setCentered(true), 4000);
+        return () => { clearTimeout(t); clearTimeout(c); };
     }, []);
 
-    // A single animateToRegion emits onRegionChangeComplete several times on Android; ignore
-    // near-identical regions so one settle triggers at most one re-cluster + re-bake (kills the
-    // zoom/typing jank). The epsilon is far below the cluster→singles threshold (0.045).
+    // Re-cluster as the viewport settles (this is what makes bubbles collapse when you
+    // zoom out and resolve into address pills when you zoom in). A single animateToRegion
+    // emits several onRegionChangeComplete events; ignore near-identical regions so one
+    // settle triggers at most one re-cluster + re-bake (kills the zoom/typing jank). The
+    // marker churn this drives is crash-safe on iOS via the AIRMap insert-clamp patch
+    // (patches/react-native-maps) — needs the native build to be present.
     const handleRegionChange = useCallback((r: Region) => {
         setRegion((prev) =>
             Math.abs(r.latitude - prev.latitude) < 1e-4 &&
@@ -216,19 +243,27 @@ export function StoreResolutionOverlay() {
         [clusters],
     );
     const { uriFor: clusterUriFor, bakery: clusterBakery } = useBakedClusters(clusterSpecs);
+    // Keep the last baked image per STABLE cluster id so a re-cluster shows the previous
+    // bubble instead of a blank while the new count re-bakes; chain badge is the
+    // pre-first-bake fallback. Both keep the marker mounted (image swaps in place — safe +
+    // correctly sized under the AIRMapMarker CGSizeZero patch) instead of flickering null.
+    const lastClusterUriRef = useRef<Map<number, string>>(new Map());
+    const chainBadge = req ? chainBadgeImage(req.chainId) : null;
 
     if (!req) return null;
 
     return (
         <View style={styles.root}>
-            {/* Back chevron (left) + the same ScreenHeading title band as every other screen.
-                The nav row reserves the status-bar inset (bar-less modal). The chevron dismisses
-                the overlay — same handoff the old close (X) used. */}
-            <View style={[styles.navBar, { paddingTop: insets.top + 4 }]}>
-                <GlassIconButton icon="chevron-back" onPress={() => completeStoreResolution(null)} size={24} />
-            </View>
-            <ScreenHeading title={t('storeResolution.title')} />
+            {/* Full-bleed map with floating liquid-glass chrome: the back chevron, the
+                "Pick the store" title chip and the search all float over the map at the
+                top; the confirm pill floats at the bottom and appears only once a store
+                is tapped. No opaque header bar — the map runs edge to edge. */}
             <MapPickerScaffold
+                glassChrome
+                headerLeft={
+                    <GlassIconButton icon="chevron-back" glass onPress={() => completeStoreResolution(null)} size={22} />
+                }
+                title={t('storeResolution.title')}
                 mapRef={mapRef}
                 initialRegion={initialRegion}
                 onMapReady={handleMapReady}
@@ -244,19 +279,34 @@ export function StoreResolutionOverlay() {
                 confirmEnabled={selectedId != null}
                 onConfirm={onConfirm}
                 mapChildren={
-                    <>
-                        {clusters.map((c) => (
-                            <MapClusterMarker
-                                key={clusterKey(c)}
-                                coordinate={{ latitude: c.latitude, longitude: c.longitude }}
-                                pillUri={clusterUriFor(clusterKey(c))}
-                                zIndex={1}
-                                onPress={() => onClusterPress(c)}
-                            />
-                        ))}
+                    !centered ? null : <>
+                        {/* Markers show the chain badge immediately, then swap to the baked
+                            address pill in place. Two native fixes make this both correct and
+                            crash-safe (present on the build with patches/react-native-maps):
+                             • AIRMapMarker CGSizeZero → the badge→pill swap decodes at natural
+                               size (no "tiny pills"); and
+                             • AIRMap insert-clamp → the cluster↔single churn on zoom no longer
+                               aborts in insertReactSubview.
+                            Cluster keys use the STABLE min-store-id (not the count) so a count
+                            change swaps the image in place rather than remounting. */}
+                        {clusters.map((c) => {
+                            const sid = clusterStableId(c);
+                            const uri = clusterUriFor(clusterKey(c));
+                            if (uri) lastClusterUriRef.current.set(sid, uri);
+                            return (
+                                <MapClusterMarker
+                                    key={`c-${sid}`}
+                                    coordinate={{ latitude: c.latitude, longitude: c.longitude }}
+                                    pillUri={uri ?? lastClusterUriRef.current.get(sid)}
+                                    fallback={chainBadge ?? undefined}
+                                    zIndex={1}
+                                    onPress={() => onClusterPress(c)}
+                                />
+                            );
+                        })}
                         {singles.map((s) => (
                             <MapPillMarker
-                                key={`s-${s.id}|n`}
+                                key={`s-${s.id}`}
                                 coordinate={{ latitude: s.latitude, longitude: s.longitude }}
                                 chainId={req.chainId}
                                 pillUri={uriFor(`${s.id}|n`)}
@@ -266,7 +316,7 @@ export function StoreResolutionOverlay() {
                         ))}
                         {selectedStore && (
                             <MapPillMarker
-                                key={`sel-${selectedStore.id}|s`}
+                                key={`sel-${selectedStore.id}`}
                                 coordinate={{ latitude: selectedStore.latitude, longitude: selectedStore.longitude }}
                                 chainId={req.chainId}
                                 pillUri={uriFor(`${selectedStore.id}|s`)}
@@ -285,11 +335,9 @@ export function StoreResolutionOverlay() {
     );
 }
 
-const makeStyles = (c: AppTheme) =>
+const makeStyles = (_c: AppTheme) =>
     StyleSheet.create({
-        root: { flex: 1, backgroundColor: c.pageBackground },
-        // Nav row holding the back chevron (left). Same cardBackground as the ScreenHeading
-        // band below it (and every other screen's header), so the chevron sits on the lighter
-        // header surface instead of the dark page background. paddingTop (inset) applied inline.
-        navBar: { flexDirection: 'row', paddingHorizontal: spacing.sm, paddingBottom: spacing.xs, backgroundColor: c.cardBackground },
+        // Full-bleed: the map fills the whole surface; all chrome floats over it
+        // (glass back chevron + title chip + search up top, confirm pill at the bottom).
+        root: { flex: 1 },
     });

@@ -15,6 +15,7 @@ import MapView, { type Region } from 'react-native-maps';
 import { DARK_MAP_STYLE } from '../../constants/darkMapStyle';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { LiquidGlass } from '../LiquidGlass';
 import { useTheme, useResolvedScheme, spacing, radius, typography, elevation, type AppTheme } from '../../constants/theme';
 
 /**
@@ -56,12 +57,25 @@ export interface MapPickerScaffoldProps {
     mapChildren?: ReactNode;
     /** Absolute overlay over the map (centre pin, hint bar, header chip…). */
     overlay?: ReactNode;
+
+    /**
+     * Full-bleed map with FLOATING LIQUID-GLASS chrome (store-resolution screen):
+     * the map fills the whole surface; a back button + title + search float in a
+     * glass cluster at the top, and the confirm button floats at the bottom with
+     * NO panel behind it, appearing only once `confirmEnabled`. Off (default) keeps
+     * the classic header-strip + solid bottom-panel layout (the location picker).
+     */
+    glassChrome?: boolean;
+    /** Glass-chrome only: floating top-left control (e.g. a glass back chevron). */
+    headerLeft?: ReactNode;
+    /** Glass-chrome only: the screen title, shown in a see-through glass chip. */
+    title?: string;
 }
 
 export function MapPickerScaffold(props: MapPickerScaffoldProps) {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const { bottom: bottomInset } = useSafeAreaInsets();
+    const { bottom: bottomInset, top: topInset } = useSafeAreaInsets();
     const isDark = useResolvedScheme() === 'dark';
 
     const mapBlock = (
@@ -119,6 +133,65 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
             </TouchableOpacity>
         </View>
     );
+
+    // FULL-BLEED GLASS CHROME (store-resolution): the map fills the whole surface;
+    // a glass cluster (back chevron + title chip + glass search) floats at the top and
+    // the confirm pill floats at the bottom with no panel, only once a store is picked.
+    if (props.glassChrome) {
+        const glassSearch = (
+            <LiquidGlass fallback="blur" style={styles.glassSearchWrap}>
+                <View style={styles.glassSearchInner}>
+                    <Ionicons name="search" size={20} color={colors.textSecondary} />
+                    <TextInput
+                        style={styles.searchInput}
+                        value={props.searchText}
+                        onChangeText={props.onSearchTextChange}
+                        placeholder={props.searchPlaceholder}
+                        placeholderTextColor={colors.textMuted}
+                        returnKeyType="search"
+                        onSubmitEditing={props.onSearch}
+                    />
+                    {props.searching && <MaterialProgress size="small" color={colors.primary} />}
+                </View>
+            </LiquidGlass>
+        );
+        return (
+            <View style={styles.root}>
+                {mapBlock}
+                {/* Floating top cluster — reserves the status-bar inset itself. */}
+                <View style={[styles.glassTop, { top: topInset + spacing.sm }]} pointerEvents="box-none">
+                    <View style={styles.glassTopRow} pointerEvents="box-none">
+                        {props.headerLeft}
+                        {props.title != null && (
+                            <LiquidGlass fallback="blur" style={styles.titleChip}>
+                                <Text style={styles.titleChipText} numberOfLines={1}>{props.title}</Text>
+                            </LiquidGlass>
+                        )}
+                    </View>
+                    {glassSearch}
+                    {props.searchError && (
+                        <View style={styles.errorBubble}>
+                            <Text style={styles.errorText}>{props.searchError}</Text>
+                        </View>
+                    )}
+                </View>
+                {/* Confirm floats over the map, no panel, only when a store is picked. */}
+                {props.confirmEnabled && (
+                    <View style={[styles.confirmFloat, { paddingBottom: Math.max(bottomInset, 16) }]} pointerEvents="box-none">
+                        <TouchableOpacity
+                            style={[styles.confirmBtn, styles.confirmBtnFloating, props.confirmLoading && styles.btnDisabled]}
+                            onPress={props.onConfirm}
+                            disabled={props.confirmLoading}
+                        >
+                            {props.confirmLoading
+                                ? <MaterialProgress color={colors.onPrimary} />
+                                : <Text style={styles.confirmBtnText}>{props.confirmLabel}</Text>}
+                        </TouchableOpacity>
+                    </View>
+                )}
+            </View>
+        );
+    }
 
     if (Platform.OS === 'ios') {
         return (
@@ -182,4 +255,32 @@ const makeStyles = (c: AppTheme) =>
         confirmBtn: { backgroundColor: c.primary, borderRadius: radius.pill, paddingVertical: spacing.md, alignItems: 'center' },
         btnDisabled: { opacity: 0.5 },
         confirmBtnText: { ...typography.bodyStrong, fontWeight: '700', color: c.onPrimary },
+
+        // ── Glass-chrome (full-bleed map + floating liquid-glass controls) ──
+        glassTop: {
+            position: 'absolute', left: spacing.md, right: spacing.md, zIndex: 10,
+            gap: spacing.sm,
+        },
+        glassTopRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+        // See-through glass title chip next to the back chevron.
+        titleChip: {
+            flex: 1, overflow: 'hidden', borderRadius: radius.pill,
+            borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)',
+            paddingHorizontal: spacing.lg, height: 40, justifyContent: 'center',
+        },
+        titleChipText: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
+        // Glass search field floating below the title row.
+        glassSearchWrap: {
+            overflow: 'hidden', borderRadius: radius.lg, height: 48,
+            borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)',
+        },
+        glassSearchInner: {
+            flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+            paddingHorizontal: spacing.lg,
+        },
+        // Confirm pill floating over the map (no panel behind it).
+        confirmFloat: {
+            position: 'absolute', left: spacing.lg, right: spacing.lg, bottom: 0, zIndex: 10,
+        },
+        confirmBtnFloating: { ...elevation.level3 },
     });
