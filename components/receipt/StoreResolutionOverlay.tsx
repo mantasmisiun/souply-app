@@ -6,14 +6,12 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 import { GlassIconButton } from '../GlassIconButton';
 import { MapPickerScaffold } from '../map/MapPickerScaffold';
 import {
-    useBakedPills, useBakedClusters, MapPillMarker, MapClusterMarker,
-    type MapPillSpec, type MapClusterSpec,
+    useBakedPills, MapPillMarker,
+    type MapPillSpec,
 } from '../map/MapPill';
-import { chainBadgeImage } from '../../utils/chainLogoAssets';
 import { geocodeAddress } from '../../utils/nominatim';
 import { tryGpsCoords, VILNIUS_FALLBACK } from '../../utils/location';
 import { getStoreResolutionRequest, completeStoreResolution } from '../../utils/storeResolution';
-import { clusterByGrid, type Cluster, type GridRegion } from '../../utils/mapClustering';
 import { API_BASE_URL } from '../../config/api';
 
 interface ChainStore {
@@ -48,18 +46,6 @@ const addrLines = (address: string | null | undefined): string[] => {
     return m && m[1].trim() ? [m[1].trim(), m[2].trim()] : [s];
 };
 
-// Cluster bake identity — re-bakes when the count (or big threshold) changes.
-const clusterKey = (c: Cluster): string => `c-${c.id}-${c.count}`;
-
-// STABLE cluster identity for the React marker key: the smallest store id in the
-// bucket. Unique per render (buckets partition the stores) and survives zoom, unlike
-// the grid-cell id (cell size scales with longitudeDelta, so cell keys change on any
-// zoom). Keying markers by cell+count remounted every bubble on each region settle —
-// and those remove+insert storms are what hit the iOS AIRMap interop crash
-// (NSRangeException in insertReactSubview, crash log 2026-07-04; the native clamp
-// patch in patches/react-native-maps is the belt to this suspender).
-const clusterStableId = (c: Cluster): number => Math.min(...c.pointIds);
-
 /**
  * Recoverable `store_unrecognized` fallback, as an in-flow MODAL overlay (was the
  * separate `/receipt/store-resolution` route). The chain is known (logo shown, fixed)
@@ -67,8 +53,12 @@ const clusterStableId = (c: Cluster): number => Math.min(...c.pointIds);
  * chain's stores; Confirm (or close/dismiss) hands the result back to the awaiting receipt
  * pipeline via the storeResolution handoff (`completeStoreResolution`, which is idempotent).
  *
- * Store markers use the SAME logic as the results price map: clustered into count bubbles when
- * zoomed out, resolving into individual ADDRESS pills (street + number) as the user zooms in.
+ * Store markers are the N stores NEAREST the anchor (the receipt's address), drawn as
+ * address pills (street + number). The set is STABLE — it re-anchors only on open/search,
+ * never on pan/zoom — so dragging the map adds/removes no markers. That is deliberate: the
+ * unchecked AIRMap insertReactSubview crash only fires when the marker set churns mid-gesture
+ * (clustering did that on every zoom), so a stable set is crash-proof even on a build without
+ * the react-native-maps patch. Search re-anchors to look elsewhere.
  */
 export function StoreResolutionOverlay() {
     const colors = useTheme();
@@ -101,10 +91,9 @@ export function StoreResolutionOverlay() {
         latitudeDelta: DELTA,
         longitudeDelta: DELTA,
     };
-    // Current map viewport drives the grid clustering (handful of bubbles when zoomed out →
-    // individual pills as the user zooms into a city). Seeded from the initial fit, updated when
-    // the gesture settles.
-    const [region, setRegion] = useState<GridRegion>(initialRegion);
+    // Anchor for the NEAREST-N store set — updated ONLY on a deliberate recenter (open,
+    // search), never on pan/zoom, so the marker set is stable during gestures (see `nearest`).
+    const [anchor, setAnchor] = useState<{ lat: number; lng: number }>({ lat: VILNIUS_FALLBACK.lat, lng: VILNIUS_FALLBACK.lng });
 
     // Fetch the chain's stores + centre the map on the OCR address (else GPS/Vilnius).
     useEffect(() => {
@@ -139,10 +128,10 @@ export function StoreResolutionOverlay() {
                     { latitude: c.lat, longitude: c.lng, latitudeDelta: delta, longitudeDelta: delta },
                     600,
                 );
-                // Markers stay unmounted until this centering settles (see `centered`).
-                // Seed the region to the TARGET so the first mounted marker set is
-                // computed for the final viewport even if onRegionChangeComplete lags.
-                setRegion({ latitude: c.lat, longitude: c.lng, latitudeDelta: delta, longitudeDelta: delta });
+                // Markers stay unmounted until this centering settles (see `centered`), and
+                // the nearest-N set is anchored on the target — so the first (and only) mount
+                // is one clean batch of the stores nearest the receipt's address.
+                setAnchor({ lat: c.lat, lng: c.lng });
                 centerTimer.current = setTimeout(() => setCentered(true), 750);
             }
         })();
@@ -164,20 +153,9 @@ export function StoreResolutionOverlay() {
         return () => { clearTimeout(t); clearTimeout(c); };
     }, []);
 
-    // Re-cluster as the viewport settles (this is what makes bubbles collapse when you
-    // zoom out and resolve into address pills when you zoom in). A single animateToRegion
-    // emits several onRegionChangeComplete events; ignore near-identical regions so one
-    // settle triggers at most one re-cluster + re-bake (kills the zoom/typing jank). The
-    // marker churn this drives is crash-safe on iOS via the AIRMap insert-clamp patch
-    // (patches/react-native-maps) — needs the native build to be present.
-    const handleRegionChange = useCallback((r: Region) => {
-        setRegion((prev) =>
-            Math.abs(r.latitude - prev.latitude) < 1e-4 &&
-            Math.abs(r.longitude - prev.longitude) < 1e-4 &&
-            Math.abs(r.longitudeDelta - prev.longitudeDelta) < 1e-4
-                ? prev
-                : r);
-    }, []);
+    // Pan/zoom must NOT change the marker set (that churn is the crash). onRegionChangeComplete
+    // is a deliberate no-op; the set is re-anchored only on open + search.
+    const handleRegionChange = useCallback((_r: Region) => { /* frozen — see `anchor`/`nearest` */ }, []);
 
     const onSearch = useCallback(async () => {
         const q = searchText.trim();
@@ -191,6 +169,7 @@ export function StoreResolutionOverlay() {
             { latitude: r.lat, longitude: r.lng, latitudeDelta: CLOSE_DELTA, longitudeDelta: CLOSE_DELTA },
             600,
         );
+        setAnchor({ lat: r.lat, lng: r.lng }); // deliberate recenter → re-pick the nearest stores
     }, [searchText, t]);
 
     const onConfirm = useCallback(() => {
@@ -199,56 +178,40 @@ export function StoreResolutionOverlay() {
         completeStoreResolution({ storeId: s.id, storeName: s.name, storeAddress: s.address });
     }, [stores, selectedId]);
 
-    // Tap a cluster → zoom one step into it (thirds the visible span, recentred) — same gesture as
-    // the results map.
-    const onClusterPress = useCallback((c: Cluster) => {
-        mapRef.current?.animateToRegion({
-            latitude: c.latitude,
-            longitude: c.longitude,
-            latitudeDelta: Math.max(region.latitudeDelta / 3, 0.006),
-            longitudeDelta: Math.max(region.longitudeDelta / 3, 0.006),
-        }, 350);
-    }, [region.latitudeDelta, region.longitudeDelta]);
-
-    // The selected store is kept OUT of the clustering input + always drawn as its own pill, so the
-    // pick stays visible even when its neighbours collapse into a bubble at a lower zoom.
     const selectedStore = useMemo(() => stores.find((s) => s.id === selectedId) ?? null, [stores, selectedId]);
-    const { clusters, singles } = useMemo(
-        () => clusterByGrid(stores.filter((s) => s.id !== selectedId), region),
-        [stores, selectedId, region],
-    );
 
-    // Bake the visible address pills (street + number, two rows, chain logo) off-screen
-    // so the markers render a never-clipped native image — same baker as the price map.
+    // NEAREST-N, not clustering. The N stores closest to the frozen `anchor`. This set only
+    // changes when the anchor does (open / search) — NEVER on pan/zoom — so React adds or
+    // removes ZERO map children while you drag the map. That is the whole fix: the crash is
+    // an unchecked insert in AIRMap that only fires when the marker set churns during a
+    // Fabric mount transaction, and clustering churned it on every zoom. A stable set can't
+    // churn, so it can't crash — on ANY build, with or without the native patch. (The
+    // committed patch is still the belt for the price map + deliberate recenters.)
+    const NEAREST_N = 30;
+    const nearest = useMemo(() => {
+        if (!stores.length) return [];
+        const cosLat = Math.cos((anchor.lat * Math.PI) / 180);
+        const d2 = (s: ChainStore) => {
+            const dLat = s.latitude - anchor.lat;
+            const dLng = (s.longitude - anchor.lng) * cosLat;
+            return dLat * dLat + dLng * dLng;
+        };
+        return [...stores].sort((a, b) => d2(a) - d2(b)).slice(0, NEAREST_N);
+    }, [stores, anchor]);
+
+    // Bake the address pills (street + number, two rows, chain logo) off-screen so each
+    // marker renders a never-clipped native image.
     const pillSpecs = useMemo<MapPillSpec[]>(() => {
         if (!req) return [];
-        // Bake at most PILL_BAKE_CAP address pills at once — a zoomed-in search can yield
-        // up to ~160 singles (clusterByGrid stops clustering), and a captureRef per pill
-        // would flood native memory and crash. Beyond the cap, MapPillMarker falls back to
-        // the bare chain badge (still tappable → its pill bakes once selected).
-        const PILL_BAKE_CAP = 24;
-        const specs: MapPillSpec[] = singles.slice(0, PILL_BAKE_CAP).map((s) => ({
+        const specs: MapPillSpec[] = nearest.map((s) => ({
             key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral',
         }));
         if (selectedStore) {
             specs.push({ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' });
         }
         return specs;
-    }, [singles, selectedStore, req]);
+    }, [nearest, selectedStore, req]);
     const { uriFor, bakery } = useBakedPills(pillSpecs);
-
-    // Bake the count bubbles too — a child-View marker clips on Android (Fabric).
-    const clusterSpecs = useMemo<MapClusterSpec[]>(
-        () => clusters.map((c) => ({ key: clusterKey(c), count: c.count, big: c.count >= 25 })),
-        [clusters],
-    );
-    const { uriFor: clusterUriFor, bakery: clusterBakery } = useBakedClusters(clusterSpecs);
-    // Keep the last baked image per STABLE cluster id so a re-cluster shows the previous
-    // bubble instead of a blank while the new count re-bakes; chain badge is the
-    // pre-first-bake fallback. Both keep the marker mounted (image swaps in place — safe +
-    // correctly sized under the AIRMapMarker CGSizeZero patch) instead of flickering null.
-    const lastClusterUriRef = useRef<Map<number, string>>(new Map());
-    const chainBadge = req ? chainBadgeImage(req.chainId) : null;
 
     if (!req) return null;
 
@@ -280,57 +243,46 @@ export function StoreResolutionOverlay() {
                 onConfirm={onConfirm}
                 mapChildren={
                     !centered ? null : <>
-                        {/* Markers show the chain badge immediately, then swap to the baked
-                            address pill in place. Two native fixes make this both correct and
-                            crash-safe (present on the build with patches/react-native-maps):
-                             • AIRMapMarker CGSizeZero → the badge→pill swap decodes at natural
-                               size (no "tiny pills"); and
-                             • AIRMap insert-clamp → the cluster↔single churn on zoom no longer
-                               aborts in insertReactSubview.
-                            Cluster keys use the STABLE min-store-id (not the count) so a count
-                            change swaps the image in place rather than remounting. */}
-                        {clusters.map((c) => {
-                            const sid = clusterStableId(c);
-                            const uri = clusterUriFor(clusterKey(c));
-                            if (uri) lastClusterUriRef.current.set(sid, uri);
+                        {/* Each pill renders ONLY once its image is fully baked, with a STABLE
+                            key (store id). So a marker mounts exactly once, already holding its
+                            final pill — there is no badge→pill in-place image swap (which showed
+                            as a "rectangle"/tiny pill on the unpatched native), and no remount.
+                            The nearest set is frozen during pan/zoom, so no marker is ever added
+                            or removed while dragging → the unchecked AIRMap insert never fires. */}
+                        {nearest.map((s) => {
+                            const uri = uriFor(`${s.id}|n`);
+                            if (!uri) return null;
                             return (
-                                <MapClusterMarker
-                                    key={`c-${sid}`}
-                                    coordinate={{ latitude: c.latitude, longitude: c.longitude }}
-                                    pillUri={uri ?? lastClusterUriRef.current.get(sid)}
-                                    fallback={chainBadge ?? undefined}
-                                    zIndex={1}
-                                    onPress={() => onClusterPress(c)}
+                                <MapPillMarker
+                                    key={`s-${s.id}`}
+                                    coordinate={{ latitude: s.latitude, longitude: s.longitude }}
+                                    chainId={req.chainId}
+                                    pillUri={uri}
+                                    zIndex={2}
+                                    onPress={() => setSelectedId(s.id)}
                                 />
                             );
                         })}
-                        {singles.map((s) => (
-                            <MapPillMarker
-                                key={`s-${s.id}`}
-                                coordinate={{ latitude: s.latitude, longitude: s.longitude }}
-                                chainId={req.chainId}
-                                pillUri={uriFor(`${s.id}|n`)}
-                                zIndex={2}
-                                onPress={() => setSelectedId(s.id)}
-                            />
-                        ))}
-                        {selectedStore && (
-                            <MapPillMarker
-                                key={`sel-${selectedStore.id}`}
-                                coordinate={{ latitude: selectedStore.latitude, longitude: selectedStore.longitude }}
-                                chainId={req.chainId}
-                                pillUri={uriFor(`${selectedStore.id}|s`)}
-                                zIndex={10}
-                                onPress={() => setSelectedId(selectedStore.id)}
-                            />
-                        )}
+                        {selectedStore && (() => {
+                            const uri = uriFor(`${selectedStore.id}|s`);
+                            if (!uri) return null;
+                            return (
+                                <MapPillMarker
+                                    key={`sel-${selectedStore.id}`}
+                                    coordinate={{ latitude: selectedStore.latitude, longitude: selectedStore.longitude }}
+                                    chainId={req.chainId}
+                                    pillUri={uri}
+                                    zIndex={10}
+                                    onPress={() => setSelectedId(selectedStore.id)}
+                                />
+                            );
+                        })()}
                     </>
                 }
             />
-            {/* Off-screen bakeries — must live OUTSIDE the map (normal Views, not Markers).
+            {/* Off-screen bakery — must live OUTSIDE the map (normal Views, not Markers).
                 Gated on mapReady so the view-shot capture burst doesn't run during map init. */}
             {mapReady && bakery}
-            {mapReady && clusterBakery}
         </View>
     );
 }
