@@ -561,11 +561,6 @@
     "createNewSub": "Start from empty"
   },
   "discounts": {
-    "freshNow": "Updated just now",
-    "freshMinutes_one": "Updated {{count}} min ago",
-    "freshMinutes_other": "Updated {{count}} min ago",
-    "freshHours_one": "Updated {{count}} hour ago",
-    "freshHours_other": "Updated {{count}} hours ago",
     "loadFailed": "Couldn't load discounts",
     "loadFailedWithCache": "Showing saved data — couldn't refresh",
     "retry": "Try again",
@@ -575,7 +570,12 @@
     "filterSubcategories": "Subcategories",
     "filterAllStores": "All stores",
     "filterAllCategories": "All categories",
-    "filterAllSubcategories": "All subcategories"
+    "filterAllSubcategories": "All subcategories",
+    "infoTitle": "How this screen works",
+    "infoBullet1": "You see discounts currently running in stores — expired deals disappear automatically.",
+    "infoBullet2": "We refresh prices a few times a week.",
+    "infoBullet3": "A badge with a store logo shows where the product is cheapest right now — that many percent below its average price elsewhere.",
+    "infoBullet4": "The flame shows the store's own advertised discount."
   },
   "browse": {
     "addToBasket": "Add",

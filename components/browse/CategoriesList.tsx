@@ -12,6 +12,7 @@ import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from '
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
+import { categoryIcon } from '../../constants/categoryIcons';
 import { useSafeBottomTabBarHeight } from '../../hooks/useSafeBottomTabBarHeight';
 import { SkeletonBox } from '../SkeletonBox';
 
@@ -25,19 +26,6 @@ export interface Category {
     parentCategoryId: number | null;
 }
 
-const CATEGORY_ICONS: Record<string, string> = {
-    'Daržovės ir vaisiai': '🫜',
-    'Pieno gaminiai, kiaušiniai ir majonezas': '🥛',
-    'Duonos gaminiai ir konditerija': '🍞',
-    'Mėsa, žuvis ir kulinarija': '🥩',
-    'Bakalėja': '🫙',
-    'Šaldytas maistas': '🧊',
-    'Gėrimai': '🥤',
-    'Kūdikių ir vaikų prekės': '🍼',
-    'Kosmetika ir higiena': '🧴',
-    'Švaros ir gyvūnų prekės': '🧹',
-    'Namai ir laisvalaikis': '🏠',
-};
 
 const EMPTY_L2: Category[] = [];
 
@@ -104,7 +92,7 @@ const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, onSelectL2
                 style={[styles.l1Row, isExpanded && styles.l1RowExpanded]}
                 onPress={() => onToggle(item.id)}
             >
-                <Text style={styles.l1Icon}>{CATEGORY_ICONS[item.nameKey ?? item.name] || '📦'}</Text>
+                <Text style={styles.l1Icon}>{categoryIcon(item.nameKey, item.name)}</Text>
                 <Text style={styles.l1Text}>{item.name}</Text>
                 <Animated.View style={chevronStyle}>
                     <Ionicons name="chevron-down" size={20} color={isExpanded ? colors.primary : colors.success} />

@@ -1,7 +1,7 @@
 import React, { type ReactNode } from 'react';
 import {
     Modal, Pressable, Text, ScrollView, TouchableOpacity,
-    StyleSheet, useWindowDimensions,
+    StyleSheet, useWindowDimensions, View,
 } from 'react-native';
 import { BlurView } from 'expo-blur';
 import { Ionicons } from '@expo/vector-icons';
@@ -25,11 +25,13 @@ type SingleConfig = {
 type MultiConfig = {
     mode: 'multi';
     isChecked: (id: number) => boolean;
-    /** Whether every option is checked (drives the "all" row checkbox). */
+    /** Whether the "All" STATE is active (drives the radio row; checkboxes render
+     *  unchecked while it is — they mean explicit narrowing, not inclusion). */
     allChecked: boolean;
     allLabel: string;
+    /** From the All state the first toggle selects ONLY that option (caller-owned). */
     onToggle: (id: number) => void;
-    /** Reset the selection back to "all selected". */
+    /** Return to the "All" state. */
     onAll: () => void;
 };
 
@@ -46,7 +48,9 @@ interface Props {
 /**
  * A dropdown that drops a titled option panel just below a filter chip row.
  * Single mode = radio list with an "all" row that closes on pick; multi mode =
- * checkbox list with an "all" reset row that stays open while toggling.
+ * an "All" radio STATE row above a separator, then a checkbox list that stays
+ * open while toggling (checkboxes = explicit narrowing; empty/full collapse
+ * back to All is the caller's rule).
  */
 export function FilterDropdownModal({ visible, title, anchorY, options, onClose, config }: Props) {
     const colors = useTheme();
@@ -76,12 +80,15 @@ export function FilterDropdownModal({ visible, title, anchorY, options, onClose,
                                 onPress={() => { config.onSelect(null); onClose(); }}
                             />
                         ) : (
-                            <Row
-                                styles={styles} colors={colors}
-                                label={config.allLabel}
-                                checked={config.allChecked}
-                                onPress={config.onAll}
-                            />
+                            <>
+                                <Row
+                                    styles={styles} colors={colors}
+                                    label={config.allLabel}
+                                    radio={config.allChecked}
+                                    onPress={config.onAll}
+                                />
+                                <View style={styles.separator} />
+                            </>
                         )}
                         {options.map(opt => (
                             <Row
@@ -105,7 +112,7 @@ export function FilterDropdownModal({ visible, title, anchorY, options, onClose,
 }
 
 function Row({
-    styles, colors, label, leading, selected, checked, onPress,
+    styles, colors, label, leading, selected, checked, radio, onPress,
 }: {
     styles: ReturnType<typeof makeStyles>;
     colors: AppTheme;
@@ -114,11 +121,20 @@ function Row({
     selected?: boolean;
     /** undefined => single-select row (no checkbox); boolean => multi-select. */
     checked?: boolean;
+    /** Radio-style leading icon (the multi list's "All" STATE row). */
+    radio?: boolean;
     onPress: () => void;
 }) {
     const isMulti = checked !== undefined;
     return (
         <TouchableOpacity style={styles.row} onPress={onPress} activeOpacity={0.6}>
+            {radio !== undefined && (
+                <Ionicons
+                    name={radio ? 'radio-button-on' : 'radio-button-off'}
+                    size={22}
+                    color={radio ? colors.primary : colors.textMuted}
+                />
+            )}
             {isMulti && (
                 <Ionicons
                     name={checked ? 'checkbox' : 'square-outline'}
@@ -128,7 +144,7 @@ function Row({
             )}
             {leading}
             <Text
-                style={[styles.rowLabel, (selected || (isMulti && checked)) && styles.rowLabelActive]}
+                style={[styles.rowLabel, (selected || (isMulti && checked) || radio === true) && styles.rowLabelActive]}
                 numberOfLines={1}
             >
                 {label}
@@ -163,4 +179,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     rowLabel: { flex: 1, fontSize: 15, color: c.textPrimary },
     rowLabelActive: { color: c.primary, fontWeight: '600' },
+    // Thin rule under the multi list's "All" radio row, separating the STATE row
+    // from the narrowing checkboxes below it.
+    separator: {
+        height: StyleSheet.hairlineWidth,
+        backgroundColor: c.border,
+        marginHorizontal: 12,
+        marginVertical: 4,
+    },
 });

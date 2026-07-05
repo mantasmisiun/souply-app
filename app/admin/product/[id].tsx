@@ -24,7 +24,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { ProductImage } from '../../../components/ProductImage';
 import { SkeletonBox } from '../../../components/SkeletonBox';
-import MiniPriceChart, { PriceChartSvg, preparePriceData, filterByRange, type PricePoint, type RangeKey } from '../../../components/MiniPriceChart';
+import MiniPriceChart, { PriceChartSvg, preparePriceData, filterByRange, timeXPositions, type PricePoint, type RangeKey } from '../../../components/MiniPriceChart';
 import { ChainLogoStrip } from '../../../components/ChainLogoStrip';
 import { getChainMiniLogoUrl } from '../../../utils/chainBrandName';
 import CategoryPickerModal from '../../../components/admin/CategoryPickerModal';
@@ -77,11 +77,9 @@ function ModalChart({
     const chartWidth = MODAL_CHART_MIN_WIDTH;
     const padding = MODAL_CHART_PADDING;
     const chartW = chartWidth - padding.left - padding.right;
-    const pointXs = useMemo(() => data.map((_, i) =>
-        data.length === 1
-            ? padding.left + chartW / 2
-            : padding.left + (i / (data.length - 1)) * chartW
-    ), [data, chartW]);
+    // Same TIME-scaled positions the SVG draws (domain [first point, now]) — the
+    // crosshair must hit-test against where the points actually are.
+    const pointXs = useMemo(() => timeXPositions(data, chartW, padding.left), [data, chartW]);
 
     const handleChartTouch = (x: number) => {
         if (!pointXs.length) return;

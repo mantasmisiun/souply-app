@@ -531,12 +531,6 @@
     "createNewSub": "Pradėti nuo tuščio"
   },
   "discounts": {
-    "freshNow": "Atnaujinta dabar",
-    "freshMinutes_one": "Atnaujinta prieš {{count}} min.",
-    "freshMinutes_few": "Atnaujinta prieš {{count}} min.",
-    "freshMinutes_other": "Atnaujinta prieš {{count}} min.",
-    "freshHours_one": "Atnaujinta prieš {{count}} val.",
-    "freshHours_other": "Atnaujinta prieš {{count}} val.",
     "loadFailed": "Nepavyko įkelti nuolaidų",
     "loadFailedWithCache": "Rodomi išsaugoti duomenys — nepavyko atnaujinti",
     "retry": "Bandyti dar kartą",
@@ -546,7 +540,12 @@
     "filterSubcategories": "Subkategorijos",
     "filterAllStores": "Visos parduotuvės",
     "filterAllCategories": "Visos kategorijos",
-    "filterAllSubcategories": "Visos subkategorijos"
+    "filterAllSubcategories": "Visos subkategorijos",
+    "infoTitle": "Kaip veikia šis puslapis?",
+    "infoBullet1": "Čia matai šiuo metu parduotuvėse galiojančias nuolaidas — pasibaigusios akcijos dingsta automatiškai.",
+    "infoBullet2": "Kainas atnaujiname kelis kartus per savaitę.",
+    "infoBullet3": "Ženkliukas su parduotuvės logotipu rodo, kur prekė šiuo metu pigiausia — tiek procentų ji pigesnė už vidutinę savo kainą kitur.",
+    "infoBullet4": "Ugnelė rodo pačios parduotuvės skelbiamą nuolaidą."
   },
   "browse": {
     "addToBasket": "Į krepšelį",
