@@ -32,6 +32,7 @@ import Animated, {
 import { Image } from "expo-image";
 import { useTranslation } from "react-i18next";
 import { ProductImage } from "../ProductImage";
+import { ChainLogoChip } from "../ChainLogoChip";
 import { ScreenBackButton } from "../ScreenBackButton";
 import { API_BASE_URL } from "../../config/api";
 import { fetchWithTimeout, TIMEOUT_STANDARD_MS, TIMEOUT_FAST_MS } from "../../utils/fetchWithTimeout";
@@ -98,6 +99,10 @@ interface ReceiptResolveCard {
    *  candidate as a proposal. The vote body must echo `matched.spId` back as
    *  `proposedSpId` so identical links it / different blacklists the combo. */
   proposed?: boolean;
+  /** CROSS-CHAIN rescue proposal: the candidate lives in this chain (badge shown
+   *  so the user knowingly confirms "same product as this <chain> item"); an
+   *  identical swipe mints a provisional SP in the receipt's chain server-side. */
+  sourceChainId?: number;
 }
 
 /** Band-crop source for a receipt's OCR-side cards: the page images re-projected
@@ -237,23 +242,33 @@ function MatchedProductSide({
   label,
   styles,
   onSettled,
+  sourceChainId,
 }: {
   matched: ReceiptResolveCard["matched"];
   label: string;
   styles: ReturnType<typeof makeStyles>;
   onSettled?: (ok: boolean) => void;
+  /** Cross-chain rescue: badge the source chain over the product image. */
+  sourceChainId?: number;
 }) {
   return (
     <View style={styles.sideBlock}>
       <Text style={styles.sideLabel} numberOfLines={1}>{label}</Text>
-      <ProductImage
-        uris={matched.imageUrl ? [matched.imageUrl] : []}
-        imageStyle={styles.productImg}
-        placeholderStyle={styles.productImgPlaceholder}
-        emojiStyle={styles.productImgEmoji}
-        resizeMode="contain"
-        onSettled={onSettled}
-      />
+      <View>
+        <ProductImage
+          uris={matched.imageUrl ? [matched.imageUrl] : []}
+          imageStyle={styles.productImg}
+          placeholderStyle={styles.productImgPlaceholder}
+          emojiStyle={styles.productImgEmoji}
+          resizeMode="contain"
+          onSettled={onSettled}
+        />
+        {sourceChainId != null && (
+          <View style={{ position: 'absolute', top: 4, left: 4 }}>
+            <ChainLogoChip chainId={sourceChainId} size={22} />
+          </View>
+        )}
+      </View>
       <Text style={styles.productName} numberOfLines={3}>
         {matched.name ?? ""}
       </Text>
@@ -1353,7 +1368,7 @@ export function SwipeQueue({
                     <>
                       <OcrReceiptSide key={currentItem.cardId} ocr={currentItem.ocr} region={currentItem.region} crop={receiptCrop} label={t('swipe.cardReceiptLabel')} styles={styles} colors={colors} onSettled={() => handleImageSettled('crop')} />
                       <View style={styles.horizontalDivider} />
-                      <MatchedProductSide matched={currentItem.matched} label={t('swipe.cardMatchLabel')} styles={styles} onSettled={() => handleImageSettled('product')} />
+                      <MatchedProductSide matched={currentItem.matched} sourceChainId={currentItem.sourceChainId} label={t('swipe.cardMatchLabel')} styles={styles} onSettled={() => handleImageSettled('product')} />
                     </>
                   ) : isAliasCard(currentItem) ? (
                     <>
