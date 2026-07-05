@@ -5,6 +5,7 @@ import 'react-native-reanimated';
 import { useEffect } from 'react';
 import { Linking, View } from 'react-native';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { useTheme, useResolvedScheme } from '../constants/theme';
@@ -232,6 +233,10 @@ function RootLayout() {
   };
 
   return (
+    // RNGH gestures (results sheet, swipe queue, admin split) need this at the
+    // APP root — a GestureDetector outside a GestureHandlerRootView throws.
+    // (Some screens used to carry their own root view; one at the top covers all.)
+    <GestureHandlerRootView style={{ flex: 1 }}>
     <KeyboardProvider>
     <PersistQueryClientProvider
       client={queryClient}
@@ -358,6 +363,7 @@ function RootLayout() {
     </ShareIntentProvider>
     </PersistQueryClientProvider>
     </KeyboardProvider>
+    </GestureHandlerRootView>
   );
 }
 
