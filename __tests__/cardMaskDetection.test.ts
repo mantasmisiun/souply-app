@@ -69,6 +69,17 @@ describe('detectCardMaskBands', () => {
         expect(bands[0].xLeft).toBeGreaterThan(0);
     });
 
+    it('masks the IKI GIFT-card number ("KORTELĖS NUMERIS", receipt-398/401) — both word orders', () => {
+        const a = detectCardMaskBands([L('KORTELES NUMERIS 0000123971')]);
+        expect(a).toHaveLength(1);
+        expect(a[0].kind).toBe('loyalty');
+        expect(a[0].text).not.toContain('0000123971');
+        // OCR-reversed order (receipt-401): number first, label after.
+        const b = detectCardMaskBands([L('0000123971 KORTELES NUMERIS')]);
+        expect(b).toHaveLength(1);
+        expect(b[0].text).not.toContain('0000123971');
+    });
+
     it('masks the cashier name as PII (label kept, value blanked)', () => {
         const bands = detectCardMaskBands([L('Kasininkas Jonas Jonaitis')]);
         expect(bands).toHaveLength(1);
@@ -153,6 +164,18 @@ describe('redactReceiptText', () => {
         expect(out).toContain('IKI KORTELĖS NR. [•••]');
         expect(out).not.toContain('99110000000005068582');
         expect(out).toContain('Inv. Nr. 1912-0110-0320-2357'); // dashed id untouched
+    });
+
+    it('blanks the IKI gift-card number ("KORTELĖS NUMERIS") in stored text — both orders', () => {
+        const out = redactReceiptText([
+            'IKI dovanu kortele',
+            'KORTELES NUMERIS 0000123971',
+            'DOVANU KORTELĖS LIKUTIS 0,00',
+        ].join('\n'));
+        expect(out).toContain('KORTELES NUMERIS [•••]');
+        expect(out).not.toContain('0000123971');
+        expect(out).toContain('DOVANU KORTELĖS LIKUTIS 0,00'); // balance amount untouched
+        expect(redactReceiptText('0000123971 KORTELES NUMERIS')).not.toContain('0000123971');
     });
 
     it('leaves separator walls untouched', () => {
