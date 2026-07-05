@@ -3,9 +3,10 @@ import MapView from 'react-native-maps';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { useRef, useState, useMemo, useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, type AppTheme } from '../../../constants/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useTheme, typography, radius, spacing, type AppTheme } from '../../../constants/theme';
 import { MapPickerScaffold } from '../../../components/map/MapPickerScaffold';
-import { ScreenBackButton } from '../../../components/ScreenBackButton';
+import { GlassIconButton } from '../../../components/GlassIconButton';
 import { setPreset, type PresetKey } from '../../../utils/locationStorage';
 import { geocodeAddress, reverseGeocode } from '../../../utils/nominatim';
 import { tryGpsCoords, VILNIUS_FALLBACK } from '../../../utils/location';
@@ -16,6 +17,7 @@ export default function PresetMapScreen() {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
+    const { bottom: bottomInset } = useSafeAreaInsets();
 
     const { key: presetKey, label: presetLabel, lat: latParam, lng: lngParam } = useLocalSearchParams<{
         key: string;
@@ -40,6 +42,7 @@ export default function PresetMapScreen() {
     const [searching, setSearching] = useState(false);
     const [saving, setSaving] = useState(false);
     const [searchError, setSearchError] = useState<string | null>(null);
+    const [mapReady, setMapReady] = useState(false);
 
     const animateTo = (lat: number, lng: number) =>
         mapRef.current?.animateToRegion(
@@ -48,6 +51,7 @@ export default function PresetMapScreen() {
         );
 
     const handleMapReady = useCallback(async () => {
+        setMapReady(true);
         if (hasInitial) return;
         const gps = await tryGpsCoords();
         const target = gps ?? VILNIUS_FALLBACK;
@@ -93,9 +97,10 @@ export default function PresetMapScreen() {
         longitudeDelta: DELTA,
     };
 
-    // Editable title — same tap-to-edit pattern as basket [id].tsx.
-    const headerTitle = editingName
-        ? () => (
+    // Tap-to-rename title, now living INSIDE the floating glass chip (same pattern
+    // as basket [id].tsx, restyled for the chip's fixed 40pt height).
+    const titleNode = editingName
+        ? (
             <TextInput
                 ref={nameInputRef}
                 defaultValue={name}
@@ -105,36 +110,31 @@ export default function PresetMapScreen() {
                 placeholder={presetLabel}
                 placeholderTextColor={colors.textMuted}
                 autoFocus
-                style={{
-                    fontSize: 17, fontWeight: '600', color: colors.textPrimary,
-                    minWidth: 160, paddingVertical: 2,
-                    borderBottomWidth: 1, borderBottomColor: colors.primary,
-                }}
+                style={styles.titleInput}
             />
         )
-        : () => (
+        : (
             <TouchableOpacity onPress={() => setEditingName(true)} activeOpacity={0.6}>
-                <Text style={{ fontSize: 17, fontWeight: '600', color: colors.textPrimary }} numberOfLines={1}>
-                    {name || presetLabel}
-                </Text>
+                <Text style={styles.titleText} numberOfLines={1}>{name || presetLabel}</Text>
             </TouchableOpacity>
         );
 
     return (
         <>
-            <Stack.Screen options={{
-                headerTitle,
-                headerBackTitle: '',
-                headerTintColor: colors.primary,
-                headerStyle: { backgroundColor: colors.cardBackground },
-                headerShadowVisible: false,
-                // Match the app-wide pink chevron (this route was using the default arrow).
-                headerLeft: () => <ScreenBackButton />,
-            }} />
+            {/* Full-bleed glass-chrome map (same shell as the store-resolution screen):
+                no native header — the map runs edge to edge, the back chevron + title
+                chip + search float over it in liquid glass. */}
+            <Stack.Screen options={{ headerShown: false }} />
             <MapPickerScaffold
+                glassChrome
+                headerLeft={
+                    <GlassIconButton icon="chevron-back" glass onPress={() => router.back()} size={22} />
+                }
+                titleNode={titleNode}
                 mapRef={mapRef}
                 initialRegion={initialRegion}
                 onMapReady={handleMapReady}
+                mapReady={mapReady}
                 onRegionChangeComplete={r => setCenterCoords({ lat: r.latitude, lng: r.longitude })}
                 searchText={searchText}
                 onSearchTextChange={v => { setSearchText(v); setSearchError(null); }}
@@ -144,6 +144,7 @@ export default function PresetMapScreen() {
                 searchPlaceholder="Ieškoti adreso..."
                 confirmLabel="Patvirtinti vietą"
                 confirmEnabled={!!centerCoords}
+                confirmAlwaysVisible
                 confirmLoading={saving}
                 onConfirm={handleConfirm}
                 overlay={
@@ -152,7 +153,9 @@ export default function PresetMapScreen() {
                             <Ionicons name="location" size={44} color={colors.primary} style={styles.pinIcon} />
                             <View style={styles.pinShadow} />
                         </View>
-                        <View style={styles.mapHintBar} pointerEvents="none">
+                        {/* Drag hint floats above the confirm pill (the map is full-bleed
+                            now, so bottom:0 would put it under the button/home indicator). */}
+                        <View style={[styles.mapHintBar, { bottom: Math.max(bottomInset, 16) + 64 }]} pointerEvents="none">
                             <Text style={styles.mapHint}>Vilkite žemėlapį, kad patikslintumėte vietą</Text>
                         </View>
                     </>
@@ -162,14 +165,21 @@ export default function PresetMapScreen() {
     );
 }
 
-const makeStyles = (_c: AppTheme) =>
+const makeStyles = (c: AppTheme) =>
     StyleSheet.create({
         pinWrapper: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
         pinIcon: { marginTop: -22 },
         pinShadow: { width: 10, height: 5, borderRadius: 5, backgroundColor: 'rgba(0,0,0,0.18)', marginTop: -6 },
         mapHintBar: {
-            position: 'absolute', bottom: 0, left: 0, right: 0,
-            paddingVertical: 6, alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.22)',
+            position: 'absolute', alignSelf: 'center',
+            paddingVertical: 6, paddingHorizontal: spacing.lg,
+            borderRadius: radius.pill, backgroundColor: 'rgba(0,0,0,0.35)',
         },
         mapHint: { fontSize: 12, color: '#fff' },
+        titleText: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
+        titleInput: {
+            ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary,
+            minWidth: 140, paddingVertical: 0,
+            borderBottomWidth: 1, borderBottomColor: c.primary,
+        },
     });

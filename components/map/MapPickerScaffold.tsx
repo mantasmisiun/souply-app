@@ -9,6 +9,7 @@ import {
     TouchableOpacity,
     StyleSheet,
     Platform,
+    Keyboard,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import MapView, { type Region } from 'react-native-maps';
@@ -70,6 +71,13 @@ export interface MapPickerScaffoldProps {
     headerLeft?: ReactNode;
     /** Glass-chrome only: the screen title, shown in a see-through glass chip. */
     title?: string;
+    /** Glass-chrome only: custom content INSIDE the title chip instead of the plain
+     *  `title` text (e.g. the preset picker's tap-to-rename title). Wins over `title`. */
+    titleNode?: ReactNode;
+    /** Glass-chrome only: keep the floating confirm pill mounted even while
+     *  `confirmEnabled` is false (rendered disabled). Default (off) hides it until
+     *  enabled — the store-resolution behaviour. */
+    confirmAlwaysVisible?: boolean;
 }
 
 export function MapPickerScaffold(props: MapPickerScaffoldProps) {
@@ -89,6 +97,11 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                 showsUserLocation={props.showsUserLocation ?? true}
                 customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
                 toolbarEnabled={false}
+                // Typing in the search field leaves the keyboard up, covering the
+                // confirm pill; a native MapView never dismisses it on its own. Any
+                // touch on the map (tap OR the start of a drag) closes the keyboard —
+                // covers both scaffold users (location preset picker + store resolution).
+                onTouchStart={Keyboard.dismiss}
             >
                 {props.mapChildren}
             </MapView>
@@ -162,9 +175,11 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                 <View style={[styles.glassTop, { top: topInset + spacing.sm }]} pointerEvents="box-none">
                     <View style={styles.glassTopRow} pointerEvents="box-none">
                         {props.headerLeft}
-                        {props.title != null && (
+                        {(props.titleNode != null || props.title != null) && (
                             <LiquidGlass fallback="blur" style={styles.titleChip}>
-                                <Text style={styles.titleChipText} numberOfLines={1}>{props.title}</Text>
+                                {props.titleNode ?? (
+                                    <Text style={styles.titleChipText} numberOfLines={1}>{props.title}</Text>
+                                )}
                             </LiquidGlass>
                         )}
                     </View>
@@ -178,13 +193,16 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                         </View>
                     )}
                 </View>
-                {/* Confirm floats over the map, no panel, only when a store is picked. */}
-                {props.confirmEnabled && (
+                {/* Confirm floats over the map, no panel. Default: mounted only once
+                    enabled (store-resolution). confirmAlwaysVisible keeps it mounted,
+                    rendered disabled, for pickers where a selection always exists. */}
+                {(props.confirmEnabled || props.confirmAlwaysVisible) && (
                     <View style={[styles.confirmFloat, { paddingBottom: Math.max(bottomInset, 16) }]} pointerEvents="box-none">
                         <TouchableOpacity
-                            style={[styles.confirmBtn, styles.confirmBtnFloating, props.confirmLoading && styles.btnDisabled]}
+                            style={[styles.confirmBtn, styles.confirmBtnFloating,
+                                (!props.confirmEnabled || props.confirmLoading) && styles.btnDisabled]}
                             onPress={props.onConfirm}
-                            disabled={props.confirmLoading}
+                            disabled={!props.confirmEnabled || props.confirmLoading}
                         >
                             {props.confirmLoading
                                 ? <MaterialProgress color={colors.onPrimary} />
