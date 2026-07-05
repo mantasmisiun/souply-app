@@ -198,7 +198,7 @@ export function StoreResolutionOverlay() {
         }
         return specs;
     }, [stores, selectedStore, req]);
-    const { uriFor, bakedKeys, bakery } = useBakedPills(pillSpecs);
+    const { uriFor, sizeFor, bakedKeys, bakery } = useBakedPills(pillSpecs);
 
     if (!req) return null;
 
@@ -245,6 +245,7 @@ export function StoreResolutionOverlay() {
                                     coordinate={{ latitude: s.latitude, longitude: s.longitude }}
                                     chainId={req.chainId}
                                     pillUri={uriFor(key)}
+                                    pillSize={sizeFor(key)}
                                     zIndex={2}
                                     onPress={() => setSelectedId(id)}
                                 />
@@ -259,6 +260,7 @@ export function StoreResolutionOverlay() {
                                     coordinate={{ latitude: selectedStore.latitude, longitude: selectedStore.longitude }}
                                     chainId={req.chainId}
                                     pillUri={uri}
+                                    pillSize={sizeFor(`${selectedStore.id}|s`)}
                                     zIndex={10}
                                     onPress={() => setSelectedId(selectedStore.id)}
                                 />

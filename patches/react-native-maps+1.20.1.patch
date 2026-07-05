@@ -19,10 +19,25 @@ index 07a4638..0483573 100644
  #pragma clang diagnostic pop
  
 diff --git a/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m b/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
-index 8c17ac7..3c1ce05 100644
+index 8c17ac7..2520123 100644
 --- a/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
 +++ b/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
-@@ -336,8 +336,14 @@ NSInteger const AIR_CALLOUT_OPEN_ZINDEX_BASELINE = 999;
+@@ -67,7 +67,13 @@ NSInteger const AIR_CALLOUT_OPEN_ZINDEX_BASELINE = 999;
+     if ([subview isKindOfClass:[AIRMapCallout class]]) {
+         self.calloutView = (AIRMapCallout *)subview;
+     } else {
+-        [super insertReactSubview:(UIView *)subview atIndex:atIndex];
++        // PATCH(souply): clamp the index — same Fabric-interop out-of-bounds
++        // race as AIRMap.m (see patch there). Child-VIEW markers (price pills)
++        // exercise this path on every marker remount; an unchecked index
++        // throws NSRangeException -> SIGABRT (silent crash switching the
++        // 1/2-store option, 2026-07-05).
++        NSInteger safeIndex = MIN(MAX(atIndex, 0), (NSInteger)self.reactSubviews.count);
++        [super insertReactSubview:(UIView *)subview atIndex:safeIndex];
+     }
+ }
+ 
+@@ -336,8 +342,14 @@ NSInteger const AIR_CALLOUT_OPEN_ZINDEX_BASELINE = 999;
          _reloadImageCancellationBlock();
          _reloadImageCancellationBlock = nil;
      }

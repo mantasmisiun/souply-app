@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, Image, Platform, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
-import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
+import MapView, { Marker, Polyline } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Asset } from 'expo-asset';
 import { Ionicons } from '@expo/vector-icons';
@@ -12,6 +12,7 @@ import { DARK_MAP_STYLE } from '../../constants/darkMapStyle';
 import { formatEuro } from '../../utils/formatCurrency';
 import { type StoreLite } from '../../utils/candidatePool';
 import { clusterByGrid, type Cluster, type GridRegion } from '../../utils/mapClustering';
+import { LiquidGlass } from '../LiquidGlass';
 
 export type MapPin = {
     storeId: number;
@@ -33,9 +34,12 @@ type Props = {
     pins: MapPin[];
     userCoords: { lat: number; lng: number } | null;
     focusCoords: LatLng[] | null;
-    /** The recommended (cheapest, pink) store — the map centers here on load and
-     *  when nothing is selected, instead of fitting every pin. */
-    recommendedCoords?: LatLng | null;
+    /** The recommended (cheapest, pink) option's store coordinates — the map
+     *  frames these on load / when nothing is selected, instead of fitting every
+     *  pin. MULTIPLE entries (a recommended 2-store split) are FIT together —
+     *  centering on just the first store left the combo partner off-viewport
+     *  (the "maxima pin not visible on open" bug). */
+    recommendedCoords?: LatLng[] | null;
     /** Route mode: the two trip endpoints (start/end) — drawn as markers and
      *  used as the route line's ends instead of the user dot. */
     routeEndpoints?: { from: LatLng; to: LatLng } | null;
@@ -252,8 +256,18 @@ export default function StoreResultsMap({
     // highest zRank → active/selected pins render LAST and always sit on top
     // (fixes a 2nd selected store hiding behind a neutral pin, and a re-selected
     // store rendering below its former combo partner).
+    //
+    // iOS: the list must be STABLE instead (sorted by storeId, which never changes).
+    // Selecting a store / switching the 1-store↔2-store option re-ranks EVERY pin,
+    // and a re-sorted array + rank-bearing keys remounts the whole marker set in one
+    // batch — under the Fabric interop layer that insert/remove storm is what threw
+    // AIRMap's NSRangeException (silent crash, basket map 2026-07-05). iOS honours
+    // the zIndex prop, so stacking survives without reordering, and the natural-size
+    // decode patch (react-native-maps+1.20.1.patch) makes in-place image swaps safe.
     const pinsByZ = useMemo(
-        () => [...pins].sort((a, b) => (zRankMap.get(a.storeId) ?? 0) - (zRankMap.get(b.storeId) ?? 0)),
+        () => Platform.OS === 'ios'
+            ? [...pins].sort((a, b) => a.storeId - b.storeId)
+            : [...pins].sort((a, b) => (zRankMap.get(a.storeId) ?? 0) - (zRankMap.get(b.storeId) ?? 0)),
         [pins, zRankMap],
     );
 
@@ -262,7 +276,29 @@ export default function StoreResultsMap({
         () => pinsByZ.map(specForPin).filter((s): s is MapPillSpec => s != null),
         [pinsByZ],
     );
-    const { uriFor, bakery } = useBakedPills(pillSpecs);
+    const { uriFor, sizeFor, bakery } = useBakedPills(pillSpecs);
+    // DEV diagnostic (missing-pin-on-load investigation): which pins exist and
+    // which have a baked pill vs a bare badge. Cheap; strip once resolved.
+    useEffect(() => {
+        if (!__DEV__) return;
+        const t = setTimeout(async () => {
+            let b: { northEast: LatLng; southWest: LatLng } | null = null;
+            try { b = (await mapRef.current?.getMapBoundaries()) ?? null; } catch { /* old map */ }
+            const inView = (pn: MapPin) => b == null ? '?' :
+                (pn.latitude <= b.northEast.latitude && pn.latitude >= b.southWest.latitude &&
+                 pn.longitude <= b.northEast.longitude && pn.longitude >= b.southWest.longitude) ? 'in' : 'OFF-SCREEN';
+            console.log('[ResultsMap] pins:', pinsByZ.map(pn => {
+                const sp = specForPin(pn);
+                return `${pn.storeId}/c${pn.chainId}${pn.recommended ? ' REC' : ''}${pn.active ? ' SEL' : ''} ${sp ? (uriFor(sp.key) ? 'pill' : 'BADGE-ONLY') : 'no-price'} ${inView(pn)}`;
+            }).join(' | '));
+        }, 3500);
+        return () => clearTimeout(t);
+    }, [pinsByZ, uriFor]);
+    // storeId → last successfully baked pill (uri + dp size, kept TOGETHER so the
+    // iOS child-image marker never renders a uri without its bounds). Shown while
+    // a variant change re-bakes, so a pin never swaps down to the bare badge —
+    // that pill↔badge child churn also hammered the marker's native insert path.
+    const lastPillUriRef = useRef(new Map<number, { uri: string; w: number; h: number }>());
 
     const allCoords = useMemo(() => {
         const c: LatLng[] = pins.map(p => ({ latitude: p.latitude, longitude: p.longitude }));
@@ -367,8 +403,15 @@ export default function StoreResultsMap({
     recRef.current = recommendedCoords;
     const centerDefault = useCallback(() => {
         const r = recRef.current;
-        if (r) centerOn(r.latitude, r.longitude, 0.06);
-        else fitAll();
+        if (r && r.length > 1) {
+            mapRef.current?.fitToCoordinates(r, {
+                edgePadding: { top: 110, right: 90, bottom: fitBottomPad(), left: 90 },
+                animated: true,
+            });
+        } else if (r && r.length === 1) {
+            centerOn(r[0].latitude, r[0].longitude, 0.06);
+        } else fitAll();
+         
     }, [fitAll, centerOn]);
 
     const goToUser = useCallback(() => {
@@ -452,19 +495,33 @@ export default function StoreResultsMap({
                 {pinsByZ.map(pin => {
                     const spec = specForPin(pin);
                     const zRank = zRankMap.get(pin.storeId) ?? 0;
-                    const uri = spec ? uriFor(spec.key) : undefined;
+                    const fresh = spec ? sizeFor(spec.key) : undefined; // {uri,w,h} baked together
+                    // While a variant change re-bakes (selected↔neutral), keep showing the
+                    // LAST baked pill (uri AND size) instead of dropping to the bare badge.
+                    if (fresh) lastPillUriRef.current.set(pin.storeId, { uri: fresh.uri, w: fresh.w, h: fresh.h });
+                    const shown = fresh ?? (Platform.OS === 'ios' ? lastPillUriRef.current.get(pin.storeId) : undefined);
+                    const uri = shown?.uri;
                     return (
                         <MapPillMarker
-                            // Remount (→ re-rasterise) on z-rank change OR baked-image change
-                            // (price / cheapest / selected → a new spec key, hence a new image).
-                            // The bake state ('b'adge → 'p'ill) is in the key too: on iOS an
-                            // IN-PLACE image upgrade decodes into the marker's stale badge-sized
-                            // bounds (AIRMapMarker size:self.bounds.size) → tiny pills; the
-                            // remount decodes at natural size (see StoreResolutionOverlay).
-                            key={`${pin.storeId}-${zRank}-${spec ? spec.key : 'np'}-${uri ? 'p' : 'b'}`}
+                            // iOS: key = storeId + the exact IMAGE shown. An image change must
+                            // REMOUNT its marker — an in-place `image` swap on a mounted marker
+                            // (tracksViewChanges=false) silently fails to refresh, which left
+                            // pills invisible/stale after option switches. What the key must
+                            // NOT contain is the z-RANK: rank shuffles on every selection, and
+                            // an all-pins remount + reorder is the interop insert/remove storm
+                            // that threw AIRMap's NSRangeException. So: stable order (storeId),
+                            // zIndex for stacking, remounts only for the 1-3 pins whose baked
+                            // image actually changed.
+                            // Android: remount on z-rank / baked-image change — insertion order
+                            // is the only stacking control there, and in-place image swaps
+                            // rasterise unreliably (see MapPill notes).
+                            key={Platform.OS === 'ios'
+                                ? `s-${pin.storeId}-${uri ?? 'badge'}`
+                                : `${pin.storeId}-${zRank}-${spec ? spec.key : 'np'}-${uri ? 'p' : 'b'}`}
                             coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
                             chainId={pin.chainId}
                             pillUri={uri}
+                            pillSize={shown ? { w: shown.w, h: shown.h } : undefined}
                             dimmed={anySelected && !pin.active}
                             zIndex={zRank * 2}
                             anchorBaked={{ x: 0.16, y: 0.5 }}
@@ -479,13 +536,19 @@ export default function StoreResultsMap({
             {bakery}
 
             {/* Floating controls — top-right, clear of the status bar. */}
+            {/* Same liquid-glass treatment as the store-count switcher up top
+                (LiquidGlass, solid fallback = the previous look on Android/old iOS). */}
             <View style={[styles.controls, { top: insets.top + spacing.md }]} pointerEvents="box-none">
-                <TouchableOpacity style={styles.ctrlBtn} onPress={fitAll} activeOpacity={0.8}>
-                    <Ionicons name="scan-outline" size={iconSize.md} color={colors.textPrimary} />
+                <TouchableOpacity onPress={fitAll} activeOpacity={0.8}>
+                    <LiquidGlass style={styles.ctrlBtn} fallback="solid">
+                        <Ionicons name="scan-outline" size={iconSize.md} color={colors.textPrimary} />
+                    </LiquidGlass>
                 </TouchableOpacity>
                 {userCoords && (
-                    <TouchableOpacity style={styles.ctrlBtn} onPress={goToUser} activeOpacity={0.8}>
-                        <Ionicons name="locate" size={iconSize.md} color={colors.primary} />
+                    <TouchableOpacity onPress={goToUser} activeOpacity={0.8}>
+                        <LiquidGlass style={styles.ctrlBtn} fallback="solid">
+                            <Ionicons name="locate" size={iconSize.md} color={colors.primary} />
+                        </LiquidGlass>
                     </TouchableOpacity>
                 )}
             </View>

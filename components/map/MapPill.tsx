@@ -36,7 +36,7 @@ export interface MapPillSpec {
 }
 
 // ── Off-screen renderer: lays a pill out at natural size + snapshots it ──────
-function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: string, uri: string) => void; onFail: (key: string) => void }) {
+function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: string, uri: string, w: number, h: number) => void; onFail: (key: string) => void }) {
   const colors = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const ref = useRef<View>(null);
@@ -55,9 +55,10 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
   const [ready, setReady] = useState(false);
   const [badgeLoaded, setBadgeLoaded] = useState(badge == null);
 
+  const sizeRef = useRef({ w: 0, h: 0 });
   const onLayout = useCallback((e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
-    if (width > 1 && height > 1) setReady(true);
+    if (width > 1 && height > 1) { sizeRef.current = { w: width, h: height }; setReady(true); }
   }, []);
 
   // Snapshot once the pill is rounded at a real size AND its logo has loaded. onFail (on error
@@ -76,7 +77,7 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
       raf2 = requestAnimationFrame(() => {
         if (cancelled || !ref.current) return;
         captureRef(ref.current, { format: 'png', result: 'tmpfile', quality: 1 })
-          .then((uri) => onShot(spec.key, uri))
+          .then((uri) => onShot(spec.key, uri, sizeRef.current.w, sizeRef.current.h))
           .catch(() => onFail(spec.key));
       });
     });
@@ -85,7 +86,7 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
 
   useEffect(() => {
     if (ready) return;
-    const t = setTimeout(() => onFail(spec.key), 1500);
+    const t = setTimeout(() => onFail(spec.key), 2500);
     return () => clearTimeout(t);
   }, [ready, onFail, spec.key]);
 
@@ -141,21 +142,31 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
  */
 export function useBakedPills(specs: MapPillSpec[]): {
   uriFor: (key: string) => string | undefined;
+  /** Baked image's dp size — for the iOS CHILD-image marker path. */
+  sizeFor: (key: string) => { uri: string; w: number; h: number } | undefined;
   /** Keys whose pill has baked, in COMPLETION order. Render markers in this order so the
    *  on-map list only ever grows at the end (append-only) — no mid-list insert (the iOS
    *  AIRMap crash) and no badge→pill in-place swap (the "rectangle"). */
   bakedKeys: string[];
   bakery: React.ReactNode;
 } {
-  const [uris, setUris] = useState<Record<string, string>>({});
+  const [uris, setUris] = useState<Record<string, { uri: string; w: number; h: number }>>({});
   // `done` (captured OR failed) drives the throttle window so it advances even on a failed capture.
   const [done, setDone] = useState<Record<string, true>>({});
-  const onShot = useCallback((key: string, uri: string) => {
-    setUris((prev) => (prev[key] === uri ? prev : { ...prev, [key]: uri }));
+  const onShot = useCallback((key: string, uri: string, w: number, h: number) => {
+    setUris((prev) => (prev[key]?.uri === uri ? prev : { ...prev, [key]: { uri, w, h } }));
     setDone((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
   }, []);
+  // Bounded RETRY on failure: view-shot capture is flaky under load (the 2.5s
+  // watchdog or a transient 0x0 frame) — a permanent fail left the marker a
+  // bare badge until something changed its spec key (the "recommended pin
+  // missing on load" bug). Remount the shot (attempt-keyed) up to 3 tries.
+  const failsRef = useRef<Record<string, number>>({});
+  const [, setRetryTick] = useState(0);
   const onFail = useCallback((key: string) => {
-    setDone((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+    const n = (failsRef.current[key] = (failsRef.current[key] ?? 0) + 1);
+    if (n >= 3) setDone((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
+    else setRetryTick((t) => t + 1); // re-render → the shot remounts with a fresh attempt key
   }, []);
   // THROTTLE: bake at most BAKE_CONCURRENCY pills at once. Capturing many rounded views via
   // react-native-view-shot simultaneously floods native/Skia memory and segfaults
@@ -164,12 +175,12 @@ export function useBakedPills(specs: MapPillSpec[]): {
   const active = specs.filter((s) => !done[s.key]).slice(0, BAKE_CONCURRENCY);
   const bakery = (
     <View style={styles_bakeryHost} pointerEvents="none">
-      {active.map((spec) => <PillShot key={spec.key} spec={spec} onShot={onShot} onFail={onFail} />)}
+      {active.map((spec) => <PillShot key={`${spec.key}#${failsRef.current[spec.key] ?? 0}`} spec={spec} onShot={onShot} onFail={onFail} />)}
     </View>
   );
   // Object key order is insertion order, and onShot inserts on capture completion → this is
   // the bake-completion order.
-  return { uriFor: (key) => uris[key], bakedKeys: Object.keys(uris), bakery };
+  return { uriFor: (key) => uris[key]?.uri, sizeFor: (key: string) => uris[key], bakedKeys: Object.keys(uris), bakery };
 }
 
 const BAKE_CONCURRENCY = 4;
@@ -191,6 +202,7 @@ export function MapPillMarker({
   coordinate,
   chainId,
   pillUri,
+  pillSize,   // reserved: used by the child-image path once the rebuilt client ships
   dimmed = false,
   zIndex = 1,
   anchorBaked = { x: 0.18, y: 0.5 },
@@ -199,6 +211,10 @@ export function MapPillMarker({
   coordinate: { latitude: number; longitude: number };
   chainId: number;
   pillUri?: string;
+  /** Baked pill's dp size (from useBakedPills.sizeFor) — reserved for the
+   *  child-image marker path (needs the rebuilt client with the AIRMapMarker
+   *  clamp; see MapPillMarker body). */
+  pillSize?: { w: number; h: number };
   dimmed?: boolean;
   zIndex?: number;
   /** Where the geographic point sits on the baked pill — defaults near the logo
@@ -206,9 +222,16 @@ export function MapPillMarker({
   anchorBaked?: { x: number; y: number };
   onPress?: () => void;
 }) {
+  void pillSize; // see prop doc — reserved for the post-rebuild child-image path
   const baked: ImageSourcePropType | null = pillUri ? { uri: pillUri } : null;
   const badge = chainBadgeImage(chainId);
   const source: ImageSourcePropType | null = baked ?? (badge != null ? badge : null);
+  // CHILD-LESS image-prop marker on ALL platforms. Marker CHILDREN route
+  // through AIRMapMarker.insertReactSubview, which is unclamped until the
+  // dev client is REBUILT with the extended react-native-maps patch — on the
+  // current build a child-image marker storm crashes at map load. A late-
+  // mounted image marker paints once the camera moves, which the results map
+  // guarantees by re-framing whenever the pin set changes.
   if (source == null) return null;
   return (
     <Marker
@@ -257,7 +280,7 @@ function ClusterShot({ spec, onShot, onFail }: { spec: MapClusterSpec; onShot: (
   }, [ready, spec.key, onShot, onFail]);
   useEffect(() => {
     if (ready) return;
-    const t = setTimeout(() => onFail(spec.key), 1500);
+    const t = setTimeout(() => onFail(spec.key), 2500);
     return () => clearTimeout(t);
   }, [ready, onFail, spec.key]);
   return (

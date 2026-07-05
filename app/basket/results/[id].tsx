@@ -374,13 +374,17 @@ export default function BasketResultsScreen() {
             })),
         [pinStores, activeIds, pinPriceByStore, recommendedStoreIds]);
 
-    // The recommended option's representative point — the map centers here on
-    // load (a single store, or the first store of a recommended split).
+    // The recommended option's store coordinates — the map frames ALL of them on
+    // load (fit for a split, center for a single) so a combo partner is never
+    // left outside the initial viewport.
     const recommendedCoords = useMemo(() => {
-        const s = recommendedStores[0] ?? singlePriced.find(x => x.storeId === cheapestStoreId);
-        return s && s.latitude != null && s.longitude != null
-            ? { latitude: s.latitude as number, longitude: s.longitude as number }
-            : null;
+        const stores = recommendedStores.length
+            ? recommendedStores
+            : [singlePriced.find(x => x.storeId === cheapestStoreId)].filter((x): x is NonNullable<typeof x> => !!x);
+        const cs = stores
+            .filter(s => s.latitude != null && s.longitude != null)
+            .map(s => ({ latitude: s.latitude as number, longitude: s.longitude as number }));
+        return cs.length ? cs : null;
     }, [recommendedStores, singlePriced, cheapestStoreId]);
 
     // Coords the map zooms to: the selected option's store(s), or null = fit all.
