@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { API_BASE_URL } from '../config/api';
-import { getUserId } from '../config/user';
+import { getUserId, reclaimAnonSessionToken } from '../config/user';
 
 export interface ProfileData {
     points: number;
@@ -60,10 +60,20 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
         set({ fetching: true });
         try {
             const userId = await getUserId();
-            const [profileRes, statsRes] = await Promise.all([
+            const load = () => Promise.all([
                 fetch(`${API_BASE_URL}/api/users/${userId}/profile`),
                 fetch(`${API_BASE_URL}/api/users/${userId}/stats`),
             ]);
+            let [profileRes, statsRes] = await load();
+            // Stale/pre-hardening session token → the self-only routes 401.
+            // Re-claim the anon token once and retry (empty charts + missing
+            // savings card came from storing the 401 error body as "stats").
+            if (profileRes.status === 401 || statsRes.status === 401) {
+                if (await reclaimAnonSessionToken()) [profileRes, statsRes] = await load();
+            }
+            // NEVER store a non-OK body — `{error}` parsed as stats blanked the
+            // whole profile screen. Keep previous data instead.
+            if (!profileRes.ok || !statsRes.ok) return;
             const profile = await profileRes.json();
             const stats = await statsRes.json();
             set({ profile, stats, lastFetched: Date.now() });

@@ -85,6 +85,34 @@ async function syncToBackendIfNeeded(userId: string): Promise<void> {
     }
 }
 
+/**
+ * Force-reclaim the anonymous session token (POST /users → { token }), ignoring
+ * the synced flag. Self-heal for per-user routes that started 401-ing because the
+ * persisted token predates the auth hardening (or expired): callers retry once
+ * after this succeeds. Returns false for verified users (their token comes from
+ * the OAuth flow, POST /users deliberately mints none) and on network failure.
+ */
+export const reclaimAnonSessionToken = async (): Promise<boolean> => {
+    try {
+        const userId = await getUserId();
+        const res = await fetch(`${API_BASE_URL}/api/users`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: userId }),
+        });
+        if (!res.ok) return false;
+        const data = await res.json().catch(() => ({} as any));
+        if (data && typeof data.token === 'string' && data.token) {
+            setAnonSessionTokenMem(data.token);
+            await saveAnonSessionToken(data.token);
+            return true;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+};
+
 export const getUserId = async (): Promise<string> => {
     if (!initPromise) {
         initPromise = initUserId();
