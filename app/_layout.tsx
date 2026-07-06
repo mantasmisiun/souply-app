@@ -19,6 +19,7 @@ import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { UsernameGate } from '../components/UsernameGate';
 import UpdateGateModal from '../components/UpdateGateModal';
 import { useAppUpdates } from '../hooks/useAppUpdates';
+import { devicePdfAvailable, convertPdfOnDevice } from '../utils/receiptPdf';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
@@ -74,11 +75,32 @@ async function normalizeToLocalUri(uri: string, ext = '.tmp'): Promise<string> {
 }
 
 /**
- * Convert a PDF file:// path to PNG temp files via the server's
- * /api/receipts/pdf-to-image endpoint. Returns file:// URIs for each page.
+ * Convert a PDF file:// path to PNG temp files. ON-DEVICE first (native
+ * souply-receipt-pdf module: lossless wrapper extraction + enhancement, PDFKit
+ * render fallback) — the raw PDF carries unmasked PII, so it should not leave
+ * the phone, and this also works offline. The server /api/receipts/pdf-to-image
+ * endpoint remains the fallback for Android and dev clients predating the
+ * native build. Returns file:// URIs for each page.
  */
 async function pdfToImageUris(pdfPath: string): Promise<string[]> {
   const localPath = await normalizeToLocalUri(pdfPath, '.pdf');
+  if (devicePdfAvailable()) {
+    try {
+      const { pages, method } = await convertPdfOnDevice(localPath);
+      console.log(`[ShareHandler] pdf converted on-device (${method}, ${pages.length} page(s))`);
+      // Move out of the temp dir — downstream keeps these URIs through OCR,
+      // upload and the ensemble second pass; tmp can be purged by the OS.
+      const uris: string[] = [];
+      for (let i = 0; i < pages.length; i++) {
+        const dest = `${FileSystem.cacheDirectory}share_pdf_page_${Date.now()}_${i}.png`;
+        await FileSystem.moveAsync({ from: pages[i], to: dest });
+        uris.push(dest);
+      }
+      return uris;
+    } catch (e) {
+      console.log('[ShareHandler] on-device pdf convert failed → server fallback:', e);
+    }
+  }
   const base64 = await FileSystem.readAsStringAsync(localPath, {
     encoding: FileSystem.EncodingType.Base64,
   });

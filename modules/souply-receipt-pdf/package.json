@@ -1,0 +1,6 @@
+{
+  "name": "souply-receipt-pdf",
+  "version": "0.1.0",
+  "description": "iOS-only on-device receipt-PDF conversion: lossless embedded-image extraction (image-wrapper share-PDFs) + Core Image OCR enhancement, PDFKit page render fallback",
+  "main": "index.ts"
+}
