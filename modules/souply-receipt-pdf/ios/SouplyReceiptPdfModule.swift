@@ -122,8 +122,8 @@ public class SouplyReceiptPdfModule: Module {
       CGPDFDictionaryGetInteger(streamDict, "Height", &height)
       var format = CGPDFDataFormat.raw
       let cfData = CGPDFStreamCopyData(stream, &format)
-      // DCTDecode (.jpegEncoded) / JPX streams are complete image files as-is.
-      let data: Data? = (format == .jpegEncoded || format == .JPX) ? (cfData as Data?) : nil
+      // DCTDecode (.jpegEncoded) / JPEG2000 streams are complete image files as-is.
+      let data: Data? = (format == .jpegEncoded || format == .jpeg2000) ? (cfData as Data?) : nil
       collector.images.append((data: data, width: Int(width), height: Int(height)))
       return true
     }, info)
