@@ -130,7 +130,7 @@ import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
 import { redactReceiptText, detectCardMaskBands, clampMaskBandsToProtected, wordCentreInMaskBand, looksLikePiiText, type MaskBand } from "@shared/parsers/cardMaskDetection";
 import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
 import { requestStoreResolution, completeStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
-import { ocrReceiptPages, computeReceiptXBoundsForPage } from "../utils/receiptOcrPipeline";
+import { ocrReceiptPages, computeReceiptXBoundsForPage, reocrFusedRows } from "../utils/receiptOcrPipeline";
 import { ensembleSecondOpinion } from "../utils/parseEnsemble";
 import { StoreResolutionOverlay } from "../components/receipt/StoreResolutionOverlay";
 import { ocrImageEnhanced } from "../utils/mlkitOcr";
@@ -2566,6 +2566,12 @@ export default function ProcessReceiptScreen() {
         // lines already in page-pixel space with any per-tile offsets
         // applied, plus the pixelWidth/Height matching that space.
         const ocr = await ocrImageEnhanced(pageUri, 'auto', { document: fromPdfParam === '1' });
+        // Fused-row strip re-OCR — SAME healing pass as the shared pipeline
+        // (ocrReceiptPages) runs for the batch/recovery paths, so interactive
+        // scans can't diverge. Document pages only; fail-safe no-op otherwise.
+        if (fromPdfParam === '1') {
+          ocr.lines = await reocrFusedRows(pageUri, ocr.pixelWidth, ocr.pixelHeight, ocr.lines as any, 'auto') as any;
+        }
         const pageDims = { width: ocr.pixelWidth, height: ocr.pixelHeight };
         if (pageIdx === 0) firstPageDims = pageDims;
         if (pageIdx === 0) firstPageUri = pageUri;

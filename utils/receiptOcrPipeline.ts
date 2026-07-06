@@ -221,6 +221,182 @@ export async function cropToContentBounds(
     return { uri: out.uri, width: out.width, height: out.height };
 }
 
+// ── FUSED-ROW STRIP RE-OCR (document mode) ─────────────────────────────────
+// Vision/ML Kit occasionally merge two printed rows into ONE double-height
+// garbled line even when the pixels are pristine and cleanly separated — a
+// layout-specific line-GROUPING failure (0AE04F24: the short "RIMI SMART, 1 l"
+// row chained into "Makaronai be glitimo BARILLA" below it at every image
+// quality, while the identical product block on 26117700 read perfectly).
+// The cure is context isolation: crop exactly the fused box's y-range and
+// re-OCR the strip alone — with nothing to mis-group against, engines read
+// isolated strips reliably. The strip's lines then REPLACE everything whose
+// center falls in that range (the fused box AND partial duplicate reads like
+// a lone "Makaronai" or the same-row price, which the full-width strip
+// re-reads). Fail-safe: the splice is accepted only when the strip read is
+// demonstrably better — otherwise the fused box stays and the parser-side
+// quarantine handles it exactly as before.
+
+const isFusedBodyText = (l: { text: string }): boolean =>
+    l.text.trim().length >= 8 && l.text.trim().includes(' ');
+
+export interface FusedStripPlan {
+    /** Crop bounds (page-local px). */
+    top: number;
+    bottom: number;
+    /** The fused line's text (for logging). */
+    fusedText: string;
+    /** Indices (into the page's line array) replaced by the strip's read. */
+    replacedIdx: number[];
+    /** Median body-line height (acceptance check reuses it). */
+    medianH: number;
+}
+
+/**
+ * Pure planner: find fused boxes (double-height body lines spanning two
+ * mutually-disjoint rows — same signature as the Rimi parser / ensemble
+ * detectors) and compute for each the strip bounds + the lines the strip
+ * replaces. Exported for tests.
+ */
+export function planFusedStrips(
+    lines: { text: string; yTop: number; yBottom: number }[],
+    pageHeight: number,
+): FusedStripPlan[] {
+    const hs = lines
+        .filter(isFusedBodyText)
+        .map((l) => l.yBottom - l.yTop)
+        .filter((h) => h > 0)
+        .sort((a, b) => a - b);
+    if (hs.length < 8) return [];
+    const medianH = hs[Math.floor(hs.length / 2)];
+    if (!(medianH > 0)) return [];
+
+    const spansTwoRows = (c: { yTop: number; yBottom: number }): boolean => {
+        const inside = lines.filter((o) => {
+            if (o === c) return false;
+            const oh = o.yBottom - o.yTop;
+            if (oh <= 0) return false;
+            const ov = Math.min(o.yBottom, c.yBottom) - Math.max(o.yTop, c.yTop);
+            return ov >= 0.6 * oh;
+        });
+        for (let a = 0; a < inside.length; a++) {
+            for (let b = a + 1; b < inside.length; b++) {
+                const la = inside[a], lb = inside[b];
+                const ov = Math.min(la.yBottom, lb.yBottom) - Math.max(la.yTop, lb.yTop);
+                const minH = Math.min(la.yBottom - la.yTop, lb.yBottom - lb.yTop);
+                if (ov < 0.3 * minH) return true;
+            }
+        }
+        return false;
+    };
+
+    const plans: FusedStripPlan[] = [];
+    const claimed = new Set<number>();
+    for (let i = 0; i < lines.length && plans.length < 4; i++) {
+        const l = lines[i];
+        const h = l.yBottom - l.yTop;
+        if (!isFusedBodyText(l)) continue;
+        if (h < 1.75 * medianH || h > 3.5 * medianH) continue;
+        if (!spansTwoRows(l)) continue;
+        if (claimed.has(i)) continue;
+        const pad = Math.max(6, Math.round(0.12 * h));
+        const top = Math.max(0, Math.round(l.yTop - pad));
+        const bottom = Math.min(pageHeight, Math.round(l.yBottom + pad));
+        if (bottom - top < 20) continue;
+        const replacedIdx: number[] = [];
+        for (let j = 0; j < lines.length; j++) {
+            const c = (lines[j].yTop + lines[j].yBottom) / 2;
+            if (c >= top && c <= bottom) {
+                replacedIdx.push(j);
+                claimed.add(j);
+            }
+        }
+        plans.push({ top, bottom, fusedText: l.text, replacedIdx, medianH });
+    }
+    return plans;
+}
+
+/** Accept a strip read only when it is demonstrably BETTER than what it
+ *  replaces: no line still fused-tall, at least two distinct rows, and it
+ *  covers the replaced text (≥70% of the character mass, ≥ as many lines).
+ *  Exported for tests. */
+export function stripReadAcceptable(
+    stripLines: { text: string; yTop: number; yBottom: number }[],
+    replaced: { text: string }[],
+    medianH: number,
+): boolean {
+    if (stripLines.length < Math.max(2, replaced.length)) return false;
+    if (stripLines.some((l) => isFusedBodyText(l) && l.yBottom - l.yTop >= 1.75 * medianH)) return false;
+    const sorted = [...stripLines].sort((a, b) => a.yTop - b.yTop);
+    let rows = 1;
+    for (let i = 1; i < sorted.length; i++) {
+        const prev = sorted[i - 1], cur = sorted[i];
+        const ov = Math.min(prev.yBottom, cur.yBottom) - Math.max(prev.yTop, cur.yTop);
+        if (ov < 0.5 * Math.min(prev.yBottom - prev.yTop, cur.yBottom - cur.yTop)) rows++;
+    }
+    if (rows < 2) return false;
+    const removedLen = replaced.reduce((s, l) => s + l.text.trim().length, 0);
+    const gotLen = stripLines.reduce((s, l) => s + l.text.trim().length, 0);
+    return gotLen >= 0.7 * removedLen;
+}
+
+export async function reocrFusedRows(
+    pageUri: string,
+    pageWidth: number,
+    pageHeight: number,
+    lines: LineWithFrame[],
+    engine: OcrEngine,
+): Promise<LineWithFrame[]> {
+    const plans = planFusedStrips(lines, pageHeight);
+    if (plans.length === 0) return lines;
+    const dropIdx = new Set<number>();
+    const spliced: LineWithFrame[] = [];
+    for (const plan of plans) {
+        try {
+            const strip = await ImageManipulator.manipulateAsync(
+                pageUri,
+                [{ crop: { originX: 0, originY: plan.top, width: pageWidth, height: plan.bottom - plan.top } }],
+                { compress: 1, format: ImageManipulator.SaveFormat.PNG },
+            );
+            const stripOcr = await ocrImageEnhanced(strip.uri, engine, { document: true });
+            const offY = (v: number | undefined) => (v == null ? undefined : v + plan.top);
+            const remapped: LineWithFrame[] = stripOcr.lines.map((l) => ({
+                text: l.text,
+                yTop: l.yTop + plan.top,
+                yBottom: l.yBottom + plan.top,
+                xLeft: l.xLeft,
+                xRight: l.xRight,
+                yLeftTop: offY(l.yLeftTop),
+                yRightTop: offY(l.yRightTop),
+                yLeftBottom: offY(l.yLeftBottom),
+                yRightBottom: offY(l.yRightBottom),
+                words: l.words?.map((w) => ({
+                    ...w, yTop: w.yTop + plan.top, yBottom: w.yBottom + plan.top,
+                    cornerPoints: w.cornerPoints?.map((p) => ({ x: p.x, y: p.y + plan.top })),
+                })),
+            }));
+            const replaced = plan.replacedIdx.map((i) => lines[i]);
+            if (stripReadAcceptable(remapped, replaced, plan.medianH)) {
+                plan.replacedIdx.forEach((i) => dropIdx.add(i));
+                spliced.push(...remapped);
+                console.log(
+                    `[fusedReocr] strip y${plan.top}-${plan.bottom}: ${replaced.length}→${remapped.length} lines; ` +
+                    `"${plan.fusedText.slice(0, 32)}" → ${remapped.map((l) => `"${l.text.slice(0, 24)}"`).join(' | ')}`,
+                );
+            } else {
+                console.log(
+                    `[fusedReocr] strip y${plan.top}-${plan.bottom} REJECTED (kept fused box "${plan.fusedText.slice(0, 32)}")`,
+                );
+            }
+        } catch (e) {
+            console.log('[fusedReocr] strip failed (kept original):', e);
+        }
+    }
+    if (dropIdx.size === 0) return lines;
+    const out = lines.filter((_, i) => !dropIdx.has(i)).concat(spliced);
+    out.sort((a, b) => a.yTop - b.yTop);
+    return out;
+}
+
 /**
  * OCR every page (rotating to portrait + auto-tiling tall images via
  * `ocrImageTiled`), concatenate with per-page y-offsets so multi-page e-receipts
@@ -249,9 +425,17 @@ export async function ocrReceiptPages(
             firstPageHeight = ocr.pixelHeight;
         }
 
+        // Document pages only: heal fused double-height boxes by re-OCRing
+        // their strip in isolation (photos skew-inflate boxes and never enter
+        // planFusedStrips' two-disjoint-rows signature reliably — and their
+        // recovery path is the Android whole-section re-OCR instead).
+        const pageLines = opts.document
+            ? await reocrFusedRows(pageUri, ocr.pixelWidth, ocr.pixelHeight, ocr.lines as LineWithFrame[], engine)
+            : (ocr.lines as LineWithFrame[]);
+
         let pageMaxYScaled = 0;
         const off = (v: number | undefined) => (v == null ? undefined : v + yOffset);
-        for (const line of ocr.lines) {
+        for (const line of pageLines) {
             if (line.yBottom > pageMaxYScaled) pageMaxYScaled = line.yBottom;
             allLines.push({
                 text: line.text,
@@ -269,7 +453,7 @@ export async function ocrReceiptPages(
                 })),
             });
         }
-        const xb = computeReceiptXBoundsForPage(ocr.lines, ocr.pixelWidth, `PAGE ${pageIdx + 1}`);
+        const xb = computeReceiptXBoundsForPage(pageLines, ocr.pixelWidth, `PAGE ${pageIdx + 1}`);
         pageMetas.push({
             uri: pageUri,
             pixelWidth: ocr.pixelWidth,
