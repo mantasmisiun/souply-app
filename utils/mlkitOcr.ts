@@ -228,8 +228,8 @@ const FUSION_UPSCALE_TARGET = 2600;
  * Vision) — so it can never regress the happy path. THIS is the funnel the
  * pipeline calls.
  */
-export async function ocrImageEnhanced(uri: string, engine: OcrEngine = 'auto'): Promise<OcrResult> {
-    const base = await ocrImageTiled(uri, engine);
+export async function ocrImageEnhanced(uri: string, engine: OcrEngine = 'auto', opts: OcrTileOptions = {}): Promise<OcrResult> {
+    const base = await ocrImageTiled(uri, engine, opts);
     if (Platform.OS !== 'android' || !isDegradedOcr(base)) return base;
 
     const variants: OcrResult[] = [];
@@ -264,7 +264,16 @@ export async function ocrImageEnhanced(uri: string, engine: OcrEngine = 'auto'):
     return fused;
 }
 
-export async function ocrImageTiled(uri: string, engine: OcrEngine = 'auto'): Promise<OcrResult> {
+export interface OcrTileOptions {
+    /** CLEAN DOCUMENT input (PDF-rendered e-receipt pages, not phone photos):
+     *  skip the iOS row-fragmentation downscale — it was tuned for 3-4k px
+     *  photographed thermal receipts and, applied to a 200-dpi PDF render,
+     *  pushed thin price digits under MLKit's glyph floor (dropped rows).
+     *  Also uses the large-tile geometry (fewer OCR calls → faster). */
+    document?: boolean;
+}
+
+export async function ocrImageTiled(uri: string, engine: OcrEngine = 'auto', opts: OcrTileOptions = {}): Promise<OcrResult> {
     // Probe true pixel dims via ImageManipulator — NOT Image.getSize.
     // On Android, Image.getSize goes through BitmapFactory which auto-
     // downsamples tall bitmaps (a 1080×4885 receipt photo can come
@@ -286,7 +295,7 @@ export async function ocrImageTiled(uri: string, engine: OcrEngine = 'auto'): Pr
     // small captures up to the glyph-size floor. Both re-encode a one-off OCR
     // input and remap coords back to original space via invFactor below.
     let targetWidth: number | null = null;
-    if (Platform.OS === 'ios' && trueWidth > IOS_MAX_WIDTH) {
+    if (Platform.OS === 'ios' && !opts.document && trueWidth > IOS_MAX_WIDTH) {
         targetWidth = IOS_MAX_WIDTH;
     } else if (Platform.OS === 'android' && trueWidth > 0 && trueWidth < ANDROID_MIN_OCR_WIDTH) {
         const factor = Math.min(ANDROID_MIN_OCR_WIDTH / trueWidth, ANDROID_MAX_UPSCALE);
@@ -349,9 +358,16 @@ export async function ocrImageTiled(uri: string, engine: OcrEngine = 'auto'): Pr
               }
     );
 
+    // Tile geometry: photo defaults are platform-tuned (small iOS tiles fight
+    // row fragmentation on photographed receipts); DOCUMENT mode uses the large
+    // geometry on both platforms — fewer tiles, fewer OCR calls, faster.
+    const tileHeight = opts.document ? 3000 : TILE_HEIGHT;
+    const tileOverlap = opts.document ? 300 : TILE_OVERLAP;
+    const tilingThreshold = opts.document ? 3500 : TILING_THRESHOLD;
+
     // Short image — single-shot path matches the legacy pipeline so
     // existing parser/RegionPreview math stays valid.
-    if (workingHeight <= TILING_THRESHOLD) {
+    if (workingHeight <= tilingThreshold) {
         const res = await runMlkitOnUri(srcUri, 0, workingWidth, workingHeight, engine);
         const remapped = res.lines.map(remap);
         // Parsers assume y-sorted lines (findHeaderEnd scans the first
@@ -389,10 +405,10 @@ export async function ocrImageTiled(uri: string, engine: OcrEngine = 'auto'): Pr
     const tiles: { yStart: number; h: number }[] = [];
     let y = 0;
     while (y < workingHeight) {
-        const h = Math.min(TILE_HEIGHT, workingHeight - y);
+        const h = Math.min(tileHeight, workingHeight - y);
         tiles.push({ yStart: y, h });
         if (y + h >= workingHeight) break;
-        y += TILE_HEIGHT - TILE_OVERLAP;
+        y += tileHeight - tileOverlap;
     }
 
     // OCR tiles in parallel. Each tile's result coords are returned

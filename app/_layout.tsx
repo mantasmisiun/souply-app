@@ -114,10 +114,12 @@ function ShareHandler() {
   const navigateWithFiles = async (files: { path: string; mimeType: string }[]) => {
     try {
       const allUris: string[] = [];
+      let anyPdf = false;
       for (const file of files) {
         const isPdf = file.mimeType === 'application/pdf' ||
           file.path.toLowerCase().endsWith('.pdf');
         if (isPdf) {
+          anyPdf = true;
           const pages = await pdfToImageUris(file.path);
           allUris.push(...pages);
         } else {
@@ -125,9 +127,12 @@ function ShareHandler() {
         }
       }
       if (allUris.length === 0) return;
-      const params = allUris.length === 1
+      const params: Record<string, string> = allUris.length === 1
         ? { uri: allUris[0] }
         : { uris: allUris.map(encodeURIComponent).join(',') };
+      // PDF-rendered pages get DOCUMENT-fidelity OCR (no photo downscale —
+      // that pushed thin price digits under ML Kit's glyph floor).
+      if (anyPdf) params.fromPdf = '1';
       router.push({ pathname: '/receipt-process', params } as any);
     } catch (e) {
       console.error('[ShareHandler] failed to process shared file:', e);

@@ -23,9 +23,7 @@
 
 import {
     Ionicons } from '@expo/vector-icons';
-import TextRecognition from '@react-native-ml-kit/text-recognition';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as ImageManipulator from 'expo-image-manipulator';
 import { activateKeepAwakeAsync,
     deactivateKeepAwake } from 'expo-keep-awake';
 import { Stack,
@@ -35,9 +33,7 @@ import { useCallback,
     useRef,
     useState } from 'react';
 import {
-    ActivityIndicator,
     Alert,
-    Image,
     Platform,
     ScrollView,
     StyleSheet,
@@ -47,8 +43,9 @@ import {
     View,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
-import { ocrImageTiled } from '../../utils/mlkitOcr';
 import { API_BASE_URL } from '../../config/api';
+import { ocrReceiptPages } from '../../utils/receiptOcrPipeline';
+import { ensembleSecondOpinion } from '../../utils/parseEnsemble';
 import { getUserId } from '../../config/user';
 import {
     isIkiReceipt,
@@ -250,55 +247,10 @@ const downloadPageToCache = async (chain: ChainName, pageName: string): Promise<
 };
 
 /**
- * OCR one PNG → `PageLine[]` + native pixel dims (after the rotate
- * step). Dims are needed by the dev receipt-detail screen to scale
- * V2's band y-coords (in image-pixel space) to display-pixel space
- * when overlaying band rectangles on the rendered image.
+ * (Per-page OCR now goes through the SHARED ocrReceiptPages pipeline —
+ * the batch must run exactly what the Analyze scan runs.)
  */
-const ocrImage = async (
-    uri: string,
-): Promise<{ lines: PageLine[]; pixelWidth: number; pixelHeight: number }> => {
-    const rotated = await ensurePortrait(uri);
-    const result = await ocrImageTiled(rotated);
-    return {
-        lines: result.lines,
-        pixelWidth: result.pixelWidth,
-        pixelHeight: result.pixelHeight,
-    };
-};
 
-/**
- * Rotate sideways photos upright before OCR. Scanned-PDF pages are
- * already portrait; phone photos are where this matters. Heuristic: if
- * the image is wider than tall, OCR both rotations and pick whichever
- * produces more non-trivial text lines.
- */
-const ensurePortrait = async (uri: string): Promise<string> => {
-    const { width, height } = await new Promise<{ width: number; height: number }>(
-        (resolve, reject) => {
-            Image.getSize(uri, (w, h) => resolve({ width: w, height: h }), reject);
-        }
-    );
-    if (height >= width) return uri;
-    const cw = await ImageManipulator.manipulateAsync(uri, [{ rotate: 90 }], {
-        compress: 1,
-        format: ImageManipulator.SaveFormat.JPEG,
-    });
-    const ccw = await ImageManipulator.manipulateAsync(uri, [{ rotate: -90 }], {
-        compress: 1,
-        format: ImageManipulator.SaveFormat.JPEG,
-    });
-    const [cwRes, ccwRes] = await Promise.all([
-        TextRecognition.recognize(cw.uri),
-        TextRecognition.recognize(ccw.uri),
-    ]);
-    const count = (r: any) =>
-        r.blocks.reduce(
-            (acc: number, b: any) => acc + b.lines.filter((l: any) => l.text.trim().length >= 3).length,
-            0
-        );
-    return count(cwRes) >= count(ccwRes) ? cw.uri : ccw.uri;
-};
 
 const detectChain = (lines: PageLine[]): ChainName | null => {
     const texts = lines.map((l) => l.text);
@@ -345,7 +297,10 @@ const fetchAltMatches = async (
             // penalties when fed in.
             const matchAmount = p.parsedAmount ?? null;
             const matchUnit = p.parsedUnit ?? null;
-            const url = `${API_BASE_URL}/api/store-products/match?chainId=${chainId}&name=${encodeURIComponent(p.name ?? '')}${matchAmount !== null && matchUnit ? `&amount=${matchAmount}&unit=${encodeURIComponent(matchUnit)}` : ''}`;
+            // by-WEIGHT line (sold per kg) → matcher skips packaged SPs — the
+            // SAME weighable gate the Analyze scan sends (parity requirement).
+            const wParam = p.unit === 'kg' ? '&weighable=1' : '';
+            const url = `${API_BASE_URL}/api/store-products/match?chainId=${chainId}&name=${encodeURIComponent(p.name ?? '')}${matchAmount !== null && matchUnit ? `&amount=${matchAmount}&unit=${encodeURIComponent(matchUnit)}` : ''}${wParam}`;
             const res = await fetch(url);
             const body = await res.json().catch(() => ({}));
             const matches = Array.isArray(body?.matches) ? body.matches : [];
@@ -427,54 +382,64 @@ export default function ReceiptBatchScreen() {
             return { ...row, state: 'error', message: 'missing from manifest' };
         }
 
-        // Download each page into the app's cache, OCR it, then clean
-        // the cache entry. MLKit needs a local file path (won't fetch
-        // over https itself), so the HTTP-delivered PNG is saved to
-        // cacheDirectory for the duration of OCR only.
-        const allLines: PageLine[] = [];
+        // Download each page into the app's cache, then run the SAME shared
+        // pipeline the Analyze scan uses (ocrReceiptPages: rotate → enhanced
+        // OCR → y-offset concat → row merge → per-page x-bounds) — the batch
+        // must never branch off the real scan, or its results stop predicting
+        // what a user sees in Analyze. Cache files stay alive until after the
+        // ensemble (it re-reads them with the second engine).
         const cachedUris: string[] = [];
-        const pageMetas: PageMeta[] = []; // for snapshot → detail screen
-        let yOffset = 0;
+        let allLines: PageLine[] = [];
+        let pageMetas: PageMeta[] = []; // for snapshot → detail screen
+        let detected: ChainName | 'iki' | null = null;
+        let parsed: ReturnType<typeof runParser> = null;
         try {
             for (const pageName of entry.pages) {
-                const localUri = await downloadPageToCache(row.chain, pageName);
-                cachedUris.push(localUri);
-                const { lines: pageLines, pixelWidth, pixelHeight } = await ocrImage(localUri);
-                pageMetas.push({
-                    name: pageName,
-                    pixelWidth,
-                    pixelHeight,
-                    yOffsetInParserSpace: yOffset,
-                });
-                const maxY = pageLines.reduce((m, l) => Math.max(m, l.yBottom), 0);
-                for (const l of pageLines) {
-                    allLines.push({
-                        ...l,
-                        yTop: l.yTop + yOffset,
-                        yBottom: l.yBottom + yOffset,
-                        // keep per-word boxes in the same parser y-space (for word-
-                        // anchored bands); no-op offset on single-page receipts.
-                        words: (l as { words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number }[] }).words
-                            ?.map((w) => ({ ...w, yTop: w.yTop + yOffset, yBottom: w.yBottom + yOffset })),
-                    });
-                }
-                yOffset += maxY + 50;
+                cachedUris.push(await downloadPageToCache(row.chain, pageName));
+            }
+            const ocr = await ocrReceiptPages(cachedUris, 'auto', { document: true });
+            allLines = ocr.allLines as PageLine[];
+            pageMetas = ocr.pageMetas.map((m, i) => ({
+                name: entry.pages[i],
+                pixelWidth: m.pixelWidth,
+                pixelHeight: m.pixelHeight,
+                yOffsetInParserSpace: m.yOffsetScaled,
+                receiptXLeft: m.receiptXLeftScaled,
+                receiptXRight: m.receiptXRightScaled,
+            }));
+
+            detected = detectChain(allLines);
+            if (!detected) {
+                return { ...row, state: 'no-chain', message: 'isXReceipt detectors all false' };
+            }
+
+            // Same parser INPUT as the live scan: IKI parses the merged rows,
+            // the other chains parse raw lines.
+            const linesFor = (o: { allLines: unknown[]; mergedLines: unknown[] }) =>
+                (detected === 'iki' ? o.mergedLines : o.allLines) as PageLine[];
+            parsed = runParser(detected, linesFor(ocr));
+            if (!parsed) {
+                return { ...row, state: 'error', message: 'parser returned null' };
+            }
+
+            // Phase-5 ensemble — SAME shared implementation as the Analyze scan
+            // (flagged primary parse → ML Kit second opinion → arithmetic picks).
+            const outcome = await ensembleSecondOpinion(
+                parsed,
+                cachedUris,
+                (second) => runParser(detected!, linesFor(second))!,
+                { document: true },
+            );
+            if (outcome.engine === 'second' && outcome.secondOcr) {
+                parsed = outcome.parsed;
+                allLines = outcome.secondOcr.allLines as PageLine[];
             }
         } finally {
             for (const u of cachedUris) {
                 FileSystem.deleteAsync(u, { idempotent: true }).catch(() => {});
             }
         }
-
-        const detected = detectChain(allLines);
-        if (!detected) {
-            return { ...row, state: 'no-chain', message: 'isXReceipt detectors all false' };
-        }
-
-        const parsed = runParser(detected, allLines);
-        if (!parsed) {
-            return { ...row, state: 'error', message: 'parser returned null' };
-        }
+        if (!detected || !parsed) return { ...row, state: 'error', message: 'unreachable' };
 
         const chainId = CHAIN_ID[detected as ChainName] ?? 3;
         const storeId = await matchStoreId(chainId, parsed.header?.storeAddress ?? null);
@@ -588,7 +553,7 @@ export default function ReceiptBatchScreen() {
                 // receipts in one Metro log are unambiguous to slice
                 // apart.
                 try {
-                    const trace = traceProductBands(allLines as any);
+                    const trace = traceProductBands(allLines as any, PARSER_OPTS);
                     console.log(
                         `[V2-TRACE BEGIN ${row.sourcePdf}]\n\`\`\`text\n${trace}\n\`\`\`\n[V2-TRACE END ${row.sourcePdf}]`,
                     );

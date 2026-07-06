@@ -40,6 +40,11 @@ export interface PageMeta {
     pixelWidth: number;
     /** Native pixel height of this page's PNG. */
     pixelHeight: number;
+    /** Receipt CONTENT x-bounds (price-column refined, see receiptXBounds) —
+     *  band crops use these to skip the PDF page's white margins. Absent on
+     *  old snapshots → full-width fallback. */
+    receiptXLeft?: number;
+    receiptXRight?: number;
     /**
      * y-offset added to lines from this page when concatenated into
      * the parser's single-y-space input. For single-page receipts

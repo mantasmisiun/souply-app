@@ -130,7 +130,8 @@ import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
 import { redactReceiptText, detectCardMaskBands, clampMaskBandsToProtected, wordCentreInMaskBand, looksLikePiiText, type MaskBand } from "@shared/parsers/cardMaskDetection";
 import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
 import { requestStoreResolution, completeStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
-import { ocrReceiptPages } from "../utils/receiptOcrPipeline";
+import { ocrReceiptPages, computeReceiptXBoundsForPage } from "../utils/receiptOcrPipeline";
+import { ensembleSecondOpinion } from "../utils/parseEnsemble";
 import { StoreResolutionOverlay } from "../components/receipt/StoreResolutionOverlay";
 import { ocrImageEnhanced } from "../utils/mlkitOcr";
 import { refineFooterBands } from "../utils/footerBandRefine";
@@ -638,7 +639,7 @@ function buildParsedData(
 
 export default function ProcessReceiptScreen() {
   const { t } = useTranslation();
-  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, shoppingListId: shoppingListIdParam, expectedChainId: expectedChainIdParam, listMap: listMapParam, reocrReceiptId: reocrReceiptIdParam } = useLocalSearchParams<{
+  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, shoppingListId: shoppingListIdParam, expectedChainId: expectedChainIdParam, listMap: listMapParam, reocrReceiptId: reocrReceiptIdParam, fromPdf: fromPdfParam } = useLocalSearchParams<{
     uri?: string;
     uris?: string;
     receiptId?: string;
@@ -647,6 +648,7 @@ export default function ProcessReceiptScreen() {
      *  The old receipt is deleted just before the new one is POSTed (so a re-parse
      *  that bails to retake doesn't destroy it, and the create isn't a dedup 409). */
     reocrReceiptId?: string;
+    fromPdf?: string;
     /** Single-store list upload: the list row to link the Receipt to. */
     shoppingListId?: string;
     /** Single-store: the list's chain — gate the scan against it. */
@@ -1352,6 +1354,27 @@ export default function ProcessReceiptScreen() {
 
             const applyDims = (w: number, h: number) => {
               setImageDims({ width: w, height: h });
+              // Receipt x-bounds for STORED receipts: 0..w (the full page) leaves
+              // PDF receipts' band crops mostly white margin. The persisted
+              // wordsDump carries every OCR line's x — content extent, refined to
+              // the price column's right edge (the VAT letters are the receipt's
+              // rightmost real content) exactly like the live-scan histogram clamp.
+              let xL = 0;
+              let xR = w;
+              const wd: any[] = Array.isArray((parsed as any)?.wordsDump) ? (parsed as any).wordsDump : [];
+              const xs = wd
+                .map((d: any) => ({ l: Number(d?.x?.[0]), r: Number(d?.x?.[1]), t: String(d?.t ?? '') }))
+                .filter((d) => Number.isFinite(d.l) && Number.isFinite(d.r) && d.r > d.l);
+              if (xs.length >= 5) {
+                xL = Math.max(0, Math.min(...xs.map((d) => d.l)));
+                xR = Math.min(w, Math.max(...xs.map((d) => d.r)));
+                const tails = xs.filter((d) => /-?\d{1,4}[.,]\s?\d{2}\s*[ABC]\s*$/.test(d.t.trim()));
+                if (tails.length >= 3) {
+                  const colRight = Math.max(...tails.map((d) => d.r)) + 12;
+                  if (colRight < xR && colRight > xL + (xR - xL) / 2) xR = colRight;
+                }
+                if (xR <= xL) { xL = 0; xR = w; }
+              }
               setPageMetas([
                 {
                   uri: localUri,
@@ -1360,8 +1383,8 @@ export default function ProcessReceiptScreen() {
                   frameScale: 1,
                   yOffsetScaled: 0,
                   pageMaxYScaled: h,
-                  receiptXLeftScaled: 0,
-                  receiptXRightScaled: w,
+                  receiptXLeftScaled: xL,
+                  receiptXRightScaled: xR,
                 },
               ]);
             };
@@ -2542,7 +2565,7 @@ export default function ProcessReceiptScreen() {
         // which otherwise silently halves character detail. Returns
         // lines already in page-pixel space with any per-tile offsets
         // applied, plus the pixelWidth/Height matching that space.
-        const ocr = await ocrImageEnhanced(pageUri);
+        const ocr = await ocrImageEnhanced(pageUri, 'auto', { document: fromPdfParam === '1' });
         const pageDims = { width: ocr.pixelWidth, height: ocr.pixelHeight };
         if (pageIdx === 0) firstPageDims = pageDims;
         if (pageIdx === 0) firstPageUri = pageUri;
@@ -2581,37 +2604,14 @@ export default function ProcessReceiptScreen() {
           });
         }
 
-        // Receipt horizontal bounds via text-density histogram.
-        // Percentile bounds fail when many "edge" lines (dividers, logos,
-        // multi-line address text) reach close to the page edge — their
-        // count exceeds the percentile cutoff and the crop degrades to full
-        // width. Instead: bucket x into 20-px bins, count how many lines
-        // cover each bin, keep bins with >=8% of peak coverage, and take
-        // the outermost kept bins as the receipt column.
-        // Histogram domain = pixel-space width (pageDims.width), which is
-        // the same space `l`/`r` live in (frameScale was already applied).
-        const BIN = 20;
-        const nBins = Math.max(1, Math.ceil(pageDims.width / BIN));
-        const hist = new Array(nBins).fill(0);
-        for (const { l, r } of pageLineBounds) {
-          const lo = Math.max(0, Math.floor(l / BIN));
-          const hi = Math.min(nBins - 1, Math.floor((Math.max(l, r - 1)) / BIN));
-          for (let b = lo; b <= hi; b++) hist[b]++;
-        }
-        const peak = hist.reduce((m, v) => Math.max(m, v), 0);
-        const densityThresh = Math.max(1, peak * 0.08);
-        let leftBin = 0;
-        while (leftBin < nBins && hist[leftBin] < densityThresh) leftBin++;
-        let rightBin = nBins - 1;
-        while (rightBin >= 0 && hist[rightBin] < densityThresh) rightBin--;
-        let receiptXLeftScaled = leftBin * BIN;
-        let receiptXRightScaled = (rightBin + 1) * BIN;
-        if (receiptXRightScaled <= receiptXLeftScaled) {
-          receiptXLeftScaled = 0;
-          receiptXRightScaled = pageDims.width;
-        }
+        // Receipt horizontal bounds — SHARED implementation (density histogram +
+        // price-column clamp) in receiptOcrPipeline, same one the dev batch and
+        // the recovery flow use, so bounds can never drift between entry points.
+        const xb = computeReceiptXBoundsForPage(ocr.lines, pageDims.width, `PAGE ${pageIdx + 1}`);
+        const receiptXLeftScaled = xb.left;
+        const receiptXRightScaled = xb.right;
         console.log(
-          `PAGE ${pageIdx + 1} receipt x-bounds (pixels): left=${Math.round(receiptXLeftScaled)}, right=${Math.round(receiptXRightScaled)}, pageW=${pageDims.width}, yExtent=${Math.round(pageMaxYScaled)}, yOffset=${Math.round(yOffset)}, peak=${peak}`,
+          `PAGE ${pageIdx + 1} receipt x-bounds (pixels): left=${Math.round(receiptXLeftScaled)}, right=${Math.round(receiptXRightScaled)}, pageW=${pageDims.width}, yExtent=${Math.round(pageMaxYScaled)}, yOffset=${Math.round(yOffset)}, peak=${xb.peak}`,
         );
 
         collectedPageMetas.push({
@@ -3033,39 +3033,19 @@ export default function ProcessReceiptScreen() {
         // the better result. Runs ONLY on flagged parses (the happy path pays nothing);
         // both engines report in source-image pixels, so bands/masks stay valid either
         // way. Android's counterpart is the strip re-OCR pass below. ──
-        // A name with embedded amount tokens ("MAGIJA … 0,65 84 A A") = a mis-segmented
-        // row group — counts as flagged AND penalised, so a false-reconciled parse with
-        // junk names still gets (and loses to) the second opinion.
-        const junkName = (n: string | undefined | null) => !!n && /\d[.,]\s?\d{2}|\s\d{2,}\s+[ABC](?:\s|$)/.test(n);
-        const parseQuality = (r: any): number => {
-          let q = 0;
-          if (r?.footer?.reconciled) q += 100;
-          const prods = r?.products ?? [];
-          q += Math.min(prods.length, 30);
-          q -= prods.filter((pp: any) => !pp.name || pp.name === '?').length * 8;
-          q -= prods.filter((pp: any) => junkName(pp.name)).length * 8;
-          q -= prods.filter((pp: any) => !(pp.price > 0)).length * 5;
-          if (!r?.footer?.reconciled && Number.isFinite(r?.footer?.reconDelta)) {
-            q -= Math.min(30, Math.abs(r.footer.reconDelta) * 10);
-          }
-          if (r?.footer?.total == null) q -= 20;
-          return q;
-        };
-        const flagged = !parsed.footer.reconciled ||
-          parsed.products.some((pp: any) => !pp.name || pp.name === '?' || junkName(pp.name) || !(pp.price > 0));
-        if (Platform.OS === 'ios' && flagged && imageUris.length > 0) {
-          try {
-            const t0 = Date.now();
-            const second = await ocrReceiptPages(imageUris, 'mlkit');
-            const parsed2 = parseIkiReceipt(second.mergedLines as any);
-            const q1 = parseQuality(parsed), q2 = parseQuality(parsed2);
-            console.log(`[ensemble] vision=${q1} mlkit=${q2} (${Date.now() - t0}ms) → keeping ${q2 > q1 ? 'ML KIT' : 'vision'}`);
-            if (q2 > q1) {
-              parsed = parsed2 as typeof parsed;
-              wordsDumpRef.current = buildWordsDump(second.mergedLines as any);
-            }
-          } catch (e) {
-            console.log('[ensemble] second opinion failed (kept vision):', e);
+        // Phase-5 ensemble — SHARED implementation (utils/parseEnsemble), the
+        // same code path the dev batch harness runs, so batch results and
+        // Analyze results can never drift.
+        {
+          const outcome = await ensembleSecondOpinion(
+            parsed,
+            imageUris,
+            (second) => parseIkiReceipt(second.mergedLines as any) as typeof parsed,
+            { document: fromPdfParam === '1' },
+          );
+          if (outcome.engine === 'second' && outcome.secondOcr) {
+            parsed = outcome.parsed;
+            wordsDumpRef.current = buildWordsDump(outcome.secondOcr.mergedLines as any);
           }
         }
         if (!(await ensureHasProducts(parsed.products, 'IKI'))) return;

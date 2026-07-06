@@ -38,6 +38,23 @@ export interface LineWithFrame {
     words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number; cornerPoints?: { x: number; y: number }[] }[];
 }
 
+export interface ReceiptOcrPageMeta {
+    /** Post-rotation page uri (what OCR actually ran on). */
+    uri: string;
+    pixelWidth: number;
+    pixelHeight: number;
+    frameScale: number;
+    /** This page's y-offset in the concatenated parser space. */
+    yOffsetScaled: number;
+    /** Max line yBottom on this page (page-local, pre-offset). */
+    pageMaxYScaled: number;
+    /** Receipt CONTENT x-bounds — density histogram refined to the price
+     *  column (see computeReceiptXBoundsForPage). Band crops use these to
+     *  skip PDF page margins. */
+    receiptXLeftScaled: number;
+    receiptXRightScaled: number;
+}
+
 export interface ReceiptOcrResult {
     /** Raw OCR lines (page-pixel space, multi-page y-offset applied), sorted top→bottom. */
     allLines: LineWithFrame[];
@@ -49,6 +66,54 @@ export interface ReceiptOcrResult {
     firstPageUri: string;
     firstPageWidth: number;
     firstPageHeight: number;
+    /** Per-page metadata (rotation-corrected uris, y-offsets, x-bounds). */
+    pageMetas: ReceiptOcrPageMeta[];
+}
+
+/**
+ * Receipt horizontal bounds for ONE page — the SINGLE implementation shared by
+ * the live scan, the recovery flow and the dev batch (they must never drift):
+ * a 20-px text-density histogram (percentile bounds fail when sparse edge
+ * lines — dividers, logos — keep outer bins alive), then the price-column
+ * clamp: the VAT letter after each price is the receipt's rightmost REAL
+ * content, so ≥3 price-tail lines pull the right bound in (narrow-only,
+ * right-half guarded).
+ */
+export function computeReceiptXBoundsForPage(
+    lines: { xLeft: number; xRight: number; text: string }[],
+    pageWidth: number,
+    logLabel?: string,
+): { left: number; right: number; peak: number } {
+    const BIN = 20;
+    const nBins = Math.max(1, Math.ceil(pageWidth / BIN));
+    const hist = new Array(nBins).fill(0);
+    for (const { xLeft: l, xRight: r } of lines) {
+        const lo = Math.max(0, Math.floor(l / BIN));
+        const hi = Math.min(nBins - 1, Math.floor(Math.max(l, r - 1) / BIN));
+        for (let b = lo; b <= hi; b++) hist[b]++;
+    }
+    const peak = hist.reduce((m, v) => Math.max(m, v), 0);
+    const densityThresh = Math.max(1, peak * 0.08);
+    let leftBin = 0;
+    while (leftBin < nBins && hist[leftBin] < densityThresh) leftBin++;
+    let rightBin = nBins - 1;
+    while (rightBin >= 0 && hist[rightBin] < densityThresh) rightBin--;
+    let left = leftBin * BIN;
+    let right = (rightBin + 1) * BIN;
+    if (right <= left) { left = 0; right = pageWidth; }
+    const PRICE_TAIL_RE = /-?\d{1,4}[.,]\s?\d{2}\s*[ABC]\s*$/;
+    const tails = lines.filter((l) => PRICE_TAIL_RE.test(l.text.trim()));
+    if (tails.length >= 3) {
+        const colRight = Math.max(...tails.map((l) => l.xRight)) + 12;
+        const mid = left + (right - left) / 2;
+        if (colRight < right && colRight > mid) {
+            if (logLabel) {
+                console.log(`${logLabel} price-column right clamp: ${Math.round(right)} → ${Math.round(colRight)} (${tails.length} price tails)`);
+            }
+            right = colRight;
+        }
+    }
+    return { left, right, peak };
 }
 
 /**
@@ -161,8 +226,13 @@ export async function cropToContentBounds(
  * `ocrImageTiled`), concatenate with per-page y-offsets so multi-page e-receipts
  * parse as one document, then run the adjacent-row merge.
  */
-export async function ocrReceiptPages(imageUris: string[], engine: OcrEngine = 'auto'): Promise<ReceiptOcrResult> {
+export async function ocrReceiptPages(
+    imageUris: string[],
+    engine: OcrEngine = 'auto',
+    opts: { document?: boolean } = {},
+): Promise<ReceiptOcrResult> {
     const allLines: LineWithFrame[] = [];
+    const pageMetas: ReceiptOcrPageMeta[] = [];
     let frameScale = 1;
     let yOffset = 0;
     let firstPageUri = imageUris[0] ?? "";
@@ -171,7 +241,7 @@ export async function ocrReceiptPages(imageUris: string[], engine: OcrEngine = '
 
     for (let pageIdx = 0; pageIdx < imageUris.length; pageIdx++) {
         const pageUri = await rotatePortrait(imageUris[pageIdx]);
-        const ocr = await ocrImageEnhanced(pageUri, engine);
+        const ocr = await ocrImageEnhanced(pageUri, engine, opts);
         if (pageIdx === 0) {
             frameScale = ocr.frameScale;
             firstPageUri = pageUri;
@@ -199,6 +269,17 @@ export async function ocrReceiptPages(imageUris: string[], engine: OcrEngine = '
                 })),
             });
         }
+        const xb = computeReceiptXBoundsForPage(ocr.lines, ocr.pixelWidth, `PAGE ${pageIdx + 1}`);
+        pageMetas.push({
+            uri: pageUri,
+            pixelWidth: ocr.pixelWidth,
+            pixelHeight: ocr.pixelHeight,
+            frameScale: ocr.frameScale,
+            yOffsetScaled: yOffset,
+            pageMaxYScaled,
+            receiptXLeftScaled: xb.left,
+            receiptXRightScaled: xb.right,
+        });
         yOffset += pageMaxYScaled + 50;
     }
 
@@ -234,5 +315,5 @@ export async function ocrReceiptPages(imageUris: string[], engine: OcrEngine = '
         mergedLines.push({ ...line });
     }
 
-    return { allLines, mergedLines, frameScale, firstPageUri, firstPageWidth, firstPageHeight };
+    return { allLines, mergedLines, frameScale, firstPageUri, firstPageWidth, firstPageHeight, pageMetas };
 }

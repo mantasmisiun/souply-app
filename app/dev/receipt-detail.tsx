@@ -370,6 +370,8 @@ export default function ReceiptDetailScreen() {
                                     uri={url}
                                     pageWidth={page.pixelWidth}
                                     pageHeight={page.pixelHeight}
+                                    receiptXLeft={page.receiptXLeft}
+                                    receiptXRight={page.receiptXRight}
                                     bands={overlayBuckets.perPage[pageIdx]}
                                     maskBands={maskBuckets?.[pageIdx]}
                                     colors={colors}
@@ -479,6 +481,8 @@ export default function ReceiptDetailScreen() {
                                 uri={localUri}
                                 pageWidth={page.pixelWidth}
                                 pageHeight={page.pixelHeight}
+                                receiptXLeft={page.receiptXLeft}
+                                receiptXRight={page.receiptXRight}
                                 yTopOnPage={onPage.yTopOnPage}
                                 yBottomOnPage={onPage.yBottomOnPage}
                                 colors={colors}
@@ -507,6 +511,8 @@ const ProductRow = ({
     uri,
     pageWidth,
     pageHeight,
+    receiptXLeft,
+    receiptXRight,
     yTopOnPage,
     yBottomOnPage,
     colors,
@@ -517,6 +523,8 @@ const ProductRow = ({
     uri: string;
     pageWidth: number;
     pageHeight: number;
+    receiptXLeft?: number;
+    receiptXRight?: number;
     yTopOnPage: number;
     yBottomOnPage: number;
     colors: AppTheme;
@@ -525,7 +533,13 @@ const ProductRow = ({
     const status = deriveStatus(bandResult);
     const product = bandResult.product;
     const bandHeight = Math.max(yBottomOnPage - yTopOnPage, 1);
-    const cropAspect = pageWidth / bandHeight;
+    // Horizontal viewport = receipt content bounds (skips the PDF page's white
+    // margins); full width on old snapshots without the bounds.
+    const PAD_X = 20;
+    const cropX = Math.max(0, Math.floor((receiptXLeft ?? 0) - PAD_X));
+    const cropRight = Math.min(pageWidth, Math.ceil((receiptXRight ?? pageWidth) + PAD_X));
+    const cropW = Math.max(1, cropRight - cropX);
+    const cropAspect = cropW / bandHeight;
 
     // Pre-crop the band region to a separate image file via
     // expo-image-manipulator. Two reasons this is sharper than
@@ -554,7 +568,7 @@ const ProductRow = ({
             pageHeight - yTop,
         );
         if (heightPx <= 0) return;
-        const cropArgs = { uri, originX: 0, originY: yTop, width: pageWidth, height: heightPx };
+        const cropArgs = { uri, originX: cropX, originY: yTop, width: cropW, height: heightPx };
         devLog('receipt-detail.cropAttempt', { bandIdx, ...cropArgs });
         // JPEG output: PNG via expo-image-manipulator v14 on iOS
         // trips `calling the 'renderAsync' function has failed`
@@ -563,7 +577,7 @@ const ProductRow = ({
         // tile crop, so the PNG encoder path is the broken one.
         ImageManipulator.manipulateAsync(
             uri,
-            [{ crop: { originX: 0, originY: yTop, width: pageWidth, height: heightPx } }],
+            [{ crop: { originX: cropX, originY: yTop, width: cropW, height: heightPx } }],
             { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
         )
             .then((res) => {
@@ -577,7 +591,7 @@ const ProductRow = ({
                 if (!cancelled) setCropError(errMsg);
             });
         return () => { cancelled = true; };
-    }, [uri, yTopOnPage, yBottomOnPage, pageWidth, pageHeight, bandIdx]);
+    }, [uri, yTopOnPage, yBottomOnPage, pageWidth, pageHeight, bandIdx, cropX, cropW]);
 
     return (
         <View style={styles.productRow}>
@@ -738,6 +752,8 @@ const ImageWithBands = ({
     uri,
     pageWidth,
     pageHeight,
+    receiptXLeft,
+    receiptXRight,
     bands,
     maskBands,
     colors,
@@ -745,24 +761,44 @@ const ImageWithBands = ({
     uri: string;
     pageWidth: number;
     pageHeight: number;
+    /** Receipt content x-bounds (snapshot page meta) — the view crops the PDF
+     *  page's white margins so the receipt fills the width. Absent → full page. */
+    receiptXLeft?: number;
+    receiptXRight?: number;
     bands: BandOnPage[];
     maskBands?: MaskOnPage[];
     colors: AppTheme;
 }) => {
-    const aspect = pageWidth / pageHeight;
+    // Horizontal viewport: crop to content bounds (+pad) unless the content
+    // already spans the page (photos) — then this is a no-op full view.
+    const PAD = 24;
+    const rawL = Math.max(0, (receiptXLeft ?? 0) - PAD);
+    const rawR = Math.min(pageWidth, (receiptXRight ?? pageWidth) + PAD);
+    const useCrop = rawR - rawL >= pageWidth * 0.2 && rawR - rawL <= pageWidth * 0.92;
+    const cropX = useCrop ? rawL : 0;
+    const cropW = useCrop ? rawR - rawL : pageWidth;
+    const aspect = cropW / pageHeight;
+    // Overlay x mapping into the cropped viewport.
+    const xPct = (x: number) => (Math.max(0, Math.min(cropW, x - cropX)) / cropW) * 100;
     return (
-        <View style={{ width: '100%', aspectRatio: aspect, position: 'relative' }}>
+        <View style={{ width: '100%', aspectRatio: aspect, position: 'relative', overflow: 'hidden' }}>
             <Image
                 source={{ uri }}
-                style={{ width: '100%', height: '100%' }}
-                resizeMode="contain"
+                style={{
+                    position: 'absolute',
+                    left: `${-(cropX / cropW) * 100}%`,
+                    top: 0,
+                    width: `${(pageWidth / cropW) * 100}%`,
+                    height: '100%',
+                }}
+                resizeMode="stretch"
             />
             {(maskBands ?? []).map((b) => {
                 const topPct = (b.yTopOnPage / pageHeight) * 100;
                 const heightPct =
                     ((b.yBottomOnPage - b.yTopOnPage) / pageHeight) * 100;
-                const leftPct = (b.xLeft / pageWidth) * 100;
-                const widthPct = ((b.xRight - b.xLeft) / pageWidth) * 100;
+                const leftPct = xPct(b.xLeft);
+                const widthPct = Math.max(0, xPct(b.xRight) - xPct(b.xLeft));
                 return (
                     <View
                         key={`mask-${b.idx}`}
@@ -797,7 +833,14 @@ const ImageWithBands = ({
                             right: 0,
                             top: `${topPct}%`,
                             height: `${heightPct}%`,
-                            borderWidth: 1.5,
+                            // Shared dividers: bands are CONTIGUOUS (band N bottom ==
+                            // band N+1 top) — a full border on every band doubled up
+                            // into a 3px wall that read as a gap between products.
+                            // Each band draws its top + sides; the next band's top
+                            // edge IS this band's bottom divider.
+                            borderTopWidth: 1.5,
+                            borderLeftWidth: 1.5,
+                            borderRightWidth: 1.5,
                             borderColor: border,
                             backgroundColor: fill,
                         }}
