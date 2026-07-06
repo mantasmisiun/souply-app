@@ -189,8 +189,34 @@ export default function ReceiptPhotoView({
         if (w !== containerW) setContainerW(w);
     };
 
-    const scale =
-        imageDims && imageDims.width > 0 ? containerW / imageDims.width : 0;
+    /** Horizontal content extent — the x analog of contentY below. Maxima
+     *  e-receipt PDFs render the receipt column on a full A4 page: without
+     *  this crop half the Kvitas view is white margin. Regions carry the
+     *  parser's x extents, so the same confidence rules apply; skipped when
+     *  the content already fills the page (photos) — no pointless zoom. */
+    const contentX = useMemo(() => {
+        if (!imageDims) return null;
+        const xs: number[] = [];
+        for (const r of headerRegions) xs.push(r.xLeft, r.xRight);
+        for (const r of productRegions) xs.push(r.xLeft, r.xRight);
+        for (const r of footerRegions) xs.push(r.xLeft, r.xRight);
+        for (const r of skippedRegions) xs.push(r.xLeft, r.xRight);
+        for (const r of maskRegions) xs.push(r.xLeft, r.xRight);
+        const finite = xs.filter((v) => Number.isFinite(v));
+        if (finite.length < 4) return null;
+        const xMin = Math.max(0, Math.min(...finite) - 24);
+        const xMax = Math.min(imageDims.width, Math.max(...finite) + 24);
+        const w = xMax - xMin;
+        if (w < imageDims.width * 0.2) return null;          // suspicious — bail
+        if (w > imageDims.width * 0.92) return null;          // full-width already
+        return { xMin, xMax };
+    }, [headerRegions, productRegions, footerRegions, skippedRegions, maskRegions, imageDims]);
+
+    const viewW = contentX
+        ? contentX.xMax - contentX.xMin
+        : (imageDims?.width ?? 0);
+    const scale = imageDims && viewW > 0 ? containerW / viewW : 0;
+    const cropOffsetX = contentX ? contentX.xMin * scale : 0;
     const displayedH = (imageDims?.height ?? 0) * scale;
 
     /** Vertical content extent (image-pixel space) covered by the
@@ -239,7 +265,7 @@ export default function ReceiptPhotoView({
      *  Used for product + skipped bands, whose walls must hug the tilted rows. */
     const toQuadPoints = (r: ReceiptRegion): { points: string; left: number; midY: number } | null => {
         if (!imageDims || !onPageOne(r)) return null;
-        const dx = (x: number) => Math.max(0, Math.min(containerW, x * scale));
+        const dx = (x: number) => Math.max(0, Math.min(containerW, x * scale - cropOffsetX));
         const dy = (y: number) => Math.max(0, Math.min(stageH, y * scale - cropOffsetY));
         // Shared with the Items-tab crop clip (utils/bandQuad) so the two never diverge.
         return {
@@ -351,8 +377,8 @@ export default function ReceiptPhotoView({
                             style={{
                                 position: 'absolute',
                                 top: -cropOffsetY,
-                                left: 0,
-                                width: containerW,
+                                left: -cropOffsetX,
+                                width: (imageDims?.width ?? 0) * scale,
                                 height: displayedH,
                             }}
                             resizeMode="stretch"
