@@ -413,6 +413,21 @@ export default function ReceiptBatchScreen() {
                     console.log(`[batch] ${row.sourcePdf}: on-device pdf convert (${method}, ${pages.length} p)`);
                     cachedUris.push(...pages);
                     FileSystem.deleteAsync(pdfUri, { idempotent: true }).catch(() => {});
+                    // DEBUG drop-box: ship the converted pixels back to the dev
+                    // machine so the native conversion chain output can be
+                    // inspected there (receipts/_logs/<chain>/<file>/…png).
+                    for (let p = 0; p < pages.length; p++) {
+                        try {
+                            const pngBase64 = await FileSystem.readAsStringAsync(pages[p], {
+                                encoding: FileSystem.EncodingType.Base64,
+                            });
+                            await fetch(`${API_BASE_URL}/receipts-batch-debug`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ chain: row.chain, file: row.sourcePdf, page: p + 1, pngBase64 }),
+                            });
+                        } catch { /* debug-only, best effort */ }
+                    }
                 } catch (e) {
                     console.warn(`[batch] ${row.sourcePdf}: device convert failed → staged PNGs`, e);
                 }

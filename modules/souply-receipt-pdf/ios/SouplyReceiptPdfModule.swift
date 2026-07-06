@@ -37,15 +37,32 @@ public class SouplyReceiptPdfModule: Module {
   public func definition() -> ModuleDefinition {
     Name("SouplyReceiptPdf")
 
-    // convert(pdfUri, targetWidth) → { pages: [file://…png], method: "extract" | "render" }
-    AsyncFunction("convert") { (uri: String, targetWidth: Int) -> [String: Any] in
-      return try SouplyReceiptPdfModule.convert(uri: uri, targetWidth: CGFloat(max(targetWidth, 346)))
+    // convert(pdfUri, targetWidth, stepsCsv, unsharpRadius, unsharpIntensity)
+    //   → { pages: [file://…png], method: "extract" | "render" }
+    // stepsCsv: comma-separated subset of "grayscale,median,unsharp" applied in
+    // that fixed order on the extraction path ("" = pure Lanczos upscale only).
+    // JS-parameterized so the enhancement chain tunes WITHOUT a native rebuild.
+    AsyncFunction("convert") { (uri: String, targetWidth: Int, stepsCsv: String, unsharpRadius: Double, unsharpIntensity: Double) -> [String: Any] in
+      let steps = Set(stepsCsv.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) })
+      return try SouplyReceiptPdfModule.convert(
+        uri: uri,
+        targetWidth: CGFloat(max(targetWidth, 346)),
+        steps: steps,
+        unsharpRadius: unsharpRadius,
+        unsharpIntensity: unsharpIntensity
+      )
     }
   }
 
   // MARK: - Entry
 
-  private static func convert(uri: String, targetWidth: CGFloat) throws -> [String: Any] {
+  private static func convert(
+    uri: String,
+    targetWidth: CGFloat,
+    steps: Set<String>,
+    unsharpRadius: Double,
+    unsharpIntensity: Double
+  ) throws -> [String: Any] {
     let url: URL
     if let parsed = URL(string: uri), let scheme = parsed.scheme, !scheme.isEmpty {
       url = parsed
@@ -65,7 +82,10 @@ public class SouplyReceiptPdfModule: Module {
     // Path 1 — wrapper extraction. All-or-nothing: every page must extract,
     // otherwise the whole document goes through the renderer so multi-page
     // receipts never mix pixel provenances.
-    if let extracted = try? extractAllPages(cgDoc, pageCount: pageCount, targetWidth: targetWidth) {
+    if let extracted = try? extractAllPages(
+      cgDoc, pageCount: pageCount, targetWidth: targetWidth,
+      steps: steps, unsharpRadius: unsharpRadius, unsharpIntensity: unsharpIntensity
+    ) {
       return ["pages": extracted, "method": "extract"]
     }
 
@@ -76,14 +96,24 @@ public class SouplyReceiptPdfModule: Module {
 
   // MARK: - Path 1: lossless embedded-image extraction + enhancement
 
-  private static func extractAllPages(_ doc: CGPDFDocument, pageCount: Int, targetWidth: CGFloat) throws -> [String] {
+  private static func extractAllPages(
+    _ doc: CGPDFDocument,
+    pageCount: Int,
+    targetWidth: CGFloat,
+    steps: Set<String>,
+    unsharpRadius: Double,
+    unsharpIntensity: Double
+  ) throws -> [String] {
     var uris: [String] = []
     for pageNo in 1...pageCount {
       guard let page = doc.page(at: pageNo) else { throw ReceiptPdfError(message: "missing page \(pageNo)") }
       guard let jpeg = try singlePageSizedImage(page) else {
         throw ReceiptPdfError(message: "page \(pageNo) is not a clean image wrapper")
       }
-      let enhanced = try enhanceForOcr(jpeg, targetWidth: targetWidth)
+      let enhanced = try enhanceForOcr(
+        jpeg, targetWidth: targetWidth,
+        steps: steps, unsharpRadius: unsharpRadius, unsharpIntensity: unsharpIntensity
+      )
       uris.append(try writeTemp(enhanced, ext: "png"))
     }
     return uris
@@ -147,10 +177,20 @@ public class SouplyReceiptPdfModule: Module {
     return data
   }
 
-  /// Core Image equivalent of the server's sharp recipe (greyscale → median →
-  /// LANCZOS upscale → unsharp). Skipped entirely when the source is already
-  /// at/above the target width — then the lossless bytes win as-is.
-  private static func enhanceForOcr(_ jpegData: Data, targetWidth: CGFloat) throws -> Data {
+  /// Core Image equivalent of the server's sharp recipe, with each step
+  /// JS-selectable (see AsyncFunction docs). CRITICAL: the CIContext works in
+  /// sRGB, NOT Core Image's default linear space — in linear space the median
+  /// erodes 1px-wide glyph strokes at 346px into hollow outlines and the
+  /// unsharp rings hard (the first device build produced OCR noise because of
+  /// exactly this; sharp on the server filters in sRGB, which is the behavior
+  /// the recipe was validated with).
+  private static func enhanceForOcr(
+    _ jpegData: Data,
+    targetWidth: CGFloat,
+    steps: Set<String>,
+    unsharpRadius: Double,
+    unsharpIntensity: Double
+  ) throws -> Data {
     guard var image = CIImage(data: jpegData) else {
       throw ReceiptPdfError(message: "Could not decode embedded image")
     }
@@ -160,23 +200,33 @@ public class SouplyReceiptPdfModule: Module {
       return jpegData
     }
 
-    image = image.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.0])
-    image = image.applyingFilter("CIMedianFilter")
+    if steps.contains("grayscale") {
+      image = image.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0.0])
+    }
+    if steps.contains("median") {
+      image = image.applyingFilter("CIMedianFilter")
+    }
     let scale = min(targetWidth / sourceWidth, 6.0)
     image = image.applyingFilter("CILanczosScaleTransform", parameters: [
       kCIInputScaleKey: scale,
       kCIInputAspectRatioKey: 1.0,
     ])
-    image = image.applyingFilter("CIUnsharpMask", parameters: [
-      kCIInputRadiusKey: 2.5,
-      kCIInputIntensityKey: 0.9,
-    ])
+    if steps.contains("unsharp") {
+      image = image.applyingFilter("CIUnsharpMask", parameters: [
+        kCIInputRadiusKey: unsharpRadius,
+        kCIInputIntensityKey: unsharpIntensity,
+      ])
+    }
 
-    let context = CIContext()
+    let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
+    let context = CIContext(options: [
+      .workingColorSpace: srgb,
+      .outputColorSpace: srgb,
+    ])
     guard let png = context.pngRepresentation(
       of: image.cropped(to: image.extent),
       format: .RGBA8,
-      colorSpace: CGColorSpaceCreateDeviceRGB()
+      colorSpace: srgb
     ) else {
       throw ReceiptPdfError(message: "Could not encode enhanced page")
     }

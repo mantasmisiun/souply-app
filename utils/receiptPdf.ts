@@ -24,7 +24,13 @@ export interface DevicePdfResult {
 }
 
 interface ReceiptPdfNativeModule {
-    convert: (uri: string, targetWidth: number) => Promise<DevicePdfResult>;
+    convert: (
+        uri: string,
+        targetWidth: number,
+        stepsCsv: string,
+        unsharpRadius: number,
+        unsharpIntensity: number,
+    ) => Promise<DevicePdfResult>;
 }
 
 let native: ReceiptPdfNativeModule | null = null;
@@ -37,6 +43,23 @@ try {
 /** Matches the server-side ENHANCE_TARGET_WIDTH and the document-mode OCR floor. */
 export const DEVICE_PDF_TARGET_WIDTH = 2000;
 
+/** Enhancement steps for the EXTRACTION path (wrapper PDFs), tunable WITHOUT a
+ *  native rebuild. Order is fixed native-side: grayscale → median → (Lanczos
+ *  upscale, always) → unsharp. The first device build proved the aggressive
+ *  chain destroys 1px strokes — defaults start gentle; A/B via the batch
+ *  screen + debug drop-box before adding steps back. */
+export interface DevicePdfEnhanceOpts {
+    steps?: ('grayscale' | 'median' | 'unsharp')[];
+    unsharpRadius?: number;
+    unsharpIntensity?: number;
+}
+export const DEVICE_PDF_ENHANCE_DEFAULTS: Required<DevicePdfEnhanceOpts> = {
+    steps: ['grayscale', 'unsharp'],
+    unsharpRadius: 2.5,
+    // CI default is 0.5; sharp's default sharpen is mild — start there, not 0.9.
+    unsharpIntensity: 0.5,
+};
+
 /** True only when the native module is compiled into THIS iOS build. */
 export function devicePdfAvailable(): boolean {
     return Platform.OS === 'ios' && native != null;
@@ -46,9 +69,11 @@ export function devicePdfAvailable(): boolean {
 export async function convertPdfOnDevice(
     uri: string,
     targetWidth: number = DEVICE_PDF_TARGET_WIDTH,
+    enhance: DevicePdfEnhanceOpts = {},
 ): Promise<DevicePdfResult> {
     if (!native) {
         throw new Error('SouplyReceiptPdf native module is not present in this build (iOS-only)');
     }
-    return native.convert(uri, targetWidth);
+    const opts = { ...DEVICE_PDF_ENHANCE_DEFAULTS, ...enhance };
+    return native.convert(uri, targetWidth, opts.steps.join(','), opts.unsharpRadius, opts.unsharpIntensity);
 }
