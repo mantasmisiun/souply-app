@@ -46,6 +46,7 @@ import { MaterialProgress } from '@/components/MaterialProgress';
 import { API_BASE_URL } from '../../config/api';
 import { ocrReceiptPages } from '../../utils/receiptOcrPipeline';
 import { ensembleSecondOpinion } from '../../utils/parseEnsemble';
+import { devicePdfAvailable, convertPdfOnDevice } from '../../utils/receiptPdf';
 import { getUserId } from '../../config/user';
 import {
     isIkiReceipt,
@@ -142,6 +143,9 @@ const MAXIMA_FIELD_KIND: Record<string, string> = {
 interface ManifestEntry {
     sourcePdf: string;
     pages: string[];
+    /** Raw staged PDF (when the source was a PDF) — lets a device with the
+     *  souply-receipt-pdf module convert ON-DEVICE, the production share path. */
+    pdf?: string;
 }
 
 interface PageLine {
@@ -347,6 +351,11 @@ export default function ReceiptBatchScreen() {
     const [loading, setLoading] = useState(true);
     const [running, setRunning] = useState(false);
     const [persist, setPersist] = useState(false);
+    // A/B lever: ON = convert staged raw PDFs on-device (the production share
+    // path: lossless wrapper extraction + CI enhancement / PDFKit render);
+    // OFF = use the server-converted staged PNGs. Only shown when the native
+    // module is in this build.
+    const [devicePdf, setDevicePdf] = useState(true);
     const abortRef = useRef(false);
 
     const refresh = useCallback(async () => {
@@ -394,8 +403,24 @@ export default function ReceiptBatchScreen() {
         let detected: ChainName | 'iki' | null = null;
         let parsed: ReturnType<typeof runParser> = null;
         try {
-            for (const pageName of entry.pages) {
-                cachedUris.push(await downloadPageToCache(row.chain, pageName));
+            if (devicePdf && devicePdfAvailable() && entry.pdf) {
+                // Production share-flow parity: pull the RAW pdf and convert
+                // on-device (wrapper extraction + enhancement, or PDFKit
+                // render). Falls back to the staged PNGs on any failure.
+                try {
+                    const pdfUri = await downloadPageToCache(row.chain, entry.pdf);
+                    const { pages, method } = await convertPdfOnDevice(pdfUri);
+                    console.log(`[batch] ${row.sourcePdf}: on-device pdf convert (${method}, ${pages.length} p)`);
+                    cachedUris.push(...pages);
+                    FileSystem.deleteAsync(pdfUri, { idempotent: true }).catch(() => {});
+                } catch (e) {
+                    console.warn(`[batch] ${row.sourcePdf}: device convert failed → staged PNGs`, e);
+                }
+            }
+            if (cachedUris.length === 0) {
+                for (const pageName of entry.pages) {
+                    cachedUris.push(await downloadPageToCache(row.chain, pageName));
+                }
             }
             const ocr = await ocrReceiptPages(cachedUris, 'auto', { document: true });
             allLines = ocr.allLines as PageLine[];
@@ -1004,6 +1029,12 @@ export default function ReceiptBatchScreen() {
                     <Text style={styles.persistLabel}>Persist</Text>
                     <Switch value={persist} onValueChange={setPersist} disabled={running} />
                 </View>
+                {devicePdfAvailable() && (
+                    <View style={styles.persistRow}>
+                        <Text style={styles.persistLabel}>PDF įreng.</Text>
+                        <Switch value={devicePdf} onValueChange={setDevicePdf} disabled={running} />
+                    </View>
+                )}
                 <TouchableOpacity
                     style={[styles.button, running ? styles.buttonStop : styles.buttonStart]}
                     onPress={running ? stop : runBatch}
