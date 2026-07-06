@@ -122,8 +122,12 @@ public class SouplyReceiptPdfModule: Module {
       CGPDFDictionaryGetInteger(streamDict, "Height", &height)
       var format = CGPDFDataFormat.raw
       let cfData = CGPDFStreamCopyData(stream, &format)
-      // DCTDecode (.jpegEncoded) / JPEG2000 streams are complete image files as-is.
-      let data: Data? = (format == .jpegEncoded || format == .jpeg2000) ? (cfData as Data?) : nil
+      // A DCTDecode (.jpegEncoded) stream is a complete JPEG file as-is —
+      // the only sample format receipt wrapper-PDFs use. Anything else
+      // (raw/Flate samples, JPEG2000) disqualifies the page here and the
+      // document takes the PDFKit render path instead, which decodes every
+      // format correctly.
+      let data: Data? = format == .jpegEncoded ? (cfData as Data?) : nil
       collector.images.append((data: data, width: Int(width), height: Int(height)))
       return true
     }, info)
