@@ -34,6 +34,29 @@ export const parseQuality = (r: any): number => {
     return q;
 };
 
+export interface EnsembleGeomLine { yTop: number; yBottom: number; text: string }
+
+/** FUSED-ROW OCR defect — on very low-res document renders (Rimi app-share
+ *  PDFs wrap a ~346px embedded JPEG; the 300-dpi raster is pure interpolation)
+ *  Vision sometimes merges two printed rows into ONE double-height line,
+ *  garbling both and dropping text ("RIMI SMART, 1 l" + "be glitimo BARILLA"
+ *  → "Raaronal be glitimo BARILIA"). The parse can still reconcile, so the
+ *  flagged-parse gate never fires — this geometric signal does. Body lines
+ *  only (≥8 chars + a space): logo/barcode art always has huge boxes; the
+ *  3.5× cap keeps decorative blocks out. Meaningful only on document inputs —
+ *  photo skew inflates bboxes and would false-positive. */
+export const countFusedRows = (lines: EnsembleGeomLine[]): number => {
+    const body = lines.filter((l) => l.text.trim().length >= 8 && l.text.trim().includes(' '));
+    const hs = body.map((l) => l.yBottom - l.yTop).filter((h) => h > 0).sort((a, b) => a - b);
+    if (hs.length < 8) return 0;
+    const median = hs[Math.floor(hs.length / 2)];
+    if (!(median > 0)) return 0;
+    return body.filter((l) => {
+        const h = l.yBottom - l.yTop;
+        return h >= 1.75 * median && h <= 3.5 * median;
+    }).length;
+};
+
 export const parseIsFlagged = (parsed: any): boolean =>
     !parsed?.footer?.reconciled ||
     (parsed?.products ?? []).some(
@@ -58,19 +81,30 @@ export async function ensembleSecondOpinion<P>(
     primaryParsed: P,
     imageUris: string[],
     parseFn: (second: ReceiptOcrResult) => P,
-    opts: { document?: boolean; secondEngine?: OcrEngine } = {},
+    opts: { document?: boolean; secondEngine?: OcrEngine; primaryLines?: EnsembleGeomLine[] } = {},
 ): Promise<EnsembleOutcome<P>> {
     const keepPrimary: EnsembleOutcome<P> = { parsed: primaryParsed, secondOcr: null, engine: 'primary' };
     if (Platform.OS !== 'ios' || imageUris.length === 0) return keepPrimary;
-    if (!parseIsFlagged(primaryParsed)) return keepPrimary;
+    // Fused rows destroy text WITHOUT breaking reconciliation (a whole row
+    // disappears into its neighbour), so they force the second opinion even
+    // on a parse that self-verifies. ML Kit segments the same pixels
+    // independently and often keeps the rows apart.
+    const fused1 = opts.document && opts.primaryLines ? countFusedRows(opts.primaryLines) : 0;
+    if (!parseIsFlagged(primaryParsed) && fused1 === 0) return keepPrimary;
     try {
         const t0 = Date.now();
         const second = await ocrReceiptPages(imageUris, opts.secondEngine ?? 'mlkit', { document: opts.document });
         const parsed2 = parseFn(second);
         const q1 = parseQuality(primaryParsed);
         const q2 = parseQuality(parsed2);
-        console.log(`[ensemble] vision=${q1} mlkit=${q2} (${Date.now() - t0}ms) → keeping ${q2 > q1 ? 'ML KIT' : 'vision'}`);
-        if (q2 > q1) return { parsed: parsed2, secondOcr: second, engine: 'second' };
+        // Tiebreak: at equal-or-better parse quality, fewer fused rows wins —
+        // quality can't see a fusion (names aren't arithmetic), geometry can.
+        const fused2 = fused1 > 0 ? countFusedRows(second.allLines as EnsembleGeomLine[]) : 0;
+        const secondWins = q2 > q1 || (fused1 > 0 && fused2 < fused1 && q2 >= q1);
+        console.log(
+            `[ensemble] vision=${q1} mlkit=${q2} fused=${fused1}→${fused2} (${Date.now() - t0}ms) → keeping ${secondWins ? 'ML KIT' : 'vision'}`,
+        );
+        if (secondWins) return { parsed: parsed2, secondOcr: second, engine: 'second' };
         return keepPrimary;
     } catch (e) {
         console.log('[ensemble] second opinion failed (kept primary):', e);

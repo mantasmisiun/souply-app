@@ -428,7 +428,7 @@ export default function ReceiptBatchScreen() {
                 parsed,
                 cachedUris,
                 (second) => runParser(detected!, linesFor(second))!,
-                { document: true },
+                { document: true, primaryLines: ocr.allLines as { yTop: number; yBottom: number; text: string }[] },
             );
             if (outcome.engine === 'second' && outcome.secondOcr) {
                 parsed = outcome.parsed;

@@ -3041,7 +3041,7 @@ export default function ProcessReceiptScreen() {
             parsed,
             imageUris,
             (second) => parseIkiReceipt(second.mergedLines as any) as typeof parsed,
-            { document: fromPdfParam === '1' },
+            { document: fromPdfParam === '1', primaryLines: allLines },
           );
           if (outcome.engine === 'second' && outcome.secondOcr) {
             parsed = outcome.parsed;

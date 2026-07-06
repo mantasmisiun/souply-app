@@ -121,6 +121,16 @@ const IOS_TILE_JPEG_QUALITY = 0.92;
 const ANDROID_MIN_OCR_WIDTH = 1280;
 const ANDROID_MAX_UPSCALE = 2;
 
+// DOCUMENT-mode minimum OCR width (both platforms): staging rasterizes PDFs at
+// 300 dpi, but an APP-SHARE receipt PDF often just WRAPS a small embedded
+// image (Rimi: a 346-px-wide JPEG page → 1442 px raster that is interpolation,
+// not detail) and photo sources can be ~960 px. At those widths the thin
+// size/calc glyphs sit under ML Kit's floor ("80 ml" → "80 IL"). Upscaling
+// never hurts (coords remap via invFactor) and reliably lifts recognition —
+// the same Tier-1 lever the Android photo path has had.
+const DOCUMENT_MIN_OCR_WIDTH = 2000;
+const DOCUMENT_MAX_UPSCALE = 2.5;
+
 // Dedupe distance for "same text at similar y from adjacent tiles".
 // Text row height is ~25-30 px on typical receipt OCR, so anything
 // beyond ~40 px is a different physical row. Using TILE_OVERLAP here
@@ -295,7 +305,10 @@ export async function ocrImageTiled(uri: string, engine: OcrEngine = 'auto', opt
     // small captures up to the glyph-size floor. Both re-encode a one-off OCR
     // input and remap coords back to original space via invFactor below.
     let targetWidth: number | null = null;
-    if (Platform.OS === 'ios' && !opts.document && trueWidth > IOS_MAX_WIDTH) {
+    if (opts.document && trueWidth > 0 && trueWidth < DOCUMENT_MIN_OCR_WIDTH) {
+        const factor = Math.min(DOCUMENT_MIN_OCR_WIDTH / trueWidth, DOCUMENT_MAX_UPSCALE);
+        targetWidth = Math.round(trueWidth * factor);
+    } else if (Platform.OS === 'ios' && !opts.document && trueWidth > IOS_MAX_WIDTH) {
         targetWidth = IOS_MAX_WIDTH;
     } else if (Platform.OS === 'android' && trueWidth > 0 && trueWidth < ANDROID_MIN_OCR_WIDTH) {
         const factor = Math.min(ANDROID_MIN_OCR_WIDTH / trueWidth, ANDROID_MAX_UPSCALE);
