@@ -24,7 +24,12 @@ const maybeDescribe = rootExists ? describe : describe.skip;
 
 maybeDescribe('shared/ copy is in sync with the root shared/ (run npm run sync-shared)', () => {
     test('every root source file exists in the copy with identical content', () => {
-        const rootFiles = listFiles(ROOT_SHARED).filter((f) => /\.(ts|tsx|js|json)$/.test(f));
+        const rootFiles = listFiles(ROOT_SHARED)
+            .filter((f) => /\.(ts|tsx|js|json)$/.test(f))
+            // Batch-run OUTPUT artifacts (receipts/_results, _logs) are not source —
+            // they land in the root shared/ during device test runs and must not
+            // demand a re-sync.
+            .filter((f) => !/^receipts\/(_results|_logs)\//.test(f));
         const diverged: string[] = [];
         for (const rel of rootFiles) {
             const appPath = path.join(APP_SHARED, rel);
