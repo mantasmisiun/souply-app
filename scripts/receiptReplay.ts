@@ -69,10 +69,12 @@ if (target === '--sweep') {
             const drift = Math.round((paid - (r.footer.total ?? 0)) * 100) / 100;
             const amts = r.products.filter((p: any) => p.parsedAmount != null || p.unit === 'kg').length;
             const oldN = stored ? (stored.products ?? []).length : r.products.length;
+            const recon = r.footer.reconciled === true ? '✓'
+                : r.footer.reconDelta != null ? `✗Δ${r.footer.reconDelta}` : '—';
             const flag = (junk ? ' JUNK' : '')
                 + (Math.abs(drift) > 0.9 ? ` DRIFT=${drift}` : '')
                 + (r.products.length !== oldN ? ` COUNT ${oldN}→${r.products.length}` : '');
-            console.log(`${dir.padEnd(44)} n=${String(r.products.length).padStart(2)} amt=${String(amts).padStart(2)} total=${r.footer.total}${flag}`);
+            console.log(`${dir.padEnd(44)} n=${String(r.products.length).padStart(2)} amt=${String(amts).padStart(2)} total=${r.footer.total} recon=${recon}${flag}`);
         } catch (e) {
             console.log(`${dir.padEnd(44)} ERR ${(e as Error).message.slice(0, 60)}`);
         }
