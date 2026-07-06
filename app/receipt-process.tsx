@@ -2865,8 +2865,20 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        const parsed = parseRimiReceipt(allLines);
+        let parsed = parseRimiReceipt(allLines);
         logParsedReview('RIMI', parsed);
+        // Phase-5 ensemble — same shared implementation as the IKI branch and
+        // the dev batch harness (flagged parse OR fused-row geometry → ML Kit
+        // second opinion → arithmetic + fewer-fusions arbitration).
+        {
+          const outcome = await ensembleSecondOpinion(
+            parsed,
+            imageUris,
+            (second) => parseRimiReceipt(second.allLines as any) as typeof parsed,
+            { document: fromPdfParam === '1', primaryLines: allLines },
+          );
+          if (outcome.engine === 'second') parsed = outcome.parsed;
+        }
         if (!(await ensureHasProducts(parsed.products, 'RIMI'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyRimiResult(parsed.header, parsed.products, parsed.footer);
@@ -2895,7 +2907,7 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        const parsed = parseMaximaReceipt(allLines, PARSER_OPTS);
+        let parsed = parseMaximaReceipt(allLines, PARSER_OPTS);
         if (__DEV__) {
           // Diagnostic: surface what the parser actually captured
           // from the footer so we can compare against the printed
@@ -2913,6 +2925,16 @@ export default function ProcessReceiptScreen() {
           );
         }
         logParsedReview('MAXIMA', parsed);
+        // Phase-5 ensemble — parity with the IKI branch / dev batch harness.
+        {
+          const outcome = await ensembleSecondOpinion(
+            parsed,
+            imageUris,
+            (second) => parseMaximaReceipt(second.allLines as any, PARSER_OPTS) as typeof parsed,
+            { document: fromPdfParam === '1', primaryLines: allLines },
+          );
+          if (outcome.engine === 'second') parsed = outcome.parsed;
+        }
         if (!(await ensureHasProducts(parsed.products, 'MAXIMA'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyMaximaResult(parsed.header, parsed.products, parsed.footer);
@@ -2936,8 +2958,18 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        const parsed = parseNorfaReceipt(allLines);
+        let parsed = parseNorfaReceipt(allLines);
         logParsedReview('NORFA', parsed);
+        // Phase-5 ensemble — parity with the IKI branch / dev batch harness.
+        {
+          const outcome = await ensembleSecondOpinion(
+            parsed,
+            imageUris,
+            (second) => parseNorfaReceipt(second.allLines as any) as typeof parsed,
+            { document: fromPdfParam === '1', primaryLines: allLines },
+          );
+          if (outcome.engine === 'second') parsed = outcome.parsed;
+        }
         if (!(await ensureHasProducts(parsed.products, 'NORFA'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyNorfaResult(parsed.header, parsed.products, parsed.footer);
@@ -2964,8 +2996,18 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        const parsed = parseLidlReceipt(allLines, PARSER_OPTS);
+        let parsed = parseLidlReceipt(allLines, PARSER_OPTS);
         logParsedReview('LIDL', parsed);
+        // Phase-5 ensemble — parity with the IKI branch / dev batch harness.
+        {
+          const outcome = await ensembleSecondOpinion(
+            parsed,
+            imageUris,
+            (second) => parseLidlReceipt(second.allLines as any, PARSER_OPTS) as typeof parsed,
+            { document: fromPdfParam === '1', primaryLines: allLines },
+          );
+          if (outcome.engine === 'second') parsed = outcome.parsed;
+        }
         if (!(await ensureHasProducts(parsed.products, 'LIDL'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyLidlResult(parsed.header, parsed.products, parsed.footer);

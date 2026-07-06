@@ -57,11 +57,19 @@ export const countFusedRows = (lines: EnsembleGeomLine[]): number => {
     }).length;
 };
 
-export const parseIsFlagged = (parsed: any): boolean =>
-    !parsed?.footer?.reconciled ||
-    (parsed?.products ?? []).some(
+export const parseIsFlagged = (parsed: any): boolean => {
+    // Reconciliation gate applies only to RECON-AWARE chains (IKI, Rimi —
+    // their footers always carry the `reconciled` key, even when undefined =
+    // unknown, which flags). Maxima/Norfa/Lidl have no receipt-level recon
+    // yet; treating their missing field as "not reconciled" made EVERY iOS
+    // scan pay an unconditional ML Kit second pass. They flag on visible
+    // defects only until they grow their own recon.
+    const footer = parsed?.footer;
+    if (footer && 'reconciled' in footer && footer.reconciled !== true) return true;
+    return (parsed?.products ?? []).some(
         (pp: any) => !pp.name || pp.name === '?' || junkName(pp.name) || !(pp.price > 0),
     );
+};
 
 export interface EnsembleOutcome<P> {
     parsed: P;
