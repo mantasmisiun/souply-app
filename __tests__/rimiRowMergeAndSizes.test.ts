@@ -28,6 +28,35 @@ describe('mergeRowFragmentsRimi', () => {
         expect(out[0].text).toBe('Nuol. -1,30 Galut. kaina 1,39');
     });
 
+    test('an engine DOUBLE-READ of the same row is suppressed, keeping the fuller text (rimi-30-04-2026-2)', () => {
+        // Vision emitted the same physical row twice with different garbles;
+        // x-joining them doubled the name and ate a product.
+        const out = mergeRowFragmentsRimi([
+            { text: 'Virtos GIMINIŲ dešrelės,', yTop: 2691, yBottom: 2753, xLeft: 31, xRight: 551 },
+            { text: 'Virtos CIMINIŲ derelės,', yTop: 2700, yBottom: 2752, xLeft: 28, xRight: 540 },
+        ]);
+        expect(out).toHaveLength(1);
+        expect(out[0].text).toBe('Virtos GIMINIŲ dešrelės,');
+    });
+
+    test('a DOUBLE-READ price anchor is suppressed too (ios-56 minted a phantom band from it)', () => {
+        const out = mergeRowFragmentsRimi([
+            { text: 'grietine, 30 %, 400 g', yTop: 1299, yBottom: 1332, xLeft: 15, xRight: 420 },
+            { text: '2,99 A', yTop: 1294, yBottom: 1332, xLeft: 1219, xRight: 1340 },
+            { text: '2,99 A', yTop: 1299, yBottom: 1334, xLeft: 1221, xRight: 1342 },
+        ]);
+        expect(out.filter((l) => l.text === '2,99 A')).toHaveLength(1);
+    });
+
+    test('genuine side-by-side fragments still join (no x-overlap = not duplicates)', () => {
+        const out = mergeRowFragmentsRimi([
+            L('3 vnt.', 1147, 60, 140),
+            L('X 4,99 EUR', 1142, 300, 240),
+        ]);
+        expect(out).toHaveLength(1);
+        expect(out[0].text).toBe('3 vnt. X 4,99 EUR');
+    });
+
     test('a split VAT letter reunites with ITS price, keeping the anchor alive (rimi-11-05 JUNGA)', () => {
         const out = mergeRowFragmentsRimi([
             L('2 vnt. X 0,99 EUR', 842, 60),
@@ -146,6 +175,130 @@ describe('parseRimiReceipt — receipt-level reconciliation', () => {
         const r = parseRimiReceipt(R('44', [L('PIRKINYS 2,12 EUR', 1050, 19, 600)]));
         expect(r.footer.total).toBe(2.12);
         expect(r.footer.reconciled).toBe(true); // read → verified
+    });
+
+    test('a garbled multi-buy X ("x*2,69") still parses — qty and ppu captured (rimi-30-04-2026-2 p11)', () => {
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            L('Virtos GIMINIŲ dešrelės, a.r., 260g', 600, 22),
+            L('2 vnt. x*2,69 EUR', 660, 74, 400),
+            L('5,38 A', 660, 1219, 120),
+            L('SUTEIKTOS NUOLAIDOS:', 900, 19),
+            L('Mokėti', 1100, 17),
+            L('5,38', 1100, 1150, 140),
+            L('Mokestis Suma su PVM', 1150, 17),
+        ]);
+        expect(r.products).toHaveLength(1);
+        expect(r.products[0].quantity).toBe(2);
+        expect(r.products[0].price).toBe(2.69);
+        expect(r.products[0].name).not.toMatch(/vnt|EUR/);
+        expect(r.footer.reconciled).toBe(true);
+    });
+
+    test('a lead-digit-garbled anchor heals when the multi line corroborates (ios-56 DEARY "0,78A")', () => {
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            L('Isp. šalavijo ir kokoso pudingas DEARY, 150 g', 600, 22),
+            L('2 vnt. X 1,39 EUR', 660, 74, 400),
+            L('0,78 A', 660, 1219, 120),   // printed 2,78 — leading digit garbled
+            L('SUTEIKTOS NUOLAIDOS:', 900, 19),
+            L('Mokėti', 1100, 17),
+            L('2,78', 1100, 1150, 140),
+            L('Mokestis Suma su PVM', 1150, 17),
+        ]);
+        expect(r.products).toHaveLength(1);
+        expect(r.products[0].price).toBe(1.39);  // per-unit normalized from healed 2.78
+        expect(r.products[0].quantity).toBe(2);
+        expect(r.footer.reconciled).toBe(true);  // healed total reconciles to the cent
+    });
+
+    test('a zero-garbled anchor ("O,65") still anchors — two products stay separate (rimi-30-04-2026-13)', () => {
+        // The letter-O garble killed the anchor and TWO sūrelis products
+        // merged into one band. The lead-garble fold restores it via the
+        // relaxed (VAT-less) anchor lane.
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            L('Sūrelis MAGIJA su vanile', 600, 22),
+            L('O,65', 600, 1219, 120),          // ← garbled anchor, no VAT letter
+            L('Sūrelis MAGIJA su', 660, 22),
+            L('kakava, 24,5 %', 720, 22),
+            L('0,65 A', 720, 1219, 120),
+            L('SUTEIKTOS NUOLAIDOS:', 900, 19),
+            L('Mokėti', 1100, 17),
+            L('1,30', 1100, 1150, 140),
+            L('Mokestis Suma su PVM', 1150, 17),
+        ]);
+        expect(r.products).toHaveLength(2);
+        expect(r.products[0].price).toBe(0.65);
+        expect(r.footer.reconciled).toBe(true);
+    });
+
+    test('a produce grade token ("C2-3, 1") never reads as a savings amount (ios-55 citrinos)', () => {
+        // The garbled-Nuol rescue requires EXACTLY two cent digits; the grade
+        // token + wrapped size digit used to become savings=3,10 → a phantom
+        // "discount DROPPED" warning on a discount-less product.
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            L('Citrinos Verna, 1kl, C2-3, 1', 600, 22),
+            L('kg', 660, 22, 60),
+            L('0,390 kg X 2,49 EUR/kg', 720, 36, 400),
+            L('0,97 A', 720, 1219, 120),
+            L('SUTEIKTOS NUOLAIDOS:', 900, 19),
+            L('Mokėti', 1100, 17),
+            L('0,97', 1100, 1150, 140),
+            L('Mokestis Suma su PVM', 1150, 17),
+        ]);
+        expect(r.products).toHaveLength(1);
+        const p = r.products[0];
+        expect(p.name).toContain('C2-3');
+        expect(p.promoPrice).toBeNull();
+        expect(p.quantity).toBe(0.39);
+        expect(r.footer.reconciled).toBe(true);
+    });
+
+    test('a mushed weighed line ("46g429 EUKG") recovers €/kg and kg from the anchor (ios-55 paprikos)', () => {
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            L('Raud. saldžiosios paprikos', 600, 22),
+            L('46g429 EUKG', 660, 0, 400),   // printed: 0,406 kg X 4,29 EUR/kg
+            L('1,74 A', 660, 1219, 120),
+            L('SUTEIKTOS NUOLAIDOS:', 900, 19),
+            L('Mokėti', 1100, 17),
+            L('1,74', 1100, 1150, 140),
+            L('Mokestis Suma su PVM', 1150, 17),
+        ]);
+        expect(r.products).toHaveLength(1);
+        const p = r.products[0];
+        expect(p.name).toBe('Raud. saldžiosios paprikos');
+        expect(p.pricePerUnit).toBe(4.29);
+        expect(p.quantity).toBe(0.406);
+        expect(p.unit).toBe('kg');
+        expect(r.footer.reconciled).toBe(true);
+    });
+
+    test('a garbled hint WITHOUT corroborating digits stays zeroed (never fabricate)', () => {
+        // Leading digits "99" do not appear in the derived qty (1.74/4.29 =
+        // 0.406) → recovery must refuse; poison guard zeroes the price and
+        // zeroedLineTotal still reconciles the receipt.
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            L('Raud. saldžiosios paprikos', 600, 22),
+            L('99x429 EUKG', 660, 0, 400),
+            L('1,74 A', 660, 1219, 120),
+            L('SUTEIKTOS NUOLAIDOS:', 900, 19),
+            L('Mokėti', 1100, 17),
+            L('1,74', 1100, 1150, 140),
+            L('Mokestis Suma su PVM', 1150, 17),
+        ]);
+        expect(r.products[0].price).toBe(0);
+        expect(r.products[0].pricePerUnit).toBeNull();
+        expect(r.footer.reconciled).toBe(true); // zeroedLineTotal books the money
     });
 
     test('a one-cent mismatch anywhere fails reconciliation (strict, no tolerance)', () => {
