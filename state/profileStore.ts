@@ -32,10 +32,24 @@ export interface MonthSlice { month: string; label: string; total: number; }
 
 export interface StatsData {
     storeBreakdown: StoreSlice[];
+    /** Per-month store breakdown keyed by `YYYY-MM` — drives the month-paged
+     *  Stores donut. Absent months simply have no key (empty donut). */
+    storeBreakdownByMonth?: Record<string, StoreSlice[]>;
     categoryBreakdown: CategorySlice[];
     kitaBreakdown?: CategorySlice[];
+    /** Full per-month category breakdown keyed by `YYYY-MM` (not truncated —
+     *  the client applies its own top-N/"Kitos" split). Drives the month-paged
+     *  Categories donut. */
+    categoryBreakdownByMonth?: Record<string, CategorySlice[]>;
     monthlySpending: MonthSlice[];
     totalSavings: number;
+    /** Savings for the current calendar month only (same avg-vs-paid formula
+     *  as totalSavings, scoped to this month). */
+    savingsThisMonth: number;
+    /** Last month's savings figure (same avg-vs-paid formula). The card shows
+     *  the € delta (thisMonth − lastMonth) as a "vs last month" chip, hidden
+     *  when last month has no baseline (=== 0). */
+    savingsLastMonth: number;
 }
 
 const STALE_MS = 5 * 60 * 1000;

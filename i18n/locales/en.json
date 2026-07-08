@@ -503,6 +503,7 @@
     "cancel": "Cancel",
     "continue": "Continue",
     "confirm": "Confirm",
+    "clear": "Clear",
     "delete": "Delete",
     "edit": "Edit",
     "retry": "Retry",
@@ -686,6 +687,9 @@
       "bannerDisabled": "Waiting for network"
     },
     "filterAll": "All",
+    "filterStores": "Stores",
+    "filterAllStores": "All stores",
+    "filterDate": "Date",
     "devDelete": {
       "title": "Delete receipt (DEV)",
       "body": "Permanently delete \"{{store}}\" and all associated data (prices, products, image)?",
@@ -1341,6 +1345,10 @@
     "points_other": "{{count}} points",
     "savedTotal": "Saved in total",
     "couldHaveSavedTotal": "Could have saved in total",
+    "pickMonth": "Pick a month",
+    "savedThisMonth": "Saved this month",
+    "couldHaveSavedThisMonth": "Could have saved this month",
+    "vsLastMonth": "vs last month",
     "dataFootnote": "Data based on uploaded receipts",
     "voteHistory": "Vote history",
     "devTools": "Developer tools",

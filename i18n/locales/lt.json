@@ -471,6 +471,7 @@
     "cancel": "Atšaukti",
     "continue": "Tęsti",
     "confirm": "Patvirtinti",
+    "clear": "Išvalyti",
     "delete": "Ištrinti",
     "edit": "Redaguoti",
     "retry": "Bandyti dar kartą",
@@ -656,6 +657,9 @@
       "bannerDisabled": "Laukiama interneto"
     },
     "filterAll": "Visi",
+    "filterStores": "Parduotuvės",
+    "filterAllStores": "Visos parduotuvės",
+    "filterDate": "Data",
     "devDelete": {
       "title": "Ištrinti kvitą (DEV)",
       "body": "Visam laikui ištrinti „{{store}}“ ir visus susijusius duomenis (kainas, produktus, nuotrauką)?",
@@ -1317,6 +1321,10 @@
     "points_other": "{{count}} taškų",
     "savedTotal": "Iš viso sutaupėte",
     "couldHaveSavedTotal": "Iš viso galėjote sutaupyti",
+    "pickMonth": "Pasirinkite mėnesį",
+    "savedThisMonth": "Šį mėnesį sutaupėte",
+    "couldHaveSavedThisMonth": "Šį mėnesį galėjote sutaupyti",
+    "vsLastMonth": "nei praėjusį mėn.",
     "dataFootnote": "Duomenys pagrįsti įkeltais kvitais",
     "voteHistory": "Balsavimų istorija",
     "devTools": "Kūrėjo įrankiai",
