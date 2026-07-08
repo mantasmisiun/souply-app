@@ -6,7 +6,9 @@ import { Stack,
     useFocusEffect,
     useRouter } from "expo-router";
 import { useSafeBottomTabBarHeight } from "../../../hooks/useSafeBottomTabBarHeight";
-import { StoreChipBar } from "../../../components/StoreChipBar";
+import { StoreFilterButton } from "../../../components/StoreFilterButton";
+import { DateFilterButton } from "../../../components/DateFilterButton";
+import type { FilterOption } from "../../../components/FilterDropdownModal";
 import { useCallback,
     useEffect,
     useMemo,
@@ -22,6 +24,7 @@ import {
     Modal,
     Pressable,
     RefreshControl,
+    ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
@@ -36,7 +39,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { glassHeaderOptions } from "../../../constants/navHeader";
 import { ScreenHeading } from "../../../components/ScreenHeading";
 import { useCollapsingHeader, CollapsingHeader } from "../../../components/CollapsingHeader";
-import { chainBrandName, chainIdByName } from "../../../utils/chainBrandName";
+import { chainBrandName, chainBrandColor, chainIdByName } from "../../../utils/chainBrandName";
 import { launchDocumentScanner } from "../../../utils/launchDocumentScanner";
 import { ChainLogoChip } from "../../../components/ChainLogoChip";
 import { SkeletonBox } from "../../../components/SkeletonBox";
@@ -88,6 +91,33 @@ const safeJsonParse = (raw: string): any => {
   }
 };
 
+// ── Receipt DATE (the date printed on the receipt, not the upload time) ──
+// Parse a loose "YYYY-MM-DD" / "YYYY.MM.DD" / "YYYY/M/D" (optionally with a
+// time tail) into a local Date; null when unparseable.
+const parseYMD = (str: string | null | undefined): Date | null => {
+  if (!str) return null;
+  const m = String(str).match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const d = new Date(str);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+// The receipt's own footer date (parsed blob) takes priority over the stored
+// receiptDate column — same source the card shows.
+const receiptFooterDateStr = (r: Receipt): string | null => {
+  const pd = r.parsedData;
+  if (!pd) return null;
+  const obj = typeof pd === "string" ? safeJsonParse(pd) : pd;
+  const raw = (obj as any)?.footer?.date ?? (obj as any)?.date ?? null;
+  return typeof raw === "string" && raw.trim() ? raw : null;
+};
+
+const receiptDateObj = (r: Receipt): Date | null =>
+  parseYMD(receiptFooterDateStr(r) ?? r.receiptDate);
+
+const sameDay = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+
 function queueStatusLabel(item: QueueItem, t: TFunction): string {
   if (item.status === "pending") return t('receipts.status.pending');
   if (item.status === "awaiting_network") return t('receipts.status.awaitingNetworkBadge');
@@ -134,7 +164,10 @@ export default function ReceiptsScreen() {
   const checkCandidate = useLevelStore(s => s.checkCandidate);
   useFocusEffect(useCallback(() => { checkCandidate(); }, [checkCandidate]));
   const [receipts, setReceipts] = useState<Receipt[]>([]);
-  const [selectedChain, setSelectedChain] = useState<string | null>(null);
+  // Store filter: null = all stores; otherwise the explicit checked chainId set.
+  const [selectedChainIds, setSelectedChainIds] = useState<Set<number> | null>(null);
+  // Date filter: null = no filter; otherwise show only that exact day.
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
@@ -445,37 +478,103 @@ export default function ReceiptsScreen() {
     } as any);
   };
 
-  const chainFilters = useMemo(() => {
-    const acc = new Map<string, { name: string; logoUrl: string | null; count: number }>();
+  // Store filter options (multi-select), keyed by chainId — derived from the
+  // receipts present, most-frequent chain first. `logoUrlById` feeds the
+  // selected-logos trigger in StoreFilterButton.
+  const { storeOptions, logoUrlById } = useMemo(() => {
+    const acc = new Map<number, { label: string; logo: string | null; count: number }>();
+    const logos = new Map<number, string | null>();
     for (const r of receipts) {
       if (!r.chainName) continue;
+      const id = chainIdByName(r.chainName);
+      if (!id) continue;
       const logo = r.chainMiniLogoUrl ?? r.chainLogoUrl ?? null;
-      const existing = acc.get(r.chainName);
+      const existing = acc.get(id);
       if (existing) {
         existing.count += 1;
-        if (!existing.logoUrl && logo) existing.logoUrl = logo;
+        if (!existing.logo && logo) existing.logo = logo;
       } else {
-        acc.set(r.chainName, { name: r.chainName, logoUrl: logo, count: 1 });
+        acc.set(id, { label: chainBrandName(r.chainName), logo, count: 1 });
       }
+      if (logo && !logos.has(id)) logos.set(id, logo);
     }
-    return Array.from(acc.values()).sort((a, b) => b.count - a.count);
+    const opts: FilterOption[] = Array.from(acc.entries())
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([id, v]) => ({
+        id,
+        label: v.label,
+        leading: <ChainLogoChip chainId={id} name={v.label} logoUrl={v.logo} size={24} />,
+      }));
+    return { storeOptions: opts, logoUrlById: logos };
   }, [receipts]);
 
-  useEffect(() => {
-    if (selectedChain === null) return;
-    if (!chainFilters.some((c) => c.name === selectedChain)) {
-      setSelectedChain(null);
+  const toggleStore = useCallback((id: number) => {
+    setSelectedChainIds((prev) => {
+      if (prev == null) return new Set([id]); // from "all" → narrow to just this one
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      // Empty or full selection both collapse back to "all stores".
+      if (next.size === 0 || next.size >= storeOptions.length) return null;
+      return next;
+    });
+  }, [storeOptions.length]);
+
+  const selectAllStores = useCallback(() => setSelectedChainIds(null), []);
+
+  // Calendar marks: "YYYY-MM-DD" → chain dot colours (deduped per chain, so a
+  // day with two Rimi receipts shows one red dot; Rimi + IKI shows red + green).
+  const receiptDots = useMemo(() => {
+    const m = new Map<string, string[]>();
+    const seen = new Map<string, Set<string>>();
+    for (const r of receipts) {
+      const d = receiptDateObj(r);
+      if (!d || !r.chainName) continue;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const chains = seen.get(key) ?? new Set<string>();
+      if (chains.has(r.chainName)) continue;
+      chains.add(r.chainName);
+      seen.set(key, chains);
+      const arr = m.get(key) ?? [];
+      arr.push(chainBrandColor(r.chainName));
+      m.set(key, arr);
     }
-  }, [chainFilters, selectedChain]);
+    return m;
+  }, [receipts]);
+
+  // Drop any selected chains that vanish from the loaded receipts.
+  useEffect(() => {
+    if (selectedChainIds == null) return;
+    const valid = new Set(storeOptions.map((o) => o.id));
+    const kept = new Set([...selectedChainIds].filter((id) => valid.has(id)));
+    if (kept.size !== selectedChainIds.size) {
+      setSelectedChainIds(kept.size === 0 ? null : kept);
+    }
+  }, [storeOptions, selectedChainIds]);
 
   const listData: ListItem[] = useMemo(() => {
     const out: ListItem[] = [];
     for (const q of queueItems) out.push({ kind: "queue", data: q });
-    const filtered = selectedChain
-      ? receipts.filter((r) => r.chainName === selectedChain)
-      : receipts;
-    const recent = filtered.filter((r) => recentIds.includes(r.id));
-    const older = filtered.filter((r) => !recentIds.includes(r.id));
+    let filtered = receipts;
+    // STORE (multi): skipped when all stores are selected so unknown-chain
+    // receipts survive; otherwise keep only the checked chains.
+    if (selectedChainIds && selectedChainIds.size < storeOptions.length) {
+      filtered = filtered.filter((r) => {
+        const id = r.chainName ? chainIdByName(r.chainName) : 0;
+        return id ? selectedChainIds.has(id) : false;
+      });
+    }
+    // DATE (exact day) — against the receipt's own date.
+    if (selectedDate) {
+      filtered = filtered.filter((r) => {
+        const d = receiptDateObj(r);
+        return d ? sameDay(d, selectedDate) : false;
+      });
+    }
+    // Sort by the receipt date (newest first); undated receipts sink to the end.
+    const byReceiptDateDesc = (a: Receipt, b: Receipt) =>
+      (receiptDateObj(b)?.getTime() ?? -Infinity) - (receiptDateObj(a)?.getTime() ?? -Infinity);
+    const recent = filtered.filter((r) => recentIds.includes(r.id)).sort(byReceiptDateDesc);
+    const older = filtered.filter((r) => !recentIds.includes(r.id)).sort(byReceiptDateDesc);
     if (recent.length > 0) {
       out.push({ kind: "section", title: t('receipts.sections.new'), id: "sec-nauji" });
       for (const r of recent) out.push({ kind: "receipt", data: r });
@@ -485,7 +584,7 @@ export default function ReceiptsScreen() {
     }
     for (const r of older) out.push({ kind: "receipt", data: r });
     return out;
-  }, [queueItems, receipts, recentIds, selectedChain]);
+  }, [queueItems, receipts, recentIds, selectedChainIds, selectedDate, storeOptions.length]);
 
   if (loading) {
     return (
@@ -681,17 +780,32 @@ export default function ReceiptsScreen() {
         controller={header}
         background={colors.cardBackground}
         collapsing={<ScreenHeading title={t('tabs.receipts')} />}
-        pinned={chainFilters.length > 1 ? (
-          <StoreChipBar
-            chips={chainFilters.map(f => ({
-              id: f.name,
-              label: chainBrandName(f.name),
-              logoUrl: f.logoUrl,
-            }))}
-            selectedId={selectedChain}
-            onSelect={id => setSelectedChain(id as string | null)}
-            allLabel={t('receipts.filterAll')}
-          />
+        pinned={(storeOptions.length > 1 || receipts.length > 0) ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.filterRow}
+          >
+            {storeOptions.length > 1 && (
+              <StoreFilterButton
+                storeOptions={storeOptions}
+                selectedIds={selectedChainIds}
+                onToggle={toggleStore}
+                onAll={selectAllStores}
+                logoUrlById={logoUrlById}
+                label={t('receipts.filterStores')}
+                allLabel={t('receipts.filterAllStores')}
+                title={t('receipts.filterStores')}
+              />
+            )}
+            <DateFilterButton
+              value={selectedDate}
+              onChange={setSelectedDate}
+              label={t('receipts.filterDate')}
+              markedDates={receiptDots}
+            />
+          </ScrollView>
         ) : undefined}
       />
       <Animated.FlatList
@@ -885,6 +999,13 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: c.pageBackground },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   list: { padding: spacing.lg },
+  filterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+  },
 
   card: {
     backgroundColor: c.cardBackground,

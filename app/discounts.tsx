@@ -27,6 +27,7 @@ import { SkeletonBox } from '../components/SkeletonBox';
 import { ChainLogoStrip } from '../components/ChainLogoStrip';
 import { ChainLogoChip } from '../components/ChainLogoChip';
 import { FilterDropdownModal, type FilterOption } from '../components/FilterDropdownModal';
+import { StoreFilterButton } from '../components/StoreFilterButton';
 import { categoryIcon } from '../constants/categoryIcons';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
@@ -196,7 +197,9 @@ export default function DiscountsScreen() {
     const [selectedL1, setSelectedL1] = useState<number | null>(null);
     /** null = all stores (the default); a Set is the explicit checked subset. */
     const [selectedChainIds, setSelectedChainIds] = useState<Set<number> | null>(null);
-    const [openFilter, setOpenFilter] = useState<null | 'store' | 'l1' | 'l2'>(null);
+    // Store filter now lives in <StoreFilterButton> (self-contained dropdown);
+    // this shared dropdown only drives the L1/L2 category filters.
+    const [openFilter, setOpenFilter] = useState<null | 'l1' | 'l2'>(null);
     const [anchorY, setAnchorY] = useState(0);
     const filterRowRef = useRef<View>(null);
     const [search, setSearch] = useState('');
@@ -310,17 +313,8 @@ export default function DiscountsScreen() {
         [availableChainIds],
     );
 
-    const allStoresSelected = !selectedChainIds || selectedChainIds.size >= availableChainIds.length;
-    // "All stores" is a STATE, not "everything checked": while it is active the store
-    // checkboxes render unchecked — they mean explicit narrowing. One tap on any store
-    // then selects JUST that store (see toggleChain) instead of excluding it from all.
-    const isChainChecked = useCallback(
-        (id: number) => selectedChainIds != null && selectedChainIds.has(id),
-        [selectedChainIds],
-    );
-
-    // First logoUrl seen per chain, so the store chip can render the selected
-    // chains' logos (same ChainLogoStrip rules as the product cards).
+    // First logoUrl seen per chain — the selected-store logo strip (inside
+    // StoreFilterButton) renders these (same ChainLogoStrip rules as the cards).
     const chainLogoUrlById = useMemo(() => {
         const m = new Map<number, string | null>();
         for (const p of allProducts) {
@@ -330,12 +324,6 @@ export default function DiscountsScreen() {
         }
         return m;
     }, [allProducts]);
-
-    const selectedStoreLogos = useMemo(() => {
-        if (allStoresSelected) return [];
-        const ids = (selectedChainIds ? [...selectedChainIds] : availableChainIds).slice().sort((a, b) => a - b);
-        return ids.map(id => ({ chainId: id, logoUrl: chainLogoUrlById.get(id) ?? null }));
-    }, [allStoresSelected, selectedChainIds, availableChainIds, chainLogoUrlById]);
 
     useEffect(() => {
         if (selectedL2 != null && !activeL2Ids.has(selectedL2)) setSelectedL2(null);
@@ -393,14 +381,7 @@ export default function DiscountsScreen() {
         setSelectedL2(null); // changing the L1 resets the subcategory to "Visi"
     }, []);
 
-    const openDropdown = useCallback((which: 'store' | 'l1' | 'l2') => {
-        const node = filterRowRef.current;
-        if (node?.measureInWindow) {
-            node.measureInWindow((_x, y, _w, h) => { setAnchorY((y || 0) + (h || 0)); setOpenFilter(which); });
-        } else {
-            setOpenFilter(which);
-        }
-    }, []);
+    const openDropdown = useCallback((which: 'l1' | 'l2') => setOpenFilter(which), []);
 
     const l1Label = selectedL1 != null
         ? (() => {
@@ -687,22 +668,16 @@ export default function DiscountsScreen() {
                                     contentContainerStyle={styles.bubblesContainer}
                                 >
                                     {storeOptions.length > 1 && (
-                                        (allStoresSelected || selectedStoreLogos.length === 0) ? (
-                                            <FilterChip
-                                                styles={styles} colors={colors}
-                                                label={t('discounts.filterStores')} active={!allStoresSelected}
-                                                onPress={() => openDropdown('store')}
-                                            />
-                                        ) : (
-                                            <TouchableOpacity
-                                                style={[styles.bubble, styles.filterChip, { borderColor: colors.primary }]}
-                                                onPress={() => openDropdown('store')}
-                                                activeOpacity={0.7}
-                                            >
-                                                <ChainLogoStrip chainLogos={selectedStoreLogos} />
-                                                <Ionicons name="chevron-down" size={14} color={colors.primary} />
-                                            </TouchableOpacity>
-                                        )
+                                        <StoreFilterButton
+                                            storeOptions={storeOptions}
+                                            selectedIds={selectedChainIds}
+                                            onToggle={toggleChain}
+                                            onAll={selectAllStores}
+                                            logoUrlById={chainLogoUrlById}
+                                            label={t('discounts.filterStores')}
+                                            allLabel={t('discounts.filterAllStores')}
+                                            title={t('discounts.filterStores')}
+                                        />
                                     )}
                                     {l1Options.length > 0 && (
                                         <FilterChip
@@ -867,13 +842,10 @@ export default function DiscountsScreen() {
             />
             <FilterDropdownModal
                 visible={openFilter !== null}
-                title={openFilter === 'store' ? t('discounts.filterStores') : openFilter === 'l1' ? t('discounts.filterCategories') : t('discounts.filterSubcategories')}
-                anchorY={anchorY}
-                options={openFilter === 'store' ? storeOptions : openFilter === 'l1' ? l1Options : l2Options}
+                title={openFilter === 'l1' ? t('discounts.filterCategories') : t('discounts.filterSubcategories')}
+                options={openFilter === 'l1' ? l1Options : l2Options}
                 onClose={() => setOpenFilter(null)}
-                config={openFilter === 'store'
-                    ? { mode: 'multi', isChecked: isChainChecked, allChecked: allStoresSelected, allLabel: t('discounts.filterAllStores'), onToggle: toggleChain, onAll: selectAllStores }
-                    : openFilter === 'l1'
+                config={openFilter === 'l1'
                     ? { mode: 'single', selectedId: selectedL1, allLabel: t('discounts.filterAllCategories'), onSelect: selectL1 }
                     : { mode: 'single', selectedId: selectedL2, allLabel: t('discounts.filterAllSubcategories'), onSelect: setSelectedL2 }}
             />
