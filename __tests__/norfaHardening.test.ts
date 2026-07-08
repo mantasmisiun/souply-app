@@ -1,4 +1,4 @@
-import { parseNorfaReceipt, findReceiptBandsNorfa, type NorfaLine } from '../shared/parsers/norfaParser';
+import { parseNorfaReceipt, findReceiptBandsNorfa, parseNorfaHeaderOnly, type NorfaLine } from '../shared/parsers/norfaParser';
 
 // IKI-parser hardening transfers: date/time garble classes, synthetic
 // receipt id, weighed price-poisoning guard + isWeighable emission,
@@ -558,5 +558,32 @@ describe('whole-bag weighable reclassification (Pramonės-04-02 potatoes)', () =
         const p = r.products[0];
         expect(p.unit).toBe('vnt');
         expect(p.quantity).toBe(2);
+    });
+});
+
+describe('store address reconstruction (Pramonės-04-23 fragmented + reversed row)', () => {
+    const B = (text: string, yTop: number, yBottom: number, xLeft: number, xRight: number): NorfaLine =>
+        ({ text, yTop, yBottom, xLeft, xRight });
+    test('street box + "6, Šiauliai" box (right box sorts first by y) reconstruct the address', () => {
+        // "Pramonės g. 6, Šiauliai" printed as two boxes on one row; the
+        // right ("6, Šiauliai") sorts FIRST by yTop, so neither half matches
+        // the address regex alone and storeAddress read empty → store
+        // unmatched. x-order join recovers it (with the OCR "Pramnės" garble
+        // the fuzzy store matcher then tolerates).
+        const h: any = parseNorfaHeaderOnly([
+            B('D1', 85, 128, 75, 137),
+            B('UAB NORFOS MAŽMENA', 148, 205, 72, 757),
+            B('6, Šiauliai', 225, 282, 543, 955),   // right box, sorts first
+            B('Pramnės g.', 231, 275, 76, 482),      // street box, OCR dropped the 'o'
+            B('Visada laukiame Jūsu, AČIU', 298, 344, 69, 1070),
+        ]);
+        expect(h.storeAddress).toBe('Pramnės g. 6, Šiauliai');
+    });
+    test('a single-box address still parses (no regression)', () => {
+        const h: any = parseNorfaHeaderOnly([
+            B('D1 UAB NORFOS MAŽMENA', 85, 128, 75, 900),
+            B('Pramonės 6, Šiauliai', 148, 205, 75, 800),
+        ]);
+        expect(h.storeAddress).toBe('Pramonės 6, Šiauliai');
     });
 });
