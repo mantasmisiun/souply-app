@@ -47,6 +47,8 @@ import { API_BASE_URL } from '../../config/api';
 import { ocrReceiptPages } from '../../utils/receiptOcrPipeline';
 import { ensembleSecondOpinion } from '../../utils/parseEnsemble';
 import { devicePdfAvailable, convertPdfOnDevice } from '../../utils/receiptPdf';
+import { sectionReocrIfFlagged, graftRicherFields } from '../../utils/sectionReocr';
+import { compareItemTruth, isItemTruthFile } from '../../utils/itemTruth';
 import { getUserId } from '../../config/user';
 import {
     isIkiReceipt,
@@ -200,6 +202,10 @@ interface RowStatus {
      *  truth files can be reconstructed when the parser is treated
      *  as authoritative. */
     parsedProducts?: ParsedProductSnapshot[];
+    /** v2 item-truth roll-up (drives the ✓/⚠/○ list icon). */
+    truthSummary?: 'ok' | 'attention' | 'partial' | 'none';
+    truthDiffer?: number;
+    truthMissing?: number;
 }
 
 const loadTruth = async (
@@ -437,7 +443,10 @@ export default function ReceiptBatchScreen() {
                     cachedUris.push(await downloadPageToCache(row.chain, pageName));
                 }
             }
-            const ocr = await ocrReceiptPages(cachedUris, 'auto', { document: true });
+            // stripHealing for ALL sources — photos included: their engine-
+            // dropped rows only heal through strips, and the splice guards
+            // (dedupe, sliver filter, anchor preservation) carry the risk.
+            const ocr = await ocrReceiptPages(cachedUris, 'auto', { document: true, stripHealing: true });
             allLines = ocr.allLines as PageLine[];
             pageMetas = ocr.pageMetas.map((m, i) => ({
                 name: entry.pages[i],
@@ -461,6 +470,10 @@ export default function ReceiptBatchScreen() {
             if (!parsed) {
                 return { ...row, state: 'error', message: 'parser returned null' };
             }
+            // The PRIMARY parse often has the richest names (later lanes can
+            // win the arithmetic while dropping a wrapped name row) — kept for
+            // a final graft after ensemble/section re-OCR.
+            const primaryParsed = parsed;
 
             // Phase-5 ensemble — SAME shared implementation as the Analyze scan
             // (flagged primary parse → ML Kit second opinion → arithmetic picks).
@@ -468,11 +481,37 @@ export default function ReceiptBatchScreen() {
                 parsed,
                 cachedUris,
                 (second) => runParser(detected!, linesFor(second))!,
-                { document: true, primaryLines: ocr.allLines as { yTop: number; yBottom: number; text: string }[] },
+                { document: true, stripHealing: true, primaryLines: ocr.allLines as { yTop: number; yBottom: number; text: string }[] },
             );
             if (outcome.engine === 'second' && outcome.secondOcr) {
                 parsed = outcome.parsed;
                 allLines = outcome.secondOcr.allLines as PageLine[];
+            }
+
+            // PHOTO section re-OCR — recon-failed single-page photos get one
+            // document-mode re-read of the product section (the photo path's
+            // counterpart of the PDF strip healing; same wiring as the live
+            // scan). IKI is excluded: it parses merged lines and has its own
+            // whole-section machinery.
+            if (!entry.pdf && cachedUris.length === 1
+                && (parsed as any)?.footer?.reconciled === false && pageMetas[0]) {
+                const o = await sectionReocrIfFlagged(
+                    parsed as any,
+                    allLines as any,
+                    ocr.pageMetas[0].uri,
+                    ocr.pageMetas[0].pixelWidth,
+                    ocr.pageMetas[0].pixelHeight,
+                    'auto',
+                    (ls) => runParser(detected!, ls as PageLine[]) as any,
+                );
+                if (o.applied) {
+                    parsed = o.parsed;
+                    allLines = o.lines as PageLine[];
+                }
+            }
+            // Final name graft from the primary read (no-op when identical).
+            if (parsed !== primaryParsed) {
+                parsed = graftRicherFields(primaryParsed as any, parsed as any) as typeof parsed;
             }
         } finally {
             for (const u of cachedUris) {
@@ -502,6 +541,10 @@ export default function ReceiptBatchScreen() {
                 receiptNo: parsed.footer?.receiptNo ?? null,
                 totalSavings: (parsed.footer as any)?.totalSavings ?? null,
                 rawText: parsed.footer?.rawText ?? null,
+                // Parser self-verification — the report generator prefers
+                // these over its own naive sum (recon-aware chains only).
+                reconciled: (parsed.footer as any)?.reconciled ?? null,
+                reconDelta: (parsed.footer as any)?.reconDelta ?? null,
             },
         };
 
@@ -550,7 +593,20 @@ export default function ReceiptBatchScreen() {
         // a single JSON pushed to /api/parser-test/results.
         try {
             const truth = await loadTruth(row.chain, row.sourcePdf);
-            if (truth) {
+            if (truth && isItemTruthFile(truth)) {
+                // v2 PER-ITEM truth (checkmarked on the detail screen):
+                // compare only the asserted items; roll-up drives the list icon.
+                const cmp = compareItemTruth(truth, parsed.products as any, parsed.footer as any);
+                status.truthSummary = cmp.summary;
+                status.truthDiffer =
+                    cmp.perProduct.filter((p) => p.state === 'differ').length +
+                    (cmp.footer === 'differ' ? 1 : 0);
+                status.truthMissing = cmp.missing.length;
+                console.log(
+                    `[truth] ${row.chain}/${row.sourcePdf}: ${cmp.summary}` +
+                    ` (differ=${status.truthDiffer} missing=${cmp.missing.length})`,
+                );
+            } else if (truth) {
                 status.truthProvisional = truth.provisional === true;
                 const parsedTotal = parsed.footer?.total ?? null;
                 status.comparison = compareToTruth(
@@ -567,11 +623,23 @@ export default function ReceiptBatchScreen() {
                 );
             } else {
                 status.comparison = null;
+                status.truthSummary = 'none';
             }
         } catch (e: any) {
             console.warn(`[score] ${row.sourcePdf} comparison failed:`, e);
             status.comparison = null;
         }
+
+        // FINAL-parse extras every chain's snapshot carries — the detail
+        // screen's item-truth checkmarks assert these values.
+        const snapProducts = status.parsedProducts;
+        const snapFooter = {
+            total: parsed.footer?.total ?? null,
+            date: parsed.footer?.date ?? null,
+            receiptNo: parsed.footer?.receiptNo ?? null,
+            reconciled: (parsed.footer as any)?.reconciled ?? null,
+            reconDelta: (parsed.footer as any)?.reconDelta ?? null,
+        };
 
         // V2 step 1 + step 2 (Maxima only today): identify product
         // band boundaries (step 1) and convert each band into a
@@ -644,6 +712,8 @@ export default function ReceiptBatchScreen() {
                     sourcePdf: row.sourcePdf,
                     pages: pageMetas,
                     bands,
+                    products: snapProducts,
+                    footer: snapFooter,
                     taggedBands: [...fieldBands, ...productTagged] as any,
                 });
             } catch (e) {
@@ -702,6 +772,8 @@ export default function ReceiptBatchScreen() {
                     sourcePdf: row.sourcePdf,
                     pages: pageMetas,
                     bands,
+                    products: snapProducts,
+                    footer: snapFooter,
                     taggedBands: planV2.bands,
                 });
             } catch (e) {
@@ -759,6 +831,8 @@ export default function ReceiptBatchScreen() {
                     sourcePdf: row.sourcePdf,
                     pages: pageMetas,
                     bands,
+                    products: snapProducts,
+                    footer: snapFooter,
                     taggedBands: planV2.bands,
                 });
             } catch (e) {
@@ -817,6 +891,8 @@ export default function ReceiptBatchScreen() {
                     sourcePdf: row.sourcePdf,
                     pages: pageMetas,
                     bands,
+                    products: snapProducts,
+                    footer: snapFooter,
                     taggedBands: planV2.bands,
                 });
             } catch (e) {
@@ -1102,11 +1178,22 @@ export default function ReceiptBatchScreen() {
                                         `(${s.comparison.productsCorrect}/` +
                                         `${s.comparison.productsCorrect + s.comparison.productsMissed})`
                                     )}
-                                    {s.state === 'done' && s.comparison === null &&
+                                    {s.state === 'done' && s.truthSummary === 'attention' &&
+                                        ` · ⚠ ${s.truthDiffer ?? 0} skiriasi${s.truthMissing ? `, ${s.truthMissing} dingo` : ''}`}
+                                    {s.state === 'done' && s.comparison === null && s.truthSummary === 'none' &&
                                         ' · be truth'}
                                     {s.message && ` · ${s.message}`}
                                 </Text>
                             </View>
+                            {s.state === 'done' && s.truthSummary === 'attention' && (
+                                <Ionicons name="warning" size={18} color={colors.error} />
+                            )}
+                            {s.state === 'done' && s.truthSummary === 'ok' && (
+                                <Ionicons name="shield-checkmark" size={16} color={colors.success} />
+                            )}
+                            {s.state === 'done' && s.truthSummary === 'partial' && (
+                                <Ionicons name="shield-half-outline" size={16} color={colors.textMuted} />
+                            )}
                             {canNavigate && (
                                 <Ionicons name="chevron-forward" size={16} color={colors.textMuted} />
                             )}

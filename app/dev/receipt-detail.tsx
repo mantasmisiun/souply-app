@@ -46,6 +46,14 @@ import {
 } from 'react-native';
 import { API_BASE_URL } from '../../config/api';
 import { devLog } from '../../utils/devLog';
+import {
+    compareItemTruth,
+    isItemTruthFile,
+    truthFromParsed,
+    footerFromParsed,
+    type ItemTruthFile,
+    type ProductTruthComparison,
+} from '../../utils/itemTruth';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import {
     getReceiptSnapshot,
@@ -271,6 +279,84 @@ export default function ReceiptDetailScreen() {
         [snap],
     );
 
+    // ── ITEM TRUTH (v2): fetch the receipt's approval file, compare the
+    // FINAL parsed products (snapshot.products) against it, and let each
+    // product row checkmark/overwrite/remove its assertion. Writes go
+    // through the dev API into shared/receipts/<chain>/ (git-versioned).
+    const [truth, setTruth] = useState<ItemTruthFile | null>(null);
+    useEffect(() => {
+        if (!snap) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const base = snap.sourcePdf.replace(/\.(pdf|png|jpg|jpeg)$/i, '');
+                const res = await fetch(`${API_BASE_URL}/receipts-truth/${snap.chain}/${base}.truth.json`);
+                if (!res.ok) return;
+                const j = await res.json();
+                if (!cancelled && isItemTruthFile(j)) setTruth(j);
+            } catch { /* no truth yet */ }
+        })();
+        return () => { cancelled = true; };
+    }, [snap]);
+
+    const truthCmp = useMemo(
+        () => (snap?.products ? compareItemTruth(truth, snap.products, snap.footer ?? null) : null),
+        [truth, snap],
+    );
+    // Band rows display extract-level products; assertions target the FINAL
+    // parse (snapshot.products). Map band index → final-product index by
+    // counting non-skip bands.
+    const bandToProductIdx = useMemo(() => {
+        let n = 0;
+        return (snap?.bands ?? []).map((b) => (b.product ? n++ : -1));
+    }, [snap]);
+
+    const saveTruth = async (next: ItemTruthFile | null) => {
+        setTruth(next);
+        try {
+            await fetch(`${API_BASE_URL}/receipts-truth-set`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chain: snap?.chain, file: snap?.sourcePdf, truth: next }),
+            });
+        } catch (e) {
+            console.warn('[truth] save failed:', e);
+        }
+    };
+    const editableTruth = (): ItemTruthFile => (
+        truth
+            ? { ...truth, products: [...truth.products] }
+            : { version: 2, source: snap?.sourcePdf ?? '', products: [], footer: null }
+    );
+    const checkProduct = (productIdx: number) => {
+        if (!snap?.products || !truthCmp) return;
+        const t = editableTruth();
+        const item = truthFromParsed(snap.products[productIdx], new Date().toISOString());
+        const existing = truthCmp.perProduct[productIdx]?.truthIdx;
+        if (existing != null) t.products[existing] = item;
+        else t.products.push(item);
+        void saveTruth(t);
+    };
+    const uncheckProduct = (productIdx: number) => {
+        if (!truthCmp) return;
+        const existing = truthCmp.perProduct[productIdx]?.truthIdx;
+        if (existing == null) return;
+        const t = editableTruth();
+        t.products.splice(existing, 1);
+        void saveTruth(t.products.length || t.footer ? t : null);
+    };
+    const checkFooter = () => {
+        if (!snap?.footer) return;
+        const t = editableTruth();
+        t.footer = footerFromParsed(snap.footer, new Date().toISOString());
+        void saveTruth(t);
+    };
+    const uncheckFooter = () => {
+        const t = editableTruth();
+        t.footer = null;
+        void saveTruth(t.products.length ? t : null);
+    };
+
     // iOS ImageManipulator refuses HTTP URIs and aborts with the
     // cryptic `calling the 'renderAsync' function has failed`. Cache
     // each batch-staging page to local FS once, hand the file:// URI
@@ -379,6 +465,38 @@ export default function ReceiptDetailScreen() {
                             </View>
                         );
                     })}
+                    {/* Footer (suma/data/nr/recon) truth card — directly under
+                        the receipt photo so it's inspectable in one glance.
+                        Whole card is tappable: tap = approve current values,
+                        long-press = remove the assertion. */}
+                    {snap.footer && truthCmp && (
+                        <TouchableOpacity
+                            style={styles.footerTruthCard}
+                            onPress={truthCmp.footer !== 'match' ? checkFooter : undefined}
+                            onLongPress={truthCmp.footer !== 'none' ? uncheckFooter : undefined}
+                            delayLongPress={450}
+                            activeOpacity={0.7}
+                        >
+                            <View style={styles.truthCheck}>
+                                {truthCmp.footer === 'differ' && (
+                                    <Ionicons name="warning" size={16} color={colors.error} />
+                                )}
+                                <Ionicons
+                                    name={truthCmp.footer === 'none' ? 'ellipse-outline' : 'checkmark-circle'}
+                                    size={22}
+                                    color={truthCmp.footer === 'match' ? colors.success : truthCmp.footer === 'differ' ? colors.error : colors.textMuted}
+                                />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.productName}>
+                                    Suma €{snap.footer.total ?? '—'} · {snap.footer.date ?? '—'} · nr {snap.footer.receiptNo ?? '—'} · recon {snap.footer.reconciled === true ? '✓' : snap.footer.reconciled === false ? `✗ (Δ${snap.footer.reconDelta ?? '?'})` : '—'}
+                                </Text>
+                                {truthCmp.footer === 'differ' && truthCmp.footerDiffs.map((d, i) => (
+                                    <Text key={i} style={styles.truthDiffText}>{d}</Text>
+                                ))}
+                            </View>
+                        </TouchableOpacity>
+                    )}
                     <View style={styles.bandsSection}>
                         <Text style={styles.sectionTitle}>V2 bandų y koordinatės</Text>
                         {isTaggedReceipt
@@ -463,6 +581,15 @@ export default function ReceiptDetailScreen() {
             {showProductsList && (
                 <View style={styles.productsSection}>
                     <Text style={styles.sectionTitle}>Produktai</Text>
+                    {truthCmp && truthCmp.missing.length > 0 && (
+                        <View style={styles.truthMissingBox}>
+                            {truthCmp.missing.map((m, i) => (
+                                <Text key={i} style={styles.truthMissingText}>
+                                    ⚠ dingo iš parse: {m.name} — €{m.price.toFixed(2)} × {m.quantity} {m.unit}
+                                </Text>
+                            ))}
+                        </View>
+                    )}
                     {snap.bands.length === 0 && (
                         <Text style={styles.emptyText}>V2 nerado bandų.</Text>
                     )}
@@ -473,11 +600,15 @@ export default function ReceiptDetailScreen() {
                         // empty string before that — ProductRow's crop
                         // effect bails on empty and re-runs on update.
                         const localUri = localPageUris[page.name] ?? '';
+                        const productIdx = bandToProductIdx[idx];
+                        const cmp = productIdx >= 0 ? truthCmp?.perProduct[productIdx] ?? null : null;
+                        const finalProduct = productIdx >= 0 ? snap.products?.[productIdx] ?? null : null;
                         return (
                             <ProductRow
                                 key={idx}
                                 bandIdx={idx}
                                 bandResult={bandResult}
+                                finalProduct={finalProduct}
                                 uri={localUri}
                                 pageWidth={page.pixelWidth}
                                 pageHeight={page.pixelHeight}
@@ -487,6 +618,9 @@ export default function ReceiptDetailScreen() {
                                 yBottomOnPage={onPage.yBottomOnPage}
                                 colors={colors}
                                 styles={styles}
+                                truthCmp={cmp}
+                                onTruthCheck={productIdx >= 0 ? () => checkProduct(productIdx) : undefined}
+                                onTruthRemove={productIdx >= 0 ? () => uncheckProduct(productIdx) : undefined}
                             />
                         );
                     })}
@@ -508,6 +642,7 @@ export default function ReceiptDetailScreen() {
 const ProductRow = ({
     bandIdx,
     bandResult,
+    finalProduct,
     uri,
     pageWidth,
     pageHeight,
@@ -517,6 +652,9 @@ const ProductRow = ({
     yBottomOnPage,
     colors,
     styles,
+    truthCmp,
+    onTruthCheck,
+    onTruthRemove,
 }: {
     bandIdx: number;
     bandResult: BandResult;
@@ -529,9 +667,21 @@ const ProductRow = ({
     yBottomOnPage: number;
     colors: AppTheme;
     styles: ReturnType<typeof makeStyles>;
+    finalProduct?: NonNullable<ReceiptSnapshot['products']>[number] | null;
+    truthCmp?: ProductTruthComparison | null;
+    onTruthCheck?: () => void;
+    onTruthRemove?: () => void;
 }) => {
     const status = deriveStatus(bandResult);
     const product = bandResult.product;
+    // DISPLAY the FINAL parsed product when available — the band's own
+    // extract-level product predates parse-level heals (Galut salvage, ppu
+    // normalization, grafts), and showing it made rimi-30-04-2026-2's Cukrus
+    // look discount-less while the shipped parse (and the truth assertions)
+    // had akcija 0.65. Final products are per-unit normalized: totals are
+    // price×qty. Falls back to the extract product on old snapshots.
+    const fp = finalProduct ?? null;
+    const round2 = (v: number) => Math.round(v * 100) / 100;
     const bandHeight = Math.max(yBottomOnPage - yTopOnPage, 1);
     // Horizontal viewport = receipt content bounds (skips the PDF page's white
     // margins); full width on old snapshots without the bounds.
@@ -622,58 +772,105 @@ const ProductRow = ({
                     </Text>
                     {product ? (
                         <Text style={styles.productName} numberOfLines={2}>
-                            {product.name}
+                            {fp?.name ?? product.name}
                         </Text>
                     ) : (
                         <Text style={styles.productSkipName} numberOfLines={2}>
                             {skipLabel(bandResult.warnings)}
                         </Text>
                     )}
+                    {product && truthCmp && (
+                        // Item-truth checkmark: tap = approve current values
+                        // (creates/overwrites the assertion), long-press =
+                        // remove the assertion. Red warning = truth differs.
+                        <TouchableOpacity
+                            style={styles.truthCheck}
+                            onPress={truthCmp.state !== 'match' ? onTruthCheck : undefined}
+                            onLongPress={truthCmp.state !== 'unchecked' ? onTruthRemove : undefined}
+                            delayLongPress={450}
+                        >
+                            {truthCmp.state === 'differ' && (
+                                <Ionicons name="warning" size={16} color={colors.error} />
+                            )}
+                            <Ionicons
+                                name={truthCmp.state === 'unchecked' ? 'ellipse-outline' : 'checkmark-circle'}
+                                size={22}
+                                color={truthCmp.state === 'match' ? colors.success : truthCmp.state === 'differ' ? colors.error : colors.textMuted}
+                            />
+                        </TouchableOpacity>
+                    )}
                 </View>
+                {truthCmp?.state === 'differ' && truthCmp.diffs.length > 0 && (
+                    <View style={styles.truthDiffBox}>
+                        {truthCmp.diffs.map((d, i) => (
+                            <Text key={i} style={styles.truthDiffText}>{d}</Text>
+                        ))}
+                    </View>
+                )}
                 {product && (
                     <View style={styles.productFields}>
                         {/*
-                          Parser-extracted pack size from the name (e.g.
-                          32 rit. for ZEWA, 990 ml for SOMAT, 250 g for
-                          MILLER). Shown above the price line so the
-                          discriminator the matcher uses is immediately
-                          visible — easy to spot regressions where the
-                          token didn't get caught. Renders "—" when
-                          extractPackSize returned null (e.g. a bare
-                          number with no unit suffix lost in OCR).
+                          Parser-extracted pack size from the name. Final-parse
+                          values when the snapshot carries them (post-heals);
+                          extract-level fallback otherwise.
                         */}
                         <Text style={styles.productPackSize}>
-                            {(product as any).parsedAmount != null && (product as any).parsedUnit
-                                ? `${(product as any).parsedAmount} ${(product as any).parsedUnit}`
-                                : '—'}
+                            {fp
+                                ? (fp.parsedAmount != null && fp.parsedUnit ? `${fp.parsedAmount} ${fp.parsedUnit}` : '—')
+                                : ((product as any).parsedAmount != null && (product as any).parsedUnit
+                                    ? `${(product as any).parsedAmount} ${(product as any).parsedUnit}`
+                                    : '—')}
                         </Text>
-                        {/*
-                          Gross math: <ppu>{/unit} × <qty> <unit> = <price>.
-                          For single-pack rows with no X-N line on the
-                          receipt the parser leaves pricePerUnit=null;
-                          we fall back to the line price as the per-pack
-                          price and drop the "/unit" suffix so the line
-                          reads naturally instead of "€0.49/vnt × 1 vnt".
-                        */}
-                        <Text style={styles.productPriceLine}>
-                            <Text style={styles.productPpu}>
-                                €{(product.pricePerUnit ?? product.price).toFixed(2)}
-                                {product.pricePerUnit !== null ? `/${product.unit}` : ''}
+                        {fp ? (
+                            // FINAL product: price is per-unit normalized —
+                            // line total = price × qty.
+                            <Text style={styles.productPriceLine}>
+                                <Text style={styles.productPpu}>
+                                    €{fp.price.toFixed(2)}
+                                    {fp.quantity !== 1 || fp.unit === 'kg' ? `/${fp.unit}` : ''}
+                                </Text>
+                                <Text style={styles.productSecondary}>
+                                    {' × '}
+                                    {formatQty(fp.quantity)} {fp.unit}
+                                    {' = '}
+                                </Text>
+                                <Text style={styles.productTotal}>
+                                    €{round2(fp.price * fp.quantity).toFixed(2)}
+                                </Text>
                             </Text>
-                            <Text style={styles.productSecondary}>
-                                {' × '}
-                                {formatQty(product.quantity)} {product.unit}
-                                {' = '}
+                        ) : (
+                            <Text style={styles.productPriceLine}>
+                                <Text style={styles.productPpu}>
+                                    €{(product.pricePerUnit ?? product.price).toFixed(2)}
+                                    {product.pricePerUnit !== null ? `/${product.unit}` : ''}
+                                </Text>
+                                <Text style={styles.productSecondary}>
+                                    {' × '}
+                                    {formatQty(product.quantity)} {product.unit}
+                                    {' = '}
+                                </Text>
+                                <Text style={styles.productTotal}>
+                                    €{product.price.toFixed(2)}
+                                </Text>
                             </Text>
-                            <Text style={styles.productTotal}>
-                                €{product.price.toFixed(2)}
+                        )}
+                        {fp ? (fp.promoPrice != null && (
+                            <Text style={styles.productPromoLine}>
+                                <Text style={styles.productPromoLabel}>akcija </Text>
+                                <Text style={styles.productPpu}>
+                                    €{fp.promoPrice.toFixed(2)}
+                                    {fp.quantity !== 1 || fp.unit === 'kg' ? `/${fp.unit}` : ''}
+                                </Text>
+                                <Text style={styles.productSecondary}>
+                                    {' × '}
+                                    {formatQty(fp.quantity)} {fp.unit}
+                                    {' = '}
+                                </Text>
+                                <Text style={styles.productTotal}>
+                                    €{round2(fp.promoPrice * fp.quantity).toFixed(2)}
+                                </Text>
                             </Text>
-                        </Text>
-                        {product.promoPrice !== null && (
-                            // Discount math sub-line: divide promoPrice by
-                            // quantity to get the effective per-unit price
-                            // after the per-item discount, then show the
-                            // same shape as the gross line for easy compare.
+                        )) : (product.promoPrice !== null && (
                             <Text style={styles.productPromoLine}>
                                 <Text style={styles.productPromoLabel}>akcija </Text>
                                 <Text style={styles.productPpu}>
@@ -689,7 +886,7 @@ const ProductRow = ({
                                     €{product.promoPrice.toFixed(2)}
                                 </Text>
                             </Text>
-                        )}
+                        ))}
                     </View>
                 )}
                 {bandResult.warnings.length > 0 && (
@@ -1010,5 +1207,44 @@ const makeStyles = (c: AppTheme) =>
             color: c.textSecondary,
             fontFamily: 'monospace',
             marginBottom: 2,
+        },
+        truthCheck: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 2,
+            paddingLeft: 8,
+            paddingVertical: 2,
+        },
+        truthDiffBox: {
+            marginTop: 4,
+            padding: 6,
+            borderRadius: 6,
+            backgroundColor: c.error + '18',
+        },
+        truthDiffText: {
+            fontSize: 11,
+            color: c.error,
+            fontFamily: 'monospace',
+            marginBottom: 1,
+        },
+        truthMissingBox: {
+            marginBottom: 8,
+            padding: 8,
+            borderRadius: 8,
+            backgroundColor: c.error + '22',
+        },
+        truthMissingText: {
+            fontSize: 12,
+            color: c.error,
+            marginBottom: 2,
+        },
+        footerTruthCard: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            marginTop: 10,
+            padding: 10,
+            borderRadius: 8,
+            backgroundColor: c.surfaceMuted,
         },
     });

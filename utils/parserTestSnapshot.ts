@@ -92,6 +92,31 @@ export interface ReceiptSnapshot {
      * populated for every chain, independent of the V2 product bands.
      */
     maskBands?: MaskBand[];
+    /**
+     * FINAL parsed products (post-normalization, post-heals/grafts) — what
+     * actually ships. The item-truth checkmarks assert THESE values; the
+     * band list's own extract-level products are display-only.
+     */
+    products?: {
+        name: string;
+        price: number;
+        promoPrice: number | null;
+        quantity: number;
+        unit: string;
+        parsedAmount?: number | null;
+        parsedUnit?: string | null;
+    }[];
+    /**
+     * Footer fields of the FINAL parse — the item-truth footer checkmark on
+     * the detail screen asserts these (total/date/receiptNo/recon state).
+     */
+    footer?: {
+        total: number | null;
+        date: string | null;
+        receiptNo: string | null;
+        reconciled: boolean | null;
+        reconDelta: number | null;
+    };
 }
 
 const snapshots = new Map<string, ReceiptSnapshot>();
