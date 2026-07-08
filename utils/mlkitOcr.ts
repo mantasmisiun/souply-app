@@ -283,6 +283,126 @@ export interface OcrTileOptions {
     document?: boolean;
 }
 
+/** Amount-shaped token ("3,87" / "10.09") — present on virtually every
+ *  receipt row; an upside-down glyph read ("IW L8'E") never forms one. */
+const AMOUNT_SHAPED_RE = /\d+[.,]\s?\d{2}/;
+export const countAmountShaped = (lines: { text: string }[]): number =>
+    lines.filter((l) => AMOUNT_SHAPED_RE.test(l.text)).length;
+/** A dense read with ZERO amount-shaped tokens is the inverted-glyph
+ *  signature. The line floor keeps sparse/blank crops from tripping it. */
+export const looksUpsideDownRead = (lines: { text: string }[]): boolean =>
+    lines.length >= 8 && countAmountShaped(lines) === 0;
+
+/** Map tile-local line boxes read from a 180°-rotated tile back into the
+ *  upright tile's space (then offset into page space). Under a 180° turn
+ *  left↔right and top↔bottom swap — including the skew edge-Y fields. */
+export const flipLines180 = (
+    lines: OcrLine[],
+    tileWidth: number,
+    tileHeight: number,
+    yOffset: number,
+): OcrLine[] => lines.map((l) => ({
+    text: l.text,
+    yTop: tileHeight - l.yBottom + yOffset,
+    yBottom: tileHeight - l.yTop + yOffset,
+    xLeft: tileWidth - l.xRight,
+    xRight: tileWidth - l.xLeft,
+    yLeftTop: l.yRightBottom == null ? undefined : tileHeight - l.yRightBottom + yOffset,
+    yRightTop: l.yLeftBottom == null ? undefined : tileHeight - l.yLeftBottom + yOffset,
+    yLeftBottom: l.yRightTop == null ? undefined : tileHeight - l.yRightTop + yOffset,
+    yRightBottom: l.yLeftTop == null ? undefined : tileHeight - l.yLeftTop + yOffset,
+    words: l.words?.map((w) => ({
+        ...w,
+        xLeft: tileWidth - w.xRight,
+        xRight: tileWidth - w.xLeft,
+        yTop: tileHeight - w.yBottom + yOffset,
+        yBottom: tileHeight - w.yTop + yOffset,
+    })),
+}));
+
+/** UPSIDE-DOWN READ rescue. A tile occasionally comes back as inverted
+ *  glyphs ("3,87 M1" → "IW L8'E" on Pramonės-02-15 tile 1) while its
+ *  pixels are upright — a content-driven orientation misfire inside the
+ *  engine, deterministic for a given tile. Two recovery lanes, first one
+ *  with amount-shaped tokens wins:
+ *    1. the OTHER engine on the SAME upright tile (ML Kit doesn't share
+ *       Vision's orientation quirk) — coords need no transform;
+ *    2. the same engine on the tile rotated 180° — helps when the flip
+ *       crept into the pixels; boxes map back through the rotation.
+ *  Fail-safe: no lane produces amounts → the original read is kept. In
+ *  dev every rescue attempt ships the tile pixels + per-lane counts to
+ *  the dev server so failures are diagnosable from evidence. */
+async function rescueUpsideDownRead(
+    tileUri: string,
+    res: RawOcrResult,
+    tileWidth: number,
+    tileHeight: number,
+    yOffset: number,
+    engine: OcrEngine,
+): Promise<RawOcrResult> {
+    if (!looksUpsideDownRead(res.lines)) return res;
+    const attempts: { lane: string; lines: number; amounts: number; sample?: string }[] = [{
+        lane: `original(${engine})`, lines: res.lines.length, amounts: countAmountShaped(res.lines),
+        sample: res.lines[0]?.text?.slice(0, 40),
+    }];
+    let rescued: RawOcrResult | null = null;
+    let rescuedLane = '';
+    if (engine !== 'mlkit') {
+        try {
+            const alt = await runMlkitOnUri(tileUri, yOffset, tileWidth, tileHeight, 'mlkit');
+            attempts.push({
+                lane: 'mlkit-upright', lines: alt.lines.length, amounts: countAmountShaped(alt.lines),
+                sample: alt.lines[0]?.text?.slice(0, 40),
+            });
+            if (countAmountShaped(alt.lines) > 0) { rescued = alt; rescuedLane = 'mlkit-upright'; }
+        } catch { /* next lane */ }
+    }
+    if (!rescued) {
+        try {
+            const flipped = await ImageManipulator.manipulateAsync(
+                tileUri,
+                [{ rotate: 180 }],
+                {
+                    compress: Platform.OS === 'ios' ? IOS_TILE_JPEG_QUALITY : 1,
+                    format: ImageManipulator.SaveFormat.JPEG,
+                },
+            );
+            const retry = await runMlkitOnUri(flipped.uri, 0, tileWidth, tileHeight, engine);
+            attempts.push({
+                lane: `rot180(${engine})`, lines: retry.lines.length, amounts: countAmountShaped(retry.lines),
+                sample: retry.lines[0]?.text?.slice(0, 40),
+            });
+            if (countAmountShaped(retry.lines) > 0) {
+                rescued = { ...retry, lines: flipLines180(retry.lines, tileWidth, tileHeight, yOffset) };
+                rescuedLane = 'rot180';
+            }
+        } catch { /* keep original */ }
+    }
+    console.log(
+        `[ocr] upside-down read y${yOffset}: ${rescued ? `rescued via ${rescuedLane}` : 'NOT rescued'} — ` +
+        attempts.map((a) => `${a.lane}:${a.lines}l/${a.amounts}a`).join(' '),
+    );
+    if (__DEV__) {
+        try {
+            const { readAsStringAsync, EncodingType } = require('expo-file-system/legacy');
+            const { API_BASE_URL } = require('../config/api');
+            const pngBase64 = await readAsStringAsync(tileUri, { encoding: EncodingType.Base64 });
+            await fetch(`${API_BASE_URL}/receipts-batch-debug`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    chain: 'ocrrescue',
+                    file: `tile-y${yOffset}`,
+                    page: 1,
+                    pngBase64,
+                    meta: { engine, tileWidth, tileHeight, yOffset, rescued: rescuedLane || false, attempts },
+                }),
+            });
+        } catch { /* debug only */ }
+    }
+    return rescued ?? res;
+}
+
 export async function ocrImageTiled(uri: string, engine: OcrEngine = 'auto', opts: OcrTileOptions = {}): Promise<OcrResult> {
     // Probe true pixel dims via ImageManipulator — NOT Image.getSize.
     // On Android, Image.getSize goes through BitmapFactory which auto-
@@ -381,7 +501,9 @@ export async function ocrImageTiled(uri: string, engine: OcrEngine = 'auto', opt
     // Short image — single-shot path matches the legacy pipeline so
     // existing parser/RegionPreview math stays valid.
     if (workingHeight <= tilingThreshold) {
-        const res = await runMlkitOnUri(srcUri, 0, workingWidth, workingHeight, engine);
+        let res = await runMlkitOnUri(srcUri, 0, workingWidth, workingHeight, engine);
+        // Upside-down rescue — short pages can hit the inverted read too.
+        res = await rescueUpsideDownRead(srcUri, res, workingWidth, workingHeight, 0, engine);
         const remapped = res.lines.map(remap);
         // Parsers assume y-sorted lines (findHeaderEnd scans the first
         // ~20 entries for `#NNNNN` / `Kvitas N/N` markers). MLKit returns
@@ -448,7 +570,8 @@ export async function ocrImageTiled(uri: string, engine: OcrEngine = 'auto', opt
                     format: ImageManipulator.SaveFormat.JPEG,
                 },
             );
-            return runMlkitOnUri(tile.uri, yStart, tile.width, tile.height, engine);
+            const res = await runMlkitOnUri(tile.uri, yStart, tile.width, tile.height, engine);
+            return rescueUpsideDownRead(tile.uri, res, tile.width, h, yStart, engine);
         }),
     );
 
