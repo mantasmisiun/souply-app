@@ -133,6 +133,29 @@ describe('extractPackSize — 300-dpi garbles', () => {
         expect(extractPackSize('Pieninis šokoladas Poesia 100c A')).toMatchObject({ amount: 100, unit: 'g' });
         expect(extractPackSize('Kečupo skonio užkand.ig CHEETOS, 165g')).toMatchObject({ amount: 165, unit: 'g' });
     });
+    test('comma-delimited fused ", 1l," = 1 l (Norfa milk, no space before the mark)', () => {
+        expect(extractPackSize('PIEMENĖLIO pienas 3.5%, 1l, butelis')).toMatchObject({ amount: 1, unit: 'l' });
+        expect(extractPackSize('Sultys TYMBARK, 1,5l')).toMatchObject({ amount: 1.5, unit: 'l' });
+    });
+    test('the fused-l lane needs REAL digits — letter words never read as litres', () => {
+        // "Oil"-class: D-class digits would turn "Oi"+"l" into 1 l.
+        expect(extractPackSize('Aliejus VIRGIN Oil, 500 ml')).toMatchObject({ amount: 500, unit: 'ml' });
+    });
+    test('"250gr" = 250 g (gr abbreviation, Norfa-04-02) and does not fall to vnt', () => {
+        expect(extractPackSize('Vyšniniai pomidorai 250gr, lvnt.')).toMatchObject({ amount: 250, unit: 'g' });
+    });
+    test('letter-FUSED weight "…baravykais500g" = 500 g (Norfa-04-09 dropped space)', () => {
+        expect(extractPackSize('Koldunai Su mėsa ir džiov.baravykais500g')).toMatchObject({ amount: 500, unit: 'g' });
+        // brand-code tails with no unit must NOT split
+        expect(extractPackSize('Žemės riešutai GAR2, 500g')).toMatchObject({ amount: 500, unit: 'g' });
+    });
+    test('count×unit-weight "20x1,5 g" = 30 g (20 tea bags × 1,5 g, Norfa-04-23)', () => {
+        expect(extractPackSize('Čiobrelių arbata AUSTĖJA, 20x1,5 g')).toMatchObject({ amount: 30, unit: 'g' });
+        // a 2-pack of 100g reads as its 200g net weight
+        expect(extractPackSize('Sausainiai, 2x100g')).toMatchObject({ amount: 200, unit: 'g' });
+        // a bare multibuy (no unit) is NOT a pack size
+        expect(extractPackSize('Batonėlis 2x0,99').amount).toBeNull();
+    });
 });
 
 describe('fused-row detection (346px wrapper-PDF class, 0AE04F24)', () => {

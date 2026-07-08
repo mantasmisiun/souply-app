@@ -42,7 +42,10 @@
       "tsx",
       "js",
       "jsx"
-    ]
+    ],
+    "moduleNameMapper": {
+      "^(\\.{1,2}/.*)\\.js$": "$1"
+    }
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
