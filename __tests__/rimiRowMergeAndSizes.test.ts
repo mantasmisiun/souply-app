@@ -67,6 +67,49 @@ describe('mergeRowFragmentsRimi', () => {
         expect(texts).toContain('1,98 A');
         expect(texts).toContain('2 vnt. X 0,99 EUR');
     });
+
+    test('a skew-chained cluster does NOT eat real neighbouring rows (ios-55 Broileriai multibuy)', () => {
+        // Real geometry: the tilted photo chained the name-continuation row
+        // and the qty row into one y-cluster, and the cluster-wide dedupe
+        // (x-span only) deleted "2 vnt. X 3,49 EUR" as a "double-read" of
+        // "ant ib., 500 g EUR" — the multibuy collapsed to 1 × 6,98. Rows
+        // must partition by pairwise y-overlap first.
+        const out = mergeRowFragmentsRimi([
+            { text: 'Broilerių sparnų vid. dalys be', yTop: 1258, yBottom: 1298, xLeft: 15, xRight: 678 },
+            { text: 'ant ib., 500 g EUR', yTop: 1291, yBottom: 1336, xLeft: 1, xRight: 415 },
+            { text: 'antib., 500 g', yTop: 1299, yBottom: 1332, xLeft: 14, xRight: 301 },
+            { text: '2 vnt. X 3,9', yTop: 1315, yBottom: 1353, xLeft: 37, xRight: 323 },
+            { text: '2 vnt. X 3,49 EUR', yTop: 1318, yBottom: 1358, xLeft: 38, xRight: 409 },
+            { text: '6,98 A', yTop: 1323, yBottom: 1353, xLeft: 814, xRight: 942 },
+            { text: 'EUR', yTop: 1329, yBottom: 1357, xLeft: 348, xRight: 413 },
+        ]);
+        const texts = out.map((l) => l.text);
+        expect(texts).toContain('2 vnt. X 3,49 EUR'); // the qty row SURVIVES
+        expect(texts).toContain('6,98 A');
+        // …while true same-row double-reads still dedupe: one name-continuation
+        // variant remains, and the partial "2 vnt. X 3,9" is gone.
+        expect(texts.filter((t) => /500 g/.test(t))).toHaveLength(1);
+        expect(texts).not.toContain('2 vnt. X 3,9');
+    });
+
+    test('a sagging junk double-read still dedupes INTO its row (ios-55 Sojos ALPRO)', () => {
+        // "IDDO" / "14 ?50m1" are garbled duplicates of the ALPRO row whose
+        // boxes sag — they pairwise-overlap ALPRO ~100% and must stay in its
+        // sub-row to be eaten (the greedy-extent partition let them escape
+        // and they joined the product name as a phantom continuation line).
+        const out = mergeRowFragmentsRimi([
+            { text: 'Sojos gaminys aisto garmin.', yTop: 1393, yBottom: 1437, xLeft: 14, xRight: 605 },
+            { text: 'Sojos gaminys maisto gamin.', yTop: 1393, yBottom: 1430, xLeft: 14, xRight: 605 },
+            { text: 'ALPRO, 14 %,25Oml', yTop: 1418, yBottom: 1451, xLeft: 13, xRight: 383 },
+            { text: 'IDDO', yTop: 1423, yBottom: 1444, xLeft: 17, xRight: 121 },
+            { text: '14 ?50m1', yTop: 1423, yBottom: 1443, xLeft: 165, xRight: 380 },
+        ]);
+        const texts = out.map((l) => l.text);
+        expect(texts).toContain('ALPRO, 14 %,25Oml'); // the real second name line survives
+        expect(texts).not.toContain('IDDO');
+        expect(texts).not.toContain('14 ?50m1');
+        expect(texts.filter((t) => /Sojos gaminys/.test(t))).toHaveLength(1);
+    });
 });
 
 describe('extractPackSize — 300-dpi garbles', () => {
@@ -82,6 +125,9 @@ describe('extractPackSize — 300-dpi garbles', () => {
     });
     test('trailing ", I 1" = 1 l (litre mark read as 1)', () => {
         expect(extractPackSize('Sojos gėr ALPRO PLANT PROTEIN, I 1')).toMatchObject({ amount: 1, unit: 'l' });
+    });
+    test('", 1lkg" reads as the 1 kg reference, never 11 kg (BE09D63 saldainiai)', () => {
+        expect(extractPackSize('Saldainiai SLYVA SOKOLADE, 1lkg')).toMatchObject({ amount: 1, unit: 'kg' });
     });
     test('"100c" = 100 g but a letter-run ("ig") never shadows the real size', () => {
         expect(extractPackSize('Pieninis šokoladas Poesia 100c A')).toMatchObject({ amount: 100, unit: 'g' });
@@ -236,6 +282,81 @@ describe('parseRimiReceipt — receipt-level reconciliation', () => {
         expect(r.footer.reconciled).toBe(true);
     });
 
+    test('a two-row fusion with a price tail SPLITS at the wall — Galut to the band above, name below (rimi-30-04-2026-2)', () => {
+        // "Lazdyny riesutu aetas RiMI 0,65": the 0,65 is CUKRUS' printed
+        // Galut. kaina (top half of the box); the garbled name is Lazdynų's
+        // (bottom half). The splitter returns each to its own band — no
+        // cross-band reads.
+        // Filler carries the REAL body-row height (~80px, matching the
+        // product rows) — the L() helper's 45px skews the median and pushes
+        // the 166px fused box outside the 2.0×/2.6× split window it
+        // actually occupies on the real receipt (166/80 ≈ 2.1×).
+        const filler = Array.from({ length: 10 }, (_, i) => ({
+            text: `Filler body line nr ${i}`, yTop: 3000 + i * 110, yBottom: 3000 + i * 110 + 80, xLeft: 20, xRight: 420,
+        }));
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            { text: 'Cukrus PANEVEZIO PLIUS, 1 kg', yTop: 1843, yBottom: 1946, xLeft: 34, xRight: 700 },
+            { text: '1,19 A', yTop: 1859, yBottom: 1946, xLeft: 1698, xRight: 1900 },
+            { text: 'Lazdyny riesutu aetas RiMI 0,65', yTop: 1909, yBottom: 2075, xLeft: 24, xRight: 900 },
+            { text: 'BASIC, 400 g', yTop: 2071, yBottom: 2145, xLeft: 31, xRight: 400 },
+            { text: '1,54 A', yTop: 2070, yBottom: 2150, xLeft: 1699, xRight: 1900 },
+            ...filler,
+            L('SUTEIKTOS NUOLAIDOS:', 4300, 19),
+            L('Mokėti', 4400, 17),
+            L('2,19', 4400, 1150, 140),
+            L('Mokestis Suma su PVM', 4500, 17),
+        ]);
+        expect(r.products).toHaveLength(2);
+        expect(r.products[0].name).toContain('Cukrus');
+        expect(r.products[0].promoPrice).toBe(0.65);   // recovered IN-BAND
+        expect(r.products[1].name).toContain('BASIC');
+        expect(r.products[1].name).not.toContain('0,65');
+        expect(r.footer.reconciled).toBe(true);        // 0.65 + 1.54 = 2.19
+    });
+
+    test('a fused garbage box never drags the clean name line into quarantine (rimi-30-04-2026-23 ALPRO)', () => {
+        // Raw geometry: tall "I'T ALPRO" box (1022-1177) y-overlaps the clean
+        // first name line — the slice-level row merger used to join them, and
+        // the quarantine then ate the REAL name too.
+        const filler = Array.from({ length: 10 }, (_, i) => L(`Filler body line nr ${i}`, 2000 + i * 110, 20, 400));
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            { text: "I'T ALPRO", yTop: 1022, yBottom: 1177, xLeft: 699, xRight: 1188 },
+            { text: 'Sok. sk. sojos ger. ALPRO', yTop: 1027, yBottom: 1104, xLeft: 30, xRight: 700 },
+            { text: 'PLANT PROTEIN, 1 1', yTop: 1099, yBottom: 1177, xLeft: 26, xRight: 858 },
+            { text: '3,79 A', yTop: 1098, yBottom: 1187, xLeft: 1695, xRight: 1979 },
+            ...filler,
+            L('SUTEIKTOS NUOLAIDOS:', 3200, 19),
+            L('Mokėti', 3300, 17),
+            L('3,79', 3300, 1150, 140),
+            L('Mokestis Suma su PVM', 3400, 17),
+        ]);
+        const p = r.products.find((x) => x.name.includes('PLANT'));
+        expect(p).toBeDefined();
+        expect(p!.name).toContain('Sok. sk. sojos ger. ALPRO');
+        expect(p!.name).not.toContain("I'T");
+    });
+
+    test('"$" before an uppercase run folds to S ("$OKOLADE" → SOKOLADE)', () => {
+        const out = mergeRowFragmentsRimi([]); // fold is entry-level; test via parse
+        expect(out).toEqual([]);
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            L('Saldainiai SLYVA $OKOLADE, 1lkg', 600, 22),
+            L('2,99 A', 600, 1219, 120),
+            L('SUTEIKTOS NUOLAIDOS:', 900, 19),
+            L('Mokėti', 1100, 17),
+            L('2,99', 1100, 1150, 140),
+            L('Mokestis Suma su PVM', 1150, 17),
+        ]);
+        expect(r.products[0].name).toContain('SOKOLADE');
+        expect(r.products[0].parsedAmount).toBe(1);
+    });
+
     test('a produce grade token ("C2-3, 1") never reads as a savings amount (ios-55 citrinos)', () => {
         // The garbled-Nuol rescue requires EXACTLY two cent digits; the grade
         // token + wrapped size digit used to become savings=3,10 → a phantom
@@ -329,6 +450,70 @@ describe('parseRimiReceipt — receipt-level reconciliation', () => {
             ? { ...l, text: 'Panaudoti MANO Rini pinigai' } : l);
         const r = parseRimiReceipt(lines);
         expect(r.footer.reconciled).toBe(true);
+    });
+
+    test('a weighed qty leading-digit garble heals from the printed line total (ios-55 citrinos)', () => {
+        // Printed "0,390 kg X 2,49 EUR/kg" with total "0,97 A"; OCR read
+        // "8,390 kg" (8↔0) and minted 8.39 kg of lemons. anchor ÷ ppu lands
+        // on a qty one leading digit away — the receipt corroborates.
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            L('Citrinos Verna, 1kl, cž-3, 1', 600, 22),
+            L('0, 97 A', 600, 1219, 120),
+            L('8,390 kg X 2,49 EUR/kg', 660, 40),
+            L('SUTEIKTOS NUOLAIDOS:', 900, 19),
+            L('Mokėti', 1100, 17),
+            L('0,97', 1100, 1150, 140),
+            L('Mokestis Suma su PVM', 1150, 17),
+        ]);
+        expect(r.products).toHaveLength(1);
+        expect(r.products[0].quantity).toBe(0.39);
+        expect(r.products[0].pricePerUnit).toBe(2.49);
+        expect(r.footer.reconciled).toBe(true);
+    });
+
+    test('a doubled-letter pinigai label ("Ppinigai") still books the wallet deduction (ios-55)', () => {
+        // Real garble: "Panaudoti MANO RIMI Ppinigai" — the strict `\s+pinig`
+        // stem refused it, the -0,33 went unbooked and recon sat 0.33 off.
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            L('Prekė VIENAS, 1 vnt.', 600, 22),
+            L('1,99 A', 600, 1219, 120),
+            L('Prekė ANTRAS, 1 vnt.', 700, 22),
+            L('2,15 A', 700, 1219, 120),
+            L('SUTEIKTOS NUOLAIDOS:', 900, 19),
+            L('Panaudoti MANO RIMI Ppinigai', 950, 14),
+            L('-0,33', 950, 794, 80),
+            L('Jūs sutaupėte', 1000, 19),
+            L('5,93', 1000, 816, 80),
+            L('Mokėti', 1100, 17),
+            L('3,81', 1100, 1150, 140),
+            L('Mokestis Suma su PVM', 1150, 17),
+        ]);
+        expect(r.footer.total).toBe(3.81);
+        expect(r.footer.reconDelta).toBe(0);
+        expect(r.footer.reconciled).toBe(true);
+    });
+
+    test('a bare UNLABELED block amount never books (no residual force-fitting)', () => {
+        // The label row is gone entirely — recon must fail honestly rather
+        // than absorb the bare -0,33 into the arithmetic (a bare amount is
+        // indistinguishable from an orphaned item-discount summary, and
+        // booking it could mask a dropped per-item discount as reconciled).
+        const r = parseRimiReceipt([
+            L('UAB RIMI LIETUVA, T1010', 100, 20),
+            L('PIRKEJAS XXXXXXXXX XX0001', 200, 20),
+            L('Prekė VIENAS, 1 vnt.', 600, 22),
+            L('1,99 A', 600, 1219, 120),
+            L('SUTEIKTOS NUOLAIDOS:', 900, 19),
+            L('-0,33', 950, 794, 80),
+            L('Mokėti', 1100, 17),
+            L('1,66', 1100, 1150, 140),
+            L('Mokestis Suma su PVM', 1150, 17),
+        ]);
+        expect(r.footer.reconciled).toBe(false);
     });
 });
 
