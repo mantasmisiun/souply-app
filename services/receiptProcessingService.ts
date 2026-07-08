@@ -574,6 +574,10 @@ async function processLidl(
     // Weighed-vs-packaged signal — the matcher's weighable gate and the resolver's
     // self-heal are inert without it (it was silently dropped here for every chain).
     isWeighable: (lp as LidlProduct & { isWeighable?: boolean | null }).isWeighable ?? (lp.unit === 'kg' ? true : null),
+    // Pack-size reference (weighable → 1 kg) so matchProducts resolves
+    // amount/sizeUnit — else weighables render with no amount. rimi parity.
+    parsedAmount: lp.parsedAmount ?? null,
+    parsedUnit: lp.parsedUnit ?? null,
     pricePerUnit: lp.pricePerUnit,
     rawLines: lp.rawLines,
     region: lp.region,
