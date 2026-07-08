@@ -712,14 +712,33 @@ const ProductRow = ({
         // flight. Bail; the effect re-runs once it populates.
         if (!uri) return;
         let cancelled = false;
-        const yTop = Math.max(0, Math.floor(yTopOnPage));
+        void (async () => {
+        // The downloaded page file can be a DIFFERENT resolution from the
+        // OCR image the band coords live in: Norfa's staged 300-dpi PNGs
+        // (~2480 px) get downscaled by the OCR pipeline to ~2000 px, and
+        // pixel-space crops against the native file drifted downward,
+        // cascading with y (first crop showed the kvito-nr line). The
+        // overlay never drifts — it positions RELATIVELY — so crops must
+        // rescale band coords by the actual file dimensions. Rimi never
+        // hit this only because its staged pages are already 2000 px.
+        const actual = await new Promise<{ w: number; h: number } | null>((resolve) => {
+            Image.getSize(uri, (w, h) => resolve({ w, h }), () => resolve(null));
+        });
+        if (cancelled) return;
+        const sx = actual ? actual.w / Math.max(1, pageWidth) : 1;
+        const sy = actual ? actual.h / Math.max(1, pageHeight) : 1;
+        const fileH = actual ? actual.h : pageHeight;
+        const fileW = actual ? actual.w : pageWidth;
+        const yTop = Math.max(0, Math.floor(yTopOnPage * sy));
         const heightPx = Math.min(
-            Math.ceil(yBottomOnPage - yTopOnPage),
-            pageHeight - yTop,
+            Math.ceil((yBottomOnPage - yTopOnPage) * sy),
+            fileH - yTop,
         );
         if (heightPx <= 0) return;
-        const cropArgs = { uri, originX: cropX, originY: yTop, width: cropW, height: heightPx };
-        devLog('receipt-detail.cropAttempt', { bandIdx, ...cropArgs });
+        const originX = Math.max(0, Math.floor(cropX * sx));
+        const widthPx = Math.max(1, Math.min(Math.ceil(cropW * sx), fileW - originX));
+        const cropArgs = { uri, originX, originY: yTop, width: widthPx, height: heightPx };
+        devLog('receipt-detail.cropAttempt', { bandIdx, sx, sy, ...cropArgs });
         // JPEG output: PNG via expo-image-manipulator v14 on iOS
         // trips `calling the 'renderAsync' function has failed`
         // regardless of legacy vs new context API. JPEG output works
@@ -727,7 +746,7 @@ const ProductRow = ({
         // tile crop, so the PNG encoder path is the broken one.
         ImageManipulator.manipulateAsync(
             uri,
-            [{ crop: { originX: cropX, originY: yTop, width: cropW, height: heightPx } }],
+            [{ crop: { originX, originY: yTop, width: widthPx, height: heightPx } }],
             { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
         )
             .then((res) => {
@@ -740,6 +759,7 @@ const ProductRow = ({
                 devLog('receipt-detail.cropFailed', { bandIdx, ...cropArgs, err: errMsg });
                 if (!cancelled) setCropError(errMsg);
             });
+        })();
         return () => { cancelled = true; };
     }, [uri, yTopOnPage, yBottomOnPage, pageWidth, pageHeight, bandIdx, cropX, cropW]);
 
@@ -771,11 +791,14 @@ const ProductRow = ({
                         #{bandIdx + 1}
                     </Text>
                     {product ? (
-                        <Text style={styles.productName} numberOfLines={2}>
+                        // Full name, no clamp — truth review needs to see
+                        // every character; a "…" can hide the exact garble
+                        // being judged.
+                        <Text style={styles.productName}>
                             {fp?.name ?? product.name}
                         </Text>
                     ) : (
-                        <Text style={styles.productSkipName} numberOfLines={2}>
+                        <Text style={styles.productSkipName}>
                             {skipLabel(bandResult.warnings)}
                         </Text>
                     )}
