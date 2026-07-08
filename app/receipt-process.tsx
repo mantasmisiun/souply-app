@@ -132,6 +132,7 @@ import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
 import { requestStoreResolution, completeStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
 import { ocrReceiptPages, computeReceiptXBoundsForPage, reocrFusedRows } from "../utils/receiptOcrPipeline";
 import { ensembleSecondOpinion } from "../utils/parseEnsemble";
+import { sectionReocrIfFlagged, graftRicherFields } from "../utils/sectionReocr";
 import { StoreResolutionOverlay } from "../components/receipt/StoreResolutionOverlay";
 import { ocrImageEnhanced } from "../utils/mlkitOcr";
 import { refineFooterBands } from "../utils/footerBandRefine";
@@ -2566,12 +2567,11 @@ export default function ProcessReceiptScreen() {
         // lines already in page-pixel space with any per-tile offsets
         // applied, plus the pixelWidth/Height matching that space.
         const ocr = await ocrImageEnhanced(pageUri, 'auto', { document: fromPdfParam === '1' });
-        // Fused-row strip re-OCR — SAME healing pass as the shared pipeline
-        // (ocrReceiptPages) runs for the batch/recovery paths, so interactive
-        // scans can't diverge. Document pages only; fail-safe no-op otherwise.
-        if (fromPdfParam === '1') {
-          ocr.lines = await reocrFusedRows(pageUri, ocr.pixelWidth, ocr.pixelHeight, ocr.lines as any, 'auto') as any;
-        }
+        // Fused/dropped-row strip re-OCR — SAME healing pass as the shared
+        // pipeline (ocrReceiptPages) runs for the batch/recovery paths, so
+        // interactive scans can't diverge. PDFs and photos alike (a photo's
+        // engine-dropped rows only heal through strips); fail-safe no-op.
+        ocr.lines = await reocrFusedRows(pageUri, ocr.pixelWidth, ocr.pixelHeight, ocr.lines as any, 'auto') as any;
         const pageDims = { width: ocr.pixelWidth, height: ocr.pixelHeight };
         if (pageIdx === 0) firstPageDims = pageDims;
         if (pageIdx === 0) firstPageUri = pageUri;
@@ -2872,6 +2872,7 @@ export default function ProcessReceiptScreen() {
         });
 
         let parsed = parseRimiReceipt(allLines);
+        const rimiPrimaryParsed = parsed;
         logParsedReview('RIMI', parsed);
         // Phase-5 ensemble — same shared implementation as the IKI branch and
         // the dev batch harness (flagged parse OR fused-row geometry → ML Kit
@@ -2881,9 +2882,29 @@ export default function ProcessReceiptScreen() {
             parsed,
             imageUris,
             (second) => parseRimiReceipt(second.allLines as any) as typeof parsed,
-            { document: fromPdfParam === '1', primaryLines: allLines },
+            { document: fromPdfParam === '1', stripHealing: true, primaryLines: allLines },
           );
           if (outcome.engine === 'second') parsed = outcome.parsed;
+        }
+        // PHOTO section re-OCR (recon-failed single-page photos) — mirrors the
+        // batch harness so its results keep predicting live scans.
+        if (fromPdfParam !== '1' && imageUris.length === 1 && firstPageUri && firstPageDims
+            && parsed.footer.reconciled === false) {
+          const o = await sectionReocrIfFlagged(
+            parsed,
+            allLines as any,
+            firstPageUri,
+            firstPageDims.width,
+            firstPageDims.height,
+            'auto',
+            (ls) => parseRimiReceipt(ls as any) as typeof parsed,
+          );
+          if (o.applied) parsed = o.parsed;
+        }
+        // Final name graft from the primary read (no-op when identical) —
+        // later lanes may win the arithmetic while dropping a name row.
+        if (parsed !== rimiPrimaryParsed) {
+          parsed = graftRicherFields(rimiPrimaryParsed as any, parsed as any) as typeof parsed;
         }
         if (!(await ensureHasProducts(parsed.products, 'RIMI'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
@@ -2937,7 +2958,7 @@ export default function ProcessReceiptScreen() {
             parsed,
             imageUris,
             (second) => parseMaximaReceipt(second.allLines as any, PARSER_OPTS) as typeof parsed,
-            { document: fromPdfParam === '1', primaryLines: allLines },
+            { document: fromPdfParam === '1', stripHealing: true, primaryLines: allLines },
           );
           if (outcome.engine === 'second') parsed = outcome.parsed;
         }
@@ -2972,7 +2993,7 @@ export default function ProcessReceiptScreen() {
             parsed,
             imageUris,
             (second) => parseNorfaReceipt(second.allLines as any) as typeof parsed,
-            { document: fromPdfParam === '1', primaryLines: allLines },
+            { document: fromPdfParam === '1', stripHealing: true, primaryLines: allLines },
           );
           if (outcome.engine === 'second') parsed = outcome.parsed;
         }
@@ -3010,7 +3031,7 @@ export default function ProcessReceiptScreen() {
             parsed,
             imageUris,
             (second) => parseLidlReceipt(second.allLines as any, PARSER_OPTS) as typeof parsed,
-            { document: fromPdfParam === '1', primaryLines: allLines },
+            { document: fromPdfParam === '1', stripHealing: true, primaryLines: allLines },
           );
           if (outcome.engine === 'second') parsed = outcome.parsed;
         }
@@ -3089,7 +3110,7 @@ export default function ProcessReceiptScreen() {
             parsed,
             imageUris,
             (second) => parseIkiReceipt(second.mergedLines as any) as typeof parsed,
-            { document: fromPdfParam === '1', primaryLines: allLines },
+            { document: fromPdfParam === '1', stripHealing: true, primaryLines: allLines },
           );
           if (outcome.engine === 'second' && outcome.secondOcr) {
             parsed = outcome.parsed;

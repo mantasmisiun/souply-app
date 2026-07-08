@@ -89,7 +89,13 @@ export async function ensembleSecondOpinion<P>(
     primaryParsed: P,
     imageUris: string[],
     parseFn: (second: ReceiptOcrResult) => P,
-    opts: { document?: boolean; secondEngine?: OcrEngine; primaryLines?: EnsembleGeomLine[] } = {},
+    opts: {
+        document?: boolean;
+        secondEngine?: OcrEngine;
+        primaryLines?: EnsembleGeomLine[];
+        /** Threaded to ocrReceiptPages — strip healing is PDF-pages-only. */
+        stripHealing?: boolean;
+    } = {},
 ): Promise<EnsembleOutcome<P>> {
     const keepPrimary: EnsembleOutcome<P> = { parsed: primaryParsed, secondOcr: null, engine: 'primary' };
     if (Platform.OS !== 'ios' || imageUris.length === 0) return keepPrimary;
@@ -101,7 +107,10 @@ export async function ensembleSecondOpinion<P>(
     if (!parseIsFlagged(primaryParsed) && fused1 === 0) return keepPrimary;
     try {
         const t0 = Date.now();
-        const second = await ocrReceiptPages(imageUris, opts.secondEngine ?? 'mlkit', { document: opts.document });
+        const second = await ocrReceiptPages(imageUris, opts.secondEngine ?? 'mlkit', {
+            document: opts.document,
+            stripHealing: opts.stripHealing,
+        });
         const parsed2 = parseFn(second);
         const q1 = parseQuality(primaryParsed);
         const q2 = parseQuality(parsed2);

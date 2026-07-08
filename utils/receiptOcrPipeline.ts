@@ -249,6 +249,11 @@ export interface FusedStripPlan {
     replacedIdx: number[];
     /** Median body-line height (acceptance check reuses it). */
     medianH: number;
+    /** INSERTION plan: the strip covers a zone where a row was DROPPED —
+     *  nothing is replaced; accepted lines are ADDED. Its acceptance rule
+     *  differs: ≥1 body line that isn't a duplicate of the surrounding
+     *  context (see reocrFusedRows). */
+    insertion?: boolean;
 }
 
 /**
@@ -258,7 +263,7 @@ export interface FusedStripPlan {
  * replaces. Exported for tests.
  */
 export function planFusedStrips(
-    lines: { text: string; yTop: number; yBottom: number }[],
+    lines: { text: string; yTop: number; yBottom: number; xLeft?: number; xRight?: number }[],
     pageHeight: number,
 ): FusedStripPlan[] {
     const hs = lines
@@ -289,17 +294,63 @@ export function planFusedStrips(
         return false;
     };
 
+    // Contains at least one mostly-inside line — a fusion often CONSUMES the
+    // second row's only text (78B94F81: weighed line + "Linu sėmenys" fused;
+    // the sole survivor inside was the price anchor, so the two-disjoint-rows
+    // test alone missed it). One contained line + double height is enough to
+    // TRY a strip — acceptance rejects any read that isn't clearly better.
+    const containsALine = (c: { yTop: number; yBottom: number }): boolean =>
+        lines.some((o) => {
+            if (o === c) return false;
+            const oh = o.yBottom - o.yTop;
+            if (oh <= 0) return false;
+            const ov = Math.min(o.yBottom, c.yBottom) - Math.max(o.yTop, c.yTop);
+            return ov >= 0.6 * oh;
+        });
+
     const plans: FusedStripPlan[] = [];
     const claimed = new Set<number>();
     for (let i = 0; i < lines.length && plans.length < 4; i++) {
         const l = lines[i];
         const h = l.yBottom - l.yTop;
         if (!isFusedBodyText(l)) continue;
-        if (h < 1.75 * medianH || h > 3.5 * medianH) continue;
-        if (!spansTwoRows(l)) continue;
+        // 1.6× threshold for the STRIP lane (the parser-side name quarantine
+        // keeps its stricter 1.75×): sub-threshold fusions cost products
+        // (-13/-2 footprints sat at 1.6-1.75×), and a false strip is cheap —
+        // the acceptance gate throws it away.
+        if (h < 1.6 * medianH || h > 3.5 * medianH) continue;
+        // Qualification tiers: spans two disjoint lines, contains one line, or
+        // is TWO FULL ROWS tall — a fusion can consume every other line of
+        // both rows (rimi-30-04-2026-2: Cukrus' discount row + Lazdynų's name
+        // row became one 2.1× box with nothing else inside). Photo-skew
+        // singles measure ~1.8× and stay below the unconditional tier.
+        if (!spansTwoRows(l) && !containsALine(l) && h < 2.0 * medianH) continue;
         if (claimed.has(i)) continue;
         const pad = Math.max(6, Math.round(0.12 * h));
-        const top = Math.max(0, Math.round(l.yTop - pad));
+        // The fused bbox often STARTS mid-glyph inside its first row (-23:
+        // "I'T ALPRO" began below the caps of "ALPRO, 1 l"), and a crop at
+        // the bbox top beheads that row — engines then refuse or re-glue it
+        // (the clipped-caps lesson the insertion planner already paid for).
+        // Extend the crop up to just past the bottom of the nearest line
+        // fully above, bounded to ~one row; the edge-sliver filter drops
+        // whatever of that neighbour leaks in.
+        //
+        // "Above" must X-OVERLAP the fused box: a right-column PRICE box
+        // legitimately sits on the fusion's own first row (-23: "3,29 А"
+        // bottomed at y1042 INSIDE the ALPRO row) — anchoring to it clamped
+        // the extension back to the beheading crop. Only the fusion's own
+        // column defines its upper wall.
+        const xOverlapsFused = (o: typeof l): boolean =>
+            o.xLeft == null || o.xRight == null || l.xLeft == null || l.xRight == null
+            || Math.min(o.xRight, l.xRight) - Math.max(o.xLeft, l.xLeft) > 0;
+        const above = lines
+            .filter((o) => o !== l && o.yBottom - o.yTop > 0 && o.yBottom <= l.yTop + 0.3 * medianH
+                && xOverlapsFused(o))
+            .sort((a, b) => b.yBottom - a.yBottom)[0];
+        const extendedTop = above
+            ? Math.max(above.yBottom - 0.2 * medianH, l.yTop - 1.2 * medianH)
+            : l.yTop - 0.6 * medianH;
+        const top = Math.max(0, Math.round(Math.min(l.yTop - pad, extendedTop)));
         const bottom = Math.min(pageHeight, Math.round(l.yBottom + pad));
         if (bottom - top < 20) continue;
         const replacedIdx: number[] = [];
@@ -315,17 +366,211 @@ export function planFusedStrips(
     return plans;
 }
 
+/**
+ * DROPPED-ROW strips: Vision sometimes deletes whole left-column rows outright
+ * (5EEA946F: "bulguras RIMI, 400 g" and "Bolivinių balandų miš. RIMI" absent
+ * from the output while their pixels are crisp). Signal: a PRODUCT ANCHOR
+ * (price + VAT letter, right column) with NO left-column text overlapping its
+ * row — impossible on a real receipt. The strip spans the whole uncovered gap
+ * (from the last left-column line above to the first below), so neighbouring
+ * dropped name-only rows heal in the same pass. Exported for tests.
+ */
+export function planDroppedRowStrips(
+    lines: { text: string; yTop: number; yBottom: number; xLeft: number; xRight: number }[],
+    pageWidth: number,
+    pageHeight: number,
+): FusedStripPlan[] {
+    const hs = lines
+        .filter(isFusedBodyText)
+        .map((l) => l.yBottom - l.yTop)
+        .filter((h) => h > 0)
+        .sort((a, b) => a - b);
+    if (hs.length < 8) return [];
+    const medianH = hs[Math.floor(hs.length / 2)];
+    if (!(medianH > 0)) return [];
+
+    // Latin AND Cyrillic-homoglyph VAT letters — pre-fold OCR output.
+    const ANCHOR_RE = /^\d+[.,]\s?\d{2}\s*[ABАВ]\s*$/;
+    const leftLines = lines.filter((l) => l.xLeft < pageWidth * 0.45 && l.text.trim().length >= 3);
+    const plans: FusedStripPlan[] = [];
+    for (const anchor of lines) {
+        if (plans.length >= 4) break;
+        if (!ANCHOR_RE.test(anchor.text.trim()) || anchor.xLeft < pageWidth * 0.5) continue;
+        const aH = anchor.yBottom - anchor.yTop;
+        const hasCompanion = leftLines.some((l) => {
+            const ov = Math.min(l.yBottom, anchor.yBottom) - Math.max(l.yTop, anchor.yTop);
+            return ov >= 0.4 * aH;
+        });
+        if (hasCompanion) continue;
+        // Widen to the full uncovered span so adjacent dropped rows heal too.
+        const above = leftLines.filter((l) => l.yBottom <= anchor.yTop + 0.3 * medianH);
+        const below = leftLines.filter((l) => l.yTop >= anchor.yBottom - 0.3 * medianH);
+        const prevBottom = above.length ? Math.max(...above.map((l) => l.yBottom)) : anchor.yTop - medianH;
+        const nextTop = below.length ? Math.min(...below.map((l) => l.yTop)) : anchor.yBottom + medianH;
+        let top = Math.max(0, Math.round(prevBottom - 6));
+        let bottom = Math.min(pageHeight, Math.round(nextTop + 6));
+        if (bottom - top > 4.5 * medianH) {
+            // A giant uncovered span is a section boundary, not a dropped row —
+            // stay tight around the anchor.
+            top = Math.max(0, Math.round(anchor.yTop - 1.2 * medianH));
+            bottom = Math.min(pageHeight, Math.round(anchor.yBottom + 1.2 * medianH));
+        }
+        if (bottom - top < 20) continue;
+        const replacedIdx: number[] = [];
+        for (let j = 0; j < lines.length; j++) {
+            const c = (lines[j].yTop + lines[j].yBottom) / 2;
+            if (c >= top && c <= bottom) replacedIdx.push(j);
+        }
+        plans.push({ top, bottom, fusedText: anchor.text, replacedIdx, medianH });
+    }
+    return plans;
+}
+
+/**
+ * MISSING-FIRST-LINE insertion strips: a wrapped product name's FIRST row can
+ * be dropped by the engine with no fused box, no lonely anchor and no visible
+ * gap — the squeeze signature (rimi-30-04-2026-8: "Varškės sūrelis…" vanished
+ * between the previous product's Nuol row and its own "MAGIJA, 20,7 %, 40 g"
+ * continuation). Signal: a left-column CONTINUATION-shaped line (BRAND-comma
+ * start) sitting tight under a STRUCTURAL row (discount/weight/multi — never
+ * a name), with the space between them unoccupied. The strip re-reads that
+ * zone in isolation and ADDS whatever non-duplicate row it finds.
+ * Exported for tests.
+ */
+const CONTINUATION_NAME_RE = /^[A-ZĄČĘĖĮŠŲŪŽ0-9]{3,},\s/;
+const STRUCTURAL_ROW_RE = /Nuo[l1i]|Galut|kaina|vnt\s*\.?\s*[xX×*]|kg\s+[xX×]|EUR/i;
+
+export function planMissingFirstLineStrips(
+    lines: { text: string; yTop: number; yBottom: number; xLeft: number; xRight: number }[],
+    pageWidth: number,
+    pageHeight: number,
+): FusedStripPlan[] {
+    const hs = lines
+        .filter(isFusedBodyText)
+        .map((l) => l.yBottom - l.yTop)
+        .filter((h) => h > 0)
+        .sort((a, b) => a - b);
+    if (hs.length < 8) return [];
+    const medianH = hs[Math.floor(hs.length / 2)];
+    if (!(medianH > 0)) return [];
+
+    const leftLines = lines.filter((l) => l.xLeft < pageWidth * 0.45 && l.text.trim().length >= 3);
+    const plans: FusedStripPlan[] = [];
+    for (const l of leftLines) {
+        if (plans.length >= 3) break;
+        if (!isFusedBodyText(l) || !CONTINUATION_NAME_RE.test(l.text.trim())) continue;
+        const above = leftLines.filter((o) => o !== l && o.yBottom <= l.yTop + 0.3 * medianH);
+        if (!above.length) continue;
+        const prev = above.reduce((a, b) => (a.yBottom > b.yBottom ? a : b));
+        const gap = l.yTop - prev.yBottom;
+        // Squeezed: the dropped row hides in LESS than a row-pitch of space —
+        // a normal gap means the first line was simply read (or is a true
+        // one-liner). And the row above must be structural, never name text
+        // (a name above means the first line IS present).
+        if (gap >= 0.9 * medianH || gap < -0.3 * medianH) continue;
+        if (!STRUCTURAL_ROW_RE.test(prev.text)) continue;
+        // The strip spans from the TOP of the structural row above THROUGH
+        // the continuation row — full rows only. A squeezed dropped row
+        // OVERLAPS the previous row's bbox (rimi-30-04-2026-8: row top 1105
+        // vs prev bottom 1117), so starting the crop below prev's bottom
+        // sliced the target row's caps/diacritics off and both engines
+        // refused it. Re-read context rows are discarded by the insertion
+        // dup-filter; only the genuinely new row splices in.
+        const top = Math.max(0, Math.round(prev.yTop - 0.1 * medianH));
+        const bottom = Math.min(pageHeight, Math.round(l.yBottom + 0.2 * medianH));
+        if (bottom - top < 0.45 * medianH) continue;
+        // Occupied DROPPED-ZONE check (the gap between prev's bottom and the
+        // continuation's top only) = nothing was dropped here.
+        const gapTop = prev.yBottom + 2;
+        const occupied = lines.some((o) => {
+            if (o === l) return false;
+            const c = (o.yTop + o.yBottom) / 2;
+            return c >= gapTop && c <= l.yTop - 2;
+        });
+        if (occupied) continue;
+        plans.push({ top, bottom, fusedText: l.text, replacedIdx: [], medianH, insertion: true });
+    }
+    return plans;
+}
+
+/** Drop strip lines HALLUCINATED from partial glyphs at the crop edges: the
+ *  strip's padding can catch the ascender/descender sliver of a NEIGHBOUR row,
+ *  which the engine decodes as garbage ("пTTaтттт" from the FUSILLI row's top
+ *  20px on 0AE04F24). Slivers are SHORT (a fraction of a row) and hang off
+ *  the boundary; real rows are full-height or overlap replaced content.
+ *  Exported for tests. */
+export function filterStripEdgeSlivers<T extends { yTop: number; yBottom: number }>(
+    stripLines: T[],
+    top: number,
+    bottom: number,
+    replaced: { yTop: number; yBottom: number }[],
+    medianH: number,
+): T[] {
+    const EDGE = 3;
+    return stripLines.filter((l) => {
+        const touchesEdge = l.yTop <= top + EDGE || l.yBottom >= bottom - EDGE;
+        if (!touchesEdge) return true;
+        const h = Math.max(1, l.yBottom - l.yTop);
+        if (h >= 0.5 * medianH) return true; // full-height rows are real content
+        return replaced.some((r) => {
+            const ov = Math.min(r.yBottom, l.yBottom) - Math.max(r.yTop, l.yTop);
+            return ov >= 0.5 * h;
+        });
+    });
+}
+
 /** Accept a strip read only when it is demonstrably BETTER than what it
  *  replaces: no line still fused-tall, at least two distinct rows, and it
  *  covers the replaced text (≥70% of the character mass, ≥ as many lines).
  *  Exported for tests. */
 export function stripReadAcceptable(
-    stripLines: { text: string; yTop: number; yBottom: number }[],
-    replaced: { text: string }[],
+    stripLines: { text: string; yTop: number; yBottom: number; xLeft?: number; xRight?: number }[],
+    replaced: { text: string; yTop: number; yBottom: number }[],
     medianH: number,
 ): boolean {
-    if (stripLines.length < Math.max(2, replaced.length)) return false;
+    // ≥2 lines only — NOT ≥ replaced.length: a good heal merges partial-read
+    // fragments into whole rows, so fewer-but-better is normal (-23: the
+    // count gate rejected the clean mlkit@1x read and the ladder fell
+    // through to a re-glued 1.5× read). Text loss is what the ≥70% mass
+    // gate below is for.
+    if (stripLines.length < 2) return false;
     if (stripLines.some((l) => isFusedBodyText(l) && l.yBottom - l.yTop >= 1.75 * medianH)) return false;
+    // HORIZONTAL-GLUE guard: an engine can double-emit a word — once glued
+    // into a DIFFERENT row's line, once standalone (-23 mlkit@1.5 read
+    // "PLANT Šok. sk. sojos gėr. ALPRO" plus a lone "PLANT" from the row
+    // below; the glued line is normal-height, so the fused-tall gate can't
+    // see it). Token repeats across rows are legitimate on receipts (brand
+    // names), so the tell is X-POSITION: the glued copy and its standalone
+    // twin are the same physical word — their x-spans overlap (estimated
+    // inside the long line by character proportion). Rejection is
+    // fail-safe: the ladder tries the next attempt, and if all fail the
+    // fused box stays quarantined exactly as before strips existed.
+    const foldText = (s: string): string =>
+        s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+    const tokensIn = (s: string): string[] => foldText(s).match(/[a-z]{3,}/g) ?? [];
+    for (const l of stripLines) {
+        if (l.xLeft == null || l.xRight == null) continue;
+        if (l.text.trim().split(/\s+/).length !== 1) continue;
+        const ts = tokensIn(l.text);
+        if (ts.length !== 1) continue;
+        const lXLeft = l.xLeft, lXRight = l.xRight;
+        const reGlued = stripLines.some((o) => {
+            if (o === l || o.xLeft == null || o.xRight == null) return false;
+            const ov = Math.min(o.yBottom, l.yBottom) - Math.max(o.yTop, l.yTop);
+            const minH = Math.min(o.yBottom - o.yTop, l.yBottom - l.yTop);
+            if (ov >= 0.5 * minH) return false; // same row — legit fragment split
+            const ot = tokensIn(o.text);
+            if (ot.length < 2 || !ot.includes(ts[0])) return false;
+            const folded = foldText(o.text);
+            const idx = folded.indexOf(ts[0]);
+            if (idx < 0) return false;
+            const w = o.xRight - o.xLeft;
+            const tokL = o.xLeft + (idx / folded.length) * w;
+            const tokR = o.xLeft + ((idx + ts[0].length) / folded.length) * w;
+            return Math.min(tokR, lXRight) - Math.max(tokL, lXLeft) > 0;
+        });
+        if (reGlued) return false;
+    }
     const sorted = [...stripLines].sort((a, b) => a.yTop - b.yTop);
     let rows = 1;
     for (let i = 1; i < sorted.length; i++) {
@@ -334,20 +579,70 @@ export function stripReadAcceptable(
         if (ov < 0.5 * Math.min(prev.yBottom - prev.yTop, cur.yBottom - cur.yTop)) rows++;
     }
     if (rows < 2) return false;
+    // A removed PRICE must survive the splice — losing an anchor destroys the
+    // band. Every replaced price-shaped line needs a numeric strip counterpart
+    // at (roughly) its row.
+    const PRICEISH = /\d+[.,]\s?\d{2}/;
+    for (const r of replaced) {
+        if (!/^\d+[.,]\s?\d{2}\s*[ABАВ]?\s*$/.test(r.text.trim())) continue;
+        const rH = Math.max(1, r.yBottom - r.yTop);
+        const kept = stripLines.some((l) => {
+            const ov = Math.min(l.yBottom, r.yBottom) - Math.max(l.yTop, r.yTop);
+            return ov >= 0.5 * rH && PRICEISH.test(l.text);
+        });
+        if (!kept) return false;
+    }
     const removedLen = replaced.reduce((s, l) => s + l.text.trim().length, 0);
     const gotLen = stripLines.reduce((s, l) => s + l.text.trim().length, 0);
     return gotLen >= 0.7 * removedLen;
 }
 
+/**
+ * FIXED-POINT healing: strips run in ROUNDS. A healed zone can unlock plans
+ * that were invisible or blocked in the previous round — on rimi-30-04-2026-8
+ * round 1's fused strip restored the "Nuo1./Galut." rows, and only THEN did
+ * the missing-first-line signature above "MAGIJA, …" become valid (its "row
+ * above" had been a garbled fused box, and the overlap-dedupe blocked the
+ * insertion strip in the same round). Single-pass healing stopped there;
+ * iterating re-plans on the healed lines. Bounded to 3 rounds; each round
+ * must accept at least one strip to continue.
+ */
 export async function reocrFusedRows(
+    pageUri: string,
+    pageWidth: number,
+    pageHeight: number,
+    initialLines: LineWithFrame[],
+    engine: OcrEngine,
+): Promise<LineWithFrame[]> {
+    let current = initialLines;
+    for (let round = 1; round <= 3; round++) {
+        const { lines: next, accepted } = await reocrFusedRowsOnce(pageUri, pageWidth, pageHeight, current, engine, round);
+        current = next;
+        if (!accepted) break;
+    }
+    return current;
+}
+
+async function reocrFusedRowsOnce(
     pageUri: string,
     pageWidth: number,
     pageHeight: number,
     lines: LineWithFrame[],
     engine: OcrEngine,
-): Promise<LineWithFrame[]> {
-    const plans = planFusedStrips(lines, pageHeight);
-    if (plans.length === 0) return lines;
+    round: number,
+): Promise<{ lines: LineWithFrame[]; accepted: boolean }> {
+    // Fused boxes first, then dropped rows, then missing-first-line
+    // insertions — dedupe overlapping strips (different signals can describe
+    // the same damage; a blocked plan gets its chance next round if the zone
+    // heals).
+    const fusedPlans = planFusedStrips(lines, pageHeight);
+    const noOverlap = (d: FusedStripPlan, prior: FusedStripPlan[]) =>
+        prior.every((f) => Math.min(f.bottom, d.bottom) - Math.max(f.top, d.top) < 0.3 * (d.bottom - d.top));
+    const droppedPlans = planDroppedRowStrips(lines, pageWidth, pageHeight).filter((d) => noOverlap(d, fusedPlans));
+    const insertionPlans = planMissingFirstLineStrips(lines, pageWidth, pageHeight)
+        .filter((d) => noOverlap(d, [...fusedPlans, ...droppedPlans]));
+    const plans = [...fusedPlans, ...droppedPlans, ...insertionPlans];
+    if (plans.length === 0) return { lines, accepted: false };
     const dropIdx = new Set<number>();
     const spliced: LineWithFrame[] = [];
     for (const plan of plans) {
@@ -357,44 +652,142 @@ export async function reocrFusedRows(
                 [{ crop: { originX: 0, originY: plan.top, width: pageWidth, height: plan.bottom - plan.top } }],
                 { compress: 1, format: ImageManipulator.SaveFormat.PNG },
             );
-            const stripOcr = await ocrImageEnhanced(strip.uri, engine, { document: true });
-            const offY = (v: number | undefined) => (v == null ? undefined : v + plan.top);
-            const remapped: LineWithFrame[] = stripOcr.lines.map((l) => ({
-                text: l.text,
-                yTop: l.yTop + plan.top,
-                yBottom: l.yBottom + plan.top,
-                xLeft: l.xLeft,
-                xRight: l.xRight,
-                yLeftTop: offY(l.yLeftTop),
-                yRightTop: offY(l.yRightTop),
-                yLeftBottom: offY(l.yLeftBottom),
-                yRightBottom: offY(l.yRightBottom),
-                words: l.words?.map((w) => ({
-                    ...w, yTop: w.yTop + plan.top, yBottom: w.yBottom + plan.top,
-                    cornerPoints: w.cornerPoints?.map((p) => ({ x: p.x, y: p.y + plan.top })),
-                })),
-            }));
             const replaced = plan.replacedIdx.map((i) => lines[i]);
-            if (stripReadAcceptable(remapped, replaced, plan.medianH)) {
-                plan.replacedIdx.forEach((i) => dropIdx.add(i));
-                spliced.push(...remapped);
+            // ENGINE×SCALE LADDER: the primary engine can refuse a row at one
+            // scale while another engine or scale reads it fine. Try both
+            // engines at 1×, then both at 1.5× (some rows unstick only when
+            // upscaled). Acceptance gates are identical for every attempt.
+            const baseEngines: OcrEngine[] = engine === 'mlkit' ? ['mlkit'] : [engine, 'mlkit'];
+            const attempts: { eng: OcrEngine; scale: number }[] = [
+                ...baseEngines.map((e) => ({ eng: e, scale: 1 })),
+                ...baseEngines.map((e) => ({ eng: e, scale: 1.5 })),
+            ];
+            const attemptLog: { eng: string; scale: number; lines: string[] }[] = [];
+            let done = false;
+            for (const { eng, scale } of attempts) {
+                let attemptUri = strip.uri;
+                let coordScale = 1;
+                if (scale !== 1) {
+                    const scaled = await ImageManipulator.manipulateAsync(
+                        strip.uri,
+                        [{ resize: { width: Math.round(pageWidth * scale) } }],
+                        { compress: 1, format: ImageManipulator.SaveFormat.PNG },
+                    );
+                    attemptUri = scaled.uri;
+                    coordScale = pageWidth / scaled.width;
+                }
+                const stripOcrRaw = await ocrImageEnhanced(attemptUri, eng, { document: true });
+                const stripOcr = coordScale === 1 ? stripOcrRaw : {
+                    ...stripOcrRaw,
+                    lines: stripOcrRaw.lines.map((l) => ({
+                        ...l,
+                        yTop: l.yTop * coordScale, yBottom: l.yBottom * coordScale,
+                        xLeft: l.xLeft * coordScale, xRight: l.xRight * coordScale,
+                        yLeftTop: l.yLeftTop == null ? undefined : l.yLeftTop * coordScale,
+                        yRightTop: l.yRightTop == null ? undefined : l.yRightTop * coordScale,
+                        yLeftBottom: l.yLeftBottom == null ? undefined : l.yLeftBottom * coordScale,
+                        yRightBottom: l.yRightBottom == null ? undefined : l.yRightBottom * coordScale,
+                        words: l.words?.map((w) => ({
+                            ...w,
+                            xLeft: w.xLeft * coordScale, xRight: w.xRight * coordScale,
+                            yTop: w.yTop * coordScale, yBottom: w.yBottom * coordScale,
+                            cornerPoints: w.cornerPoints?.map((p) => ({ x: p.x * coordScale, y: p.y * coordScale })),
+                        })),
+                    })),
+                };
+                attemptLog.push({ eng: String(eng), scale, lines: stripOcr.lines.map((l) => l.text) });
+                const offY = (v: number | undefined) => (v == null ? undefined : v + plan.top);
+                const remappedAll: LineWithFrame[] = stripOcr.lines.map((l) => ({
+                    text: l.text,
+                    yTop: l.yTop + plan.top,
+                    yBottom: l.yBottom + plan.top,
+                    xLeft: l.xLeft,
+                    xRight: l.xRight,
+                    yLeftTop: offY(l.yLeftTop),
+                    yRightTop: offY(l.yRightTop),
+                    yLeftBottom: offY(l.yLeftBottom),
+                    yRightBottom: offY(l.yRightBottom),
+                    words: l.words?.map((w) => ({
+                        ...w, yTop: w.yTop + plan.top, yBottom: w.yBottom + plan.top,
+                        cornerPoints: w.cornerPoints?.map((p) => ({ x: p.x, y: p.y + plan.top })),
+                    })),
+                }));
+                const remapped = filterStripEdgeSlivers(remappedAll, plan.top, plan.bottom, replaced, plan.medianH);
+                if (plan.insertion) {
+                    // INSERTION acceptance: at least one body line that isn't
+                    // a duplicate of the surrounding context — nothing is
+                    // removed, the healed row is simply added.
+                    const tokensOf = (s: string) => new Set(
+                        s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').split(/[^a-z0-9]+/).filter((t) => t.length >= 2),
+                    );
+                    const context = lines.filter((l) => l.yBottom > plan.top - plan.medianH && l.yTop < plan.bottom + plan.medianH);
+                    const freshNew = remapped.filter((l) => {
+                        if (!isFusedBodyText(l)) return false;
+                        const lt = tokensOf(l.text);
+                        if (lt.size === 0) return false;
+                        return !context.some((c) => {
+                            const ct = tokensOf(c.text);
+                            let hit = 0;
+                            for (const t of lt) if (ct.has(t)) hit++;
+                            return hit / Math.min(lt.size, ct.size || 1) >= 0.5;
+                        });
+                    });
+                    if (freshNew.length >= 1) {
+                        spliced.push(...freshNew);
+                        console.log(
+                            `[fusedReocr] INSERT (${eng}) y${plan.top}-${plan.bottom} above "${plan.fusedText.slice(0, 24)}": ` +
+                            freshNew.map((l) => `"${l.text.slice(0, 30)}"`).join(' | '),
+                        );
+                        done = true;
+                        break;
+                    }
+                    continue; // next engine
+                }
+                if (stripReadAcceptable(remapped, replaced, plan.medianH)) {
+                    plan.replacedIdx.forEach((i) => dropIdx.add(i));
+                    spliced.push(...remapped);
+                    console.log(
+                        `[fusedReocr] strip (${eng}) y${plan.top}-${plan.bottom}: ${replaced.length}→${remapped.length} lines; ` +
+                        `"${plan.fusedText.slice(0, 32)}" → ${remapped.map((l) => `"${l.text.slice(0, 24)}"`).join(' | ')}`,
+                    );
+                    done = true;
+                    break;
+                }
+            }
+            if (!done) {
                 console.log(
-                    `[fusedReocr] strip y${plan.top}-${plan.bottom}: ${replaced.length}→${remapped.length} lines; ` +
-                    `"${plan.fusedText.slice(0, 32)}" → ${remapped.map((l) => `"${l.text.slice(0, 24)}"`).join(' | ')}`,
+                    `[fusedReocr] strip y${plan.top}-${plan.bottom} ${plan.insertion ? 'found nothing new' : 'REJECTED'} on all attempts ("${plan.fusedText.slice(0, 32)}")`,
                 );
-            } else {
-                console.log(
-                    `[fusedReocr] strip y${plan.top}-${plan.bottom} REJECTED (kept fused box "${plan.fusedText.slice(0, 32)}")`,
-                );
+            }
+            // DEV OBSERVABILITY: ship the exact strip crop + every attempt's
+            // raw engine output to the dev server so failed strips can be
+            // diagnosed from evidence instead of guesses. Best-effort.
+            if (__DEV__) {
+                try {
+                    const { readAsStringAsync, EncodingType } = require('expo-file-system/legacy');
+                    const { API_BASE_URL } = require('../config/api');
+                    const pngBase64 = await readAsStringAsync(strip.uri, { encoding: EncodingType.Base64 });
+                    await fetch(`${API_BASE_URL}/receipts-batch-debug`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            chain: 'strips',
+                            file: `strip-r${round}-y${plan.top}-${plan.bottom}${plan.insertion ? '-insert' : ''}`,
+                            page: 1,
+                            pngBase64,
+                            meta: { plan: { top: plan.top, bottom: plan.bottom, insertion: !!plan.insertion, fusedText: plan.fusedText }, accepted: done, attempts: attemptLog },
+                        }),
+                    });
+                } catch { /* debug only */ }
             }
         } catch (e) {
             console.log('[fusedReocr] strip failed (kept original):', e);
         }
     }
-    if (dropIdx.size === 0) return lines;
+    if (dropIdx.size === 0 && spliced.length === 0) return { lines, accepted: false };
     const out = lines.filter((_, i) => !dropIdx.has(i)).concat(spliced);
     out.sort((a, b) => a.yTop - b.yTop);
-    return out;
+    return { lines: out, accepted: true };
 }
 
 /**
@@ -405,7 +798,16 @@ export async function reocrFusedRows(
 export async function ocrReceiptPages(
     imageUris: string[],
     engine: OcrEngine = 'auto',
-    opts: { document?: boolean } = {},
+    opts: {
+        document?: boolean;
+        /** Fused/dropped-row strip re-OCR (opt-in). Works for PDF pages AND
+         *  photos — the early photo damage (duplicated rows) was caused by
+         *  engine double-reads and edge slivers that now have their own
+         *  guards (cluster dedupe, sliver filter, anchor-must-survive
+         *  acceptance); a photo's engine-dropped rows only ever heal through
+         *  a strip (ios-55 "MILLER, 250 g"). */
+        stripHealing?: boolean;
+    } = {},
 ): Promise<ReceiptOcrResult> {
     const allLines: LineWithFrame[] = [];
     const pageMetas: ReceiptOcrPageMeta[] = [];
@@ -425,11 +827,13 @@ export async function ocrReceiptPages(
             firstPageHeight = ocr.pixelHeight;
         }
 
-        // Document pages only: heal fused double-height boxes by re-OCRing
-        // their strip in isolation (photos skew-inflate boxes and never enter
-        // planFusedStrips' two-disjoint-rows signature reliably — and their
-        // recovery path is the Android whole-section re-OCR instead).
-        const pageLines = opts.document
+        // Heal fused double-height boxes and engine-dropped rows by re-OCRing
+        // their strip in isolation. Photos qualify too (the strips themselves
+        // always run document-mode): a photo's dropped rows heal the same way
+        // — ios-55's "MILLER, 250 g" only ever read via a strip — and the
+        // acceptance gates (edge-sliver filter, anchor-must-survive, ≥2 rows,
+        // text-mass) are what protect skewed geometry from bad splices.
+        const pageLines = opts.stripHealing
             ? await reocrFusedRows(pageUri, ocr.pixelWidth, ocr.pixelHeight, ocr.lines as LineWithFrame[], engine)
             : (ocr.lines as LineWithFrame[]);
 
