@@ -254,7 +254,20 @@ export interface FusedStripPlan {
      *  differs: ≥1 body line that isn't a duplicate of the surrounding
      *  context (see reocrFusedRows). */
     insertion?: boolean;
+    /** GARBLED-ANCHOR plan: the row's pixels are clean but the engine
+     *  returned garbage for BOTH the name and the anchor (Norfa-04-23 "Žemės
+     *  riešutai GAR2, 500g  2x1,49 2,98 M1" → "CAD" + "2v1 Aa ae M1"). A
+     *  sporadic engine miss, not damage. Acceptance: the re-OCR must produce
+     *  a CLEAN anchor line (price/weighable + VAT suffix) that the garbled
+     *  originals lacked — proof the row was recovered (see reocrFusedRows). */
+    garbled?: boolean;
 }
+
+// A clean anchor line: total + VAT suffix (Norfa `N,NN M1`/`M5`, Rimi `N,NN
+// A`/`B`, incl. Cyrillic homoglyphs). Also matches the tail of a weighable
+// "qty x ppu TOTAL M1". Used to tell a recovered row from a garbled one.
+const CLEAN_ANCHOR_RE = /(?:^|\s)\d+[.,]\s?\d{2}\s*(?:M\s*[15]|[ABАВ])\s*$/i;
+const ANCHOR_SUFFIX_RE = /(?:M\s*[15]|[ABАВ])\s*$/i;
 
 /**
  * Pure planner: find fused boxes (double-height body lines spanning two
@@ -493,6 +506,73 @@ export function planMissingFirstLineStrips(
     return plans;
 }
 
+/**
+ * GARBLED-ANCHOR strips: a whole product row whose pixels are pristine but
+ * that the engine returned as garbage — Norfa-04-23 read "Žemės riešutai
+ * GAR2, 500g  2x1,49 2,98 M1" as "CAD" + "2v1 Aa ae M1" (both HALF height).
+ * A sporadic engine miss, not fading/skew. The dropped-row planner misses it
+ * because the garbled "…M1" box isn't recognised as an anchor at all.
+ *
+ * Signal: a RIGHT-column box ending in a VAT suffix (M1/M5/A/B) that ISN'T a
+ * clean anchor AND carries letter garbage in its value part, with NO clean
+ * full-height left-column name on its row (the name misread too). Re-OCR the
+ * row (padded to a full median height — the garbled boxes are half-tall).
+ * Acceptance (see reocrFusedRows) demands the re-read yield a CLEAN anchor,
+ * so a false trigger that can't recover is a safe no-op. Exported for tests.
+ */
+export function planGarbledAnchorStrips(
+    lines: { text: string; yTop: number; yBottom: number; xLeft: number; xRight: number }[],
+    pageWidth: number,
+    pageHeight: number,
+): FusedStripPlan[] {
+    const hs = lines
+        .filter(isFusedBodyText)
+        .map((l) => l.yBottom - l.yTop)
+        .filter((h) => h > 0)
+        .sort((a, b) => a - b);
+    if (hs.length < 8) return [];
+    const medianH = hs[Math.floor(hs.length / 2)];
+    if (!(medianH > 0)) return [];
+
+    // Full-height left-column names — a row with one of these is a healthy
+    // product, not a garbled miss.
+    const cleanLeft = lines.filter(
+        (l) => l.xLeft < pageWidth * 0.45
+            && l.text.trim().length >= 3
+            && l.yBottom - l.yTop >= 0.6 * medianH
+            && /[A-Za-zĄČĘĖĮŠŲŪŽąčęėįšųūž]/.test(l.text),
+    );
+    const plans: FusedStripPlan[] = [];
+    for (const box of lines) {
+        if (plans.length >= 4) continue;
+        const t = box.text.trim();
+        if (box.xLeft < pageWidth * 0.5) continue;              // right column
+        if (!ANCHOR_SUFFIX_RE.test(t)) continue;                // ends in a VAT suffix
+        if (CLEAN_ANCHOR_RE.test(t)) continue;                  // a clean anchor — not garbled
+        // A garbled anchor carries letter noise in the value part (a clean
+        // number never does); this is what separates "2v1 Aa ae M1" from a
+        // legitimately unusual-but-clean price.
+        if (!/[a-zA-Z]/.test(t.replace(ANCHOR_SUFFIX_RE, ''))) continue;
+        const aH = box.yBottom - box.yTop;
+        const hasCleanName = cleanLeft.some((l) => {
+            const ov = Math.min(l.yBottom, box.yBottom) - Math.max(l.yTop, box.yTop);
+            return ov >= 0.3 * aH;
+        });
+        if (hasCleanName) continue;                             // name survived → not this class
+        const cy = (box.yTop + box.yBottom) / 2;
+        const top = Math.max(0, Math.round(cy - 0.7 * medianH));
+        const bottom = Math.min(pageHeight, Math.round(cy + 0.7 * medianH));
+        if (bottom - top < 20) continue;
+        const replacedIdx: number[] = [];
+        for (let j = 0; j < lines.length; j++) {
+            const c = (lines[j].yTop + lines[j].yBottom) / 2;
+            if (c >= top && c <= bottom) replacedIdx.push(j);
+        }
+        plans.push({ top, bottom, fusedText: t, replacedIdx, medianH, garbled: true });
+    }
+    return plans;
+}
+
 /** Drop strip lines HALLUCINATED from partial glyphs at the crop edges: the
  *  strip's padding can catch the ascender/descender sliver of a NEIGHBOUR row,
  *  which the engine decodes as garbage ("пTTaтттт" from the FUSILLI row's top
@@ -641,7 +721,9 @@ async function reocrFusedRowsOnce(
     const droppedPlans = planDroppedRowStrips(lines, pageWidth, pageHeight).filter((d) => noOverlap(d, fusedPlans));
     const insertionPlans = planMissingFirstLineStrips(lines, pageWidth, pageHeight)
         .filter((d) => noOverlap(d, [...fusedPlans, ...droppedPlans]));
-    const plans = [...fusedPlans, ...droppedPlans, ...insertionPlans];
+    const garbledPlans = planGarbledAnchorStrips(lines, pageWidth, pageHeight)
+        .filter((d) => noOverlap(d, [...fusedPlans, ...droppedPlans, ...insertionPlans]));
+    const plans = [...fusedPlans, ...droppedPlans, ...insertionPlans, ...garbledPlans];
     if (plans.length === 0) return { lines, accepted: false };
     const dropIdx = new Set<number>();
     const spliced: LineWithFrame[] = [];
@@ -743,6 +825,27 @@ async function reocrFusedRowsOnce(
                     }
                     continue; // next engine
                 }
+                if (plan.garbled) {
+                    // GARBLED-ANCHOR acceptance: the re-read must produce a
+                    // CLEAN anchor (price/weighable + VAT suffix) that the
+                    // garbled originals lacked, plus some body text. That is
+                    // proof the row was actually recovered; anything less is
+                    // rejected, so a mis-fired plan is a safe no-op.
+                    const hadClean = replaced.some((l) => CLEAN_ANCHOR_RE.test(l.text.trim()));
+                    const nowClean = remapped.some((l) => CLEAN_ANCHOR_RE.test(l.text.trim()));
+                    const hasBody = remapped.some((l) => isFusedBodyText(l));
+                    if (!hadClean && nowClean && hasBody) {
+                        plan.replacedIdx.forEach((i) => dropIdx.add(i));
+                        spliced.push(...remapped);
+                        console.log(
+                            `[fusedReocr] GARBLED (${eng}) y${plan.top}-${plan.bottom}: "${plan.fusedText.slice(0, 24)}" → ` +
+                            remapped.map((l) => `"${l.text.slice(0, 28)}"`).join(' | '),
+                        );
+                        done = true;
+                        break;
+                    }
+                    continue; // next engine
+                }
                 if (stripReadAcceptable(remapped, replaced, plan.medianH)) {
                     plan.replacedIdx.forEach((i) => dropIdx.add(i));
                     spliced.push(...remapped);
@@ -772,7 +875,7 @@ async function reocrFusedRowsOnce(
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({
                             chain: 'strips',
-                            file: `strip-r${round}-y${plan.top}-${plan.bottom}${plan.insertion ? '-insert' : ''}`,
+                            file: `strip-r${round}-y${plan.top}-${plan.bottom}${plan.insertion ? '-insert' : plan.garbled ? '-garbled' : ''}`,
                             page: 1,
                             pngBase64,
                             meta: { plan: { top: plan.top, bottom: plan.bottom, insertion: !!plan.insertion, fusedText: plan.fusedText }, accepted: done, attempts: attemptLog },
