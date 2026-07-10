@@ -8,9 +8,9 @@ import {
     Dimensions,
     Platform,
 } from "react-native";
-import { Gesture, GestureDetector, ScrollView } from 'react-native-gesture-handler';
+import { Gesture, GestureDetector, ScrollView, State } from 'react-native-gesture-handler';
 import { MaterialProgress } from '@/components/MaterialProgress';
-import Animated, { SlideInDown, SlideOutDown, useAnimatedStyle, useSharedValue, withTiming, withSpring, runOnJS } from 'react-native-reanimated';
+import Animated, { SlideInDown, SlideOutDown, useAnimatedStyle, useDerivedValue, useSharedValue, withTiming, withSpring, runOnJS } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { spacing, radius, typography, iconSize, avatarSize, type AppTheme } from '../../constants/theme';
 import { type SheetOption } from '../../utils/splitOptions';
@@ -19,13 +19,14 @@ import { chainBrandName } from '../../utils/chainBrandName';
 import { formatEuro } from '../../utils/formatCurrency';
 import { useTranslation } from 'react-i18next';
 import { LiquidGlass } from '../LiquidGlass';
-import { concentricRadius } from '../../utils/displayCorners';
+import { concentricRadius, displayCornerRadius } from '../../utils/displayCorners';
 
 // SheetOption lives in utils/splitOptions (pure + unit-tested). Re-export so
 // existing imports from this component keep working.
 export type { SheetOption };
 
 const SCREEN_H = Dimensions.get('window').height;
+const SCREEN_W = Dimensions.get('window').width;
 const PEEK_GAP = 26;   // sliver of the next card shown when collapsed
 
 /** "1.4 km" / "850 m" — distance display, switching to metres under 1 km. Units
@@ -260,9 +261,15 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
     // height → never clipped.
     const snaps = useMemo(() => {
         const bar = HANDLE_H + actionsH;
-        const full = Math.min(bar + contentH, SCREEN_H * 0.85);
+        // FULL (the docked stage 3) is ALWAYS the near-top detent — independent
+        // of content height, like Find My. Short lists just leave slack below;
+        // the dock morph belongs to the approach to the TOP of the screen, not
+        // to "content fits" (which used to dock the sheet at mid-screen).
+        const full = SCREEN_H * 0.85;
         const peek = Math.min(bar + firstCardH + PEEK_GAP, full);
-        const mid = clamp(bar + SCREEN_H * 0.42, peek, full);
+        // MID = the floating "see the options" stage: whole list when it's
+        // short, else a fixed comfortable height with the map still visible.
+        const mid = clamp(Math.min(bar + contentH, bar + SCREEN_H * 0.42), peek, full);
         const pts = [bar];
         if (peek > bar + 40) pts.push(peek);
         if (mid > peek + 48 && full > mid + 48) pts.push(mid);
@@ -278,6 +285,8 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
     const snapsSV = useSharedValue<number[]>(snaps);
     useEffect(() => { snapsSV.value = snaps; }, [snaps, snapsSV]);
     const dragging = useRef(false);
+    // UI-thread mirror of `dragging` for the dock-progress worklet (see dockP).
+    const draggingSV = useSharedValue(false);
     const snapsRef = useRef(snaps); snapsRef.current = snaps;
     const stageRef = useRef(safeStage); stageRef.current = safeStage;
     // Slide-in is driven by this shared value (NOT reanimated's `entering`
@@ -286,15 +295,58 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
     // measured peek never applies until you tap. Owning both the slide and the
     // height in ONE animated style avoids that entirely.
     const slideY = useSharedValue(SCREEN_H * 0.85);
+
+    // ── Stage-3 DOCK progress ────────────────────────────────────────────────
+    // stagePSV: 0/1 timing that follows the COMMITTED stage (flick coverage).
+    // dockP: while the finger is down, the height-derived progress (tracks the
+    // drag, reverses with it); once released, max(height, stage) so a flick
+    // that lands on the last detent always completes the morph.
+    const stagePSV = useSharedValue(0);
+    useEffect(() => {
+        const atLast = snaps.length > 1 && safeStage === snaps.length - 1;
+        stagePSV.value = withTiming(atLast ? 1 : 0, { duration: 240 });
+    }, [safeStage, snaps.length, stagePSV]);
+    const dockP = useDerivedValue(() => {
+        const sn = snapsSV.value;
+        const last = sn[sn.length - 1];
+        const prev = sn.length > 1 ? sn[sn.length - 2] : last;
+        const range = Math.max(1, last - prev);
+        const hp = Math.min(1, Math.max(0, (height.value - prev) / range));
+        let p = draggingSV.value ? hp : Math.max(hp, stagePSV.value);
+        if (p > 0.995) p = 1;
+        return p;
+    });
+    const bottomOffset = spacing.sm;
+
     // TRANSFORM-ONLY animation (the definitive de-stutter): the sheet's parts
     // never change SIZE while dragging — the BODY (glass + handle + list, all
     // fixed at the tallest snap) slides down inside a fixed clipping viewport
     // as the sheet collapses, and the BAR is a separate fixed glass panel the
     // body disappears behind. translateY is a pure transform: no Yoga layout,
     // no blur resize, nothing measured — every frame is just a matrix update.
-    const outerStyle = useAnimatedStyle(() => ({
-        transform: [{ translateY: slideY.value }],
-    }));
+    //
+    // The stage-3 DOCK is transform-only too, so it can track the finger with
+    // no per-frame Yoga passes: the root is laid out EDGE-TO-EDGE (docked
+    // geometry) and scaled DOWN in x to the floating width; an inner wrapper
+    // counter-scales by 1/s so the content renders at identity (never
+    // stretched, text stays crisp). Both scales share the same centre, so
+    // content never moves — only the clip box (the sheet's visible edges)
+    // expands/contracts with the drag. The float's bottom gap is a translateY.
+    const outerStyle = useAnimatedStyle(() => {
+        const p = dockP.value;
+        const s = (SCREEN_W - 2 * spacing.sm * (1 - p)) / SCREEN_W;
+        return {
+            transform: [
+                { translateY: slideY.value - bottomOffset * (1 - p) },
+                { scaleX: s },
+            ],
+        };
+    });
+    const counterScaleStyle = useAnimatedStyle(() => {
+        const p = dockP.value;
+        const s = (SCREEN_W - 2 * spacing.sm * (1 - p)) / SCREEN_W;
+        return { transform: [{ scaleX: 1 / s }] };
+    });
     // delta = how far the (fixed-size) glass panel + list slide DOWN as the
     // sheet collapses. One shared worklet drives both transforms.
     const bodyStyle = useAnimatedStyle(() => {
@@ -328,10 +380,8 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
     useEffect(() => { setStage(1); }, [options]);
 
     // Report the settled stage height so the map can frame content above us —
-    // plus the float gap below the sheet (it no longer touches the screen edge).
-    // Gap matches the SIDE margins exactly (user call: equal breathing room all
-    // around beats aligning to the home-indicator inset).
-    const bottomOffset = spacing.sm;
+    // plus the float gap below the sheet (bottomOffset, defined with the dock
+    // block above: it matches the SIDE margins for equal breathing room).
     useEffect(() => { onHeightChange?.(snaps[safeStage] + bottomOffset); }, [safeStage, snaps, onHeightChange, bottomOffset]);
 
     // ── SHEET-WIDE drag: one RNGH pan gesture, worklet-driven ──
@@ -368,6 +418,11 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
         })
         .onTouchesMove((e, sm) => {
             'worklet';
+            // ONLY an activation decision — once the pan is ACTIVE it must never
+            // be re-judged: failing here mid-drag (sheet reaches full while the
+            // finger keeps moving up) KILLED the gesture, so reversing direction
+            // without lifting the finger did nothing until a fresh touch.
+            if (e.state === State.ACTIVE) return;
             const t = e.allTouches[0];
             if (!t) return;
             const dy = t.absoluteY - grabY.value;
@@ -385,6 +440,7 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
             // Anchor at the ACTIVATION point so the sheet follows the finger
             // exactly from the moment it grabs (no pre-activation jump).
             startHSV.value = height.value + e.translationY;
+            draggingSV.value = true;
             runOnJS(setDragging)(true);
         })
         .onUpdate((e) => {
@@ -393,8 +449,14 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
             const lo = sn[0], hi = sn[sn.length - 1];
             // Clamp between the bar and full — dragging down never closes the
             // sheet (tapping the map deselects; that's the only dismiss).
-            const h = startHSV.value - e.translationY;
-            height.value = h < lo ? lo : h > hi ? hi : h;
+            // RE-ANCHOR whenever the clamp engages: otherwise the overshoot
+            // distance is swallowed and a direction reversal (swipe up past
+            // full, then drag down WITHOUT releasing) doesn't move the sheet
+            // until the finger has retraced the entire overshoot.
+            let h = startHSV.value - e.translationY;
+            if (h > hi) { startHSV.value = hi + e.translationY; h = hi; }
+            else if (h < lo) { startHSV.value = lo + e.translationY; h = lo; }
+            height.value = h;
         })
         .onEnd((e) => {
             'worklet';
@@ -411,12 +473,14 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
             height.value = withSpring(sn[idx], {
                 velocity: -e.velocityY, damping: 30, stiffness: 280, mass: 0.8, overshootClamping: true,
             });
+            draggingSV.value = false;
             runOnJS(setDragging)(false);
             runOnJS(settleFromUI)(idx);
         })
         .onFinalize((_e, success) => {
             'worklet';
             if (success) return;
+            draggingSV.value = false;
             runOnJS(setDragging)(false);
             runOnJS(settleFromUI)(-1);
         })
@@ -432,15 +496,43 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
     const maxSnap = snaps[snaps.length - 1];
     const listH = Math.max(0, maxSnap - HANDLE_H - actionsH);
     const cornerR = concentricRadius(bottomInset, spacing.sm);
+
+    // ── Stage-3 DOCKING styles (the scaleX geometry lives up top) ───────────
+    // Everything here is draw-only (radii, opacity) or transform — the whole
+    // dock morph tracks the finger with zero per-frame layout. All geometry
+    // (edges via scaleX, bottom gap via translateY, corner radii here) rides
+    // the SAME dockP progress, so every edge docks by the same rules.
+    //
+    // CONCENTRIC bottom corners: as the sheet's corner travels to the screen's
+    // own (rounded) corner, its radius GROWS from cornerR (= displayR − inset)
+    // to the display's radius — the perceived roundness stays CONSTANT the
+    // whole way (shrinking to 0 made the corners visibly sharpen mid-drag).
+    const displayR = displayCornerRadius(bottomInset);
+    const dockCornersStyle = useAnimatedStyle(() => {
+        const p = dockP.value;
+        const r = cornerR + (displayR - cornerR) * p;
+        return {
+            borderBottomLeftRadius: r,
+            borderBottomRightRadius: r,
+        };
+    });
+    const solidBgStyle = useAnimatedStyle(() => ({ opacity: dockP.value }));
     return (
         <GestureDetector gesture={sheetGesture}>
         {/* box-none everywhere structural: the skeleton is ALWAYS maxSnap tall —
             only the (translated) panel and the button bar may take touches, so a
             collapsed sheet never steals pans meant for the map. */}
         <Animated.View
-            style={[styles.sheetRoot, { bottom: bottomOffset, height: maxSnap, borderRadius: cornerR }, outerStyle]}
+            style={[styles.sheetRoot, { height: maxSnap, borderRadius: cornerR }, outerStyle, dockCornersStyle]}
             pointerEvents="box-none"
         >
+            {/* PANEL (glass + handle) — a DIRECT root child, NOT counter-scaled:
+                it renders under the same scaleX as the root's clip, so its top
+                corner arcs stay inside the visible edges and curve EXACTLY like
+                the root-clipped bottom corners. (Inside the counter-wrapper it
+                rendered wider than the clip — the top radii landed outside the
+                sheet and the visible top corners went square.) Nothing in it is
+                text-critical; the ~4% x-compression at float is imperceptible. */}
             <Animated.View
                 style={[styles.panel, {
                     height: maxSnap,
@@ -448,11 +540,19 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
                 }, bodyStyle]}
             >
                 <LiquidGlass fallback="blur" style={styles.bodyGlass} />
+                {/* Solid backdrop that fades in as the sheet docks at full. */}
+                <Animated.View
+                    pointerEvents="none"
+                    style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.pageBackground }, solidBgStyle]}
+                />
                 <View style={styles.handleArea}>
                     <View style={styles.handle} />
                 </View>
             </Animated.View>
 
+            {/* Counter-scale wrapper: undoes the root's scaleX so the TEXT
+                content (list + buttons) renders at identity — never stretched. */}
+            <Animated.View style={[StyleSheet.absoluteFillObject, counterScaleStyle]} pointerEvents="box-none">
             {/* List viewport: root-fixed, ends at the bar's top edge; the list
                 inside rides the same delta transform as the panel. */}
             <View style={[styles.listViewport, { height: Math.max(0, maxSnap - actionsH) }]} pointerEvents="box-none">
@@ -489,18 +589,19 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
                 <Actions styles={styles} colors={colors} creatingList={creatingList}
                     onNavigate={onNavigate} onCreateList={onCreateList} bottomInset={bottomInset} />
             </View>
+            </Animated.View>
         </Animated.View>
         </GestureDetector>
     );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    // FLOATING GLASS PANEL (Find-My-style): detached from the screen edges
-    // (side margins + a gap above the home indicator, `bottom` set inline),
-    // rounded concentric with the display. Two fixed glass parts (BODY above,
-    // BAR below) — nothing resizes while dragging (see the transform worklets).
+    // FLOATING GLASS PANEL (Find-My-style). LAID OUT edge-to-edge (the DOCKED
+    // geometry); the floating look — side margins + the gap above the home
+    // indicator — comes from the root's scaleX + translateY transforms (see
+    // outerStyle), so the dock morph is transform-only and never relayouts.
     sheetRoot: {
-        position: 'absolute', left: spacing.sm, right: spacing.sm, bottom: 0,
+        position: 'absolute', left: 0, right: 0, bottom: 0,
         overflow: 'hidden', // rounds the visible bottom cut of the sliding panel
     },
     // Single-store sheet (auto-height, not animated) keeps the one-piece panel.
@@ -510,17 +611,19 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 12,
     },
     // The ONE glass panel (whole sheet incl. the bar area) — slides via
-    // transform; sides carry the hairline, the root's clip rounds the bottom.
+    // transform; the root's clip rounds the corners. NO border: the hairline
+    // "decoration" clipped visibly against the rounded corners and left a
+    // see-through strip at the docked edges — the glass edge alone is enough.
     panel: {
         position: 'absolute', top: 0, left: 0, right: 0, overflow: 'hidden',
-        borderWidth: StyleSheet.hairlineWidth, borderBottomWidth: 0,
-        borderColor: 'rgba(120,120,128,0.24)',
         backgroundColor: Platform.OS === 'android' ? c.cardBackground + 'F2' : 'transparent',
     },
     bodyGlass: StyleSheet.absoluteFillObject,
-    // Root-fixed clip for the list — ends at the bar's top edge.
-    listViewport: { position: 'absolute', top: 0, left: 0, right: 0, overflow: 'hidden' },
-    barOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0 },
+    // Root-fixed clip for the list — ends at the bar's top edge. Inset by the
+    // float margin so content sits at its floating position at EVERY stage
+    // (the root is laid out at the docked width; content must not shift).
+    listViewport: { position: 'absolute', top: 0, left: spacing.sm, right: spacing.sm, overflow: 'hidden' },
+    barOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: spacing.sm },
     sheetGlass: {
         flex: 1, borderRadius: radius.xl, overflow: 'hidden',
         borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)',
