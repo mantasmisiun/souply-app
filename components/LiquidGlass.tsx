@@ -42,12 +42,18 @@ export function LiquidGlass({
     glassStyle = 'regular',
     intensity = 50,
     blurTint,
+    forceFallback = false,
 }: {
     style?: StyleProp<ViewStyle>;
     children?: React.ReactNode;
     tintColor?: string;
     interactive?: boolean;
     fallback?: 'blur' | 'solid';
+    /** Skip the native Liquid Glass even when available and render the
+     *  fallback material. The native glass draws its own specular RIM at the
+     *  view's edges — right for buttons/pills, but on a large sheet surface it
+     *  reads as an unwanted edge decoration; the blur fallback has no rim. */
+    forceFallback?: boolean;
     /** iOS 26 material flavour: 'regular' (default) or 'clear' — clear carries
      *  almost no tint, for surfaces stacked ON another glass (e.g. option cards
      *  on the results sheet) so glass-on-glass doesn't go muddy. */
@@ -61,7 +67,7 @@ export function LiquidGlass({
     blurTint?: 'light' | 'dark' | 'default';
 }) {
     const scheme = useColorScheme();
-    if (HAS_LIQUID_GLASS && GlassView) {
+    if (!forceFallback && HAS_LIQUID_GLASS && GlassView) {
         // Strip any solid backgroundColor so the glass material shows through.
         return (
             <GlassView

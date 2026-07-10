@@ -297,22 +297,26 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
     const slideY = useSharedValue(SCREEN_H * 0.85);
 
     // ── Stage-3 DOCK progress ────────────────────────────────────────────────
-    // stagePSV: 0/1 timing that follows the COMMITTED stage (flick coverage).
-    // dockP: while the finger is down, the height-derived progress (tracks the
-    // drag, reverses with it); once released, max(height, stage) so a flick
-    // that lands on the last detent always completes the morph.
+    // Finger DOWN → the height-derived progress (tracks the drag, reverses
+    // with it). Released → stagePSV, a timing toward the committed stage that
+    // the gesture SEEDS from the finger's final progress, so the handoff is
+    // continuous in both directions. (An earlier max(height, stage) blend
+    // flashed on downward release: stagePSV was still 1 from stage 3 at the
+    // instant the finger lifted, snapping the morph back to docked for a beat.)
     const stagePSV = useSharedValue(0);
     useEffect(() => {
         const atLast = snaps.length > 1 && safeStage === snaps.length - 1;
         stagePSV.value = withTiming(atLast ? 1 : 0, { duration: 240 });
-    }, [safeStage, snaps.length, stagePSV]);
+        // settleTick: a CANCELLED drag leaves stagePSV seeded mid-way with no
+        // stage change — this re-fire eases it back to the committed stage.
+    }, [safeStage, snaps.length, settleTick, stagePSV]);
     const dockP = useDerivedValue(() => {
         const sn = snapsSV.value;
         const last = sn[sn.length - 1];
         const prev = sn.length > 1 ? sn[sn.length - 2] : last;
         const range = Math.max(1, last - prev);
         const hp = Math.min(1, Math.max(0, (height.value - prev) / range));
-        let p = draggingSV.value ? hp : Math.max(hp, stagePSV.value);
+        let p = draggingSV.value ? hp : stagePSV.value;
         if (p > 0.995) p = 1;
         return p;
     });
@@ -473,6 +477,14 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
             height.value = withSpring(sn[idx], {
                 velocity: -e.velocityY, damping: 30, stiffness: 280, mass: 0.8, overshootClamping: true,
             });
+            // Seed the dock progress from the finger's FINAL position, then
+            // ease to the landing stage — the finger→timing handoff stays
+            // continuous (no snap back to the old stage's morph state).
+            const last = sn[sn.length - 1];
+            const prev = sn.length > 1 ? sn[sn.length - 2] : last;
+            const hp = Math.min(1, Math.max(0, (h - prev) / Math.max(1, last - prev)));
+            stagePSV.value = hp;
+            stagePSV.value = withTiming(idx === sn.length - 1 ? 1 : 0, { duration: 240 });
             draggingSV.value = false;
             runOnJS(setDragging)(false);
             runOnJS(settleFromUI)(idx);
@@ -480,6 +492,12 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
         .onFinalize((_e, success) => {
             'worklet';
             if (success) return;
+            // Cancelled drag: seed from wherever the morph is; the settleTick
+            // re-fire of the stagePSV effect eases it back to the committed stage.
+            const sn = snapsSV.value;
+            const last = sn[sn.length - 1];
+            const prev = sn.length > 1 ? sn[sn.length - 2] : last;
+            stagePSV.value = Math.min(1, Math.max(0, (height.value - prev) / Math.max(1, last - prev)));
             draggingSV.value = false;
             runOnJS(setDragging)(false);
             runOnJS(settleFromUI)(-1);
@@ -539,7 +557,10 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
                     borderTopLeftRadius: cornerR, borderTopRightRadius: cornerR,
                 }, bodyStyle]}
             >
-                <LiquidGlass fallback="blur" style={styles.bodyGlass} />
+                {/* forceFallback: the native Liquid Glass draws a specular RIM
+                    at its edges — on the sheet it reads as an edge decoration.
+                    The blur material is rimless. */}
+                <LiquidGlass fallback="blur" forceFallback style={styles.bodyGlass} />
                 {/* Solid backdrop that fades in as the sheet docks at full. */}
                 <Animated.View
                     pointerEvents="none"
