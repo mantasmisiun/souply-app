@@ -1,8 +1,20 @@
 diff --git a/node_modules/react-native-maps/ios/AirMaps/AIRMap.m b/node_modules/react-native-maps/ios/AirMaps/AIRMap.m
-index 07a4638..0483573 100644
+index 07a4638..73758db 100644
 --- a/node_modules/react-native-maps/ios/AirMaps/AIRMap.m
 +++ b/node_modules/react-native-maps/ios/AirMaps/AIRMap.m
-@@ -135,7 +135,14 @@ const NSInteger AIRMapMaxZoomLevel = 20;
+@@ -106,6 +106,11 @@ const NSInteger AIRMapMaxZoomLevel = 20;
+ - (void)insertReactSubview:(id<RCTComponent>)subview atIndex:(NSInteger)atIndex {
+     // Our desired API is to pass up markers/overlays as children to the mapview component.
+     // This is where we intercept them and do the appropriate underlying mapview action.
++    // PATCH(souply): nil-guard. Under the Fabric interop layer a marker mount/remove
++    // storm can hand us a nil subview; the unchecked `[_reactSubviews insertObject:nil]`
++    // below throws NSInvalidArgumentException ("object cannot be nil") -> SIGABRT (crash
++    // log 2026-07-10, results map zoom/combo churn). Nothing to insert -> just bail.
++    if (subview == nil) { return; }
+     if ([subview isKindOfClass:[AIRMapMarker class]]) {
+         [self addAnnotation:(id <MKAnnotation>) subview];
+     } else if ([subview isKindOfClass:[AIRMapPolyline class]]) {
+@@ -135,7 +140,14 @@ const NSInteger AIRMapMaxZoomLevel = 20;
              [self insertReactSubview:(UIView *)childSubviews[i] atIndex:atIndex];
          }
      }
@@ -19,10 +31,16 @@ index 07a4638..0483573 100644
  #pragma clang diagnostic pop
  
 diff --git a/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m b/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
-index 8c17ac7..2520123 100644
+index 8c17ac7..924c3f3 100644
 --- a/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
 +++ b/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
-@@ -67,7 +67,13 @@ NSInteger const AIR_CALLOUT_OPEN_ZINDEX_BASELINE = 999;
+@@ -64,10 +64,19 @@ NSInteger const AIR_CALLOUT_OPEN_ZINDEX_BASELINE = 999;
+ }
+ 
+ - (void)insertReactSubview:(id<RCTComponent>)subview atIndex:(NSInteger)atIndex {
++    // PATCH(souply): nil-guard — the interop churn can hand us a nil subview,
++    // which throws "object cannot be nil" downstream (see AIRMap.m). Bail early.
++    if (subview == nil) { return; }
      if ([subview isKindOfClass:[AIRMapCallout class]]) {
          self.calloutView = (AIRMapCallout *)subview;
      } else {
@@ -37,7 +55,7 @@ index 8c17ac7..2520123 100644
      }
  }
  
-@@ -336,8 +342,14 @@ NSInteger const AIR_CALLOUT_OPEN_ZINDEX_BASELINE = 999;
+@@ -336,8 +345,14 @@ NSInteger const AIR_CALLOUT_OPEN_ZINDEX_BASELINE = 999;
          _reloadImageCancellationBlock();
          _reloadImageCancellationBlock = nil;
      }

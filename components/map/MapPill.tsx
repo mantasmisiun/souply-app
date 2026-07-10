@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Image, StyleSheet, Text, View, type ImageSourcePropType, type ImageURISource, type LayoutChangeEvent } from 'react-native';
+import { Image, Platform, StyleSheet, Text, View, type ImageSourcePropType, type ImageURISource, type LayoutChangeEvent } from 'react-native';
 import { Marker } from 'react-native-maps';
 import { captureRef } from 'react-native-view-shot';
 import { chainBadgeImage } from '../../utils/chainLogoAssets';
@@ -154,6 +154,7 @@ export function useBakedPills(specs: MapPillSpec[]): {
   // `done` (captured OR failed) drives the throttle window so it advances even on a failed capture.
   const [done, setDone] = useState<Record<string, true>>({});
   const onShot = useCallback((key: string, uri: string, w: number, h: number) => {
+    if (__DEV__) console.log(`[BAKERY] baked key=${key} → …${uri.slice(-14)} ${Math.round(w)}x${Math.round(h)}dp`);
     setUris((prev) => (prev[key]?.uri === uri ? prev : { ...prev, [key]: { uri, w, h } }));
     setDone((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
   }, []);
@@ -165,6 +166,7 @@ export function useBakedPills(specs: MapPillSpec[]): {
   const [, setRetryTick] = useState(0);
   const onFail = useCallback((key: string) => {
     const n = (failsRef.current[key] = (failsRef.current[key] ?? 0) + 1);
+    if (__DEV__) console.log(`[BAKERY] FAIL key=${key} attempt=${n}${n >= 3 ? ' (giving up)' : ' (retrying)'}`);
     if (n >= 3) setDone((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
     else setRetryTick((t) => t + 1); // re-render → the shot remounts with a fresh attempt key
   }, []);
@@ -207,13 +209,14 @@ export function MapPillMarker({
   zIndex = 1,
   anchorBaked = { x: 0.18, y: 0.5 },
   onPress,
+  debugId,
 }: {
   coordinate: { latitude: number; longitude: number };
   chainId: number;
   pillUri?: string;
-  /** Baked pill's dp size (from useBakedPills.sizeFor) — reserved for the
-   *  child-image marker path (needs the rebuilt client with the AIRMapMarker
-   *  clamp; see MapPillMarker body). */
+  /** Baked pill's dp size (from useBakedPills.sizeFor) — sizes the iOS
+   *  child-<Image> marker; pass it TOGETHER with pillUri (same bake) so the
+   *  child never renders a uri at a stale size. Unused on Android. */
   pillSize?: { w: number; h: number };
   dimmed?: boolean;
   zIndex?: number;
@@ -221,25 +224,96 @@ export function MapPillMarker({
    *  on the left (the badge-only fallback always centres). */
   anchorBaked?: { x: number; y: number };
   onPress?: () => void;
+  /** DEV diagnostics label (e.g. "797/c5") — enables the [PILL] pipeline logs. */
+  debugId?: string;
 }) {
-  void pillSize; // see prop doc — reserved for the post-rebuild child-image path
   const baked: ImageSourcePropType | null = pillUri ? { uri: pillUri } : null;
   const badge = chainBadgeImage(chainId);
   const source: ImageSourcePropType | null = baked ?? (badge != null ? badge : null);
-  // CHILD-LESS image-prop marker on ALL platforms. Marker CHILDREN route
-  // through AIRMapMarker.insertReactSubview, which is unclamped until the
-  // dev client is REBUILT with the extended react-native-maps patch — on the
-  // current build a child-image marker storm crashes at map load. A late-
-  // mounted image marker paints once the camera moves, which the results map
-  // guarantees by re-framing whenever the pin set changes.
+  // Android-only: re-track briefly when the shown image changes so Google Maps
+  // re-rasterises the swapped image (tracksViewChanges is honoured there and
+  // ignored by Apple Maps). Settling back to false keeps the static map cheap.
+  const [tracks, setTracks] = useState(true);
+  useEffect(() => {
+    setTracks(true);
+    const t = setTimeout(() => setTracks(false), 600);
+    return () => clearTimeout(t);
+  }, [pillUri]);
+
+  // ── [PILL] pipeline diagnostics (DEV, when debugId set) ──────────────────
+  // MOUNT/UNMOUNT proves whether React remounts the marker (it should NOT with
+  // a stable key); "uri→" proves the prop reached the marker; the child Image's
+  // LOADED/ERROR proves whether the new tmpfile decoded. LOADED + still
+  // invisible on screen = the native annotation view lost the update (interop).
+  const tail = (u?: string) => (u ? `…${u.slice(-14)}` : 'badge');
+  useEffect(() => {
+    if (!__DEV__ || !debugId) return;
+    console.log(`[PILL ${debugId}] MOUNT (uri=${tail(pillUri)} z=${zIndex})`);
+    return () => console.log(`[PILL ${debugId}] UNMOUNT`);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  const prevUriRef = useRef<string | undefined>(pillUri);
+  const prevZRef = useRef<number>(zIndex);
+  useEffect(() => {
+    if (!__DEV__ || !debugId) return;
+    if (prevUriRef.current !== pillUri) {
+      console.log(`[PILL ${debugId}] uri ${tail(prevUriRef.current)} → ${tail(pillUri)} size=${pillSize ? `${Math.round(pillSize.w)}x${Math.round(pillSize.h)}` : 'none'} dimmed=${dimmed} z=${zIndex}`);
+      prevUriRef.current = pillUri;
+    }
+    if (prevZRef.current !== zIndex) {
+      console.log(`[PILL ${debugId}] zIndex ${prevZRef.current} → ${zIndex}`);
+      prevZRef.current = zIndex;
+    }
+  });
+
   if (source == null) return null;
+
+  // iOS: CHILD-<Image> marker (the AIRMapMarker child-insert clamp is verified
+  // in the built client — the crash log's signature moved past it). The pill is
+  // a plain RN Image child, so an image change is a NORMAL view update:
+  //   • repaints reliably (native `image`-prop swaps via setImageSrc silently
+  //     BLANK on Apple Maps — the "pill in view but invisible" bug), and
+  //   • needs NO marker remount (remount batches are the interop nil-insert
+  //     crash/lost-marker surface).
+  // The marker itself stays mounted with a stable key; only its child updates.
+  // pillSize (dp, captured with the uri by the bakery) sizes the child.
+  if (Platform.OS === 'ios') {
+    const usePill = baked != null && pillSize != null;
+    const childSource = usePill ? baked! : (badge ?? baked!);
+    const w = usePill ? pillSize!.w : 30;
+    const h = usePill ? pillSize!.h : 30;
+    return (
+      <Marker
+        coordinate={coordinate}
+        anchor={usePill ? anchorBaked : { x: 0.5, y: 0.5 }}
+        opacity={dimmed ? 0.4 : 1}
+        tracksViewChanges={false}
+        zIndex={zIndex}
+        onPress={__DEV__ && debugId
+          ? () => { console.log(`[PILL ${debugId}] TAP`); onPress?.(); }
+          : onPress}
+      >
+        <Image
+          source={childSource}
+          style={{ width: w, height: h }}
+          resizeMode="contain"
+          onLoad={__DEV__ && debugId ? () => console.log(`[PILL ${debugId}] child Image LOADED ${tail(pillUri)}`) : undefined}
+          onError={__DEV__ && debugId ? (e) => console.log(`[PILL ${debugId}] child Image ERROR ${tail(pillUri)}:`, e.nativeEvent?.error) : undefined}
+          onLayout={__DEV__ && debugId ? (e) => console.log(`[PILL ${debugId}] child layout ${Math.round(e.nativeEvent.layout.width)}x${Math.round(e.nativeEvent.layout.height)}`) : undefined}
+        />
+      </Marker>
+    );
+  }
+
+  // Android: CHILD-LESS image-prop marker — child images don't rasterise inside
+  // custom marker views there (new arch, #5877); the image prop never clips.
   return (
     <Marker
       coordinate={coordinate}
       anchor={baked ? anchorBaked : { x: 0.5, y: 0.5 }}
       image={source}
       opacity={dimmed ? 0.4 : 1}
-      tracksViewChanges={false}
+      tracksViewChanges={tracks}
       zIndex={zIndex}
       onPress={onPress}
     />
@@ -333,13 +407,21 @@ export function MapClusterMarker({ coordinate, pillUri, fallback, zIndex = 1, on
   onPress?: () => void;
 }) {
   const source: number | ImageURISource | null = pillUri ? { uri: pillUri } : fallback ?? null;
+  // Re-track briefly on image change so the async-decoded count bubble actually
+  // paints (same tracksViewChanges gotcha as MapPillMarker).
+  const [tracks, setTracks] = useState(true);
+  useEffect(() => {
+    setTracks(true);
+    const t = setTimeout(() => setTracks(false), 600);
+    return () => clearTimeout(t);
+  }, [pillUri]);
   if (source == null) return null;
   return (
     <Marker
       coordinate={coordinate}
       anchor={{ x: 0.5, y: 0.5 }}
       image={source}
-      tracksViewChanges={false}
+      tracksViewChanges={tracks}
       zIndex={zIndex}
       onPress={onPress}
     />

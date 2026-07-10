@@ -1,13 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, Image, Platform, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
-import MapView, { Marker, Polyline } from 'react-native-maps';
+import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
+import { useSharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Asset } from 'expo-asset';
 import { Ionicons } from '@expo/vector-icons';
 import { spacing, radius, elevation, iconSize, useResolvedScheme, type AppTheme } from '../../constants/theme';
 import { chainBrandColorById } from '../../utils/chainBrandName';
-import { chainPinImage } from '../../utils/chainLogoAssets';
-import { useBakedPills, MapPillMarker, type MapPillSpec, type MapPillVariant } from '../map/MapPill';
+import { chainPinImage, chainBadgeImage } from '../../utils/chainLogoAssets';
+import { useBakedPills, useBakedClusters, MapPillMarker, MapClusterMarker, type MapPillSpec, type MapPillVariant, type MapClusterSpec } from '../map/MapPill';
+import { MapPillOverlay, type OverlayPillSpec } from '../map/MapPillOverlay';
 import { DARK_MAP_STYLE } from '../../constants/darkMapStyle';
 import { formatEuro } from '../../utils/formatCurrency';
 import { type StoreLite } from '../../utils/candidatePool';
@@ -29,6 +31,17 @@ export type MapPin = {
 type LatLng = { latitude: number; longitude: number };
 
 const SCREEN_H = Dimensions.get('window').height;
+
+// The un-priced directory layer re-buckets its markers on every pan/zoom, and
+// that marker mount/unmount CHURN feeds the Fabric interop a nil subview ->
+// `-[AIRMap insertReactSubview:]: object cannot be nil` -> SIGABRT. That's a
+// NATIVE bug: the fix is the nil-guard already added to
+// patches/react-native-maps+1.20.1.patch, which only takes effect after the
+// next native build. Until this device is rebuilt with that patch, the
+// directory stays OFF so the map is crash-free (the priced pills are a fixed,
+// non-churning set and are unaffected). Flip to false once the patched build is
+// installed.
+const HIDE_DIRECTORY_UNTIL_NILGUARD_BUILD = true;
 
 type Props = {
     pins: MapPin[];
@@ -96,36 +109,6 @@ const specForPin = (pin: MapPin): MapPillSpec | null =>
               variant: pinVariant(pin),
           };
 
-/**
- * A clustered group of un-priced directory stores. The count is a text View
- * marker → it needs a brief tracksViewChanges window to snapshot (same Fabric
- * caveat as the price pill); it remounts whenever the grid re-buckets, so each
- * fresh bubble paints once then freezes. Tap → zoom into the cluster.
- */
-function ClusterBubble({ cluster, styles, onPress }: {
-    cluster: Cluster; styles: Styles; onPress: (c: Cluster) => void;
-}) {
-    const [tracks, setTracks] = useState(true);
-    useEffect(() => {
-        setTracks(true);
-        const t = setTimeout(() => setTracks(false), 350);
-        return () => clearTimeout(t);
-    }, [cluster.count]);
-    const big = cluster.count >= 25;
-    return (
-        <Marker
-            coordinate={{ latitude: cluster.latitude, longitude: cluster.longitude }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={tracks}
-            zIndex={1}
-            onPress={() => onPress(cluster)}
-        >
-            <View style={[styles.cluster, big && styles.clusterBig]}>
-                <Text style={styles.clusterText}>{cluster.count}</Text>
-            </View>
-        </Marker>
-    );
-}
 
 /**
  * A single un-priced directory store — just the logo (no pill). Reads as "store
@@ -143,51 +126,39 @@ function DirectoryPin({ store, styles, pricing, onPress }: {
     const logo = chainPinImage(store.chainId, false);
     const tap = () => onPress(store.id);
 
-    const [tracks, setTracks] = useState(Platform.OS === 'ios');
-    useEffect(() => {
-        if (Platform.OS !== 'ios') return;
-        const t = setTimeout(() => setTracks(false), 400);
-        return () => clearTimeout(t);
-    }, []);
-
-    if (Platform.OS === 'ios') {
+    // CHILDLESS native image marker on BOTH platforms. iOS previously wrapped a
+    // larger logo in a child <View> for tappability, but child-View <Marker>s
+    // churn through the AIRMapMarker interop on every zoom re-cluster and
+    // destabilise the whole map's marker rendering — the confirmed cause of the
+    // priced pills vanishing (A/B: hiding this layer stopped it). A native
+    // `image` marker never inserts a child subview. Static (require'd) assets
+    // decode synchronously, so tracksViewChanges can stay false. The no-logo
+    // fallback is the only remaining child-View — rare, negligible churn.
+    if (logo != null) {
         return (
             <Marker
                 coordinate={{ latitude: store.latitude, longitude: store.longitude }}
                 anchor={{ x: 0.5, y: 0.5 }}
-                tracksViewChanges={tracks}
-                opacity={pricing ? 0.45 : 1}
+                image={logo}
+                opacity={pricing ? 0.45 : Platform.OS === 'ios' ? 1 : 0.92}
+                tracksViewChanges={false}
                 zIndex={1}
                 onPress={tap}
-            >
-                <View style={styles.dirHit}>
-                    {logo != null
-                        ? <Image source={logo} style={styles.dirLogo} resizeMode="contain" />
-                        : (
-                            <View style={[styles.fallbackChip, { backgroundColor: chainBrandColorById(store.chainId) }]}>
-                                <Text style={styles.fallbackText}>{(store.chainName[0] ?? '?').toUpperCase()}</Text>
-                            </View>
-                        )}
-                </View>
-            </Marker>
+            />
         );
     }
-
     return (
         <Marker
             coordinate={{ latitude: store.latitude, longitude: store.longitude }}
             anchor={{ x: 0.5, y: 0.5 }}
-            image={logo ?? undefined}
-            opacity={pricing ? 0.45 : 0.92}
+            opacity={pricing ? 0.45 : 1}
             tracksViewChanges={false}
             zIndex={1}
             onPress={tap}
         >
-            {logo == null ? (
-                <View style={[styles.fallbackChip, { backgroundColor: chainBrandColorById(store.chainId) }]}>
-                    <Text style={styles.fallbackText}>{(store.chainName[0] ?? '?').toUpperCase()}</Text>
-                </View>
-            ) : undefined}
+            <View style={[styles.fallbackChip, { backgroundColor: chainBrandColorById(store.chainId) }]}>
+                <Text style={styles.fallbackText}>{(store.chainName[0] ?? '?').toUpperCase()}</Text>
+            </View>
         </Marker>
     );
 }
@@ -327,6 +298,14 @@ export default function StoreResultsMap({
     // Current map region drives the directory grid clustering. Seeded from the
     // initial fit; updated when the user pans/zooms (after the gesture settles).
     const [region, setRegion] = useState<GridRegion>(initialRegion);
+
+    // iOS pill overlay plumbing: the LIVE region (onRegionChange fires
+    // continuously during gestures) + the map's px size, as shared values so
+    // the overlay pills reposition on the UI thread with no React re-render.
+    const liveRegion = useSharedValue<Region>(initialRegion as Region);
+    const mapW = useSharedValue(0);
+    const mapH = useSharedValue(0);
+    const onRegionLive = useCallback((r: Region) => { liveRegion.value = r; }, [liveRegion]);
     // Baked price-pill images, produced off-screen by the shared MapPill baker.
 
     // Directory layer: every un-priced store, bucketed into clusters/singles for
@@ -344,6 +323,47 @@ export default function StoreResultsMap({
         () => clusterByGrid(directoryPts, region),
         [directoryPts, region],
     );
+
+    // Cluster count bubbles are BAKED to images (like the pills) instead of a
+    // child-View <Marker> — the child-View version was the crash/disappear churn.
+    const clusterSpecs = useMemo<MapClusterSpec[]>(
+        () => HIDE_DIRECTORY_UNTIL_NILGUARD_BUILD ? [] : clusters.map((c) => ({ key: c.id, count: c.count, big: c.count >= 25 })),
+        [clusters],
+    );
+    const { uriFor: clusterUriFor, bakery: clusterBakery } = useBakedClusters(clusterSpecs);
+
+    // ── DIAGNOSTICS (temporary) ──────────────────────────────────────────────
+    // [PINS] — the pin set's visual identity (spec key = storeId|price|variant).
+    // Fires on every option switch / selection so we can line pill visibility up
+    // against exactly which pins RE-BAKED (their price or variant changed).
+    useEffect(() => {
+        if (!__DEV__) return;
+        console.log('[PINS]', pins.map(p => specForPin(p)?.key ?? `${p.storeId}|no-price`).join(' | '));
+    }, [pins]);
+    // [ROUTE] — polyline/endpoint mounts mutate the SAME native children array
+    // as the pill markers; log them to correlate with pill losses.
+    useEffect(() => {
+        if (!__DEV__) return;
+        console.log(`[ROUTE] polyline=${routeCoords ? routeCoords.length : 0}pts endpoints=${routeEndpoints ? 'MOUNTED' : 'none'}`);
+    }, [routeCoords, routeEndpoints]);
+
+    // How many child-View directory markers render per region (the iOS churn
+    // suspect), and whether the priced pins actually fall inside the settled
+    // viewport (disappearing-pills check).
+    useEffect(() => {
+        if (!__DEV__) return;
+        console.log(`[MapDiag] directory markers: clusters=${clusters.length} singles=${singles.length} (child-View <Marker>s on iOS)`);
+    }, [clusters.length, singles.length]);
+
+    const onRegionSettle = useCallback((r: GridRegion) => {
+        if (__DEV__) {
+            const latPad = r.latitudeDelta / 2, lngPad = r.longitudeDelta / 2;
+            const inBox = pins.filter(p =>
+                Math.abs(p.latitude - r.latitude) <= latPad && Math.abs(p.longitude - r.longitude) <= lngPad).length;
+            console.log(`[MapDiag] region settle center=${r.latitude.toFixed(4)},${r.longitude.toFixed(4)} Δ=${r.latitudeDelta.toFixed(4)} | pricedPins=${pins.length} insideViewport=${inBox} | dirToCluster=${directoryPts.length}`);
+        }
+        setRegion(r);
+    }, [pins, directoryPts.length]);
 
     // Report the nearest un-priced stores in view (capped at the batch limit) so
     // the parent can offer a "price this area" button. Keyed so we only emit on
@@ -449,7 +469,9 @@ export default function StoreResultsMap({
                 initialRegion={initialRegion}
                 onMapReady={centerDefault}
                 onPress={handleMapPress}
-                onRegionChangeComplete={setRegion}
+                onLayout={(e) => { mapW.value = e.nativeEvent.layout.width; mapH.value = e.nativeEvent.layout.height; }}
+                onRegionChange={Platform.OS === 'ios' ? onRegionLive : undefined}
+                onRegionChangeComplete={onRegionSettle}
                 customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
                 rotateEnabled={false}
                 pitchEnabled={false}
@@ -469,11 +491,18 @@ export default function StoreResultsMap({
                         lineCap="round"
                     />
                 )}
-                {/* Directory layer (un-priced, below the priced pills + user dot). */}
-                {clusters.map(c => (
-                    <ClusterBubble key={`c-${c.id}`} cluster={c} styles={styles} onPress={onClusterPress} />
+                {/* Directory layer (un-priced) — OFF until the nil-guard build (its
+                    marker churn crashes AIRMap on this binary; see the flag comment). */}
+                {!HIDE_DIRECTORY_UNTIL_NILGUARD_BUILD && clusters.map(c => (
+                    <MapClusterMarker
+                        key={`c-${c.id}`}
+                        coordinate={{ latitude: c.latitude, longitude: c.longitude }}
+                        pillUri={clusterUriFor(c.id)}
+                        zIndex={1}
+                        onPress={() => onClusterPress(c)}
+                    />
                 ))}
-                {singles.map(s => (
+                {!HIDE_DIRECTORY_UNTIL_NILGUARD_BUILD && singles.map(s => (
                     <DirectoryPin
                         key={`d-${s.id}`}
                         store={s}
@@ -492,36 +521,26 @@ export default function StoreResultsMap({
                         <Marker coordinate={routeEndpoints.to} pinColor={colors.primary} zIndex={5} />
                     </>
                 )}
-                {pinsByZ.map(pin => {
+                {/* ANDROID ONLY: native image-prop pill markers (Google Maps renders +
+                    stacks them correctly; remount keys are safe there). iOS pills render
+                    in the PROJECTED OVERLAY below the map — instrumented runs proved the
+                    legacy AIRMapMarker under the Fabric interop drops child-image updates
+                    and ignores zPosition, so native markers can't carry the pills on iOS. */}
+                {Platform.OS !== 'ios' && pinsByZ.map(pin => {
                     const spec = specForPin(pin);
                     const zRank = zRankMap.get(pin.storeId) ?? 0;
                     const fresh = spec ? sizeFor(spec.key) : undefined; // {uri,w,h} baked together
-                    // While a variant change re-bakes (selected↔neutral), keep showing the
-                    // LAST baked pill (uri AND size) instead of dropping to the bare badge.
-                    if (fresh) lastPillUriRef.current.set(pin.storeId, { uri: fresh.uri, w: fresh.w, h: fresh.h });
-                    const shown = fresh ?? (Platform.OS === 'ios' ? lastPillUriRef.current.get(pin.storeId) : undefined);
-                    const uri = shown?.uri;
+                    const uri = fresh?.uri;
                     return (
                         <MapPillMarker
-                            // iOS: key = storeId + the exact IMAGE shown. An image change must
-                            // REMOUNT its marker — an in-place `image` swap on a mounted marker
-                            // (tracksViewChanges=false) silently fails to refresh, which left
-                            // pills invisible/stale after option switches. What the key must
-                            // NOT contain is the z-RANK: rank shuffles on every selection, and
-                            // an all-pins remount + reorder is the interop insert/remove storm
-                            // that threw AIRMap's NSRangeException. So: stable order (storeId),
-                            // zIndex for stacking, remounts only for the 1-3 pins whose baked
-                            // image actually changed.
-                            // Android: remount on z-rank / baked-image change — insertion order
-                            // is the only stacking control there, and in-place image swaps
+                            // Remount on z-rank / baked-image change — insertion order is the
+                            // only stacking control on Android, and in-place image swaps
                             // rasterise unreliably (see MapPill notes).
-                            key={Platform.OS === 'ios'
-                                ? `s-${pin.storeId}-${uri ?? 'badge'}`
-                                : `${pin.storeId}-${zRank}-${spec ? spec.key : 'np'}-${uri ? 'p' : 'b'}`}
+                            key={`${pin.storeId}-${zRank}-${spec ? spec.key : 'np'}-${uri ? 'p' : 'b'}`}
                             coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
                             chainId={pin.chainId}
                             pillUri={uri}
-                            pillSize={shown ? { w: shown.w, h: shown.h } : undefined}
+                            pillSize={fresh ? { w: fresh.w, h: fresh.h } : undefined}
                             dimmed={anySelected && !pin.active}
                             zIndex={zRank * 2}
                             anchorBaked={{ x: 0.16, y: 0.5 }}
@@ -531,9 +550,46 @@ export default function StoreResultsMap({
                 })}
             </MapView>
 
+            {/* iOS: the pills as a PROJECTED REACT OVERLAY — plain views above the map,
+                positioned by Mercator math from the live region. Image updates, taps,
+                dimming and stacking are all ordinary RN behaviour (see MapPillOverlay). */}
+            {Platform.OS === 'ios' && (
+                <MapPillOverlay
+                    pills={pinsByZ.flatMap<OverlayPillSpec>(pin => {
+                        const spec = specForPin(pin);
+                        const zRank = zRankMap.get(pin.storeId) ?? 0;
+                        const fresh = spec ? sizeFor(spec.key) : undefined;
+                        // While a variant change re-bakes, keep showing the LAST baked
+                        // pill (uri AND size together) instead of flashing the badge.
+                        if (fresh) lastPillUriRef.current.set(pin.storeId, { uri: fresh.uri, w: fresh.w, h: fresh.h });
+                        const shown = fresh ?? lastPillUriRef.current.get(pin.storeId);
+                        const badge = chainBadgeImage(pin.chainId);
+                        const source = shown ? { uri: shown.uri } : badge;
+                        if (source == null) return [];
+                        return [{
+                            id: pin.storeId,
+                            latitude: pin.latitude,
+                            longitude: pin.longitude,
+                            source,
+                            w: shown?.w ?? 30,
+                            h: shown?.h ?? 30,
+                            isPill: shown != null,
+                            dimmed: anySelected && !pin.active,
+                            z: zRank * 2,
+                            onPress: () => handleStoreTap(pin.storeId),
+                            debugId: `${pin.storeId}/c${pin.chainId}`,
+                        }];
+                    })}
+                    region={liveRegion}
+                    mapW={mapW}
+                    mapH={mapH}
+                />
+            )}
+
             {/* OFF-SCREEN price-pill bakery (shared MapPill baker) — snapshots each priced pin's
                 (logo + price) row to an image the marker can use natively. */}
             {bakery}
+            {clusterBakery}
 
             {/* Floating controls — top-right, clear of the status bar. */}
             {/* Same liquid-glass treatment as the store-count switcher up top

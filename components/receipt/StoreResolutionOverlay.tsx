@@ -6,9 +6,11 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 import { GlassIconButton } from '../GlassIconButton';
 import { MapPickerScaffold } from '../map/MapPickerScaffold';
 import {
-    useBakedPills, MapPillMarker,
-    type MapPillSpec,
+    useBakedPills, useBakedClusters, MapPillMarker, MapClusterMarker,
+    type MapPillSpec, type MapClusterSpec,
 } from '../map/MapPill';
+import { clusterByGrid, type Cluster, type GridRegion } from '../../utils/mapClustering';
+import { chainBadgeImage } from '../../utils/chainLogoAssets';
 import { geocodeAddress } from '../../utils/nominatim';
 import { tryGpsCoords, VILNIUS_FALLBACK } from '../../utils/location';
 import { getStoreResolutionRequest, completeStoreResolution } from '../../utils/storeResolution';
@@ -92,6 +94,11 @@ export function StoreResolutionOverlay() {
         latitudeDelta: DELTA,
         longitudeDelta: DELTA,
     };
+    // Current viewport drives the grid clustering — seeded from the initial fit,
+    // updated when the camera settles. The react-native-maps insert-index clamp
+    // (now in the rebuilt client) makes the mid-list marker inserts that
+    // clustering produces on zoom/pan crash-safe.
+    const [region, setRegion] = useState<GridRegion>(initialRegion);
 
     // Fetch the chain's stores + centre the map on the OCR address (else GPS/Vilnius).
     useEffect(() => {
@@ -156,9 +163,26 @@ export function StoreResolutionOverlay() {
         return () => { clearTimeout(t); clearTimeout(c); };
     }, []);
 
-    // The marker set is fixed (all stores, mounted once) so region changes are irrelevant to
-    // it; onRegionChangeComplete is a no-op. Nothing here ever adds or removes a marker.
-    const handleRegionChange = useCallback((_r: Region) => { /* fixed set — see the block comment above */ }, []);
+    // Re-cluster when the camera settles; ignore sub-1e-4 drift so an idle map
+    // (or an animation's tail) doesn't churn the marker set.
+    const handleRegionChange = useCallback((r: Region) => {
+        setRegion((prev) =>
+            Math.abs(prev.latitude - r.latitude) < 1e-4 &&
+            Math.abs(prev.longitude - r.longitude) < 1e-4 &&
+            Math.abs(prev.latitudeDelta - r.latitudeDelta) < 1e-4
+                ? prev
+                : r);
+    }, []);
+
+    // Zoom one step into a tapped cluster (thirds the visible span, recentred).
+    const onClusterPress = useCallback((c: Cluster) => {
+        mapRef.current?.animateToRegion({
+            latitude: c.latitude,
+            longitude: c.longitude,
+            latitudeDelta: Math.max(region.latitudeDelta / 3, 0.006),
+            longitudeDelta: Math.max(region.longitudeDelta / 3, 0.006),
+        }, 350);
+    }, [region.latitudeDelta, region.longitudeDelta]);
 
     const onSearch = useCallback(async () => {
         const q = searchText.trim();
@@ -181,24 +205,36 @@ export function StoreResolutionOverlay() {
     }, [stores, selectedId]);
 
     const selectedStore = useMemo(() => stores.find((s) => s.id === selectedId) ?? null, [stores, selectedId]);
-    const storeById = useMemo(() => new Map(stores.map((s) => [s.id, s])), [stores]);
 
-    // Bake an ADDRESS PILL (logo + street + number) for every store, plus a 'selected' variant
-    // for the pick. Markers are then rendered in bake-COMPLETION order (bakedKeys) so the on-map
-    // list only ever GROWS AT THE END — an append-only insert can't hit the out-of-bounds
-    // AIRMap crash, and mounting each marker already holding its pill means no badge→pill
-    // in-place swap (no "rectangle"). No clustering (dense areas overlap until the built patch).
+    // Grid-cluster the stores for the current viewport: dense areas collapse to a
+    // count bubble when zoomed out and resolve into individual address pills as the
+    // user zooms in (clusterByGrid stops clustering below its city-district delta).
+    const { clusters, singles } = useMemo(() => {
+        const points = stores
+            .filter((s) => Number.isFinite(s.latitude) && Number.isFinite(s.longitude))
+            .map((s) => ({ ...s, id: s.id, latitude: s.latitude, longitude: s.longitude }));
+        return clusterByGrid(points, region);
+    }, [stores, region]);
+
+    // Bake an ADDRESS PILL (logo + street + number) for each VISIBLE single, plus a
+    // 'selected' variant for the pick; and a count bubble for each cluster.
     const pillSpecs = useMemo<MapPillSpec[]>(() => {
         if (!req) return [];
-        const specs: MapPillSpec[] = stores.map((s) => ({
+        const specs: MapPillSpec[] = singles.map((s) => ({
             key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral',
         }));
         if (selectedStore) {
             specs.push({ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' });
         }
         return specs;
-    }, [stores, selectedStore, req]);
-    const { uriFor, sizeFor, bakedKeys, bakery } = useBakedPills(pillSpecs);
+    }, [singles, selectedStore, req]);
+    const { uriFor, sizeFor, bakery } = useBakedPills(pillSpecs);
+
+    const clusterSpecs = useMemo<MapClusterSpec[]>(
+        () => clusters.map((c) => ({ key: c.id, count: c.count, big: c.count >= 20 })),
+        [clusters],
+    );
+    const { uriFor: clusterUriFor, bakery: clusterBakery } = useBakedClusters(clusterSpecs);
 
     if (!req) return null;
 
@@ -230,27 +266,32 @@ export function StoreResolutionOverlay() {
                 onConfirm={onConfirm}
                 mapChildren={
                     !centered ? null : <>
-                        {/* Address pills, rendered in BAKE-COMPLETION order (append-only) so the
-                            marker list only grows at the end — no mid-list insert (crash) and no
-                            in-place image swap (rectangle). Each mounts once already holding its
-                            baked pill. The selected store's pill is drawn on top. */}
-                        {bakedKeys.map((key) => {
-                            if (!key.endsWith('|n')) return null;
-                            const id = Number(key.slice(0, -2));
-                            const s = storeById.get(id);
-                            if (!s) return null;
-                            return (
-                                <MapPillMarker
-                                    key={`s-${id}`}
-                                    coordinate={{ latitude: s.latitude, longitude: s.longitude }}
-                                    chainId={req.chainId}
-                                    pillUri={uriFor(key)}
-                                    pillSize={sizeFor(key)}
-                                    zIndex={2}
-                                    onPress={() => setSelectedId(id)}
-                                />
-                            );
-                        })}
+                        {/* Count bubbles for clustered areas (stable grid-cell key → the marker
+                            mounts once and swaps its baked image in place; a chain-badge fallback
+                            keeps it from flashing null, the AIRMap insert crash surface). */}
+                        {clusters.map((c) => (
+                            <MapClusterMarker
+                                key={`c-${c.id}`}
+                                coordinate={{ latitude: c.latitude, longitude: c.longitude }}
+                                pillUri={clusterUriFor(c.id)}
+                                fallback={chainBadgeImage(req.chainId) ?? undefined}
+                                zIndex={3}
+                                onPress={() => onClusterPress(c)}
+                            />
+                        ))}
+                        {/* Address pills for the individual (unclustered) stores. Stable storeId
+                            key + the CGSizeZero decode patch → badge→pill swaps in place. */}
+                        {singles.map((s) => (
+                            <MapPillMarker
+                                key={`s-${s.id}`}
+                                coordinate={{ latitude: s.latitude, longitude: s.longitude }}
+                                chainId={req.chainId}
+                                pillUri={uriFor(`${s.id}|n`)}
+                                pillSize={sizeFor(`${s.id}|n`)}
+                                zIndex={2}
+                                onPress={() => setSelectedId(s.id)}
+                            />
+                        ))}
                         {selectedStore && (() => {
                             const uri = uriFor(`${selectedStore.id}|s`);
                             if (!uri) return null;
@@ -269,9 +310,11 @@ export function StoreResolutionOverlay() {
                     </>
                 }
             />
-            {/* Off-screen bakery — must live OUTSIDE the map (normal Views, not Markers).
-                Gated on mapReady so the view-shot capture burst doesn't run during map init. */}
+            {/* Off-screen bakeries (pills + cluster bubbles) — must live OUTSIDE the map
+                (normal Views, not Markers). Gated on mapReady so the view-shot capture
+                burst doesn't run during map init. */}
             {mapReady && bakery}
+            {mapReady && clusterBakery}
         </View>
     );
 }
