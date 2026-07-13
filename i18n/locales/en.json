@@ -710,6 +710,15 @@
       "uploadCamera": "Take photo",
       "previewToggle": "Preview — don't save",
       "previewHint": "OCR and parser output is shown, but the receipt isn't stored."
+    },
+    "liveScan": {
+      "title": "Scanning receipt",
+      "processing": "Processing",
+      "matching": "{{done}} / {{total}} products matched",
+      "needsInput": "Needs your input",
+      "done": "Ready",
+      "failed": "Failed",
+      "tapToOpen": "Tap to open"
     }
   },
   "basketTab": {
@@ -1240,7 +1249,9 @@
     "addPhoto": "Add photo",
     "send": "Send",
     "comboDiscount": "Bundle discount",
-    "reverifyBadge": "Reconfirm match"
+    "reverifyBadge": "Reconfirm match",
+    "scanBusyTitle": "A scan is already running",
+    "scanBusyBody": "Wait for the current receipt to finish processing, then try again."
   },
   "product": {
     "noDataForPeriod": "No data for the selected period",

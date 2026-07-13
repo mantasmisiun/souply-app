@@ -1,11 +1,8 @@
 import {
     Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { usePreventRemove,
-    useNavigation,
-    useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect } from "@react-navigation/native";
 import { useTranslation } from "react-i18next";
-import * as Clipboard from "expo-clipboard";
 import * as Haptics from "expo-haptics";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";
@@ -61,256 +58,54 @@ import {
     markRegionsVersionCurrent,
     REGIONS_VERSION,
 } from "../services/regionsRehydrationService";
-import { DEV_MODE, CONFIDENCE_BAND_DISPLAY, PRODUCT_REOCR_ENABLED } from "../constants/flags";
+import { DEV_MODE, CONFIDENCE_BAND_DISPLAY } from "../constants/flags";
 import { useTheme, type AppTheme } from "../constants/theme";
 import {
     useReceiptCreateContext,
     useReceiptPickerState,
 } from "../state/basketState";
-import {
-    clearReceiptDraft,
-    saveReceiptDraft,
-} from "../state/receiptDraft";
 import { useNetworkStatus } from "../state/networkStatus";
-import { useReceiptQueueStore } from "../state/receiptQueueStore";
-import { recordStoreVisit } from "../utils/locationStorage";
 import { useLevelStore } from "../state/levelStore";
 import {
     fetchWithTimeout,
     TIMEOUT_FAST_MS,
-    TIMEOUT_HEAVY_MS,
     TIMEOUT_STANDARD_MS,
 } from "../utils/fetchWithTimeout";
-import {
-    parseIkiHeaderOnly,
-    type IkiFooter,
-    type IkiHeader,
-    type IkiProduct,
-} from "@shared/parsers/ikiParser";
-import { RECOGNITION, type ItemConfidence } from "@shared/recognitionConfig";
+import { type ItemConfidence } from "@shared/recognitionConfig";
 import ConfidenceBadge from "../components/ConfidenceBadge";
 import {
-    parseMaximaHeaderOnly,
-    type MaximaFooter,
-    type MaximaHeader,
-    type MaximaProduct,
-} from "@shared/parsers/maximaParser";
-import {
-    parseLidlHeaderOnly,
-    type LidlFooter,
-    type LidlHeader,
-    type LidlProduct,
-} from "@shared/parsers/lidlParser";
-import {
-    parseNorfaHeaderOnly,
-    type NorfaFooter,
-    type NorfaHeader,
-    type NorfaProduct,
-} from "@shared/parsers/norfaParser";
-import {
-    parseRimiHeaderOnly,
     LabeledRegion,
     Region,
-    RimiFooter,
-    RimiHeader,
-    RimiProduct
 } from "@shared/parsers/rimiParser";
-import { parseProductName } from "@shared/parsers/productNameParser";
-import { redactReceiptText, detectCardMaskBands, clampMaskBandsToProtected, wordCentreInMaskBand, looksLikePiiText, type MaskBand } from "@shared/parsers/cardMaskDetection";
-import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
-import { requestStoreResolution, completeStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
-import { ocrReceiptPages } from "../utils/receiptOcrPipeline";
-import { detectReceiptChain, parseChainReceipt } from "../utils/receiptScanFlow";
+import { clampMaskBandsToProtected, type MaskBand } from "@shared/parsers/cardMaskDetection";
+import { completeStoreResolution } from "../utils/storeResolution";
 import { StoreResolutionOverlay } from "../components/receipt/StoreResolutionOverlay";
+import {
+    consumeSession,
+    respondSessionInput,
+    attachableSessionId,
+    sameUris,
+    useScanSession,
+} from "../state/scanSession";
+import {
+    startScanSession,
+    retryScanPost,
+    retryScanUpload,
+} from "../services/scanSessionService";
+import {
+    CHAIN_NAMES,
+    buildParsedData,
+    type FooterData,
+    type HeaderData,
+    type ProductLine,
+    type ProductMatchOption,
+} from "../utils/receiptParsedData";
 import { launchDocumentScanner } from "../utils/launchDocumentScanner";
 import { MaterialProgress } from "../components/MaterialProgress";
 import { useProfileStore } from '../state/profileStore';
 
 // Parser options (fragment-merger flags etc.) live in utils/receiptScanFlow
 // (SCAN_PARSER_OPTS) — the single source of truth shared with the dev batch.
-
-/**
- * DEV: paste-friendly dump of what a chain parser produced from the OCR text.
- * Pair with the "DEDUPED RAW TEXT" block above it to review parser accuracy —
- * copy both blocks out of the Metro log when a scanned receipt parses wrong.
- * Defensive field access (`?? '-'`) so it never throws on a partial parse.
- */
-function logParsedReview(chain: string, parsed: any): void {
-  try {
-    const h = parsed?.header ?? {};
-    const f = parsed?.footer ?? {};
-    const products: any[] = Array.isArray(parsed?.products) ? parsed.products : [];
-    const rows = products.map((p, i) =>
-      `  ${String(i + 1).padStart(2, ' ')}. ${p?.name ?? '?'}` +
-      ` | price=${p?.price ?? '-'} qty=${p?.quantity ?? '-'} promo=${p?.promoPrice ?? '-'}` +
-      `${p?.brandName ? ` brand=${p.brandName}` : ''}` +
-      `${p?.isWeighable ? ' [kg]' : ''}` +
-      `${p?.categoryId != null ? ` cat=${p.categoryId}` : ''}`,
-    );
-    console.log(
-      `=== PARSED REVIEW [${chain}] (${products.length} products) ===\n` +
-      `header: store=${h.storeName ?? '-'} | code=${h.storeCode ?? '-'} | addr=${h.storeAddress ?? '-'} | chainId=${h.chainId ?? '-'}\n` +
-      `footer: total=${f.total ?? '-'} | date=${f.date ?? '-'} | receiptNo=${f.receiptNo ?? '-'} | savings=${f.totalSavings ?? '-'}\n` +
-      `${rows.join('\n')}\n` +
-      `=== END PARSED [${chain}] ===`,
-    );
-  } catch (e) {
-    console.log(`[PARSED REVIEW ${chain}] log failed`, e);
-  }
-}
-
-// chainId → display name, for the chain-match gate copy.
-const CHAIN_NAMES: Record<number, string> = { 1: 'Maxima', 2: 'Rimi', 3: 'Iki', 4: 'Norfa', 5: 'Lidl' };
-
-interface ProductMatchOption {
-  storeProductId: number;
-  productId: number;
-  categoryId: number;
-  /** Server-joined category label (Phase 0d JOIN Category, server-side).
-   *  Optional because pre-redesign receipts may not have it until the
-   *  lazy-hydration GET handler backfills them. */
-  categoryName?: string | null;
-  /** L2 ancestor of categoryName — what the breakdown buckets on. Server
-   *  CASE returns null for L1 categories. */
-  categoryL2Name?: string | null;
-  name: string;
-  imageUrl: string | null;
-  amount: number | null;
-  unit: string | null;
-  confidence: number;
-  price?: number | null;
-  promoPrice?: number | null;
-}
-
-interface ProductLine {
-  name: string;
-  matchedName: string | null;
-  storeProductId: number | null;
-  storeProductImageUrl: string | null;
-  matchConfidence: number | null;
-  matchConfirmed: boolean;
-  priceVerified?: boolean;
-  /** Set when the USER manually re-matched this line (name-edit rematch flow). The
-   *  server's autosave merge honors match fields only for marked lines — see
-   *  applyReceiptAutosave — so stale client state can't undo server-side votes. */
-  manualMatch?: boolean;
-  /** Server-set (read overlay): this line's match contradicts one of the user's old
-   *  'different' votes and that vote is queued for a re-verification swipe. The match
-   *  renders normally with a small "reconfirm" chip until the re-swipe settles it. */
-  pendingReverification?: boolean;
-  altMatches: ProductMatchOption[];
-  price: number;
-  promoPrice: number | null;
-  quantity: number;
-  /** Receipt quantity unit: "vnt" for pieces, "kg" for weighable. Used for calculation labels. */
-  unit: string | null;
-  /** Product package size amount (e.g. 165 for CHEETOS 165g). Stored on the SP. */
-  amount: number | null;
-  /** Product package size unit (e.g. "g", "ml", "rit"). Stored on the SP; separate from `unit`. */
-  sizeUnit: string | null;
-  pricePerUnit: number | null;
-  rawLines: string[];
-  region: Region;
-  /**
-   * Server-computed per-line confidence (DISPLAY-ONLY). Present on receipts
-   * saved after the score shipped; null on live-scan lines (the score is
-   * computed during save) and on older receipts. Drives the band-based display
-   * behind {@link CONFIDENCE_BAND_DISPLAY} and the always-on `__DEV__` badge.
-   */
-  itemConfidence?: ItemConfidence | null;
-  /**
-   * Line-level category of the CURRENT primary match — set by the server at save +
-   * on every demotion (runner-up → its category; orphan/OCR → null). The summary
-   * breakdown prefers these over altMatches[0] (which is a borrowed candidate, not
-   * necessarily the linked SP) so a swipe-'different' moves the line to the right
-   * bucket. Absent on legacy receipts → breakdown falls back to altMatches[0].
-   */
-  categoryId?: number | null;
-  categoryName?: string | null;
-  categoryL2Name?: string | null;
-}
-
-/**
- * Map a product line's top match candidate to its stored display/link fields.
- *
- * A WEAK cross-chain fallback match — the candidate came from the cross-chain
- * catalog (`data.crossChain`) AND scored below the auto-apply bar — is too
- * speculative to advertise as "this product": it's another chain's catalog with a
- * sub-autoApply name hit (the slyvos / "IKI mince → another chain's mince" trap).
- * We ORPHAN it here: null matchedName/image/confidence so the receipt row shows
- * the OCR name from the start, while the candidates stay in `altMatches` for
- * orphan-rescue voting. The server then mints a fresh same-chain SP and the line
- * routes to orphan rescue instead of a confident "is this right?" Card-B.
- *
- * Strong (≥ autoApply) cross-chain matches still apply; same-chain matches are
- * untouched (a weak same-chain hit shares the catalog and IS the intended Card-B
- * confirm case).
- */
-function topMatchDisplayFields(
-  top: ProductMatchOption | null,
-  isCrossChain: boolean,
-  autoApply: boolean,
-): Pick<
-  ProductLine,
-  | "matchedName"
-  | "storeProductId"
-  | "storeProductImageUrl"
-  | "matchConfidence"
-  | "matchConfirmed"
-  | "priceVerified"
-> {
-  const weakCrossChain = isCrossChain && top !== null && !autoApply;
-  return {
-    matchedName: weakCrossChain ? null : top?.name ?? null,
-    storeProductId: autoApply ? top!.storeProductId : null,
-    storeProductImageUrl: weakCrossChain ? null : top?.imageUrl ?? null,
-    matchConfidence: weakCrossChain ? null : top?.confidence ?? null,
-    matchConfirmed: autoApply,
-    priceVerified: autoApply,
-  };
-}
-
-interface HeaderData {
-  chainName: string;
-  chainId: number | null;
-  storeCode: string;
-  storeAddress: string;
-  storeId: number | null;
-  storeName: string | null;
-  storeAddressMatched: string | null;
-  matchConfidence: number | null;
-  matchLoading: boolean;
-  rawText: string;
-  region: Region;
-  /** Per-field source-line bboxes (emitted by every chain parser
-   *  post-Phase-6 refactor). Optional because pre-refactor receipts in
-   *  the DB carry only the block `region`; the photo view falls back
-   *  to that single bbox when this array is absent or empty. Each entry
-   *  carries a `kind` so the renderer can colour + label per field. */
-  lineRegions?: LabeledRegion[];
-  /** Parser-output version. Stamped at upload time and updated by
-   *  rehydration. Mobile compares against the current `REGIONS_VERSION`
-   *  to decide whether to re-OCR a receipt whose persisted bands came
-   *  from an earlier parser revision (e.g. before the Rimi anchored
-   *  receiptNo fix or the Norfa fallback band fix). */
-  regionsVersion?: string;
-}
-
-interface FooterData {
-  total: number | null;
-  date: string;
-  time: string;
-  receiptNo: string;
-  totalSavings: number | null;
-  /** Receipt-level combo/set-deal discount (IKI bare "RINKINYS -1,90") — POSITIVE
-   *  magnitude off the paid total, owned by no single product. Rendered as an
-   *  adjustment row on the Prekės tab; rides parsedData.footer to the server
-   *  (savings + store comparison subtract it from the visited basket). */
-  comboDiscount: number | null;
-  rawText: string;
-  region: Region;
-  lineRegions?: LabeledRegion[];
-}
 
 type AsyncStatus = "idle" | "pending" | "done" | "error";
 
@@ -556,68 +351,6 @@ function formatAmountLabel(p: ProductLine): string {
   return "1 vnt.";
 }
 
-function buildParsedData(
-  header: HeaderData,
-  products: ProductLine[],
-  footer: FooterData,
-  imageMeta: { uri: string | null; width: number; height: number } | null,
-  imageFilePath: string | null,
-  maskBands: MaskBand[] = [],
-  wordsDump?: unknown,
-): object {
-  // Strip bank/loyalty card numbers + cashier name from everything that gets
-  // persisted, so the DB never holds them (the image is redacted separately
-  // before upload). Only the free-text carriers need it — structured fields
-  // (receiptNo/date/total/storeAddress) are never sensitive.
-  // SLIM the persisted blob (see receipt rawData slimming): drop transient/duplicate
-  // fields + big image URLs. matchLoading = transient UI state; footer.rawText/region =
-  // byte-identical duplicates of header.*; image URLs are re-fetchable by storeProductId.
-  // Old receipts keep the fat shape — every reader stays backward-compatible.
-  const { matchLoading: _matchLoading, ...slimHeader } = header;
-  const { rawText: _footerRawText, region: _footerRegion, ...slimFooter } = footer;
-  // Never persist image:null when we have geometry. Losing the OCR coordinate-
-  // space dims forces the reopen path into a decoder-sampled re-measure that
-  // drifts every band + mask; fall back to the region/word extents so the space
-  // is always recoverable.
-  const imgDims = imageMeta ?? deriveImageDimsFromGeometry({ header, products, footer, maskBands, wordsDump });
-  return {
-    version: 1,
-    image: imgDims
-      ? {
-          filePath: imageFilePath,
-          width: imgDims.width,
-          height: imgDims.height,
-        }
-      : null,
-    header: { ...slimHeader, rawText: redactReceiptText(header.rawText) },
-    products: products.map((p) => ({
-      ...p,
-      rawLines: Array.isArray(p.rawLines) ? p.rawLines.map(redactReceiptText) : p.rawLines,
-      // Drop the big image URLs from altMatches (never rendered — only altMatches[0]'s
-      // category is read; the displayed thumbnail uses storeProductImageUrl, kept). This
-      // is the bulk of the per-receipt bytes: ~3 dup/alt URLs × every product.
-      altMatches: Array.isArray(p.altMatches)
-        ? p.altMatches.map(({ imageUrl: _ai, ...am }) => am)
-        : p.altMatches,
-    })),
-    footer: slimFooter, // rawText + region dropped (header is the single source of truth)
-    // Geometry-only redaction boxes (no card digits) so the Kvitas-tab
-    // overlay can re-draw the black "private info" bands on reload.
-    maskBands: maskBands.map((b) => ({
-      yTop: b.yTop, yBottom: b.yBottom, xLeft: b.xLeft, xRight: b.xRight, kind: b.kind,
-      // Keep the per-corner Y (skew) so the reload overlay can bend the black band
-      // along the tilted PII row instead of drawing a flat rectangle.
-      yLeftTop: b.yLeftTop, yRightTop: b.yRightTop,
-      yLeftBottom: b.yLeftBottom, yRightBottom: b.yRightBottom,
-      // PII text extent — so a re-clamp on reload still can't trim the band into the card number.
-      piiTop: b.piiTop, piiBottom: b.piiBottom,
-    })),
-    // Per-word OCR capture (staging+prod now, PII redacted at the build site). Top-level
-    // so it survives the header-state round-trip. Repro a bad scan with wordsToFixture.mjs.
-    ...(wordsDump ? { wordsDump } : {}),
-  };
-}
-
 export default function ProcessReceiptScreen() {
   const { t } = useTranslation();
   const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, shoppingListId: shoppingListIdParam, expectedChainId: expectedChainIdParam, listMap: listMapParam, reocrReceiptId: reocrReceiptIdParam, fromPdf: fromPdfParam } = useLocalSearchParams<{
@@ -682,31 +415,26 @@ export default function ProcessReceiptScreen() {
   // Used for iterating on parser accuracy without cluttering the database.
   const isPreviewMode = previewParam === "true";
   const router = useRouter();
-  const navigation = useNavigation();
   const colors = useTheme();
   const styles = useMemo(() => makeStyles(colors), [colors]);
   const [loading, setLoading] = useState(true);
-  // Honest OCR/processing sub-step shown under the silly ProcessingLoader headline.
-  // Empty initially (the rotating headline carries the load); the OCR pipeline sets it.
-  const [loadingMessage, setLoadingMessage] = useState("");
-  // Chain-match gate (list-upload flow): when the scanned receipt's chain
-  // doesn't match the list's store, processReceipt parks here and awaits the
-  // user's decision via chainGateResolveRef (proceed = "different store", or
-  // back out). null when no mismatch.
-  const [chainGate, setChainGate] = useState<{ detectedChainId: number; expectedChainIds: number[] } | null>(null);
-  const chainGateResolveRef = useRef<((proceed: boolean) => void) | null>(null);
-  // Manual date-entry gate: shown only when the receipt is otherwise readable
-  // (has receiptNo + time) but its DATE was unreadable (e.g. an ink stain). The
-  // user picks the date printed on the receipt; capped at today so it can never
-  // land a future-dated price (which would pin a wrong "latest" price).
-  const [dateGate, setDateGate] = useState(false);
-  // Store-resolution shown as an on-top modal (was the separate /receipt/store-resolution
-  // route). The OCR pipeline awaits the storeResolution handoff promise; this just toggles
-  // the modal's visibility.
-  const [storeGate, setStoreGate] = useState(false);
-  // Resolves once the store-resolution map's dismiss animation finishes (Modal.onDismiss,
-  // iOS), so a following modal never presents on top of the still-animating map.
-  const storeGateDismissRef = useRef<(() => void) | null>(null);
+  // Fresh-scan processing now lives in the app-level scan session
+  // (state/scanSession + services/scanSessionService) so it survives this
+  // screen unmounting (tab switch / back mid-processing). The screen
+  // subscribes: loader + input gates render from these selectors, and the
+  // hydration effects below copy the terminal result into local state.
+  const sSessionId = useScanSession((s) => s.sessionId);
+  const sPhase = useScanSession((s) => s.phase);
+  const sInput = useScanSession((s) => s.inputRequest);
+  const sMatchProgress = useScanSession((s) => s.matchProgress);
+  const sParse = useScanSession((s) => s.parse);
+  const sCompletion = useScanSession((s) => s.completion);
+  const sFailMessage = useScanSession((s) => s.failMessage);
+  const sPostStatus = useScanSession((s) => s.postStatus);
+  const sPostErr = useScanSession((s) => s.postErr);
+  const sUploadStatus = useScanSession((s) => s.uploadStatus);
+  const sUploadErr = useScanSession((s) => s.uploadErr);
+  const sImageFilePath = useScanSession((s) => s.imageFilePath);
   // Mandatory swipes are hosted IN-PLACE as a phase of this screen (was the
   // /swipe/queue route bounce + swipeDone round-trip). `swiping` flips the whole
   // screen to <SwipeQueue>; `postSwipeActionRef` holds the continuation to run
@@ -718,22 +446,11 @@ export default function ProcessReceiptScreen() {
   // leaveSwipePhase / loadExistingReceipt) — survives a slow /complete-swipes.
   const swipesJustDoneRef = useRef<number | null>(null);
   const postSwipeActionRef = useRef<(() => void) | null>(null);
-  const dateGateResolveRef = useRef<((picked: Date | null) => void) | null>(null);
   const [dateGateTemp, setDateGateTemp] = useState<Date | null>(null); // null = empty field (no prefill)
   const [dateGateShowPicker, setDateGateShowPicker] = useState(false);
   // Souply-styled failure modal (replaces the stock OS Alert). Holds the
   // user-facing message; buttons Try-again (re-open scanner) / Close.
   const [failGate, setFailGate] = useState<string | null>(null);
-  // Resolved list row to link the receipt to (auto-selected by detected
-  // chain for groups; the single list for single-store). Set in processReceipt.
-  const linkListIdRef = useRef<number | null>(null);
-  // Per-product match progress. When non-null, loading overlay shows
-  // an "N / M" counter alongside the message so the user sees the
-  // phone is actively working through the product list. Reset to null
-  // once matching completes (or on bail).
-  const [matchProgress, setMatchProgress] = useState<
-    { done: number; total: number } | null
-  >(null);
   const isHydratingRef = useRef(false);
   // NOTE: product-match fetches deliberately carry NO component-scoped abort signal.
   // A previous `mountAbortRef` aborted them on unmount to spare the server ~30 in-flight
@@ -803,9 +520,6 @@ export default function ProcessReceiptScreen() {
   // Save state
   const [receiptId, setReceiptId] = useState<number | null>(null);
   const [imageFilePath, setImageFilePath] = useState<string | null>(null);
-  // TRUE only during a duplicate-409 RESUME whose server row already has its photo
-  // (swipes-only recovery) — gates runUpload so the stored image is never overwritten.
-  const resumedPhotoPresentRef = useRef(false);
   // How many swipe cards are currently waiting for this user on this receipt.
   // Fetched on mount and whenever the screen refocuses (so it updates after
   // the user returns from the swipe screen). `swipeQueueFetched` toggles
@@ -1031,7 +745,6 @@ export default function ProcessReceiptScreen() {
     try {
       setLoading(true);
       isHydratingRef.current = true;
-      setLoadingMessage(t('receiptProcess.loading'));
       // WARM reopen: this screen instance can be reused with imageDims/imageUri still
       // holding a PREVIOUS image (after a fresh scan, or a cached nav stack). The mask
       // overlay scales by imageDims, but setImageDims only fires later in the async
@@ -1491,17 +1204,176 @@ export default function ProcessReceiptScreen() {
       if (hasProcessedRef.current) return; // StrictMode mounts effects twice in dev
       hasProcessedRef.current = true;
       setImageUri(imageUriList[0]); // first page used for region previews
-      // Persist a draft to AsyncStorage so that if the OS kills the
-      // app before the Receipt POST completes, the user can resume
-      // from the Analize tab without re-picking the image. Preview
-      // mode is out-of-scope for this — those scans never save
-      // anything server-side anyway.
-      if (!isPreviewMode) {
-        saveReceiptDraft(imageUriList).catch(() => {});
+      // A second scan can reuse this screen instance (fail → "Try again"
+      // replaces to the same route with a new uri) — re-raise the loader the
+      // fail/completion handlers dropped, or the whole OCR would run behind
+      // an empty detail tree.
+      setLoading(true);
+      // Attach to the live background session for these images if one exists
+      // (re-entry via the Analyze live card / back-navigation); otherwise
+      // start one. The session persists the draft + runs the full pipeline
+      // OUTSIDE this screen, so navigating away no longer kills the scan.
+      if (attachableSessionId(imageUriList) === null) {
+        const entryParams: Record<string, string> = {};
+        if (urisParam) entryParams.uris = urisParam;
+        else if (uri) entryParams.uri = uri;
+        if (previewParam) entryParams.preview = previewParam;
+        if (shoppingListIdParam) entryParams.shoppingListId = shoppingListIdParam;
+        if (expectedChainIdParam) entryParams.expectedChainId = expectedChainIdParam;
+        if (listMapParam) entryParams.listMap = listMapParam;
+        if (reocrReceiptIdParam) entryParams.reocrReceiptId = reocrReceiptIdParam;
+        if (fromPdfParam) entryParams.fromPdf = fromPdfParam;
+        const started = startScanSession({
+          imageUris: imageUriList,
+          fromPdf: fromPdfParam === '1',
+          preview: isPreviewMode,
+          linkMap,
+          fallbackLinkId,
+          reocrReceiptId,
+          entryParams,
+        });
+        if (started === null) {
+          // A DIFFERENT scan is still mid-flight — refuse to silently kill it.
+          setLoading(false);
+          router.replace('/(tabs)/receipts');
+          setTimeout(() => {
+            Alert.alert(t('receiptProcess.scanBusyTitle'), t('receiptProcess.scanBusyBody'));
+          }, 100);
+        }
       }
-      processReceipt(imageUriList);
     }
   }, [imageUriList, isExistingMode, existingReceiptId, isPreviewMode]);
+
+  // ── Scan-session subscription (fresh-scan mode only) ────────────────────────
+  const isSessionMode = !isExistingMode && imageUriList.length > 0;
+  // The store is a singleton that outlives screens, so every subscription
+  // below must also check the session BELONGS to this screen: a fresh mount's
+  // first effect pass still sees the PREVIOUS scan's terminal state (the
+  // kickoff effect replaces the session synchronously, but this pass runs on
+  // the old closure). Without this gate, scan B's screen would replay scan
+  // A's duplicate alert / fail modal / parse hydration.
+  const sOpts = useScanSession((s) => s.opts);
+  const sConsumed = useScanSession((s) => s.consumed);
+  const sessionIsMine =
+    isSessionMode && sameUris(sOpts?.imageUris, imageUriList);
+
+  // Mirror the session's POST/upload state into the local status vars the
+  // detail render reads (error cards, the sending/uploading overlay).
+  useEffect(() => {
+    if (!sessionIsMine) return;
+    setPostStatus(sPostStatus);
+    setPostErr(sPostErr);
+  }, [sessionIsMine, sPostStatus, sPostErr]);
+  useEffect(() => {
+    if (!sessionIsMine) return;
+    setUploadStatus(sUploadStatus);
+    setUploadErr(sUploadErr);
+    if (sImageFilePath) setImageFilePath(sImageFilePath);
+  }, [sessionIsMine, sUploadStatus, sUploadErr, sImageFilePath]);
+
+  // Hydrate the parsed result as soon as the session publishes it (during
+  // 'saving' already — the detail renders under the sending overlay, exactly
+  // like the old in-component flow after matching finished).
+  const hydratedSessionRef = useRef<number>(0);
+  useEffect(() => {
+    // Consumed = a previous instance already displayed this session; a NEW
+    // mount over it means a fresh re-scan is about to replace the store —
+    // hydrating the OLD parse here would flash stale data and drop the loader.
+    if (!sessionIsMine || sConsumed || !sParse) return;
+    if (hydratedSessionRef.current === sSessionId) return;
+    hydratedSessionRef.current = sSessionId;
+    setHeader(sParse.header);
+    setProducts(sParse.products);
+    setFooter(sParse.footer);
+    setSkippedRegions(sParse.skippedRegions);
+    setPageMetas(sParse.pageMetas);
+    setMaskBands(sParse.maskBands);
+    if (sParse.imageUri) setImageUri(sParse.imageUri);
+    if (sParse.imageDims) setImageDims(sParse.imageDims);
+    wordsDumpRef.current = sParse.wordsDump;
+    wordsSrcRef.current = sParse.wordsSrc;
+    setLoading(false);
+  }, [sessionIsMine, sConsumed, sParse, sSessionId]);
+
+  // Terminal completion — run the post-save continuation exactly once.
+  // `sConsumed` blocks a replay when a NEW instance mounts over an already-
+  // handled terminal session for the same uris (re-pick of the same image).
+  const completionHandledRef = useRef<number>(0);
+  useEffect(() => {
+    if (!sessionIsMine || sConsumed || sPhase !== 'done' || !sCompletion) return;
+    if (completionHandledRef.current === sSessionId) return;
+    completionHandledRef.current = sSessionId;
+    consumeSession(sSessionId);
+    setLoading(false);
+    switch (sCompletion.kind) {
+      case 'preview':
+        break;
+      case 'cancelled_list':
+        // Chain gate declined on a list upload — a retry, not a failure.
+        router.replace('/(tabs)/shoppingList');
+        break;
+      case 'duplicate': {
+        // Receipt already exists server-side and there's nothing to resume
+        // with. Bail out to the right tab with a clear message — no
+        // half-state on this screen.
+        if (sCompletion.linkedToList) {
+          router.replace('/(tabs)/shoppingList');
+          setTimeout(() => {
+            Alert.alert(t('receiptProcess.duplicateTitle'), t('receiptProcess.duplicateLinkedBody'));
+          }, 100);
+          break;
+        }
+        const crossAccount = sCompletion.crossAccount;
+        router.replace('/(tabs)/receipts');
+        setTimeout(() => {
+          Alert.alert(
+            crossAccount ? t('receiptProcess.dupOtherAccountTitle') : t('receiptProcess.duplicateTitle'),
+            crossAccount ? t('receiptProcess.dupOtherAccountBody') : t('receiptProcess.duplicateBody'),
+          );
+        }, 100);
+        break;
+      }
+      case 'saved': {
+        const id = sCompletion.receiptId;
+        setReceiptId(id);
+        if (sCompletion.pendingSwipes > 0) {
+          // User must swipe before seeing the price comparison — host the
+          // swipe phase in-place, then fetch the comparison.
+          enterSwipePhase(id, () => {
+            setComparisonStatus('pending');
+            fetchComparison(id);
+          });
+        } else {
+          setComparisonStatus('pending');
+          fetchComparison(id);
+        }
+        break;
+      }
+    }
+  }, [sessionIsMine, sConsumed, sPhase, sCompletion, sSessionId]);
+
+  // Terminal failure — surface the Souply-styled fail modal. Delayed a beat
+  // so a store-resolution map that just cancelled finishes its dismiss
+  // animation first (presenting over a still-animating fullScreen modal
+  // stacks two modals on iOS).
+  const failHandledRef = useRef<number>(0);
+  useEffect(() => {
+    if (!sessionIsMine || sConsumed || sPhase !== 'failed' || sFailMessage == null) return;
+    if (failHandledRef.current === sSessionId) return;
+    failHandledRef.current = sSessionId;
+    consumeSession(sSessionId);
+    setLoading(false);
+    const timer = setTimeout(() => setFailGate(sFailMessage), 450);
+    return () => clearTimeout(timer);
+  }, [sessionIsMine, sConsumed, sPhase, sFailMessage, sSessionId]);
+
+  // Fresh date-gate request → clear the picker field (force an active pick).
+  useEffect(() => {
+    if (sInput?.kind === 'date') {
+      setDateGateTemp(null);
+      setDateGateShowPicker(false);
+    }
+  }, [sInput?.kind]);
 
   // Re-pull receipt categories on focus so the Suvestinė breakdown
   // reflects any personal rescues from a voluntary swipe session. The
@@ -1700,353 +1572,6 @@ export default function ProcessReceiptScreen() {
     clearPendingPick();
   }, [pendingPick, clearPendingPick]);
 
-  // Step 1: POST receipt once OCR + store match + product match have all completed
-  const runPost = async () => {
-    if (!header || !footer) return;
-    if (header.matchLoading) return;
-    setPostStatus("pending");
-    setPostErr(null);
-    // Fresh POST attempt → any previous duplicate-resume photo gate is stale
-    // (this screen instance can be reused across scans).
-    resumedPhotoPresentRef.current = false;
-    try {
-      const userId = userIdRef.current ?? (await getUserId());
-      userIdRef.current = userId;
-
-      const parsedData = buildParsedData(
-        header,
-        products,
-        footer,
-        // Fallback-of-first-resort: the dims LOADED from the blob. Geometry-derived
-        // dims (inside buildParsedData) are reserved for true legacy image:null
-        // receipts — never for one that already has persisted dims (band-drift class).
-        imageDims
-          ? { uri: imageUri, ...imageDims }
-          : loadedImageDimsRef.current
-            ? { uri: imageUri, ...loadedImageDimsRef.current }
-            : null,
-        imageFilePath,
-        maskBandsClamped,
-        wordsDumpRef.current,
-      );
-
-      // DEV re-OCR: retire the OLD receipt right before creating the fresh one — done
-      // HERE (not on entry) so a bail-to-retake earlier in the pipeline leaves the
-      // original intact, and so the create below isn't rejected as a duplicate (same
-      // receiptNo). Best-effort: a delete hiccup would only surface as a 409 next.
-      if (reocrReceiptId != null && Number.isFinite(reocrReceiptId)) {
-        try {
-          await fetch(`${API_BASE_URL}/api/receipts/${reocrReceiptId}`, { method: "DELETE" });
-        } catch (e) {
-          console.warn("[reocr] old-receipt delete failed (continuing):", e);
-        }
-      }
-
-      const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, filePath: "", parsedData }),
-        timeoutMs: TIMEOUT_HEAVY_MS,
-      });
-      const data = await res.json();
-      // Duplicate detection. Backend returns 409 for BOTH same-user
-      // (caught upfront) and cross-user (caught by the UNIQUE
-      // constraint safety net) duplicates. Either way, bail out to
-      // the Analize tab with a clear message — no half-state on this
-      // screen, no sneaky nav to another receipt's view.
-      if (res.status === 409) {
-        // SAME-ACCOUNT duplicate on a FRESH SCAN with the photo still in hand — but ONLY
-        // when the existing row is INCOMPLETE: the photo never landed (photoPending, the
-        // receipt-238 abort-then-retry shape) or mandatory swipes are still owed. That's
-        // a genuine recovery → RESUME the pipeline against the existing row (photo upload
-        // + swipe phase). A COMPLETE duplicate — photo present, nothing pending — is a
-        // deliberate re-scan of an already-uploaded receipt: resuming there silently
-        // OVERWROTE the stored photo with the new frame (user report, 2026-07-04); it now
-        // falls through to the honest "already uploaded" alert below.
-        const existingId = Number(data?.existingReceiptId);
-        const resumable = data?.photoPending === true || Number(data?.mandatorySwipesPending ?? 0) > 0;
-        if (!data?.crossAccount && resumable && Number.isFinite(existingId) && existingId > 0 && imageUri) {
-          // Swipes-only resume: the server photo EXISTS — the upload step must not
-          // replace it with this scan's frame (see the runUpload guard).
-          resumedPhotoPresentRef.current = data?.photoPending !== true;
-          console.log(`[post] duplicate of r${existingId} — resuming pipeline against it (photoPending=${data?.photoPending === true}, swipes=${Number(data?.mandatorySwipesPending ?? 0)})`);
-          setReceiptId(existingId);
-          setPostStatus("done");
-          useReceiptQueueStore.getState().noteReceiptCreated(existingId);
-          if (linkListIdRef.current) {
-            fetch(`${API_BASE_URL}/api/shopping-lists/${linkListIdRef.current}/link-receipt`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ receiptId: existingId }),
-            }).catch(() => {});
-          }
-          clearReceiptDraft().catch(() => {});
-          const pending = Number(data?.mandatorySwipesPending ?? 0);
-          if (pending > 0) {
-            enterSwipePhase(existingId, () => {
-              setComparisonStatus("pending");
-              fetchComparison(existingId);
-            });
-          } else {
-            setComparisonStatus("pending");
-            fetchComparison(existingId);
-          }
-          return;
-        }
-        setPostStatus("done");
-        // Receipt already exists server-side and there's nothing to resume with
-        // (cross-account, or no photo in hand). Drop the local draft — the data
-        // lives in someone's receipt list.
-        clearReceiptDraft().catch(() => {});
-        useProfileStore.getState().invalidate();
-        // Same-ACCOUNT duplicate while uploading for a list: the user already
-        // has this receipt — silently link the EXISTING row to the list
-        // instead of bailing, so the card still flips to "Kvitas pridėtas".
-        if (linkListIdRef.current && data?.existingReceiptId) {
-          fetch(`${API_BASE_URL}/api/shopping-lists/${linkListIdRef.current}/link-receipt`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ receiptId: data.existingReceiptId }),
-          }).catch(() => {});
-          router.replace("/(tabs)/shoppingList");
-          setTimeout(() => {
-            Alert.alert(t('receiptProcess.duplicateTitle'), t('receiptProcess.duplicateLinkedBody'));
-          }, 100);
-          return;
-        }
-        // Cross-ACCOUNT duplicate: a different account uploaded this receipt.
-        // Don't claim the current user uploaded it; can't link it either.
-        const crossAccount = data?.crossAccount === true;
-        router.replace("/(tabs)/receipts");
-        setTimeout(() => {
-          Alert.alert(
-            crossAccount ? t('receiptProcess.dupOtherAccountTitle') : t('receiptProcess.duplicateTitle'),
-            crossAccount ? t('receiptProcess.dupOtherAccountBody') : t('receiptProcess.duplicateBody'),
-          );
-        }, 100);
-        return;
-      }
-      if (!res.ok || !data?.id) {
-        throw new Error(data?.error || `HTTP ${res.status}`);
-      }
-      setReceiptId(data.id);
-      setPostStatus("done");
-      // Tell the shared queue store the receipt now exists so the Analyze list refetches
-      // immediately (even while its tab is blurred) and the receipt lands in "Nauji" —
-      // parity with the batch-upload path. Placed on the success branch only (after the
-      // 409-duplicate and !ok early-returns), never before data.id exists.
-      useReceiptQueueStore.getState().noteReceiptCreated(data.id);
-      // Link this receipt to the resolved list row (auto-selected by the
-      // detected chain for groups). Fire-and-forget — the List-tab card
-      // flips to "Kvitas pridėtas" on next refresh.
-      if (linkListIdRef.current) {
-        fetch(`${API_BASE_URL}/api/shopping-lists/${linkListIdRef.current}/link-receipt`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ receiptId: data.id }),
-        }).catch(() => {});
-      }
-      clearReceiptDraft().catch(() => {});
-      // Record store visit for location intelligence (fire-and-forget)
-      if (header.storeId && header.chainId) {
-        fetch(`${API_BASE_URL}/api/stores/${header.storeId}`)
-          .then(r => r.ok ? r.json() : null)
-          .then(store => {
-            if (store?.latitude && store?.longitude) {
-              recordStoreVisit(
-                header.storeId!,
-                store.latitude,
-                store.longitude,
-                header.chainId!,
-                header.chainName,
-              ).catch(() => {});
-            }
-          })
-          .catch(() => {});
-      }
-      if (data.mandatorySwipesRequired > 0) {
-        // User must swipe before seeing the price comparison — host the swipe
-        // phase in-place. When the session finishes we fetch the comparison and
-        // flip straight to the detail (no route bounce, no new screen instance).
-        enterSwipePhase(data.id, () => {
-          setComparisonStatus("pending");
-          fetchComparison(data.id);
-        });
-      } else {
-        setComparisonStatus("pending");
-        fetchComparison(data.id);
-      }
-    } catch (e: any) {
-      console.warn("Receipt POST failed:", e);
-      setPostStatus("error");
-      setPostErr(e?.message || t('receiptProcess.errorSave'));
-      // Do NOT re-arm the auto-POST guard here: the effect below re-fires on any
-      // header/footer/products identity change, so resetting the ref turned a
-      // DETERMINISTIC server rejection (the garbled-date 500, receipt-242 re-scan)
-      // into an endless "saving receipt…" modal loop. Retries stay MANUAL via the
-      // error card's retry button (retryPost re-arms + re-runs deliberately).
-    }
-  };
-
-  useEffect(() => {
-    if (isExistingMode) return;
-    if (isPreviewMode) return; // preview: skip receipt creation
-    if (hasPostedRef.current) return;
-    if (!header || !footer) return;
-    if (header.matchLoading) return;
-    hasPostedRef.current = true;
-    runPost();
-  }, [header, footer, products, isPreviewMode]);
-
-  const retryPost = () => {
-    hasPostedRef.current = true;
-    runPost();
-  };
-
-  // Step 2: MinIO upload — runs in parallel with POST, PATCH filePath once done.
-  const runUpload = async () => {
-    // HARD GUARD: only ever burn+upload on a FRESH SCAN. In existing mode the
-    // image is already uploaded (and already redacted). Re-running here re-burns
-    // the masks onto the already-burned MinIO image — the "random black band on
-    // reopen". The imageFilePath guard below was insufficient because
-    // parsed.image.filePath is frozen at POST time (still null then; the real
-    // filePath is PATCHed to a separate column AFTER the upload), so on reopen
-    // imageFilePath stays null and the burn leaked through. The orphan case
-    // (filePath === "") only surfaces an error badge — it never re-uploads — so
-    // there is no legitimate existing-mode upload to preserve.
-    if (isExistingMode) return;
-    if (!imageUri || !receiptId) return;
-    // Duplicate RESUME where the server photo already exists (swipes-only recovery):
-    // uploading would overwrite the stored, already-redacted image with this scan's
-    // frame. The photo is only ever recovered when the 409 said photoPending.
-    if (resumedPhotoPresentRef.current) {
-      console.log("[upload] skipped — resumed duplicate already has its photo");
-      setUploadStatus("done");
-      return;
-    }
-    setUploadStatus("pending");
-    setUploadErr(null);
-    try {
-      const urlRes = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/upload-url`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: `receipt-${receiptId}.jpg`,
-          mimeType: "image/jpeg",
-        }),
-        timeoutMs: TIMEOUT_STANDARD_MS,
-      });
-      if (!urlRes.ok) throw new Error(`upload-url HTTP ${urlRes.status}`);
-      const { uploadUrl, filePath } = await urlRes.json();
-      if (!uploadUrl || !filePath) throw new Error(t('receiptProcess.errorUploadUrlFields'));
-
-      // Burn the card/loyalty/cashier black boxes into the image BEFORE upload
-      // so the raw card data never leaves the device. This goes through the
-      // SAME shared `buildRedactedUploadUri` as the headless queue, so every
-      // entry point (take-photo / upload / shopping-list) masks identically.
-      // Fail-closed: if sensitive bands were detected but a clean redaction
-      // can't be produced (incl. missing image dims), abort — never PUT the
-      // original image that still shows a card number.
-      // `imageDims` is set during OCR and goes stale across the post→existing-
-      // mode re-mount (existing-mode load doesn't repopulate it), which made the
-      // redaction abort with "invalid image dims 0x0" — esp. on the multi-segment
-      // path. Measure the actual upload image instead of trusting that state; the
-      // mask bands (filtered to this page's height) map onto these pixels.
-      // This burn ONLY runs on a fresh scan (runUpload bails in existing mode),
-      // so imageDims is the OCR pixel space the mask bands were detected in —
-      // burn the bands at percent of those same dims.
-      let uploadW = imageDims?.width ?? 0;
-      let uploadH = imageDims?.height ?? 0;
-      if (!(uploadW > 0) || !(uploadH > 0)) {
-        try {
-          // TRUE decoder pixels via ImageManipulator — NOT Image.getSize, which
-          // BitmapFactory down-samples tall images to (an undersized denominator
-          // would misposition the burned bands).
-          const info = await ImageManipulator.manipulateAsync(imageUri, []);
-          if (!(uploadW > 0)) uploadW = info.width;
-          if (!(uploadH > 0)) uploadH = info.height;
-        } catch { /* leave 0 — buildRedactedUploadUri fail-closes if bands exist */ }
-      }
-      let uploadUri = imageUri;
-      try {
-        uploadUri = await buildRedactedUploadUri(imageUri, uploadW, uploadH, maskBandsClamped);
-      } catch (e: any) {
-        console.warn("[mask] redaction failed, aborting upload:", e?.message ?? e);
-        // Log the unprocessable case (P4). Fire-and-forget; never block on it.
-        fetch(`${API_BASE_URL}/api/receipts/log-fail`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            userId: userIdRef.current,
-            failReason: "mask_failed",
-            shoppingListId: linkListIdRef.current ?? undefined,
-          }),
-        }).catch(() => {});
-        setUploadStatus("error");
-        setUploadErr(t('receiptProcess.errorMaskFailed'));
-        return;
-      }
-
-      // Local-file blob load is NOT a network call; fetch on a file:// URI
-      // is synchronous-ish. No timeout needed.
-      const imageBlob = await (await fetch(uploadUri)).blob();
-      const putRes = await fetchWithTimeout(uploadUrl, {
-        method: "PUT",
-        headers: { "Content-Type": "image/jpeg" },
-        body: imageBlob,
-        timeoutMs: TIMEOUT_HEAVY_MS,
-      });
-      if (!putRes.ok) throw new Error(`MinIO PUT HTTP ${putRes.status}`);
-
-      const patchRes = await fetchWithTimeout(
-        `${API_BASE_URL}/api/receipts/${receiptId}/file-path`,
-        {
-          method: "PATCH",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filePath }),
-          timeoutMs: TIMEOUT_STANDARD_MS,
-        },
-      );
-      if (!patchRes.ok) throw new Error(`PATCH HTTP ${patchRes.status}`);
-
-      setImageFilePath(filePath);
-      setUploadStatus("done");
-
-      // Cache the EXACT redacted bytes we just persisted at the canonical reopen path
-      // (buildReceiptPageMeta's download dest) so a later reopen of THIS receipt — or
-      // any fallback crop build — short-circuits to the local file instead of a MinIO
-      // round-trip, and renders the SAME redacted pixels that were stored. Best-effort.
-      try {
-        const cacheDir = FileSystem.cacheDirectory ?? "";
-        if (cacheDir && uploadUri) {
-          const dest = `${cacheDir}receipt-${receiptId}.jpg`;
-          if (uploadUri !== dest) {
-            await FileSystem.deleteAsync(dest, { idempotent: true });
-            await FileSystem.copyAsync({ from: uploadUri, to: dest });
-          }
-        }
-      } catch {
-        /* non-fatal: the reopen path will just download as before */
-      }
-    } catch (e: any) {
-      console.warn("MinIO upload failed:", e);
-      setUploadStatus("error");
-      setUploadErr(e?.message || t('receiptProcess.errorUploadPhoto'));
-    }
-  };
-
-  useEffect(() => {
-    if (isPreviewMode) return; // preview: skip MinIO upload + PATCH
-    if (isExistingMode) return; // never re-burn/upload an already-saved receipt
-    if (!imageUri || !receiptId || imageFilePath) return;
-    if (uploadStatus === "pending" || uploadStatus === "error") return;
-    runUpload();
-  }, [imageUri, receiptId, imageFilePath, isPreviewMode, isExistingMode]);
-
-  const retryUpload = () => {
-    runUpload();
-  };
-
   // Auto-retry: on reconnect AND on a 5-second interval while any step is
   // in error state. Errors are never shown to the user — everything retries
   // silently in the background.
@@ -2056,8 +1581,8 @@ export default function ProcessReceiptScreen() {
   useEffect(() => {
     if (lastOnlineAt === null) return;
     if (isPreviewMode) return;
-    if (postStatus === "error") retryPost();
-    if (uploadStatus === "error" && imageUri) runUpload();
+    retryScanPost();
+    retryScanUpload();
     if (comparisonStatus === "error" && receiptId) fetchComparison(receiptId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lastOnlineAt]);
@@ -2066,8 +1591,8 @@ export default function ProcessReceiptScreen() {
   useEffect(() => {
     if (!hasAnyError || isPreviewMode) return;
     const interval = setInterval(() => {
-      if (postStatus === "error") retryPost();
-      if (uploadStatus === "error" && imageUri) runUpload();
+      retryScanPost();
+      retryScanUpload();
       if (comparisonStatus === "error" && receiptId) fetchComparison(receiptId);
     }, 5000);
     return () => clearInterval(interval);
@@ -2352,1444 +1877,6 @@ export default function ProcessReceiptScreen() {
     }, 1500);
   };
 
-  /**
-   * Analize-flow bail path. Called when the receipt can't proceed past
-   * an early phase (OCR produced nothing, chain not detected, store
-   * lookup failed). Logs a FailedReceiptLog server-side for analytics
-   * — lets us distinguish "user uploaded junk" from "OCR missed" —
-   * then pops an alert and navigates back to the Analize tab. No
-   * Receipt row is ever created on this path.
-   */
-  type BailReason =
-    | "ocr_no_text"
-    | "ocr_error"
-    | "chain_unrecognized"
-    | "store_unrecognized"
-    | "no_products"
-    | "doubled_scan";
-
-  const USER_FACING_BAIL_MSG: Record<BailReason, string> = {
-    ocr_no_text: t('receiptProcess.errorOcrUnreadable'),
-    ocr_error: t('receiptProcess.errorOcrParse'),
-    chain_unrecognized: t('receiptProcess.errorChain'),
-    store_unrecognized: t('receiptProcess.errorStore'),
-    no_products: t('receiptProcess.errorNoProducts'),
-    doubled_scan: t('receiptProcess.errorDoubledScan'),
-  };
-
-  interface BailContext {
-    ocrLineCount?: number | null;
-    ocrPreview?: string | null;
-    detectedChainName?: string | null;
-    extractedStoreAddress?: string | null;
-    /** OCR/parsed payload captured at fail time (JSON string) — the post-mortem trail. */
-    parsedData?: string | null;
-  }
-
-  const bailWithLog = async (reason: BailReason, ctx: BailContext = {}) => {
-    // Fire-and-forget log. Network/DB failure here must not block the
-    // user's return to the Analize tab — the priority is getting them
-    // out of the dead-end flow.
-    try {
-      const userId = await getUserId();
-      fetchWithTimeout(`${API_BASE_URL}/api/receipts/log-fail`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          userId,
-          failReason: reason,
-          ocrLineCount: ctx.ocrLineCount ?? null,
-          ocrPreview: ctx.ocrPreview ?? null,
-          detectedChainName: ctx.detectedChainName ?? null,
-          extractedStoreAddress: ctx.extractedStoreAddress ?? null,
-          imageFilePath: imageFilePath ?? null,
-          parsedData: ctx.parsedData ?? null,
-        }),
-        timeoutMs: TIMEOUT_FAST_MS,
-      }).catch((e) => console.warn("[bailWithLog] log POST failed:", e));
-    } catch (e) {
-      console.warn("[bailWithLog] log prep failed:", e);
-    }
-
-    setLoading(false);
-    // Bail = receipt can't be processed, nothing to resume. Drop the
-    // draft so the Analize tab doesn't keep prompting "continue" on
-    // a scan that will just bail again.
-    clearReceiptDraft().catch(() => {});
-    // Show the Souply-styled failure modal (Try again / Close) instead of the
-    // stock OS Alert. Its buttons handle navigation — we DON'T navigate here, so
-    // "Try again" can re-open the scanner from this screen.
-    setFailGate(USER_FACING_BAIL_MSG[reason]);
-  };
-
-  const processReceipt = async (imageUris: string[]) => {
-    // Quality gate. A readable receipt always yields a receipt id (now incl. the
-    // "Kvitas"/synthetic fallbacks) and a DATE; TIME is OPTIONAL (midday default).
-    // Outcomes:
-    //   • receiptNo + date present → proceed (time defaulted to 12:00 when unread).
-    //   • receiptNo present, date MISSING → ask the user to pick the printed date
-    //     (capped at today; flows in exactly like an OCR date). Cancel → bail.
-    //   • no receiptNo → genuinely unreadable → fail with a message (no rescan loop).
-    // Mutates footer.date/footer.time so the rest of the save/price path uses them.
-    // OCR line texts, hoisted for the bail helpers below (the `lineTexts` const lives
-    // inside the try block; assigned right after OCR completes).
-    let ocrLineTexts: string[] = [];
-    const ensureKeyReceiptFields = async (
-      footer: { receiptNo?: string | null; date?: string | null; time?: string | null } | null,
-    ): Promise<boolean> => {
-      // Post-mortem payload for the fail log: rows 37/38 (receipt-278's two dead scans)
-      // stored only the preview message — with no OCR text there was no way to tell a
-      // cropped-off date line from a garbled one. Ship the line count + tail + full text.
-      const keyFieldsDiag = () => ({
-        ocrLineCount: ocrLineTexts.length,
-        parsedData: JSON.stringify({ footer, lineTexts: ocrLineTexts }),
-      });
-      // TIME IS OPTIONAL: some IKI layouts print date+time ONLY in the bottom VMI fiscal
-      // line (receipt-278) — a slightly short frame loses both. The exact hour only
-      // orders same-day receipts, so default to midday rather than dead-ending the scan.
-      if (footer?.receiptNo && !footer.time) footer.time = '12:00';
-      if (footer?.receiptNo && footer?.date) return true;
-      if (footer?.receiptNo && !footer?.date) {
-        // The component early-returns a full-screen loading view while `loading`
-        // is true (`if (loading) return <loadingScreen>`), which UN-MOUNTS every
-        // modal — including this one. Drop loading first so the date modal actually
-        // renders; otherwise its promise never resolves and the screen hangs on
-        // "Scanning and recognising" (the reported bug). Resume it on confirm.
-        setLoading(false);
-        setDateGateTemp(null); // empty field — force the user to actively pick
-        const picked = await new Promise<Date | null>((resolve) => {
-          dateGateResolveRef.current = resolve;
-          setDateGate(true);
-        });
-        setDateGate(false);
-        setDateGateShowPicker(false);
-        dateGateResolveRef.current = null;
-        if (picked) {
-          setLoading(true); // resume the processing indicator for applyXResult
-          const y = picked.getFullYear();
-          const m = String(picked.getMonth() + 1).padStart(2, '0');
-          const d = String(picked.getDate()).padStart(2, '0');
-          footer.date = `${y}-${m}-${d}`;
-          return true;
-        }
-        // dismissed without a date → can't proceed
-        await bailWithLog('ocr_no_text', { ocrPreview: 'manual date entry cancelled', ...keyFieldsDiag() });
-        return false;
-      }
-      // No receipt id → fail (no rescan loop). Include the OCR tail in the preview: the
-      // key fields print at the BOTTOM, so the tail answers "cropped off or garbled?"
-      // at a glance (the full text rides in parsedData).
-      await bailWithLog('ocr_no_text', {
-        ocrPreview:
-          `missing key fields: receiptNo=- date=${footer?.date ?? '-'} time=${footer?.time ?? '-'}` +
-          ` | tail: ${ocrLineTexts.slice(-8).join(' ⏎ ')}`,
-        ...keyFieldsDiag(),
-      });
-      return false;
-    };
-
-    // A usable receipt needs at least ONE product with a COMPLETE identity — a real NAME and a
-    // positive PRICE. Zero products, OR products that ALL lost their name ("?") or their price (a
-    // garbled/blurred scan), means nothing actionable was recovered → bail with a "retake the
-    // photo" prompt instead of saving a junk receipt. Runs BEFORE the date gate + BEFORE any
-    // Receipt row is created (bailWithLog never creates one), so the failed scan never reaches the
-    // DB — nothing to wipe. A garbled-but-PRESENT name still passes: that's a matching problem
-    // (0 catalog matches), not a capture failure, and is not a retake case.
-    const ensureHasProducts = async (products: any[], chainName: string): Promise<boolean> => {
-      const list = Array.isArray(products) ? products : [];
-      const hasName = (p: any) => typeof p?.name === 'string' && p.name.trim().length > 0 && p.name.trim() !== '?';
-      const hasPrice = (p: any) =>
-        (typeof p?.price === 'number' && p.price > 0) || (typeof p?.promoPrice === 'number' && p.promoPrice > 0);
-      if (list.some((p) => hasName(p) && hasPrice(p))) return true;
-      await bailWithLog('no_products', {
-        detectedChainName: chainName,
-        ocrLineCount: ocrLineTexts.length,
-        ocrPreview: `${list.length} parsed, 0 with a complete name+price (${chainName})`,
-        parsedData: JSON.stringify({ lineTexts: ocrLineTexts }),
-      });
-      return false;
-    };
-
-    try {
-      setLoading(true);
-      setLoadingMessage(t('receiptProcess.loadingScan'));
-      setSkippedRegions([]); // only the IKI path repopulates this
-
-      interface LineWithFrame {
-        text: string;
-        yTop: number;
-        yBottom: number;
-        xLeft: number;
-        xRight: number;
-        yLeftTop?: number;
-        yRightTop?: number;
-        yLeftBottom?: number;
-        yRightBottom?: number;
-        words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number; cornerPoints?: { x: number; y: number }[] }[];
-      }
-
-      // SHARED OCR pipeline — the exact per-page loop the dev batch and the
-      // recovery flow run (rotate-portrait → enhanced/tiled OCR → fused/
-      // dropped-row strip healing → per-page x-bounds → y-offset concat →
-      // adjacent-row merge). The interactive scan must never branch off it,
-      // or batch results stop predicting what a user sees here.
-      const ocrResult = await ocrReceiptPages(imageUris, 'auto', {
-        document: fromPdfParam === '1',
-        stripHealing: true,
-      });
-      const allLines: LineWithFrame[] = ocrResult.allLines as LineWithFrame[];
-      const firstPageDims: { width: number; height: number } | null =
-        { width: ocrResult.firstPageWidth, height: ocrResult.firstPageHeight };
-      const firstPageUri: string | null = ocrResult.firstPageUri;
-      const collectedPageMetas: PageMeta[] = ocrResult.pageMetas;
-
-      setPageMetas(collectedPageMetas);
-
-      // CANONICAL IMAGE = the ROTATED page that OCR actually ran on, NOT the raw
-      // capture. All region geometry (products/header/footer/masks) lives in this
-      // rotated portrait space. Using the raw landscape capture here would render
-      // every band in the wrong place, redact the masks at the wrong coords, and
-      // upload a landscape image whose saved-receipt view can't be cropped. For a
-      // portrait capture the rotated uri === the original, so this is a no-op.
-      if (collectedPageMetas[0]?.uri) setImageUri(collectedPageMetas[0].uri);
-
-      const dims = firstPageDims ?? { width: 0, height: 0 };
-      setImageDims(dims);
-
-      // Detect bank/loyalty/cashier redaction boxes for the pre-upload image
-      // masking. allLines are in image-pixel space, so the boxes map 1:1 onto
-      // the uploaded photo (single-image; multi-page bands beyond page 0 fall
-      // outside the uploaded page-0 image and are filtered at upload time).
-      const detectedMaskBands = detectCardMaskBands(allLines);
-      console.log(
-        `[MASK] detected ${detectedMaskBands.length} band(s):`,
-        detectedMaskBands.map((b) => `${b.label}@${Math.round(b.yTop)}-${Math.round(b.yBottom)}`).join(', ') || '(none)',
-      );
-      // SMOKING-GUN diagnostic: dump every OCR line that looks card/loyalty/
-      // cashier-ish, regardless of detection result. If these lines are present
-      // but `detected=0`, it's a DETECTOR bug; if they're absent, OCR never read
-      // the payment section (photo cut off / blurry) → nothing to mask.
-      const cardish = allLines.filter((l) =>
-        /[*xX•·]{2,}|mokejim|moket|kortel|lojalum|kasin\w{0,3}k|\bbanko\b|maestro|visa|master/i.test(l.text),
-      );
-      console.log(
-        `[MASK] card-ish OCR lines (${cardish.length}/${allLines.length} total):`,
-      );
-      for (const l of cardish) {
-        console.log(`   y${Math.round(l.yTop)} » ${JSON.stringify(l.text)}`);
-        // Per-word boxes — needed to verify the cashier mask starts at the cashier
-        // value and never covers the Kvito Nr (which shares the row).
-        if (l.words?.length) {
-          console.log(
-            `      words: ${l.words.map((w: any) => `${JSON.stringify(w.text)}[${Math.round(w.xLeft)}-${Math.round(w.xRight)}]`).join(' ')}`,
-          );
-        }
-      }
-      for (const b of detectedMaskBands.filter((b) => b.kind === 'cashier')) {
-        console.log(`[MASK] cashier band x${Math.round(b.xLeft)}-${Math.round(b.xRight)} y${Math.round(b.yTop)}-${Math.round(b.yBottom)}`);
-      }
-      setMaskBands(detectedMaskBands);
-
-      // Adjacent-row merge comes from the SAME shared pipeline call (iki +
-      // chain detection consume these; the other parsers take raw allLines).
-      const mergedLines: LineWithFrame[] = ocrResult.mergedLines as LineWithFrame[];
-
-      const lineTexts = mergedLines.map((l) => l.text);
-      ocrLineTexts = lineTexts; // expose to the bail helpers defined above the try
-
-      // DOUBLED-SCAN gate: the camera caught the SAME receipt twice in one frame (receipt-167) — its
-      // full slashed receipt number ("71/612/114973") then appears in ≥2 lines. The two copies can't
-      // be reconciled: the header reads from copy 1, the products from copy 2, and the stored image
-      // covers only one — so product bands land OFF-image (no crops in the Items tab) and the address
-      // bands a garbled product line. Bail with a retake prompt rather than save a mangled receipt.
-      // (A single receipt prints the full slashed number once; the short "Kvito numeris" form has no
-      // slashes, and the terminal id "0429/0022/802" has a 3-digit tail → neither false-triggers.)
-      {
-        // Per-chain "this token prints exactly ONCE on a real receipt" extractors. The original
-        // slashed form covers IKI/Rimi; the added forms make the gate effective for the other
-        // chains too (it was silently inert there — a doubled Maxima/Lidl/Norfa frame saved a
-        // mangled receipt instead of prompting a retake):
-        //   Maxima  "Kvito Nr. 1234567"      — labelled, unslashed
-        //   Maxima  "Dokumento numeris 123…" — alternative label
-        //   Lidl    "Kvitas 47989/258"       — labelled 2-part (NOT the bare "#00NNNNN", which
-        //                                      legitimately prints twice: header + VMI block)
-        //   Norfa   "# Kvito numeris 123456 #"
-        const ONCE_ONLY_TOKENS: RegExp[] = [
-          /\b\d{2,4}\/\d{2,4}\/\d{4,8}\b/,                       // IKI/Rimi full slashed id
-          /[KA][vouy]ito\s+Nr\S{0,2}\s*(\d{5,})/i,               // Maxima labelled id (stem-tolerant)
-          /Dokumento\s+numeris\s*:?\s*(\d{4,})/i,                // Maxima alt label
-          /\bKvitas\s+(\d{4,}\s*\/\s*\d+)/i,                     // Lidl labelled 2-part
-          /#\s*Kvito\s+numeris\s+(\d{4,})\s*#/i,                 // Norfa
-        ];
-        const rcptTokens: string[] = [];
-        for (const tx of lineTexts) {
-          for (const re of ONCE_ONLY_TOKENS) {
-            const m = tx.match(re);
-            if (m) { rcptTokens.push((m[1] ?? m[0]).replace(/\s+/g, '')); break; }
-          }
-        }
-        const dup = rcptTokens.find((tok, i) => rcptTokens.indexOf(tok) !== i);
-        if (dup) {
-          await bailWithLog("doubled_scan", { ocrPreview: `doubled scan: receiptNo ${dup} ×${rcptTokens.filter((tk) => tk === dup).length}` });
-          return;
-        }
-      }
-
-      if (__DEV__) {
-        // DEV-only verbose OCR dump for parser debugging. Raw OCR holds pre-mask
-        // PII (card / loyalty / cashier), so it must NEVER reach prod logs —
-        // gate the whole thing behind __DEV__.
-        console.log("=== MERGED OCR LINES ===");
-        mergedLines.forEach((l, i) =>
-          console.log(`${i}: [y=${Math.round(l.yTop)}] ${l.text}`),
-        );
-        const rawDump = lineTexts.join("\n");
-        console.log(
-          `=== DEDUPED RAW TEXT (${lineTexts.length} lines) ===\n` +
-          rawDump +
-          "\n=== END RAW TEXT ===",
-        );
-        // Metro truncates long logs — also drop the full raw text on the
-        // clipboard so it's one paste away (no digging in the DB rawData field).
-        Clipboard.setStringAsync(rawDump).catch(() => {});
-        console.log(`[dev] raw OCR (${lineTexts.length} lines) copied to clipboard ✂️`);
-      }
-
-      // OCR produced nothing usable — bail before trying chain detection.
-      // Empty-text check uses >= 3 lines as the threshold: a well-lit
-      // receipt always emits at least the header + a couple of product
-      // rows, so fewer than 3 lines means OCR effectively failed.
-      if (lineTexts.filter((t) => t.trim().length > 0).length < 3) {
-        await bailWithLog("ocr_no_text", {
-          ocrLineCount: lineTexts.length,
-          ocrPreview: lineTexts.join("\n").slice(0, 500),
-        });
-        return;
-      }
-
-      setLoadingMessage(t('receiptProcess.loadingScan'));
-
-      // Chain-match gate + auto store-resolution (list-upload flow only).
-      // For a multi-store group the receipt's detected chain AUTO-selects
-      // which store row to link — no store-selection prompt. If the detected
-      // chain matches none of the list's stores, ask before continuing (the
-      // user may have shopped elsewhere — "I went to a different store"
-      // override). Backing out is a retry, NOT a failure (not logged). The
-      // isXReceipt checks are cheap regex; the real parse runs below regardless.
-      linkListIdRef.current = fallbackLinkId;
-      const expectedChainIds = Object.keys(linkMap).map(Number);
-      // SHARED chain detection (fingerprints in live order + VAT fallback) —
-      // the same call routes the parse below and the dev batch harness.
-      const detectedScan = detectReceiptChain(lineTexts);
-      if (expectedChainIds.length > 0) {
-        const detectedChainId = detectedScan.chainId;
-        if (detectedChainId != null && linkMap[detectedChainId] != null) {
-          // Auto-detected store — link target resolved, no prompt.
-          linkListIdRef.current = linkMap[detectedChainId];
-        } else {
-          const proceed = await new Promise<boolean>((resolve) => {
-            chainGateResolveRef.current = resolve;
-            setChainGate({ detectedChainId: detectedChainId ?? 0, expectedChainIds });
-          });
-          setChainGate(null);
-          chainGateResolveRef.current = null;
-          if (!proceed) {
-            setLoading(false);
-            router.replace('/(tabs)/shoppingList');
-            return;
-          }
-          // Override: shopped at an unplanned store — fulfil the first
-          // awaiting store slot of this list/group.
-          linkListIdRef.current = Object.values(linkMap)[0] ?? fallbackLinkId;
-        }
-      }
-
-      // Note on setLoading placement: we intentionally hold the main
-      // loading overlay up through the ENTIRE applyXxxResult call.
-      // Dropping it right after the early header was set used to flash
-      // "Prekės (0) — prekės nerastos" to the user while per-product
-      // match requests were still in flight. Keep the overlay until
-      // products have been parsed + matched.
-      //
-      // Args every parseChainReceipt call below shares — THE single scan flow
-      // (utils/receiptScanFlow): chain parse → Phase-5 ensemble → rimi photo
-      // section re-OCR + primary-name graft → iki whole-section re-OCR +
-      // footer band refine. The dev batch runs the identical call.
-      const scanFlowArgs = {
-        ocr: { allLines, mergedLines, pageMetas: collectedPageMetas },
-        imageUris,
-        document: fromPdfParam === '1',
-      };
-
-      if (detectedScan.chain === 'rimi') {
-        // V2 Rimi parser does its own same-row absorption inside
-        // findProductBandsInternal, so it expects RAW OCR lines.
-        // The outer `mergedLines` blob fused header/product rows
-        // on tight gaps and broke header detection — same class
-        // of bug as Maxima below.
-        const earlyHeader = parseRimiHeaderOnly(allLines);
-        setHeader({
-          chainName: "RIMI",
-          chainId: 2,
-          storeCode: earlyHeader.storeCode,
-          storeAddress: earlyHeader.storeAddress,
-          storeId: null,
-          storeName: null,
-          storeAddressMatched: null,
-          matchConfidence: null,
-          matchLoading: true,
-          rawText: earlyHeader.rawText,
-          region: earlyHeader.region,
-        });
-
-        const parsed = (await parseChainReceipt('rimi', scanFlowArgs)).parsed;
-        logParsedReview('RIMI', parsed);
-        if (!(await ensureHasProducts(parsed.products, 'RIMI'))) return;
-        if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
-        await applyRimiResult(parsed.header, parsed.products, parsed.footer);
-        setLoading(false);
-      } else if (detectedScan.chain === 'maxima') {
-        // Maxima parser does its own splitMergedLines + same-row
-        // handling internally, so it expects RAW OCR lines, not the
-        // outer `mergedLines` blob. Passing the merged blob caused
-        // the first product's name to get glued onto the last
-        // header line ("Kvitas bazėje:" + "Gira RUGILĖ" within
-        // 30 px) and eaten by findHeaderEnd, leaving band 1 with
-        // an empty name. Iki still consumes the merged blob
-        // because its parser was tuned against that input.
-        const earlyHeader = parseMaximaHeaderOnly(allLines);
-        setHeader({
-          chainName: "MAXIMA",
-          chainId: 1,
-          storeCode: earlyHeader.storeCode,
-          storeAddress: earlyHeader.storeAddress,
-          storeId: null,
-          storeName: null,
-          storeAddressMatched: null,
-          matchConfidence: null,
-          matchLoading: true,
-          rawText: earlyHeader.rawText,
-          region: earlyHeader.region,
-        });
-
-        const parsed = (await parseChainReceipt('maxima', scanFlowArgs)).parsed;
-        if (__DEV__) {
-          // Diagnostic: surface what the parser actually captured
-          // from the footer so we can compare against the printed
-          // receipt without poking the DB. Most useful when the
-          // receipts list shows the wrong/missing date.
-          console.log(
-            "[parseMaximaReceipt] footer:",
-            JSON.stringify({
-              date: parsed.footer.date,
-              time: parsed.footer.time,
-              total: parsed.footer.total,
-              receiptNo: parsed.footer.receiptNo,
-              totalSavings: parsed.footer.totalSavings,
-            }),
-          );
-        }
-        logParsedReview('MAXIMA', parsed);
-        if (!(await ensureHasProducts(parsed.products, 'MAXIMA'))) return;
-        if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
-        await applyMaximaResult(parsed.header, parsed.products, parsed.footer);
-        setLoading(false);
-      } else if (detectedScan.chain === 'norfa') {
-        // Norfa V2 (hard-walled bands + per-band extract) consumes
-        // RAW OCR lines — its mergeRowFragments pass needs the
-        // original y-coords intact. Same reasoning as Rimi/Maxima.
-        const earlyHeader = parseNorfaHeaderOnly(allLines);
-        setHeader({
-          chainName: "NORFA",
-          chainId: 4,
-          storeCode: earlyHeader.storeCode,
-          storeAddress: earlyHeader.storeAddress,
-          storeId: null,
-          storeName: null,
-          storeAddressMatched: null,
-          matchConfidence: null,
-          matchLoading: true,
-          rawText: earlyHeader.rawText,
-          region: earlyHeader.region,
-        });
-
-        const parsed = (await parseChainReceipt('norfa', scanFlowArgs)).parsed;
-        logParsedReview('NORFA', parsed);
-        if (!(await ensureHasProducts(parsed.products, 'NORFA'))) return;
-        if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
-        await applyNorfaResult(parsed.header, parsed.products, parsed.footer);
-        setLoading(false);
-      } else if (detectedScan.chain === 'lidl') {
-        // Lidl V2 (hard-walled bands + per-band extract) consumes
-        // RAW OCR lines — same reasoning as Rimi/Maxima/Norfa.
-        // Phone-photographed thermal print so OCR is rougher than
-        // the e-receipt chains, but the V2 splitter handles the
-        // head-fused / tail-fused / middle-fused-with-barcode
-        // patterns MLKit emits.
-        const earlyHeader = parseLidlHeaderOnly(allLines);
-        setHeader({
-          chainName: "LIDL",
-          chainId: 5,
-          storeCode: earlyHeader.storeCode,
-          storeAddress: earlyHeader.storeAddress,
-          storeId: null,
-          storeName: null,
-          storeAddressMatched: null,
-          matchConfidence: null,
-          matchLoading: true,
-          rawText: earlyHeader.rawText,
-          region: earlyHeader.region,
-        });
-
-        const parsed = (await parseChainReceipt('lidl', scanFlowArgs)).parsed;
-        logParsedReview('LIDL', parsed);
-        if (!(await ensureHasProducts(parsed.products, 'LIDL'))) return;
-        if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
-        await applyLidlResult(parsed.header, parsed.products, parsed.footer);
-        setLoading(false);
-      } else if (detectedScan.chain === 'iki') {
-        const earlyHeader = parseIkiHeaderOnly(mergedLines);
-        setHeader({
-          chainName: "IKI",
-          chainId: 3,
-          storeCode: earlyHeader.storeCode,
-          storeAddress: earlyHeader.storeAddress,
-          storeId: null,
-          storeName: null,
-          storeAddressMatched: null,
-          matchConfidence: null,
-          matchLoading: true,
-          rawText: earlyHeader.rawText,
-          region: earlyHeader.region,
-        });
-
-        // Capture the exact per-WORD lines the IKI column engine consumes, so a failing
-        // receipt can be reproduced 1:1 in a jest fixture (the merged line text alone
-        // loses the word coordinates the engine clusters on). Emitted as a TOP-LEVEL
-        // `wordsDump` field in buildParsedData; feed a pasted blob to wordsToFixture.mjs.
-        // wordsDump ships in staging+prod now (not __DEV__-only), so it MUST be PII-safe:
-        // the card PAN / loyalty number / cashier name appear as raw words here. Redact
-        // any word inside a mask band (or whose text LOOKS like a card/loyalty number) to
-        // '[•••]', keeping its coordinates + corners (geometry is what the dump is for; the
-        // parser skips these words anyway). The line text `t` runs through the same
-        // redactReceiptText used for rawText so a full number never lands in plaintext.
-        // (LINE corner Ys `c` = the tilt data the de-skew consumes; without it the
-        // off-device reparse ran slope=0 and couldn't reproduce device parses. The
-        // builder is a closure so the PHASE-5 ensemble below can re-emit the dump
-        // from the WINNING engine's lines — a stored dump must reproduce the stored
-        // parse.)
-        const buildWordsDump = (ls: LineWithFrame[]) => ls.map((l) => ({
-          t: redactReceiptText(l.text),
-          x: [Math.round(l.xLeft), Math.round(l.xRight)],
-          y: [Math.round(l.yTop), Math.round(l.yBottom)],
-          c: l.yLeftTop != null
-            ? [Math.round(l.yLeftTop), Math.round(l.yRightTop ?? l.yTop), Math.round(l.yLeftBottom ?? l.yBottom), Math.round(l.yRightBottom ?? l.yBottom)]
-            : undefined,
-          w: l.words?.map((w) => {
-            const pii = wordCentreInMaskBand(w, detectedMaskBands) || looksLikePiiText(w.text);
-            return [
-              pii ? "[•••]" : w.text, Math.round(w.xLeft), Math.round(w.xRight), Math.round(w.yTop), Math.round(w.yBottom),
-              w.cornerPoints?.length ? w.cornerPoints.flatMap((pt) => [Math.round(pt.x), Math.round(pt.y)]) : undefined,
-            ];
-          }),
-        }));
-        wordsDumpRef.current = buildWordsDump(mergedLines);
-        wordsSrcRef.current = "scan";
-
-        // The user-facing ensure* gates run BETWEEN the ensemble and the
-        // whole-section re-OCR (their historical position) via the flow's
-        // beforeIkiReocr hook; the hard-bail flavour is tracked so the two
-        // exits keep their distinct loading behaviour.
-        let ikiFieldsGateFailed = false;
-        const flow = await parseChainReceipt('iki', {
-          ...scanFlowArgs,
-          reportIkiReocr: true,
-          beforeIkiReocr: async (p: any) => {
-            if (!(await ensureHasProducts(p.products, 'IKI'))) return false;
-            if (!(await ensureKeyReceiptFields(p.footer))) { ikiFieldsGateFailed = true; return false; }
-            return true;
-          },
-        });
-        const parsed = flow.parsed;
-        console.log(
-          `[parse] IKI → ${parsed.products.length} product(s), total=${parsed.footer.total}, ` +
-          `date=${parsed.footer.date}, receiptNo=${parsed.footer.receiptNo}`,
-        );
-        logParsedReview('IKI', parsed);
-        // A stored wordsDump must reproduce the STORED parse — re-emit it from
-        // the winning engine's lines when the ensemble flipped to ML Kit.
-        if (flow.secondOcr) {
-          wordsDumpRef.current = buildWordsDump(flow.secondOcr.mergedLines as any);
-        }
-        if (flow.ikiGateFailed) {
-          if (ikiFieldsGateFailed) setLoading(false);
-          return;
-        }
-        await applyIkiResult(parsed.header, parsed.products, parsed.footer, parsed.skippedRegions ?? []);
-        setLoading(false);
-      } else {
-        await bailWithLog("chain_unrecognized", {
-          ocrLineCount: lineTexts.length,
-          ocrPreview: lineTexts.slice(0, 20).join("\n").slice(0, 500),
-        });
-      }
-    } catch (error) {
-      console.error("OCR error:", error);
-      await bailWithLog("ocr_error", {
-        ocrPreview: error instanceof Error ? error.message : String(error),
-      });
-    }
-  };
-
-  // Resolve a store from the OCR address. Tries the parser's header-zone `storeAddress`
-  // FIRST, then the broader raw-text street scan (`pickAddressFromRawText`, the SAME
-  // extraction the map prefill uses) — a degraded header can leave `storeAddress` empty
-  // even when the street is legible elsewhere in the OCR, and we were then showing the map
-  // for a store that is an exact DB match (receipt-293 "Lyros g. 19A-1, Šiauliai"). Deduped
-  // so the endpoint isn't hit twice with the same string. Returns null → caller shows the map.
-  const resolveStoreMatch = async (
-    chainId: number,
-    storeAddress: string | null | undefined,
-    rawText: string | null | undefined,
-  ): Promise<{ storeId: number; storeName: string | null; address: string | null; confidence: number | null } | null> => {
-    const candidates = Array.from(new Set(
-      [(storeAddress ?? '').trim(), (pickAddressFromRawText(rawText) ?? '').trim()].filter(Boolean),
-    ));
-    for (const addr of candidates) {
-      try {
-        const url = `${API_BASE_URL}/api/stores/match?chainId=${chainId}&address=${encodeURIComponent(addr)}`;
-        const res = await fetchWithTimeout(url, { timeoutMs: TIMEOUT_STANDARD_MS });
-        const data = await res.json();
-        if (data?.match) {
-          return { storeId: data.match.storeId, storeName: data.match.storeName, address: data.match.address, confidence: data.match.confidence };
-        }
-      } catch (e) {
-        console.warn('Store match failed:', e);
-      }
-    }
-    return null;
-  };
-
-  // RE-OCR STORE INHERIT: a re-OCR reprocesses an EXISTING receipt's photo — when the fresh
-  // OCR pass loses the address text entirely (a second engine can drop whole header lines),
-  // re-asking the user to pick the store on the map is wrong: the original receipt already
-  // resolved it. Chain-checked, so a mis-detected chain still falls through to the prompt.
-  const inheritReocrStore = async (
-    chainId: number,
-  ): Promise<{ storeId: number; storeName: string | null; storeAddress: string | null } | null> => {
-    if (reocrReceiptId == null || !Number.isFinite(reocrReceiptId)) return null;
-    try {
-      const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${reocrReceiptId}`, { timeoutMs: TIMEOUT_STANDARD_MS });
-      if (!res.ok) return null;
-      const r = await res.json();
-      const pd = typeof r?.parsedData === 'string' ? JSON.parse(r.parsedData) : r?.parsedData;
-      const h = pd?.header ?? {};
-      const sid = h?.storeId ?? r?.storeId;
-      if (sid == null || (h?.chainId != null && h.chainId !== chainId)) return null;
-      console.log(`[reocr] inherited store ${sid} (${h?.storeName ?? '?'}) from receipt ${reocrReceiptId}`);
-      return { storeId: Number(sid), storeName: h?.storeName ?? null, storeAddress: h?.storeAddressMatched ?? null };
-    } catch {
-      return null;
-    }
-  };
-
-  // The store address didn't auto-match — send the user to the map
-  // store-resolution screen (chain known, store not) and await their pick.
-  // null = user backed out (caller bails as store_unrecognized).
-  const promptStoreResolution = async (chainId: number, chainName: string, ocrAddress: string | null, rawText?: string | null) => {
-    const prefill = ocrAddress || pickAddressFromRawText(rawText);
-    const pending = requestStoreResolution(chainId, chainName, prefill);
-    // Drop the OCR loader early-return so the modal mounts (mirrors the date gate), then
-    // show the store-resolution modal on top and await the user's pick.
-    setLoading(false);
-    setStoreGate(true);
-    const result = await pending;
-    // Hide the map AND wait for its dismiss animation to complete before returning.
-    // The caller may immediately show the fail modal (a cancelled pick → bailWithLog →
-    // setFailGate). Presenting that transparent modal while this fullScreen map is still
-    // sliding out stacks TWO modals on iOS (the map "stays" behind the fail card until
-    // dismissed — the reported double-modal). onDismiss fires when the slide-out finishes;
-    // a timeout backstops Android (no onDismiss) and any missed callback.
-    await new Promise<void>((resolve) => {
-      let settled = false;
-      const finish = () => { if (settled) return; settled = true; storeGateDismissRef.current = null; resolve(); };
-      storeGateDismissRef.current = finish;
-      setStoreGate(false);
-      setTimeout(finish, 500);
-    });
-    if (result) setLoading(true); // resume the processing indicator after a pick
-    return result;
-  };
-
-  const applyRimiResult = async (
-    rHeader: RimiHeader,
-    rProducts: RimiProduct[],
-    rFooter: RimiFooter,
-  ) => {
-    const chainId = 2;
-
-    let storeId: number | null = null;
-    let storeName: string | null = null;
-    let storeAddressMatched: string | null = null;
-    let matchConfidence: number | null = null;
-
-    {
-      // Header address first, raw-text street fallback second (see resolveStoreMatch).
-      const m = await resolveStoreMatch(chainId, rHeader.storeAddress, rHeader.rawText);
-      if (m) { storeId = m.storeId; storeName = m.storeName; storeAddressMatched = m.address; matchConfidence = m.confidence; }
-    }
-
-    // Bail if store couldn't be identified — no Receipt row is created
-    // for this path. Same treatment as chain-unrecognized since an
-    // un-mapped store downstream breaks price comparison and metric
-    // aggregation; easier to make the user re-scan than to thread
-    // a null-store receipt through the rest of the system.
-    if (storeId === null) {
-      const inh = await inheritReocrStore(chainId);
-      if (inh) {
-        storeId = inh.storeId;
-        storeName = inh.storeName;
-        storeAddressMatched = inh.storeAddress;
-        matchConfidence = 1;
-        rHeader.lineRegions = (rHeader.lineRegions ?? []).filter((r: any) => r?.kind !== 'storeAddress');
-      }
-    }
-    if (storeId === null) {
-      const chosen = await promptStoreResolution(chainId, "RIMI", rHeader.storeAddress || null, rHeader.rawText);
-      if (!chosen) {
-        await bailWithLog("store_unrecognized", {
-          detectedChainName: "RIMI",
-          extractedStoreAddress: rHeader.storeAddress || null,
-        });
-        return;
-      }
-      storeId = chosen.storeId;
-      storeName = chosen.storeName;
-      storeAddressMatched = chosen.storeAddress;
-      matchConfidence = 1;
-    }
-
-    setHeader({
-      chainName: "RIMI",
-      chainId,
-      storeCode: rHeader.storeCode,
-      storeAddress: rHeader.storeAddress,
-      storeId,
-      storeName,
-      storeAddressMatched,
-      matchConfidence,
-      matchLoading: false,
-      rawText: rHeader.rawText,
-      region: rHeader.region,
-      regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
-    });
-
-    const AUTO_APPLY_THRESHOLD = RECOGNITION.match.autoApplyThreshold;
-
-    // Initialise the loading-overlay progress counter. Each per-product
-    // match promise below bumps `done` on completion so the user sees
-    // "N / M prekių atpažinta" tick up instead of staring at a static
-    // spinner during what can be 5-15s of sequential HTTP calls.
-    setMatchProgress({ done: 0, total: rProducts.length });
-
-    const matchPromises = rProducts.map(async (rp) => {
-      let altMatches: ProductMatchOption[] = [];
-      let isCrossChain = false;
-
-      // Strip trailing size tokens from the product name so the fuzzy matcher
-      // isn't biased by the number. Also extract amount/unit when present.
-      // rp.parsedAmount/parsedUnit were extracted from the raw name before
-      // cleanProductName stripped the size suffix — prefer them over re-parsing
-      // the already-cleaned name (which would always return null for packaged goods).
-      const { strippedName, amount: parsedAmountFromName, unit: parsedUnitFromName } =
-        parseProductName(rp.name);
-
-      // Rimi receipts often embed volume without a unit (e.g. "NATURĀ, 1,51"
-      // means 1.51 L). When parseProductName strips a bare decimal ≤ 5 that
-      // isn't an integer, infer litres — that range covers all common liquid
-      // package sizes (0.25 L … 5 L) without catching gram/piece values.
-      let resolvedAmount = rp.parsedAmount ?? parsedAmountFromName;
-      let resolvedUnit = rp.parsedUnit ?? parsedUnitFromName;
-      if (resolvedAmount === null && strippedName !== rp.name) {
-        const stripped = rp.name.slice(strippedName.length).replace(/^[,\s]+/, "");
-        const bare = parseFloat(stripped.replace(",", "."));
-        if (
-          Number.isFinite(bare) &&
-          bare > 0.1 &&
-          bare <= 5 &&
-          !Number.isInteger(bare)
-        ) {
-          resolvedAmount = bare;
-          resolvedUnit = "l";
-        }
-      }
-
-      const matchName = strippedName || rp.name;
-      // ABSURD-LENGTH guard (receipt-272): a mega-line (a phantom that glued trailer
-      // text) makes the matcher score 14k candidates against a 200-char string — the
-      // request runs past its timeout and the abort stalls the UI for seconds. No real
-      // product name is this long; skip the match outright (the line stays unmatched).
-      const absurdName = matchName.length > 80;
-      if (absurdName) console.warn(`[match] skipped absurd-length name (${matchName.length} chars)`);
-      // by-WEIGHT line (sold per kg) → matcher skips packaged SPs (and vice-versa).
-      const wParam = rp.unit === 'kg' ? '1' : null;
-
-      if (!absurdName) try {
-        const params = new URLSearchParams({
-          chainId: String(chainId),
-          name: matchName,
-          ...(wParam ? { weighable: wParam } : {}),
-        });
-        const res = await fetchWithTimeout(
-          `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
-          {
-            timeoutMs: TIMEOUT_FAST_MS,
-          },
-        );
-        const data = await res.json();
-        if (Array.isArray(data?.matches)) altMatches = data.matches;
-        // Cross-chain fallback flag (whole match set): the same-chain catalog
-        // returned nothing, so these candidates come from OTHER chains. Used to
-        // orphan a weak (non-auto-applied) cross-chain pick — see topMatchDisplayFields.
-        isCrossChain = !!data?.crossChain;
-      } catch (e) {
-        console.warn(`Product match failed for "${rp.name}":`, e);
-      }
-
-      const top = altMatches[0] || null;
-      const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
-
-      setMatchProgress((prev) =>
-        prev ? { ...prev, done: prev.done + 1 } : prev,
-      );
-
-      return {
-        name: matchName,
-        // Weak cross-chain auto-matches are orphaned (OCR shown, candidates kept
-        // for orphan-rescue); auto-matched lines start "system-verified"
-        // (priceVerified=autoApply), flipped false on any user edit. See topMatchDisplayFields.
-        ...topMatchDisplayFields(top, isCrossChain, autoApply),
-        altMatches,
-        price: rp.price,
-        promoPrice: rp.promoPrice,
-        quantity: rp.quantity,
-        // "vnt" is the receipt quantity unit — not a product size unit.
-        // Preserve "kg" for weighable products; use the extracted size unit
-        // ("l", "g", …) when available; null when unknown.
-        unit: rp.unit === "kg" ? "kg" : rp.unit,
-        amount: resolvedAmount,
-        sizeUnit: resolvedUnit,
-        pricePerUnit: rp.pricePerUnit,
-        rawLines: rp.rawLines,
-        region: rp.region,
-      } as ProductLine;
-    });
-
-    const productLines = await Promise.all(matchPromises);
-    setMatchProgress(null);
-    setProducts(productLines);
-
-    setFooter({
-      total: rFooter.total,
-      date: rFooter.date,
-      time: rFooter.time,
-      receiptNo: rFooter.receiptNo,
-      totalSavings: rFooter.totalSavings,
-      comboDiscount: null,
-      rawText: rFooter.rawText,
-      region: rFooter.region,
-    });
-  };
-
-  const applyMaximaResult = async (
-    mHeader: MaximaHeader,
-    mProducts: MaximaProduct[],
-    mFooter: MaximaFooter,
-  ) => {
-    const chainId = 1;
-
-    let storeId: number | null = null;
-    let storeName: string | null = null;
-    let storeAddressMatched: string | null = null;
-    let matchConfidence: number | null = null;
-
-    {
-      // Header address first, raw-text street fallback second (see resolveStoreMatch).
-      const m = await resolveStoreMatch(chainId, mHeader.storeAddress, mHeader.rawText);
-      if (m) { storeId = m.storeId; storeName = m.storeName; storeAddressMatched = m.address; matchConfidence = m.confidence; }
-    }
-
-    if (storeId === null) {
-      const inh = await inheritReocrStore(chainId);
-      if (inh) {
-        storeId = inh.storeId;
-        storeName = inh.storeName;
-        storeAddressMatched = inh.storeAddress;
-        matchConfidence = 1;
-        mHeader.lineRegions = (mHeader.lineRegions ?? []).filter((r: any) => r?.kind !== 'storeAddress');
-      }
-    }
-    if (storeId === null) {
-      const chosen = await promptStoreResolution(chainId, "MAXIMA", mHeader.storeAddress || null, mHeader.rawText);
-      if (!chosen) {
-        await bailWithLog("store_unrecognized", {
-          detectedChainName: "MAXIMA",
-          extractedStoreAddress: mHeader.storeAddress || null,
-        });
-        return;
-      }
-      storeId = chosen.storeId;
-      storeName = chosen.storeName;
-      storeAddressMatched = chosen.storeAddress;
-      matchConfidence = 1;
-    }
-
-    setHeader({
-      chainName: "MAXIMA",
-      chainId,
-      storeCode: mHeader.storeCode,
-      storeAddress: mHeader.storeAddress,
-      storeId,
-      storeName,
-      storeAddressMatched,
-      matchConfidence,
-      matchLoading: false,
-      rawText: mHeader.rawText,
-      region: mHeader.region,
-      regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
-    });
-
-    const AUTO_APPLY_THRESHOLD = RECOGNITION.match.autoApplyThreshold;
-
-    setMatchProgress({ done: 0, total: mProducts.length });
-
-    const matchPromises = mProducts.map(async (mp) => {
-      let altMatches: ProductMatchOption[] = [];
-      let isCrossChain = false;
-
-      // mp.name is already cleaned (size stripped). mp.parsedAmount/parsedUnit
-      // were extracted from the raw name before cleaning.
-      const { strippedName } = parseProductName(mp.name);
-      const matchName = strippedName || mp.name;
-      // by-WEIGHT line (sold per kg) → matcher skips packaged SPs (and vice-versa).
-      const wParam = mp.unit === 'kg' ? '1' : null;
-      const resolvedAmount = mp.parsedAmount ?? null;
-      const resolvedUnit = mp.parsedUnit ?? null;
-
-      try {
-        const params = new URLSearchParams({
-          chainId: String(chainId),
-          name: matchName,
-          ...(wParam ? { weighable: wParam } : {}),
-        });
-        const res = await fetchWithTimeout(
-          `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
-          {
-            timeoutMs: TIMEOUT_FAST_MS,
-          },
-        );
-        const data = await res.json();
-        if (Array.isArray(data?.matches)) altMatches = data.matches;
-        isCrossChain = !!data?.crossChain;
-      } catch (e) {
-        console.warn(`Product match failed for "${mp.name}":`, e);
-      }
-
-      const top = altMatches[0] || null;
-      const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
-
-      setMatchProgress((prev) =>
-        prev ? { ...prev, done: prev.done + 1 } : prev,
-      );
-
-      return {
-        name: matchName,
-        // Weak cross-chain auto-matches are orphaned (OCR shown, candidates kept
-        // for orphan-rescue). See topMatchDisplayFields.
-        ...topMatchDisplayFields(top, isCrossChain, autoApply),
-        altMatches,
-        price: mp.price,
-        promoPrice: mp.promoPrice,
-        quantity: mp.quantity,
-        unit: mp.unit === "kg" ? "kg" : mp.unit,
-        amount: resolvedAmount,
-        sizeUnit: resolvedUnit,
-        pricePerUnit: mp.pricePerUnit,
-        rawLines: mp.rawLines,
-        region: mp.region,
-      } as ProductLine;
-    });
-
-    const productLines = await Promise.all(matchPromises);
-    setMatchProgress(null);
-    setProducts(productLines);
-
-    setFooter({
-      total: mFooter.total,
-      date: mFooter.date,
-      time: mFooter.time,
-      receiptNo: mFooter.receiptNo,
-      totalSavings: mFooter.totalSavings,
-      comboDiscount: null,
-      rawText: mFooter.rawText,
-      region: mFooter.region,
-    });
-  };
-
-  const applyNorfaResult = async (
-    nHeader: NorfaHeader,
-    nProducts: NorfaProduct[],
-    nFooter: NorfaFooter,
-  ) => {
-    const chainId = 4;
-
-    let storeId: number | null = null;
-    let storeName: string | null = null;
-    let storeAddressMatched: string | null = null;
-    let matchConfidence: number | null = null;
-
-    if (__DEV__) {
-      console.log(
-        "[Norfa] storeAddress OCR =",
-        JSON.stringify(nHeader.storeAddress),
-      );
-    }
-
-    {
-      // Header address first, raw-text street fallback second (see resolveStoreMatch).
-      const m = await resolveStoreMatch(chainId, nHeader.storeAddress, nHeader.rawText);
-      if (__DEV__) console.log("[Norfa] match response:", JSON.stringify(m));
-      if (m) { storeId = m.storeId; storeName = m.storeName; storeAddressMatched = m.address; matchConfidence = m.confidence; }
-    }
-
-    if (storeId === null) {
-      const inh = await inheritReocrStore(chainId);
-      if (inh) {
-        storeId = inh.storeId;
-        storeName = inh.storeName;
-        storeAddressMatched = inh.storeAddress;
-        matchConfidence = 1;
-        nHeader.lineRegions = (nHeader.lineRegions ?? []).filter((r: any) => r?.kind !== 'storeAddress');
-      }
-    }
-    if (storeId === null) {
-      const chosen = await promptStoreResolution(chainId, "NORFA", nHeader.storeAddress || null, nHeader.rawText);
-      if (!chosen) {
-        if (__DEV__) {
-          console.log(
-            "[Norfa] Header rawText (first 500 chars):\n",
-            (nHeader.rawText || "").slice(0, 500),
-          );
-        }
-        await bailWithLog("store_unrecognized", {
-          detectedChainName: "NORFA",
-          extractedStoreAddress: nHeader.storeAddress || null,
-        });
-        return;
-      }
-      storeId = chosen.storeId;
-      storeName = chosen.storeName;
-      storeAddressMatched = chosen.storeAddress;
-      matchConfidence = 1;
-    }
-
-    setHeader({
-      chainName: "NORFA",
-      chainId,
-      storeCode: nHeader.storeCode,
-      storeAddress: nHeader.storeAddress,
-      storeId,
-      storeName,
-      storeAddressMatched,
-      matchConfidence,
-      matchLoading: false,
-      rawText: nHeader.rawText,
-      region: nHeader.region,
-      regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
-    });
-
-    const AUTO_APPLY_THRESHOLD = RECOGNITION.match.autoApplyThreshold;
-
-    setMatchProgress({ done: 0, total: nProducts.length });
-
-    const matchPromises = nProducts.map(async (np) => {
-      let altMatches: ProductMatchOption[] = [];
-      let isCrossChain = false;
-
-      const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(np.name);
-      const matchName = strippedName || np.name;
-      // by-WEIGHT line (sold per kg) → matcher skips packaged SPs (and vice-versa).
-      const wParam = np.unit === 'kg' ? '1' : null;
-
-      try {
-        const params = new URLSearchParams({
-          chainId: String(chainId),
-          name: matchName,
-          ...(wParam ? { weighable: wParam } : {}),
-        });
-        const res = await fetchWithTimeout(
-          `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
-          {
-            timeoutMs: TIMEOUT_FAST_MS,
-          },
-        );
-        const data = await res.json();
-        if (Array.isArray(data?.matches)) altMatches = data.matches;
-        isCrossChain = !!data?.crossChain;
-      } catch (e) {
-        console.warn(`Product match failed for "${np.name}":`, e);
-      }
-
-      const top = altMatches[0] || null;
-      const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
-
-      setMatchProgress((prev) =>
-        prev ? { ...prev, done: prev.done + 1 } : prev,
-      );
-
-      return {
-        name: matchName,
-        // Weak cross-chain auto-matches are orphaned (OCR shown, candidates kept
-        // for orphan-rescue). See topMatchDisplayFields.
-        ...topMatchDisplayFields(top, isCrossChain, autoApply),
-        altMatches,
-        price: np.price,
-        promoPrice: np.promoPrice,
-        quantity: np.quantity,
-        unit: np.unit === "kg" ? "kg" : np.unit,
-        amount: np.parsedAmount ?? parsedAmount,
-        sizeUnit: np.parsedUnit ?? parsedUnit,
-        pricePerUnit: np.pricePerUnit,
-        rawLines: np.rawLines,
-        region: np.region,
-      } as ProductLine;
-    });
-
-    const productLines = await Promise.all(matchPromises);
-    setMatchProgress(null);
-    setProducts(productLines);
-
-    setFooter({
-      total: nFooter.total,
-      date: nFooter.date,
-      time: nFooter.time,
-      receiptNo: nFooter.receiptNo,
-      totalSavings: nFooter.totalSavings,
-      comboDiscount: null,
-      rawText: nFooter.rawText,
-      region: nFooter.region,
-    });
-  };
-
-  const applyLidlResult = async (
-    lHeader: LidlHeader,
-    lProducts: LidlProduct[],
-    lFooter: LidlFooter,
-  ) => {
-    const chainId = 5;
-
-    let storeId: number | null = null;
-    let storeName: string | null = null;
-    let storeAddressMatched: string | null = null;
-    let matchConfidence: number | null = null;
-
-    {
-      // Header address first, raw-text street fallback second (see resolveStoreMatch).
-      const m = await resolveStoreMatch(chainId, lHeader.storeAddress, lHeader.rawText);
-      if (m) { storeId = m.storeId; storeName = m.storeName; storeAddressMatched = m.address; matchConfidence = m.confidence; }
-    }
-
-    if (storeId === null) {
-      const inh = await inheritReocrStore(chainId);
-      if (inh) {
-        storeId = inh.storeId;
-        storeName = inh.storeName;
-        storeAddressMatched = inh.storeAddress;
-        matchConfidence = 1;
-        lHeader.lineRegions = (lHeader.lineRegions ?? []).filter((r: any) => r?.kind !== 'storeAddress');
-      }
-    }
-    if (storeId === null) {
-      const chosen = await promptStoreResolution(chainId, "LIDL", lHeader.storeAddress || null, lHeader.rawText);
-      if (!chosen) {
-        await bailWithLog("store_unrecognized", {
-          detectedChainName: "LIDL",
-          extractedStoreAddress: lHeader.storeAddress || null,
-        });
-        return;
-      }
-      storeId = chosen.storeId;
-      storeName = chosen.storeName;
-      storeAddressMatched = chosen.storeAddress;
-      matchConfidence = 1;
-    }
-
-    setHeader({
-      chainName: "LIDL",
-      chainId,
-      storeCode: lHeader.storeCode,
-      storeAddress: lHeader.storeAddress,
-      storeId,
-      storeName,
-      storeAddressMatched,
-      matchConfidence,
-      matchLoading: false,
-      rawText: lHeader.rawText,
-      region: lHeader.region,
-      regionsVersion: REGIONS_VERSION, // fresh parse is authoritative — don't let rehydration re-OCR + clobber it
-    });
-
-    const AUTO_APPLY_THRESHOLD = RECOGNITION.match.autoApplyThreshold;
-
-    setMatchProgress({ done: 0, total: lProducts.length });
-
-    const matchPromises = lProducts.map(async (lp) => {
-      let altMatches: ProductMatchOption[] = [];
-      let isCrossChain = false;
-
-      const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(lp.name);
-      const matchName = strippedName || lp.name;
-      // by-WEIGHT line (sold per kg) → matcher skips packaged SPs (and vice-versa).
-      const wParam = lp.unit === 'kg' ? '1' : null;
-
-      try {
-        const params = new URLSearchParams({
-          chainId: String(chainId),
-          name: matchName,
-          ...(wParam ? { weighable: wParam } : {}),
-        });
-        const res = await fetchWithTimeout(
-          `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
-          {
-            timeoutMs: TIMEOUT_FAST_MS,
-          },
-        );
-        const data = await res.json();
-        if (Array.isArray(data?.matches)) altMatches = data.matches;
-        isCrossChain = !!data?.crossChain;
-      } catch (e) {
-        console.warn(`Product match failed for "${lp.name}":`, e);
-      }
-
-      const top = altMatches[0] || null;
-      const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
-
-      setMatchProgress((prev) =>
-        prev ? { ...prev, done: prev.done + 1 } : prev,
-      );
-
-      return {
-        name: matchName,
-        // Weak cross-chain auto-matches are orphaned (OCR shown, candidates kept
-        // for orphan-rescue). See topMatchDisplayFields.
-        ...topMatchDisplayFields(top, isCrossChain, autoApply),
-        altMatches,
-        price: lp.price,
-        promoPrice: lp.promoPrice,
-        quantity: lp.quantity,
-        unit: lp.unit === "kg" ? "kg" : lp.unit,
-        amount: parsedAmount,
-        sizeUnit: parsedUnit,
-        pricePerUnit: lp.pricePerUnit,
-        rawLines: lp.rawLines,
-        region: lp.region,
-      } as ProductLine;
-    });
-
-    const productLines = await Promise.all(matchPromises);
-    setMatchProgress(null);
-    setProducts(productLines);
-
-    setFooter({
-      total: lFooter.total,
-      date: lFooter.date,
-      time: lFooter.time,
-      receiptNo: lFooter.receiptNo,
-      totalSavings: lFooter.totalSavings,
-      comboDiscount: null,
-      rawText: lFooter.rawText,
-      region: lFooter.region,
-    });
-  };
-
-  const applyIkiResult = async (
-    iHeader: IkiHeader,
-    iProducts: IkiProduct[],
-    iFooter: IkiFooter,
-    iSkipped: LabeledRegion[] = [],
-  ) => {
-    const chainId = 3;
-    setSkippedRegions(iSkipped);
-
-    let storeId: number | null = null;
-    let storeName: string | null = null;
-    let storeAddressMatched: string | null = null;
-    let matchConfidence: number | null = null;
-
-    {
-      // Header address first, raw-text street fallback second (see resolveStoreMatch).
-      const m = await resolveStoreMatch(chainId, iHeader.storeAddress, iHeader.rawText);
-      if (m) { storeId = m.storeId; storeName = m.storeName; storeAddressMatched = m.address; matchConfidence = m.confidence; }
-    }
-
-    if (storeId === null) {
-      const inh = await inheritReocrStore(chainId);
-      if (inh) {
-        storeId = inh.storeId;
-        storeName = inh.storeName;
-        storeAddressMatched = inh.storeAddress;
-        matchConfidence = 1;
-        iHeader.lineRegions = (iHeader.lineRegions ?? []).filter((r: any) => r?.kind !== 'storeAddress');
-      }
-    }
-    if (storeId === null) {
-      const chosen = await promptStoreResolution(chainId, "IKI", iHeader.storeAddress || null, iHeader.rawText);
-      if (!chosen) {
-        await bailWithLog("store_unrecognized", {
-          detectedChainName: "IKI",
-          extractedStoreAddress: iHeader.storeAddress || null,
-        });
-        return;
-      }
-      storeId = chosen.storeId;
-      storeName = chosen.storeName;
-      storeAddressMatched = chosen.storeAddress;
-      matchConfidence = 1;
-      // MANUAL pick ⇒ the OCR address was wrong or absent — its band is noise at
-      // best and lands on a PRODUCT row at worst (receipt-297: the degraded header
-      // made "0,65 AKVILE GAZ" the "address" and banded the product's line as
-      // header). The user-picked store is the truth now; drop the address band
-      // from display AND the persisted blob (buildParsedData reads header state).
-      iHeader.lineRegions = (iHeader.lineRegions ?? []).filter(
-        (r: any) => r?.kind !== 'storeAddress',
-      );
-    }
-
-    setHeader({
-      chainName: "IKI",
-      chainId,
-      storeCode: iHeader.storeCode,
-      storeAddress: iHeader.storeAddress,
-      storeId,
-      // Prefer DB-matched name, fall back to OCR-extracted so the header card
-      // shows something identifiable even when the store isn't in the DB yet.
-      storeName: storeName ?? (iHeader.storeName || null),
-      storeAddressMatched,
-      matchConfidence,
-      matchLoading: false,
-      rawText: iHeader.rawText,
-      region: iHeader.region,
-      lineRegions: iHeader.lineRegions,
-      // Stamp the CURRENT regions version: a FRESH live parse already produced
-      // the best bands. Without this the version is undefined → the rehydration
-      // effect treats every fresh scan as "stale", re-OCRs the saved (downscaled/
-      // redacted) image and OVERWRITES footer.lineRegions — and that re-OCR often
-      // loses the SUMA/Mokėti total band. Rehydration is only for OLD receipts
-      // loaded from storage, never for what we just parsed.
-      regionsVersion: REGIONS_VERSION,
-    });
-
-    const AUTO_APPLY_THRESHOLD = RECOGNITION.match.autoApplyThreshold;
-
-    setMatchProgress({ done: 0, total: iProducts.length });
-
-    const matchPromises = iProducts.map(async (ip) => {
-      let altMatches: ProductMatchOption[] = [];
-      let isCrossChain = false;
-
-      const { strippedName, amount: parsedAmount, unit: parsedUnit } = parseProductName(ip.name);
-      const matchName = strippedName || ip.name;
-      // by-WEIGHT line (sold per kg) → matcher skips packaged SPs (and vice-versa).
-      const wParam = ip.unit === 'kg' ? '1' : null;
-
-      try {
-        const params = new URLSearchParams({
-          chainId: String(chainId),
-          name: matchName,
-          ...(wParam ? { weighable: wParam } : {}),
-        });
-        const res = await fetchWithTimeout(
-          `${API_BASE_URL}/api/store-products/match?${params.toString()}`,
-          {
-            timeoutMs: TIMEOUT_FAST_MS,
-          },
-        );
-        const data = await res.json();
-        if (Array.isArray(data?.matches)) altMatches = data.matches;
-        isCrossChain = !!data?.crossChain;
-      } catch (e) {
-        console.warn(`Product match failed for "${ip.name}":`, e);
-      }
-
-      const top = altMatches[0] || null;
-      const autoApply = top !== null && top.confidence >= AUTO_APPLY_THRESHOLD;
-
-      setMatchProgress((prev) =>
-        prev ? { ...prev, done: prev.done + 1 } : prev,
-      );
-
-      return {
-        name: matchName,
-        // Weak cross-chain auto-matches are orphaned (OCR shown, candidates kept
-        // for orphan-rescue). See topMatchDisplayFields.
-        ...topMatchDisplayFields(top, isCrossChain, autoApply),
-        altMatches,
-        price: ip.price,
-        promoPrice: ip.promoPrice,
-        quantity: ip.quantity,
-        unit: ip.unit === "kg" ? "kg" : ip.unit,
-        amount: parsedAmount,
-        sizeUnit: parsedUnit,
-        pricePerUnit: ip.pricePerUnit,
-        rawLines: ip.rawLines,
-        region: ip.region,
-      } as ProductLine;
-    });
-
-    const productLines = await Promise.all(matchPromises);
-    setMatchProgress(null);
-    setProducts(productLines);
-
-    setFooter({
-      total: iFooter.total,
-      date: iFooter.date,
-      time: iFooter.time,
-      receiptNo: iFooter.receiptNo,
-      totalSavings: iFooter.totalSavings,
-      comboDiscount: iFooter.comboDiscount ?? null,
-      rawText: iFooter.rawText,
-      region: iFooter.region,
-      lineRegions: iFooter.lineRegions,
-    });
-  };
-
-  const applyGenericResult = (lines: string[]) => {
-    setHeader({
-      chainName: t('receiptProcess.fallbackChain'),
-      chainId: null,
-      storeCode: "",
-      storeAddress: "",
-      storeId: null,
-      storeName: null,
-      storeAddressMatched: null,
-      matchConfidence: null,
-      matchLoading: false,
-      rawText: lines.slice(0, 5).join("\n"),
-      region: { yTop: 0, yBottom: 0, xLeft: 0, xRight: 0 },
-    });
-    setProducts([]);
-    setFooter({
-      total: null,
-      date: "",
-      time: "",
-      receiptNo: "",
-      comboDiscount: null,
-      totalSavings: null,
-      rawText: lines.slice(-5).join("\n"),
-      region: { yTop: 0, yBottom: 0, xLeft: 0, xRight: 0 },
-    });
-  };
-
   const isProcessing =
     !firstCompleteReached &&
     (postStatus === "pending" ||
@@ -3971,20 +2058,9 @@ export default function ProcessReceiptScreen() {
     uploadStatus === "error" ||
     comparisonStatus === "error";
 
-  usePreventRemove(isProcessing, ({ data }) => {
-    Alert.alert(
-      t('receiptProcess.leaveProcessingTitle'),
-      t('receiptProcess.leaveProcessingBody'),
-      [
-        { text: t('receiptProcess.leaveWait'), style: "cancel", onPress: () => {} },
-        {
-          text: t('receiptProcess.leaveAction'),
-          style: "destructive",
-          onPress: () => navigation.dispatch(data.action),
-        },
-      ],
-    );
-  });
+  // (The old usePreventRemove "leave = lose the scan" guard is gone: the
+  // pipeline lives in the app-level scan session now, so leaving mid-
+  // processing is safe — the Analyze tab's live card tracks it.)
 
   // Mandatory-swipe phase: the swipe cards ARE this screen for the duration. When
   // the session finishes (onAllDone) or the user backs out (onExit) we run the
@@ -4035,16 +2111,18 @@ export default function ProcessReceiptScreen() {
     );
   }
 
-  if (loading) {
+  // While the session waits on user input the loader must NOT early-return —
+  // the gate modals live in the main render tree below.
+  if (loading && !(sessionIsMine && sInput != null)) {
     // ONE unified loader — identical to the POST/upload overlay below and the swipe-queue
     // loader. The headline reflects the CURRENT action (reading vs matching); the sub-step
     // carries the live match counter when matching.
-    const matching = !!(matchProgress && matchProgress.total > 0);
+    const matching = sessionIsMine && !!(sMatchProgress && sMatchProgress.total > 0);
     return (
       <View style={styles.loadingContainer}>
         <ProcessingLoader
           stage={matching ? "matching" : "scanning"}
-          subStep={matching ? t('receiptProcess.matchProgress', { done: matchProgress!.done, total: matchProgress!.total }) : null}
+          subStep={matching ? t('receiptProcess.matchProgress', { done: sMatchProgress!.done, total: sMatchProgress!.total }) : null}
         />
       </View>
     );
@@ -4706,12 +2784,13 @@ export default function ProcessReceiptScreen() {
         </Pressable>
       </Modal>
 
-      {/* Chain-match gate (list-upload flow): receipt's chain ≠ list's store. */}
+      {/* Chain-match gate (list-upload flow): receipt's chain ≠ list's store.
+          Driven by the scan session's input request; answered via respondSessionInput. */}
       <Modal
-        visible={chainGate !== null}
+        visible={sessionIsMine && sInput?.kind === 'chainGate'}
         transparent
         animationType="fade"
-        onRequestClose={() => chainGateResolveRef.current?.(false)}
+        onRequestClose={() => respondSessionInput(false)}
       >
         <View style={styles.chainGateBackdrop}>
           <View style={styles.chainGateCard}>
@@ -4719,14 +2798,14 @@ export default function ProcessReceiptScreen() {
             <Text style={styles.chainGateTitle}>{t('receiptProcess.chainGateTitle')}</Text>
             <Text style={styles.chainGateBody}>
               {t('receiptProcess.chainGateBody', {
-                detected: chainGate?.detectedChainId ? (CHAIN_NAMES[chainGate.detectedChainId] ?? '?') : '?',
-                expected: chainGate ? chainGate.expectedChainIds.map((c) => CHAIN_NAMES[c] ?? '?').join(' / ') : '',
+                detected: sInput?.kind === 'chainGate' && sInput.detectedChainId ? (CHAIN_NAMES[sInput.detectedChainId] ?? '?') : '?',
+                expected: sInput?.kind === 'chainGate' ? sInput.expectedChainIds.map((c) => CHAIN_NAMES[c] ?? '?').join(' / ') : '',
               })}
             </Text>
-            <TouchableOpacity style={styles.chainGatePrimary} onPress={() => chainGateResolveRef.current?.(true)}>
+            <TouchableOpacity style={styles.chainGatePrimary} onPress={() => respondSessionInput(true)}>
               <Text style={styles.chainGatePrimaryText}>{t('receiptProcess.chainGateDifferentStore')}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => chainGateResolveRef.current?.(false)}>
+            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => respondSessionInput(false)}>
               <Text style={styles.chainGateSecondaryText}>{t('receiptProcess.chainGateCancel')}</Text>
             </TouchableOpacity>
           </View>
@@ -4734,23 +2813,23 @@ export default function ProcessReceiptScreen() {
       </Modal>
 
       {/* Store resolution (chain recognised, store not): a full-screen map-pick modal on
-          top of the loader. Replaces the old /receipt/store-resolution route. */}
+          top of the loader. The session awaits the storeResolution handoff promise —
+          the overlay (or this dismiss) resolves it via completeStoreResolution. */}
       <Modal
-        visible={storeGate}
+        visible={sessionIsMine && sInput?.kind === 'store'}
         animationType="slide"
         presentationStyle="fullScreen"
         onRequestClose={() => completeStoreResolution(null)}
-        onDismiss={() => storeGateDismissRef.current?.()}
       >
         <StoreResolutionOverlay />
       </Modal>
 
       {/* Manual date entry: receipt readable (receiptNo + time) but DATE unreadable. */}
       <Modal
-        visible={dateGate}
+        visible={sessionIsMine && sInput?.kind === 'date'}
         transparent
         animationType="fade"
-        onRequestClose={() => dateGateResolveRef.current?.(null)}
+        onRequestClose={() => respondSessionInput(null)}
       >
         <View style={styles.chainGateBackdrop}>
           <View style={styles.chainGateCard}>
@@ -4792,11 +2871,11 @@ export default function ProcessReceiptScreen() {
             <TouchableOpacity
               style={[styles.chainGatePrimary, !dateGateTemp && styles.gateDisabled]}
               disabled={!dateGateTemp}
-              onPress={() => dateGateResolveRef.current?.(dateGateTemp)}
+              onPress={() => respondSessionInput(dateGateTemp)}
             >
               <Text style={styles.chainGatePrimaryText}>{t('receiptProcess.dateGateConfirm')}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => dateGateResolveRef.current?.(null)}>
+            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => respondSessionInput(null)}>
               <Text style={styles.chainGateSecondaryText}>{t('receiptProcess.dateGateCancel')}</Text>
             </TouchableOpacity>
           </View>
