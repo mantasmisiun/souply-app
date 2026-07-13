@@ -25,6 +25,30 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const KEY = 'analize:draft';
 const MAX_DRAFT_AGE_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * Resume-prompt arm. The Analize tab may show its "resume this scan?" Alert
+ * only while armed; claiming disarms it (one prompt per draft), and saving a
+ * NEW draft re-arms it — so a scan started mid-session can still be resumed
+ * after an interruption, while the prompt can never nag twice for one draft.
+ */
+let resumePromptArmed = true;
+
+export const armResumePrompt = (): void => {
+    resumePromptArmed = true;
+};
+
+/** One-shot claim: true exactly once per arm. */
+export const claimResumePrompt = (): boolean => {
+    if (!resumePromptArmed) return false;
+    resumePromptArmed = false;
+    return true;
+};
+
+/** Give a claim back (claimed but nothing to prompt for). */
+export const unclaimResumePrompt = (): void => {
+    resumePromptArmed = true;
+};
+
 export interface ReceiptDraft {
     imageUris: string[];
     startedAt: number;
@@ -36,6 +60,7 @@ export const saveReceiptDraft = async (imageUris: string[]): Promise<void> => {
         imageUris,
         startedAt: Date.now(),
     };
+    armResumePrompt(); // a fresh draft may prompt again after an interruption
     try {
         await AsyncStorage.setItem(KEY, JSON.stringify(draft));
     } catch (e) {

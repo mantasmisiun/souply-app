@@ -48,17 +48,22 @@ import { DEV_MODE } from "../../../constants/flags";
 import {
     clearReceiptDraft,
     loadReceiptDraft,
+    claimResumePrompt,
+    unclaimResumePrompt,
 } from "../../../state/receiptDraft";
+import { useScanSession, isSessionLive } from "../../../state/scanSession";
 import { fetchWithTimeout, TIMEOUT_HEAVY_MS, TIMEOUT_STANDARD_MS } from "../../../utils/fetchWithTimeout";
 import { formatDate } from "../../../utils/formatCurrency";
 import { useNetworkStatus } from "../../../state/networkStatus";
 import { useLevelStore } from "../../../state/levelStore";
 import { useSettingsStore } from "../../../state/settingsStore";
 
-// MODULE-LEVEL one-shot for the resume prompt. A per-component ref resets if the
-// Receipts screen remounts (tab re-focus, Fast Refresh), which can stack a second
-// Alert — this survives remounts so the prompt shows at most once per app session.
-let resumePromptShownThisSession = false;
+// The resume-prompt one-shot now lives in state/receiptDraft.ts (claim/unclaim/
+// arm) so saving a NEW draft re-arms it — the old module flag was claimed once
+// at app launch (when there was no draft yet) and never fired again, so a scan
+// started mid-session could never be resumed from this tab. A module-level
+// in-flight guard still protects against a remount stacking a second Alert.
+let resumeCheckInFlight = false;
 
 interface Receipt {
   id: number;
@@ -181,6 +186,17 @@ export default function ReceiptsScreen() {
   const [reocring, setReocring] = useState(false);
   const queueItems = useReceiptQueueStore((s) => s.items);
   const removeQueueItem = useReceiptQueueStore((s) => s.removeItem);
+  // Live scan session (interactive Analyze scan running in the background —
+  // the user navigated away mid-processing). Rendered as a card above the
+  // list; tapping re-attaches by re-opening /receipt-process with the
+  // session's original entry params.
+  const scanPhase = useScanSession((s) => s.phase);
+  const scanConsumed = useScanSession((s) => s.consumed);
+  const scanMatchProgress = useScanSession((s) => s.matchProgress);
+  const scanEntryParams = useScanSession((s) => s.opts?.entryParams);
+  const liveScanVisible =
+    scanPhase === "processing" || scanPhase === "input" || scanPhase === "saving" ||
+    ((scanPhase === "done" || scanPhase === "failed") && !scanConsumed);
   const recentIds = useReceiptQueueStore((s) => s.recentIds);
   const pruneRecentIds = useReceiptQueueStore((s) => s.pruneRecentIds);
   const addItems = useReceiptQueueStore((s) => s.addItems);
@@ -370,17 +386,29 @@ export default function ReceiptsScreen() {
   // reactively-rendered <Modal> wouldn't have this, but a native Alert would; so
   // wait for `hydrated`, by which point i18next is on the resolved language.
   const settingsHydrated = useSettingsStore((s) => s.hydrated);
-  useEffect(() => {
-    console.log(`[RESUME] effect fire — hydrated=${settingsHydrated} shownThisSession=${resumePromptShownThisSession}`);
-    // Claim the one-shot SYNCHRONOUSLY, before the await, and at MODULE level so a
-    // remount can't stack a second Alert.
-    if (!settingsHydrated || resumePromptShownThisSession) return;
-    resumePromptShownThisSession = true;
+  useFocusEffect(useCallback(() => {
+    if (!settingsHydrated) return;
+    // A LIVE scan session owns the current draft — the live card above the
+    // list is the affordance; a "resume?" prompt over a running scan would
+    // restart it from scratch. Don't claim the arm: if the app is killed
+    // mid-scan the next launch still prompts.
+    if (isSessionLive()) return;
+    // Claim SYNCHRONOUSLY, before the await, at MODULE level so a remount
+    // can't stack a second Alert. claimResumePrompt() is one-shot until a
+    // new draft re-arms it (saveReceiptDraft).
+    if (resumeCheckInFlight || !claimResumePrompt()) return;
+    resumeCheckInFlight = true;
     let active = true;
     (async () => {
       const draft = await loadReceiptDraft();
+      resumeCheckInFlight = false;
       console.log(`[RESUME] draft loaded — hasDraft=${!!draft} active=${active} uris=${draft?.imageUris?.length ?? 0}`);
-      if (!active || !draft) return;
+      if (!active || !draft) {
+        // Nothing to prompt for — give the arm back so a draft saved later
+        // this session (a new scan) can prompt after an interruption.
+        unclaimResumePrompt();
+        return;
+      }
       console.log('[RESUME] SHOWING ALERT');
       Alert.alert(
         t('receipts.resume.title'),
@@ -414,9 +442,9 @@ export default function ReceiptsScreen() {
       active = false;
     };
     // `t` intentionally omitted — see the sync-claim comment above; re-running on a
-    // language change would risk a second prompt. Fires once when hydration completes.
+    // language change would risk a second prompt.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settingsHydrated]);
+  }, [settingsHydrated]));
 
   const getStatusColor = (item: Receipt) => {
     if (hasPendingSwipes(item)) return colors.warning;
@@ -620,6 +648,64 @@ export default function ReceiptsScreen() {
     );
   }
 
+  // Card for the LIVE interactive scan session (distinct from the list-upload
+  // queue cards below — this one is a single foreground scan the user left).
+  const renderLiveScanCard = () => {
+    const needsInput = scanPhase === "input";
+    const isDone = scanPhase === "done";
+    const isFailed = scanPhase === "failed";
+    const statusColor = isFailed ? colors.error : needsInput ? colors.warning : isDone ? colors.success : colors.primary;
+    const statusLabel = isFailed
+      ? t('receipts.liveScan.failed')
+      : needsInput
+      ? t('receipts.liveScan.needsInput')
+      : isDone
+      ? t('receipts.liveScan.done')
+      : t('receipts.liveScan.processing');
+    const subline = isFailed || isDone || needsInput
+      ? t('receipts.liveScan.tapToOpen')
+      : scanMatchProgress
+      ? t('receipts.liveScan.matching', { done: scanMatchProgress.done, total: scanMatchProgress.total })
+      : t('receipts.liveScan.tapToOpen');
+    const leftIcon = isFailed
+      ? <Ionicons name="alert-circle-outline" size={iconSize.xl} color={statusColor} />
+      : needsInput
+      ? <Ionicons name="help-circle-outline" size={iconSize.xl} color={statusColor} />
+      : isDone
+      ? <Ionicons name="checkmark-circle-outline" size={iconSize.xl} color={statusColor} />
+      : <MaterialProgress size="small" color={colors.primary} />;
+    const openSession = () => {
+      const params = new URLSearchParams(scanEntryParams ?? {});
+      router.navigate(`/receipt-process?${params.toString()}` as any);
+    };
+    return (
+      <TouchableOpacity
+        style={[
+          styles.card,
+          styles.queueCard,
+          isFailed && { borderLeftColor: colors.error },
+          needsInput && { borderLeftColor: colors.warning },
+        ]}
+        activeOpacity={0.8}
+        onPress={openSession}
+      >
+        <View style={{ marginRight: spacing.md }}>{leftIcon}</View>
+        <View style={{ flex: 1, minWidth: 0 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm }}>
+            <Text style={styles.queueTitle} numberOfLines={1}>
+              {t('receipts.liveScan.title')}
+            </Text>
+            <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>
+              <Text style={styles.statusText}>{statusLabel}</Text>
+            </View>
+          </View>
+          <Text style={styles.queueSubline} numberOfLines={1}>{subline}</Text>
+        </View>
+        <Ionicons name="chevron-forward" size={iconSize.md} color={colors.textMuted} />
+      </TouchableOpacity>
+    );
+  };
+
   const renderQueueCard = (item: QueueItem) => {
     const statusLabel = queueStatusLabel(item, t);
     const isDuplicate = item.error === "Kvitas jau įkeltas";
@@ -819,14 +905,17 @@ export default function ReceiptsScreen() {
         contentInsetAdjustmentBehavior="never"
         contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
         ListHeaderComponent={
-          showBanner ? (
-            <PendingSwipesBanner
-              pendingCount={pendingSwipesCount}
-              disabled={bannerDisabled}
-              disabledHint={bannerDisabled ? t('receipts.status.bannerDisabled') : undefined}
-              onPress={onStartBanner}
-            />
-          ) : null
+          <>
+            {liveScanVisible ? renderLiveScanCard() : null}
+            {showBanner ? (
+              <PendingSwipesBanner
+                pendingCount={pendingSwipesCount}
+                disabled={bannerDisabled}
+                disabledHint={bannerDisabled ? t('receipts.status.bannerDisabled') : undefined}
+                onPress={onStartBanner}
+              />
+            ) : null}
+          </>
         }
         refreshControl={
           <RefreshControl
