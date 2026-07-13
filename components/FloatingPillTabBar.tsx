@@ -11,7 +11,9 @@ import Animated, {
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
+import { Ionicons } from '@expo/vector-icons';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { useTabBarOverride } from '../state/tabBarOverride';
 import {
     useTheme,
     useResolvedScheme,
@@ -23,6 +25,8 @@ import {
     withAlpha,
     type AppTheme,
 } from '../constants/theme';
+
+const DESTRUCTIVE_COLOR = '#E53E3E';
 
 // Width/height of the Material-3 "active indicator" pill that sits behind the
 // selected tab's icon and slides between tabs.
@@ -76,6 +80,12 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
         ? { shadowColor: '#000000', shadowOpacity: 0.45, shadowRadius: 28, shadowOffset: { width: 0, height: 16 }, elevation: 8 }
         : { shadowColor: '#3A1722', shadowOpacity: 0.16, shadowRadius: 28, shadowOffset: { width: 0, height: 16 }, elevation: 8 };
     const rimColor = isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.9)';
+
+    // Contextual override (e.g. shopping-list multi-select): the pill KEEPS its
+    // glass/shadow shell but renders action items instead of tabs — no second
+    // bar floating behind this one. The active-indicator is hidden (no tab is
+    // "selected" while actions own the bar).
+    const overrideActions = useTabBarOverride((s) => s.actions);
 
     const count = state.routes.length;
     const itemWidth = innerWidth > 0 ? innerWidth / count : 0;
@@ -140,7 +150,7 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
                     pointerEvents="none"
                     style={[styles.rim, { borderTopColor: rimColor }]}
                 />
-                {itemWidth > 0 && (
+                {itemWidth > 0 && !overrideActions && (
                     <Animated.View
                         pointerEvents="none"
                         style={[
@@ -157,7 +167,22 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
                     />
                 )}
 
-                {state.routes.map((route, index) => {
+                {overrideActions
+                    ? overrideActions.map((a, i) => (
+                        <TabItem
+                            key={`${a.label}-${i}`}
+                            label={a.label}
+                            focused={false}
+                            colors={colors}
+                            tintOverride={a.destructive ? DESTRUCTIVE_COLOR : colors.primary}
+                            renderIcon={(color) => <Ionicons name={a.icon} size={24} color={color} />}
+                            onPress={() => {
+                                Haptics.selectionAsync();
+                                a.onPress();
+                            }}
+                        />
+                    ))
+                    : state.routes.map((route, index) => {
                     const { options } = descriptors[route.key];
                     const focused = state.index === index;
                     const label = (options.title ?? route.name) as string;
@@ -200,15 +225,18 @@ function TabItem({
     colors,
     renderIcon,
     onPress,
+    tintOverride,
 }: {
     label: string;
     focused: boolean;
     colors: AppTheme;
     renderIcon: (color: string) => ReactNode;
     onPress: () => void;
+    /** Fixed tint for override-action items (primary / destructive red). */
+    tintOverride?: string;
 }) {
     const scale = useSharedValue(1);
-    const tint = focused ? colors.onSecondaryContainer : colors.textSecondary;
+    const tint = tintOverride ?? (focused ? colors.onSecondaryContainer : colors.textSecondary);
 
     useEffect(() => {
         if (focused) {
