@@ -1,12 +1,11 @@
 import { requireOptionalNativeModule } from 'expo-modules-core';
-import { Platform } from 'react-native';
 
 /**
- * On-device receipt-PDF conversion (native module `souply-receipt-pdf`).
- * iOS-only; on Android and on dev clients that PREDATE the native build the
- * optional-module lookup returns null and `devicePdfAvailable()` is false, so
- * callers fall back to the server /api/receipts/pdf-to-image endpoint (same
- * gate pattern as utils/visionOcr.ts).
+ * On-device receipt-PDF conversion (native module `souply-receipt-pdf`,
+ * iOS Swift + Android Kotlin twins). On dev clients that PREDATE the native
+ * build the optional-module lookup returns null and `devicePdfAvailable()` is
+ * false, so callers fall back to the server /api/receipts/pdf-to-image
+ * endpoint (same gate pattern as utils/visionOcr.ts).
  *
  * Why device-side: the raw share-PDF carries unmasked PII — converting locally
  * keeps it on the phone until the normal on-device masking runs; it also works
@@ -60,9 +59,11 @@ export const DEVICE_PDF_ENHANCE_DEFAULTS: Required<DevicePdfEnhanceOpts> = {
     unsharpIntensity: 0.5,
 };
 
-/** True only when the native module is compiled into THIS iOS build. */
+/** True only when the native module is compiled into THIS build (iOS Swift /
+ *  Android Kotlin — both implement the same wrapper-extract + enhance + render
+ *  contract; a dev client predating either native build returns false). */
 export function devicePdfAvailable(): boolean {
-    return Platform.OS === 'ios' && native != null;
+    return native != null;
 }
 
 /** Convert a local PDF to OCR-ready page images entirely on device. */
@@ -72,7 +73,7 @@ export async function convertPdfOnDevice(
     enhance: DevicePdfEnhanceOpts = {},
 ): Promise<DevicePdfResult> {
     if (!native) {
-        throw new Error('SouplyReceiptPdf native module is not present in this build (iOS-only)');
+        throw new Error('SouplyReceiptPdf native module is not present in this build');
     }
     const opts = { ...DEVICE_PDF_ENHANCE_DEFAULTS, ...enhance };
     return native.convert(uri, targetWidth, opts.steps.join(','), opts.unsharpRadius, opts.unsharpIntensity);
