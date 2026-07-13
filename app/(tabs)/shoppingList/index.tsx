@@ -597,9 +597,26 @@ export default function ShoppingListScreen() {
 
     // ── Derived data ──────────────────────────────────────────────────────────
 
+    // Re-derive each group's lists from the LIVE `lists` state on every render.
+    // loadSplitGroups captures list-object SNAPSHOTS at fetch time, so an
+    // optimistic status change (long-press → Complete, delete) never reached
+    // the group cards until the next refetch — the reported "marked completed,
+    // nothing changed" bug.
+    const liveGroups = useMemo<SplitGroup[]>(
+        () => splitGroups
+            .map(g => ({
+                ...g,
+                lists: g.entries
+                    .map(e => lists.find(l => l.id === e.listId))
+                    .filter((l): l is ShoppingList => l !== undefined),
+            }))
+            .filter(g => g.lists.length > 0),
+        [splitGroups, lists],
+    );
+
     const splitListIds = useMemo(
-        () => new Set(splitGroups.flatMap(g => g.entries.map(e => e.listId))),
-        [splitGroups],
+        () => new Set(liveGroups.flatMap(g => g.entries.map(e => e.listId))),
+        [liveGroups],
     );
     const singleLists = useMemo(
         () => lists.filter(l => !splitListIds.has(l.id)),
@@ -609,19 +626,19 @@ export default function ShoppingListScreen() {
     const allChains = useMemo(() => {
         const map = new Map<string, string | null>();
         singleLists.forEach(l => { if (!map.has(l.chainName)) map.set(l.chainName, l.logoUrl); });
-        splitGroups.forEach(g => g.entries.forEach(e => { if (!map.has(e.chainName)) map.set(e.chainName, e.chainLogoUrl); }));
+        liveGroups.forEach(g => g.entries.forEach(e => { if (!map.has(e.chainName)) map.set(e.chainName, e.chainLogoUrl); }));
         return Array.from(map.entries()).map(([name, logoUrl]) => ({
             id: name,
             label: chainBrandName(name),
             logoUrl: logoUrl ? getMiniLogoUrl(name, logoUrl) : null,
         }));
-    }, [singleLists, splitGroups]);
+    }, [singleLists, liveGroups]);
 
     const filteredSingle = singleLists.filter(l => {
         if (chainFilter && l.chainName !== chainFilter) return false;
         return true;
     });
-    const filteredGroups = splitGroups.filter(g => {
+    const filteredGroups = liveGroups.filter(g => {
         if (chainFilter && !g.entries.some(e => e.chainName === chainFilter)) return false;
         return true;
     });
@@ -639,7 +656,7 @@ export default function ShoppingListScreen() {
     const missingGroups = completedGroups.filter(g => g.lists.some(isAwaitingReceipt));
     const doneGroups = completedGroups.filter(g => !g.lists.some(isAwaitingReceipt));
 
-    const hasAny = lists.length > 0 || splitGroups.length > 0;
+    const hasAny = lists.length > 0 || liveGroups.length > 0;
     const hasActive = activeSingle.length > 0 || activeGroups.length > 0;
     const hasMissing = missingSingle.length > 0 || missingGroups.length > 0;
     const hasDone = doneSingle.length > 0 || doneGroups.length > 0;
