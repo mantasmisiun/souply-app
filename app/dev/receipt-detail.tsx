@@ -14,30 +14,23 @@
  *      pricePerUnit, promoPrice, reconcile state) and any
  *      warnings the extractor surfaced.
  *
- * Cropping: each band region is pre-cropped via expo-image-
- * manipulator into its own small PNG (1080 × bandHeight px).
- * Earlier the crop was done at render time by overflow:hidden +
- * a negative-`top` Image inside an aspectRatio-constrained
- * container — but RN on Android downsamples large images during
- * decode based on the visible rectangle, so feeding the whole
- * page PNG to a band-shaped container threw away most of the
- * source pixels and produced barely-readable crops on phone-
- * photographed receipts (Lidl). The pre-crop file is small
- * enough to dodge the downsample heuristic, so the band's
- * source pixels render at native resolution.
- *
- * Multi-page receipts: each band knows which page it's on via
- * the page's yOffsetInParserSpace; the crop pulls from that
- * page's PNG.
+ * Rendering is 100% SHARED with the Analyze screen — the receipt-with-bands
+ * view is ReceiptPhotoView (the Kvitas tab component) and each product's
+ * band crop is BandCropImage (the Prekės tab component), both fed the same
+ * inputs the live screen passes (final-parse regions + page metas). The only
+ * screen-local work is projection: each staged page is downloaded and
+ * normalized into OCR pixel space (normalizeLoadedImage — the same helper
+ * the saved-receipt viewer uses), and multi-page regions shift into their
+ * page's local y space. Band/crop APPEARANCE can never diverge from the app.
  */
 
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as ImageManipulator from 'expo-image-manipulator';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
-    Image,
+    Dimensions,
+    Platform,
     ScrollView,
     StyleSheet,
     Text,
@@ -46,6 +39,9 @@ import {
 } from 'react-native';
 import { API_BASE_URL } from '../../config/api';
 import { devLog } from '../../utils/devLog';
+import ReceiptPhotoView from '../../components/receipt/ReceiptPhotoView';
+import { BandCropImage } from '../../components/receipt/BandCropImage';
+import { normalizeLoadedImage, type PageMeta as ImagePageMeta } from '../../utils/receiptImage';
 import {
     compareItemTruth,
     isItemTruthFile,
@@ -61,6 +57,7 @@ import {
     type BandResult,
     type PageMeta,
     type ReceiptSnapshot,
+    type SnapshotRegion,
 } from '../../utils/parserTestSnapshot';
 import type { ProductBand } from '@shared/parsers/maximaParser';
 import type { RimiBandKind, RimiReceiptBand } from '@shared/parsers/rimiParser';
@@ -76,109 +73,43 @@ type TaggedBandKind =
     | NorfaReceiptBand['kind']
     | LidlReceiptBand['kind'];
 
-interface BandOnPage {
-    bandIdx: number;
-    /** yTop relative to THIS page's pixel space (yOffset already removed). */
-    yTopOnPage: number;
-    /** yBottom relative to THIS page's pixel space. */
-    yBottomOnPage: number;
-    /** Index of the page this band falls on (into snap.pages). */
-    pageIdx: number;
-    /**
-     * Optional band kind (Rimi/Norfa V2 — Maxima bands are all
-     * `product`). Drives the overlay rectangle's colour so the
-     * user can verify each region kind landed on the right slice
-     * of the receipt.
-     */
-    kind?: TaggedBandKind;
-    /** Short label rendered inside the rectangle (band #, `addr`, …). */
-    label?: string;
-}
-
-/**
- * Bucket each band onto the page whose y-offset range contains
- * its yTop. Returns parallel arrays: per-page band lists (for the
- * full-receipt overlay) and a flat list keyed by bandIdx (for the
- * per-product crops, where order must match `snap.bands`).
- *
- * Accepts either Maxima-style ProductBand[] (no kind / label) or
- * Rimi/Norfa-style typed bands (kind + label). The kind / label,
- * when present, flows through to the overlay so each rectangle
- * gets a colour and inline tag.
- */
 type BandLike = ProductBand | RimiReceiptBand | NorfaReceiptBand | LidlReceiptBand;
 
-const bucketBandsByPage = (
-    bands: BandLike[],
-    pages: PageMeta[],
-): { perPage: BandOnPage[][]; perBand: BandOnPage[] } => {
-    const perPage: BandOnPage[][] = pages.map(() => []);
-    const perBand: BandOnPage[] = [];
-    for (let bi = 0; bi < bands.length; bi++) {
-        const band = bands[bi];
-        let pageIdx = 0;
-        for (let i = pages.length - 1; i >= 0; i--) {
-            if (band.yTop >= pages[i].yOffsetInParserSpace) {
-                pageIdx = i;
-                break;
-            }
-        }
-        const offset = pages[pageIdx].yOffsetInParserSpace;
-        const tagged = band as Partial<RimiReceiptBand & NorfaReceiptBand & LidlReceiptBand>;
-        const onPage: BandOnPage = {
-            bandIdx: bi,
-            yTopOnPage: band.yTop - offset,
-            yBottomOnPage: band.yBottom - offset,
-            pageIdx,
-            kind: tagged.kind,
-            label: tagged.label ?? `${bi + 1}`,
-        };
-        perPage[pageIdx].push(onPage);
-        perBand.push(onPage);
+/** Card width for the shared BandCropImage (products section pads 12 a side). */
+const DETAIL_CARD_WIDTH = Dimensions.get('window').width - 24;
+
+/** Page index a parser-space yTop falls on (multi-page y concat). */
+const pageIdxFor = (yTop: number, pages: PageMeta[]): number => {
+    for (let i = pages.length - 1; i >= 0; i--) {
+        if (yTop >= pages[i].yOffsetInParserSpace) return i;
     }
-    return { perPage, perBand };
+    return 0;
 };
 
-/** A mask box placed onto one page: y in page pixel-space, x verbatim. */
-interface MaskOnPage {
-    idx: number;
-    yTopOnPage: number;
-    yBottomOnPage: number;
-    xLeft: number;
-    xRight: number;
-    kind: MaskBand['kind'];
-    label: string;
-}
+/** Shift every y field of a region into one page's local pixel space. */
+const shiftRegion = (r: SnapshotRegion, off: number): SnapshotRegion => ({
+    ...r,
+    yTop: r.yTop - off,
+    yBottom: r.yBottom - off,
+    yLeftTop: r.yLeftTop != null ? r.yLeftTop - off : undefined,
+    yRightTop: r.yRightTop != null ? r.yRightTop - off : undefined,
+    yLeftBottom: r.yLeftBottom != null ? r.yLeftBottom - off : undefined,
+    yRightBottom: r.yRightBottom != null ? r.yRightBottom - off : undefined,
+    yMidTop: r.yMidTop != null ? r.yMidTop - off : undefined,
+    yMidBottom: r.yMidBottom != null ? r.yMidBottom - off : undefined,
+    yMidTopR: r.yMidTopR != null ? r.yMidTopR - off : undefined,
+    yMidBottomR: r.yMidBottomR != null ? r.yMidBottomR - off : undefined,
+});
 
-/**
- * Bucket mask boxes onto pages like bucketBandsByPage, but preserve the
- * x-bounds (mask boxes are horizontally bounded to the number/value, not
- * full-width) so the overlay can draw a tight redaction rectangle.
- */
-const bucketMaskBands = (
-    maskBands: MaskBand[],
+/** Bucket regions per page for the shared ReceiptPhotoView (one per page). */
+const bucketRegionsByPage = (
+    regions: SnapshotRegion[],
     pages: PageMeta[],
-): MaskOnPage[][] => {
-    const perPage: MaskOnPage[][] = pages.map(() => []);
-    for (let bi = 0; bi < maskBands.length; bi++) {
-        const b = maskBands[bi];
-        let pageIdx = 0;
-        for (let i = pages.length - 1; i >= 0; i--) {
-            if (b.yTop >= pages[i].yOffsetInParserSpace) {
-                pageIdx = i;
-                break;
-            }
-        }
-        const offset = pages[pageIdx].yOffsetInParserSpace;
-        perPage[pageIdx].push({
-            idx: bi,
-            yTopOnPage: b.yTop - offset,
-            yBottomOnPage: b.yBottom - offset,
-            xLeft: b.xLeft,
-            xRight: b.xRight,
-            kind: b.kind,
-            label: b.label,
-        });
+): SnapshotRegion[][] => {
+    const perPage: SnapshotRegion[][] = pages.map(() => []);
+    for (const r of regions) {
+        const pi = pageIdxFor(r.yTop, pages);
+        perPage[pi].push(shiftRegion(r, pages[pi].yOffsetInParserSpace));
     }
     return perPage;
 };
@@ -256,28 +187,40 @@ export default function ReceiptDetailScreen() {
         if (snap.taggedBands && snap.taggedBands.length > 0) return snap.taggedBands;
         return snap.bands.map((b) => b.band);
     }, [snap]);
-    const productCropBands = useMemo<BandLike[]>(
-        () => (snap ? snap.bands.map((b) => b.band) : []),
-        [snap],
-    );
-    const overlayBuckets = useMemo(
-        () => (snap ? bucketBandsByPage(overlayBands, snap.pages) : null),
-        [snap, overlayBands],
-    );
-    const productBuckets = useMemo(
-        () => (snap ? bucketBandsByPage(productCropBands, snap.pages) : null),
-        [snap, productCropBands],
-    );
-    // Card / loyalty / cashier redaction boxes — bucketed onto pages,
-    // x-bounded to the number/value (label stays visible), rendered as
-    // SOLID boxes (the masking preview).
-    const maskBuckets = useMemo(
-        () =>
-            snap?.maskBands?.length
-                ? bucketMaskBands(snap.maskBands, snap.pages)
-                : null,
-        [snap],
-    );
+    // Regions in the EXACT shape the Analyze screen hands ReceiptPhotoView /
+    // BandCropImage. New snapshots carry them verbatim from the final parse;
+    // a legacy fallback derives flat product regions from the band list.
+    const effRegions = useMemo(() => {
+        if (!snap) return null;
+        if (snap.regions) return snap.regions;
+        const p0 = snap.pages[0];
+        const flat = (b: { yTop: number; yBottom: number }): SnapshotRegion => ({
+            yTop: b.yTop,
+            yBottom: b.yBottom,
+            xLeft: p0?.receiptXLeft ?? 0,
+            xRight: p0?.receiptXRight ?? (p0?.pixelWidth ?? 0),
+            kind: 'product',
+        });
+        return {
+            header: [] as SnapshotRegion[],
+            products: snap.bands.map((b) => flat(b.band)) as (SnapshotRegion | null)[],
+            footer: [] as SnapshotRegion[],
+            skipped: [] as SnapshotRegion[],
+        };
+    }, [snap]);
+    // Per-page buckets for the shared photo view — multi-page receipts render
+    // one ReceiptPhotoView per page, regions shifted into page-local y space.
+    const regionsByPage = useMemo(() => {
+        if (!snap || !effRegions) return null;
+        const products = effRegions.products.filter(Boolean) as SnapshotRegion[];
+        return {
+            header: bucketRegionsByPage(effRegions.header, snap.pages),
+            products: bucketRegionsByPage(products, snap.pages),
+            footer: bucketRegionsByPage(effRegions.footer, snap.pages),
+            skipped: bucketRegionsByPage(effRegions.skipped, snap.pages),
+            masks: bucketRegionsByPage((snap.maskBands ?? []) as unknown as SnapshotRegion[], snap.pages),
+        };
+    }, [snap, effRegions]);
 
     // ── ITEM TRUTH (v2): fetch the receipt's approval file, compare the
     // FINAL parsed products (snapshot.products) against it, and let each
@@ -290,10 +233,21 @@ export default function ReceiptDetailScreen() {
         (async () => {
             try {
                 const base = snap.sourcePdf.replace(/\.(pdf|png|jpg|jpeg)$/i, '');
-                const res = await fetch(`${API_BASE_URL}/receipts-truth/${snap.chain}/${base}.truth.json`);
-                if (!res.ok) return;
-                const j = await res.json();
-                if (!cancelled && isItemTruthFile(j)) setTruth(j);
+                // PER-PLATFORM truth: Android reads (and saves to) its own
+                // .truth.android.json — bootstrapped as a copy of the iOS
+                // truth — so each OCR/parser combo is scored against a truth
+                // in ITS OWN OCR flavor and only genuine diffs need review.
+                // Falls back to the base (iOS) truth when no copy exists yet.
+                const names = Platform.OS === 'android'
+                    ? [`${base}.truth.android.json`, `${base}.truth.json`]
+                    : [`${base}.truth.json`];
+                for (const n of names) {
+                    const res = await fetch(`${API_BASE_URL}/receipts-truth/${snap.chain}/${n}`);
+                    if (!res.ok) continue;
+                    const j = await res.json();
+                    if (!cancelled && isItemTruthFile(j)) setTruth(j);
+                    break;
+                }
             } catch { /* no truth yet */ }
         })();
         return () => { cancelled = true; };
@@ -317,7 +271,7 @@ export default function ReceiptDetailScreen() {
             await fetch(`${API_BASE_URL}/receipts-truth-set`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ chain: snap?.chain, file: snap?.sourcePdf, truth: next }),
+                body: JSON.stringify({ chain: snap?.chain, file: snap?.sourcePdf, truth: next, platform: Platform.OS }),
             });
         } catch (e) {
             console.warn('[truth] save failed:', e);
@@ -383,7 +337,14 @@ export default function ReceiptDetailScreen() {
                     });
                     if (cancelled) return;
                     if (dl?.status === 200 && dl?.uri) {
-                        setLocalPageUris((prev) => ({ ...prev, [page.name]: dl.uri }));
+                        // Project the downloaded file into the OCR's pixel space
+                        // (rotate-portrait + resize to the parsed dims) — the SAME
+                        // normalization the Analyze screen runs on a saved receipt's
+                        // photo (utils/receiptImage), so every region aligns 1:1
+                        // with zero per-surface scale math.
+                        const norm = await normalizeLoadedImage(dl.uri, page.pixelWidth, page.pixelHeight);
+                        if (cancelled) return;
+                        setLocalPageUris((prev) => ({ ...prev, [page.name]: norm.uri }));
                     }
                 } catch (e: any) {
                     devLog('receipt-detail.downloadThrew', { name: page.name, err: e?.message ?? String(e) });
@@ -393,7 +354,23 @@ export default function ReceiptDetailScreen() {
         return () => { cancelled = true; };
     }, [snap]);
 
-    if (!snap || !overlayBuckets || !productBuckets) {
+    // receiptImage.PageMeta view over the snapshot pages + normalized local
+    // files — the shared BandCropImage picks the page and crops in OCR space.
+    const imagePages = useMemo<ImagePageMeta[]>(() => {
+        if (!snap) return [];
+        return snap.pages.map((p) => ({
+            uri: localPageUris[p.name] ?? '',
+            pixelWidth: p.pixelWidth,
+            pixelHeight: p.pixelHeight,
+            frameScale: p.frameScale ?? 1,
+            yOffsetScaled: p.yOffsetInParserSpace,
+            pageMaxYScaled: p.pageMaxY ?? p.pixelHeight,
+            receiptXLeftScaled: p.receiptXLeft ?? 0,
+            receiptXRightScaled: p.receiptXRight ?? p.pixelWidth,
+        }));
+    }, [snap, localPageUris]);
+
+    if (!snap || !effRegions || !regionsByPage) {
         return (
             <View style={styles.centered}>
                 <Stack.Screen options={{ title: 'Detalė' }} />
@@ -444,7 +421,7 @@ export default function ReceiptDetailScreen() {
             {overviewExpanded && (
                 <View>
                     {snap.pages.map((page, pageIdx) => {
-                        const url = `${API_BASE_URL}/receipts-batch/${snap.chain}/${encodeURIComponent(page.name)}`;
+                        const localUri = localPageUris[page.name] ?? null;
                         return (
                             <View key={page.name} style={styles.pageWrap}>
                                 {snap.pages.length > 1 && (
@@ -452,15 +429,21 @@ export default function ReceiptDetailScreen() {
                                         Puslapis {pageIdx + 1}
                                     </Text>
                                 )}
-                                <ImageWithBands
-                                    uri={url}
-                                    pageWidth={page.pixelWidth}
-                                    pageHeight={page.pixelHeight}
-                                    receiptXLeft={page.receiptXLeft}
-                                    receiptXRight={page.receiptXRight}
-                                    bands={overlayBuckets.perPage[pageIdx]}
-                                    maskBands={maskBuckets?.[pageIdx]}
-                                    colors={colors}
+                                {/* THE Analyze Kvitas-tab component, fed the same
+                                    region sets the live screen passes — bands (incl.
+                                    skewed IKI parallelograms and the total/date/
+                                    receipt-no footer bands) can never render
+                                    differently between the two surfaces. */}
+                                <ReceiptPhotoView
+                                    imageUri={localUri}
+                                    imageDims={{ width: page.pixelWidth, height: page.pixelHeight }}
+                                    loading={!localUri}
+                                    headerRegions={regionsByPage.header[pageIdx] ?? []}
+                                    productRegions={regionsByPage.products[pageIdx] ?? []}
+                                    footerRegions={regionsByPage.footer[pageIdx] ?? []}
+                                    skippedRegions={regionsByPage.skipped[pageIdx] ?? []}
+                                    maskRegions={regionsByPage.masks[pageIdx] ?? []}
+                                    drawMasks
                                 />
                             </View>
                         );
@@ -594,28 +577,30 @@ export default function ReceiptDetailScreen() {
                         <Text style={styles.emptyText}>V2 nerado bandų.</Text>
                     )}
                     {snap.bands.map((bandResult, idx) => {
-                        const onPage = productBuckets.perBand[idx];
-                        const page = snap.pages[onPage.pageIdx];
-                        // file:// URI once the page has cached locally;
-                        // empty string before that — ProductRow's crop
-                        // effect bails on empty and re-runs on update.
-                        const localUri = localPageUris[page.name] ?? '';
                         const productIdx = bandToProductIdx[idx];
                         const cmp = productIdx >= 0 ? truthCmp?.perProduct[productIdx] ?? null : null;
                         const finalProduct = productIdx >= 0 ? snap.products?.[productIdx] ?? null : null;
+                        // Crop region: the FINAL parsed product's own band — the
+                        // one the Analyze Prekės tab crops. Skip bands (and legacy
+                        // snapshots) fall back to a flat extract-band region at the
+                        // page's content x-bounds.
+                        const bandPage = snap.pages[pageIdxFor(bandResult.band.yTop, snap.pages)];
+                        const region: SnapshotRegion =
+                            (productIdx >= 0 ? effRegions.products[productIdx] ?? null : null)
+                            ?? {
+                                yTop: bandResult.band.yTop,
+                                yBottom: bandResult.band.yBottom,
+                                xLeft: bandPage?.receiptXLeft ?? 0,
+                                xRight: bandPage?.receiptXRight ?? (bandPage?.pixelWidth ?? 0),
+                            };
                         return (
                             <ProductRow
                                 key={idx}
                                 bandIdx={idx}
                                 bandResult={bandResult}
                                 finalProduct={finalProduct}
-                                uri={localUri}
-                                pageWidth={page.pixelWidth}
-                                pageHeight={page.pixelHeight}
-                                receiptXLeft={page.receiptXLeft}
-                                receiptXRight={page.receiptXRight}
-                                yTopOnPage={onPage.yTopOnPage}
-                                yBottomOnPage={onPage.yBottomOnPage}
+                                pages={imagePages}
+                                region={region}
                                 colors={colors}
                                 styles={styles}
                                 truthCmp={cmp}
@@ -631,25 +616,16 @@ export default function ReceiptDetailScreen() {
 }
 
 /**
- * One product row: cropped band image on top, structured fields
- * below. The crop is implemented with overflow:hidden + an
- * absolutely-positioned <Image> whose pixel dimensions and y
- * offset are computed once the container's actual rendered width
- * is known via onLayout. Pixel values avoid the percentage/
- * aspectRatio interaction quirks that were producing a one-line
- * vertical drift on RN with absolutely-positioned children.
+ * One product row: cropped band image on top, structured fields below.
+ * The crop IS the Analyze Prekės-tab component (BandCropImage) fed the same
+ * page metas + parsed region — batch crops can never diverge from the app's.
  */
 const ProductRow = ({
     bandIdx,
     bandResult,
     finalProduct,
-    uri,
-    pageWidth,
-    pageHeight,
-    receiptXLeft,
-    receiptXRight,
-    yTopOnPage,
-    yBottomOnPage,
+    pages,
+    region,
     colors,
     styles,
     truthCmp,
@@ -658,13 +634,8 @@ const ProductRow = ({
 }: {
     bandIdx: number;
     bandResult: BandResult;
-    uri: string;
-    pageWidth: number;
-    pageHeight: number;
-    receiptXLeft?: number;
-    receiptXRight?: number;
-    yTopOnPage: number;
-    yBottomOnPage: number;
+    pages: ImagePageMeta[];
+    region: SnapshotRegion;
     colors: AppTheme;
     styles: ReturnType<typeof makeStyles>;
     finalProduct?: NonNullable<ReceiptSnapshot['products']>[number] | null;
@@ -682,106 +653,23 @@ const ProductRow = ({
     // price×qty. Falls back to the extract product on old snapshots.
     const fp = finalProduct ?? null;
     const round2 = (v: number) => Math.round(v * 100) / 100;
-    const bandHeight = Math.max(yBottomOnPage - yTopOnPage, 1);
-    // Horizontal viewport = receipt content bounds (skips the PDF page's white
-    // margins); full width on old snapshots without the bounds.
-    const PAD_X = 20;
-    const cropX = Math.max(0, Math.floor((receiptXLeft ?? 0) - PAD_X));
-    const cropRight = Math.min(pageWidth, Math.ceil((receiptXRight ?? pageWidth) + PAD_X));
-    const cropW = Math.max(1, cropRight - cropX);
-    const cropAspect = cropW / bandHeight;
-
-    // Pre-crop the band region to a separate image file via
-    // expo-image-manipulator. Two reasons this is sharper than
-    // the previous overflow:hidden + offset trick:
-    //   1. RN on Android downsamples large images during decode
-    //      based on the display rectangle. The previous path fed
-    //      the WHOLE page (1080 × ~5000 px) to a band-shaped
-    //      container (400 × ~10 px on phone), so the decoder
-    //      threw away most of the source pixels before render.
-    //      A small pre-cropped file (1080 × bandHeight) doesn't
-    //      trip the downsample heuristic — RN decodes it fully.
-    //   2. The negative-`top` positioning interacted oddly with
-    //      RN's pixel rounding on certain DPRs, producing a
-    //      ~1 line drift on long receipts. Pre-cropping makes
-    //      the offset structurally zero.
-    const [croppedUri, setCroppedUri] = useState<string | null>(null);
-    const [cropError, setCropError] = useState<string | null>(null);
-    useEffect(() => {
-        // uri stays empty while the parent's per-page download is in
-        // flight. Bail; the effect re-runs once it populates.
-        if (!uri) return;
-        let cancelled = false;
-        void (async () => {
-        // The downloaded page file can be a DIFFERENT resolution from the
-        // OCR image the band coords live in: Norfa's staged 300-dpi PNGs
-        // (~2480 px) get downscaled by the OCR pipeline to ~2000 px, and
-        // pixel-space crops against the native file drifted downward,
-        // cascading with y (first crop showed the kvito-nr line). The
-        // overlay never drifts — it positions RELATIVELY — so crops must
-        // rescale band coords by the actual file dimensions. Rimi never
-        // hit this only because its staged pages are already 2000 px.
-        const actual = await new Promise<{ w: number; h: number } | null>((resolve) => {
-            Image.getSize(uri, (w, h) => resolve({ w, h }), () => resolve(null));
-        });
-        if (cancelled) return;
-        const sx = actual ? actual.w / Math.max(1, pageWidth) : 1;
-        const sy = actual ? actual.h / Math.max(1, pageHeight) : 1;
-        const fileH = actual ? actual.h : pageHeight;
-        const fileW = actual ? actual.w : pageWidth;
-        const yTop = Math.max(0, Math.floor(yTopOnPage * sy));
-        const heightPx = Math.min(
-            Math.ceil((yBottomOnPage - yTopOnPage) * sy),
-            fileH - yTop,
-        );
-        if (heightPx <= 0) return;
-        const originX = Math.max(0, Math.floor(cropX * sx));
-        const widthPx = Math.max(1, Math.min(Math.ceil(cropW * sx), fileW - originX));
-        const cropArgs = { uri, originX, originY: yTop, width: widthPx, height: heightPx };
-        devLog('receipt-detail.cropAttempt', { bandIdx, sx, sy, ...cropArgs });
-        // JPEG output: PNG via expo-image-manipulator v14 on iOS
-        // trips `calling the 'renderAsync' function has failed`
-        // regardless of legacy vs new context API. JPEG output works
-        // with the same source URIs in rotatePortrait and mlkitOcr's
-        // tile crop, so the PNG encoder path is the broken one.
-        ImageManipulator.manipulateAsync(
-            uri,
-            [{ crop: { originX, originY: yTop, width: widthPx, height: heightPx } }],
-            { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
-        )
-            .then((res) => {
-                devLog('receipt-detail.cropSuccess', { bandIdx, resultUri: res?.uri });
-                if (!cancelled) setCroppedUri(res.uri);
-            })
-            .catch((e) => {
-                const errMsg = e?.message ?? String(e);
-                console.warn('[receipt-detail] band crop failed', { ...cropArgs, err: errMsg });
-                devLog('receipt-detail.cropFailed', { bandIdx, ...cropArgs, err: errMsg });
-                if (!cancelled) setCropError(errMsg);
-            });
-        })();
-        return () => { cancelled = true; };
-    }, [uri, yTopOnPage, yBottomOnPage, pageWidth, pageHeight, bandIdx, cropX, cropW]);
+    // BandCropImage picks its page by yOffset — hold rendering until that
+    // page's local file has downloaded + normalized (an empty uri would
+    // fail the crop instead of retrying).
+    const cropPage = pages[pages.length ? Math.max(0, pages.findIndex((p, i) =>
+        region.yTop >= p.yOffsetScaled
+        && (i === pages.length - 1 || region.yTop < pages[i + 1].yOffsetScaled))) : 0];
+    const pageReady = !!cropPage?.uri;
 
     return (
         <View style={styles.productRow}>
-            <View
-                style={[
-                    styles.cropContainer,
-                    { aspectRatio: cropAspect, borderColor: statusColor(status, colors) },
-                ]}
-            >
-                {croppedUri && (
-                    <Image
-                        source={{ uri: croppedUri }}
-                        style={{ width: '100%', height: '100%' }}
-                        resizeMode="stretch"
+            <View style={[styles.cropContainer, { borderColor: statusColor(status, colors) }]}>
+                {pageReady && (
+                    <BandCropImage
+                        pages={pages}
+                        region={region}
+                        cardWidth={DETAIL_CARD_WIDTH}
                     />
-                )}
-                {cropError && (
-                    <Text style={styles.cropErrorText} numberOfLines={5}>
-                        crop failed: {cropError}
-                    </Text>
                 )}
             </View>
             <View style={styles.productMeta}>
@@ -815,15 +703,23 @@ const ProductRow = ({
                             {truthCmp.state === 'differ' && (
                                 <Ionicons name="warning" size={16} color={colors.error} />
                             )}
+                            {/* near = same product, cross-OCR-engine name flavor:
+                                amber check — SKIPPABLE, but tap re-asserts with
+                                this engine's read if you prefer it. */}
                             <Ionicons
                                 name={truthCmp.state === 'unchecked' ? 'ellipse-outline' : 'checkmark-circle'}
                                 size={22}
-                                color={truthCmp.state === 'match' ? colors.success : truthCmp.state === 'differ' ? colors.error : colors.textMuted}
+                                color={
+                                    truthCmp.state === 'match' ? colors.success
+                                    : truthCmp.state === 'near' ? colors.warning
+                                    : truthCmp.state === 'differ' ? colors.error
+                                    : colors.textMuted
+                                }
                             />
                         </TouchableOpacity>
                     )}
                 </View>
-                {truthCmp?.state === 'differ' && truthCmp.diffs.length > 0 && (
+                {(truthCmp?.state === 'differ' || truthCmp?.state === 'near') && truthCmp.diffs.length > 0 && (
                     <View style={styles.truthDiffBox}>
                         {truthCmp.diffs.map((d, i) => (
                             <Text key={i} style={styles.truthDiffText}>{d}</Text>
@@ -966,131 +862,6 @@ const StatusIcon = ({ status, colors }: { status: StatusKind; colors: AppTheme }
     if (status === 'WARN')
         return <Ionicons name="warning" size={18} color={color} />;
     return <Ionicons name="close-circle-outline" size={18} color={color} />;
-};
-
-const ImageWithBands = ({
-    uri,
-    pageWidth,
-    pageHeight,
-    receiptXLeft,
-    receiptXRight,
-    bands,
-    maskBands,
-    colors,
-}: {
-    uri: string;
-    pageWidth: number;
-    pageHeight: number;
-    /** Receipt content x-bounds (snapshot page meta) — the view crops the PDF
-     *  page's white margins so the receipt fills the width. Absent → full page. */
-    receiptXLeft?: number;
-    receiptXRight?: number;
-    bands: BandOnPage[];
-    maskBands?: MaskOnPage[];
-    colors: AppTheme;
-}) => {
-    // Horizontal viewport: crop to content bounds (+pad) unless the content
-    // already spans the page (photos) — then this is a no-op full view.
-    const PAD = 24;
-    const rawL = Math.max(0, (receiptXLeft ?? 0) - PAD);
-    const rawR = Math.min(pageWidth, (receiptXRight ?? pageWidth) + PAD);
-    const useCrop = rawR - rawL >= pageWidth * 0.2 && rawR - rawL <= pageWidth * 0.92;
-    const cropX = useCrop ? rawL : 0;
-    const cropW = useCrop ? rawR - rawL : pageWidth;
-    const aspect = cropW / pageHeight;
-    // Overlay x mapping into the cropped viewport.
-    const xPct = (x: number) => (Math.max(0, Math.min(cropW, x - cropX)) / cropW) * 100;
-    return (
-        <View style={{ width: '100%', aspectRatio: aspect, position: 'relative', overflow: 'hidden' }}>
-            <Image
-                source={{ uri }}
-                style={{
-                    position: 'absolute',
-                    left: `${-(cropX / cropW) * 100}%`,
-                    top: 0,
-                    width: `${(pageWidth / cropW) * 100}%`,
-                    height: '100%',
-                }}
-                resizeMode="stretch"
-            />
-            {(maskBands ?? []).map((b) => {
-                const topPct = (b.yTopOnPage / pageHeight) * 100;
-                const heightPct =
-                    ((b.yBottomOnPage - b.yTopOnPage) / pageHeight) * 100;
-                const leftPct = xPct(b.xLeft);
-                const widthPct = Math.max(0, xPct(b.xRight) - xPct(b.xLeft));
-                return (
-                    <View
-                        key={`mask-${b.idx}`}
-                        pointerEvents="none"
-                        style={{
-                            position: 'absolute',
-                            left: `${leftPct}%`,
-                            width: `${widthPct}%`,
-                            top: `${topPct}%`,
-                            height: `${heightPct}%`,
-                            // Pitch-black redaction — exactly what burns into
-                            // the uploaded image. kind is shown in the legend
-                            // list below, not on the box.
-                            backgroundColor: '#000',
-                        }}
-                    />
-                );
-            })}
-            {bands.map((b) => {
-                const topPct = (b.yTopOnPage / pageHeight) * 100;
-                const heightPct =
-                    ((b.yBottomOnPage - b.yTopOnPage) / pageHeight) * 100;
-                const { border, fill } = bandKindColor(b.kind, colors.primary);
-                const labelText = b.label ?? `${b.bandIdx + 1}`;
-                return (
-                    <View
-                        key={b.bandIdx}
-                        pointerEvents="none"
-                        style={{
-                            position: 'absolute',
-                            left: 0,
-                            right: 0,
-                            top: `${topPct}%`,
-                            height: `${heightPct}%`,
-                            // Shared dividers: bands are CONTIGUOUS (band N bottom ==
-                            // band N+1 top) — a full border on every band doubled up
-                            // into a 3px wall that read as a gap between products.
-                            // Each band draws its top + sides; the next band's top
-                            // edge IS this band's bottom divider.
-                            borderTopWidth: 1.5,
-                            borderLeftWidth: 1.5,
-                            borderRightWidth: 1.5,
-                            borderColor: border,
-                            backgroundColor: fill,
-                        }}
-                    >
-                        <View
-                            style={{
-                                position: 'absolute',
-                                left: 2,
-                                top: 2,
-                                paddingHorizontal: 4,
-                                paddingVertical: 1,
-                                backgroundColor: border,
-                                borderRadius: 3,
-                            }}
-                        >
-                            <Text
-                                style={{
-                                    color: colors.onPrimary,
-                                    fontSize: 9,
-                                    fontWeight: '700',
-                                }}
-                            >
-                                {labelText}
-                            </Text>
-                        </View>
-                    </View>
-                );
-            })}
-        </View>
-    );
 };
 
 const makeStyles = (c: AppTheme) =>

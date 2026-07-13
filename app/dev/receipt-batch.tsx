@@ -45,18 +45,16 @@ import {
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { API_BASE_URL } from '../../config/api';
 import { ocrReceiptPages } from '../../utils/receiptOcrPipeline';
-import { ensembleSecondOpinion } from '../../utils/parseEnsemble';
 import { devicePdfAvailable, convertPdfOnDevice } from '../../utils/receiptPdf';
-import { sectionReocrIfFlagged, graftRicherFields } from '../../utils/sectionReocr';
+import {
+    detectReceiptChain,
+    parseChainReceipt,
+    SCAN_PARSER_OPTS,
+    SCAN_LIDL_PARSER_OPTS,
+} from '../../utils/receiptScanFlow';
 import { compareItemTruth, isItemTruthFile } from '../../utils/itemTruth';
 import { getUserId } from '../../config/user';
 import {
-    isIkiReceipt,
-    parseIkiReceipt,
-} from '@shared/parsers/ikiParser';
-import {
-    isMaximaReceipt,
-    parseMaximaReceipt,
     findProductBands,
     traceProductBands,
     traceMaximaExtract,
@@ -74,24 +72,18 @@ import {
     traceCardMaskBands,
 } from '@shared/parsers/cardMaskDetection';
 import {
-    isRimiReceipt,
-    parseRimiReceipt,
     findReceiptBandsRimi,
     traceReceiptBandsRimi,
     extractRimiProduct,
     traceRimiExtract,
 } from '@shared/parsers/rimiParser';
 import {
-    isNorfaReceipt,
-    parseNorfaReceipt,
     findReceiptBandsNorfa,
     traceReceiptBandsNorfa,
     extractNorfaProduct,
     traceNorfaExtract,
 } from '@shared/parsers/norfaParser';
 import {
-    isLidlReceipt,
-    parseLidlReceipt,
     findReceiptBandsLidl,
     traceReceiptBandsLidl,
     extractLidlProduct,
@@ -104,11 +96,11 @@ import {
     type ParserComparison,
 } from '../../utils/compareToTruth';
 
-// iOS MLKit splits each receipt row into 2-4 fragments at near-same
-// y-coords, so the Maxima + Lidl parsers need their row-defragmenter
-// turned on. Android emits one OCR line per row already, so the option
-// stays off and the existing behaviour is bit-for-bit identical.
-const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
+// Parser options come from the SHARED scan flow (utils/receiptScanFlow) —
+// the batch's band planners/tracers below must run the exact opts the
+// real parse ran, so there is a single source of truth.
+const PARSER_OPTS = SCAN_PARSER_OPTS;
+const LIDL_PARSER_OPTS = SCAN_LIDL_PARSER_OPTS;
 
 // Why HTTP instead of reading staged files locally: every local-read
 // path (file:// URIs through expo-file-system, fetch(), MLKit) runs
@@ -119,14 +111,19 @@ const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
 // before OCR, same trust boundary as the existing API calls.
 const HTTP_BATCH_ROOT = `${API_BASE_URL}/receipts-batch`;
 const HTTP_TRUTH_ROOT = `${API_BASE_URL}/receipts-truth`;
-const CHAINS = ['maxima', 'rimi', 'norfa', 'lidl'] as const;
+// Ship device-converted pages to the dev machine's debug drop-box
+// (receipts/_logs/<chain>/<file>/device-converted-pN.png). Costs seconds per
+// page (base64 + LAN POST) — enable only when inspecting conversion output.
+const SHIP_CONVERTED_PAGES_DEBUG = false;
+
+const CHAINS = ['maxima', 'rimi', 'iki', 'norfa', 'lidl'] as const;
 type ChainName = (typeof CHAINS)[number];
 
 // Chain ids mirror the StoreChain table. Maxima=1, Rimi=2, IKI=3,
 // Norfa=4. Lidl set to 5 — confirm with
 // `SELECT id FROM StoreChain WHERE name LIKE '%Lidl%'` and update if
 // different.
-const CHAIN_ID: Record<ChainName, number> = { maxima: 1, rimi: 2, norfa: 4, lidl: 5 };
+const CHAIN_ID: Record<ChainName, number> = { maxima: 1, rimi: 2, iki: 3, norfa: 4, lidl: 5 };
 
 // Map Maxima's LabeledRegion kinds → the detail overlay's colour kinds
 // (store-name/store-address/datetime/receipt-no/total), so its header +
@@ -213,16 +210,20 @@ const loadTruth = async (
     sourcePdf: string,
 ): Promise<TruthFile | null> => {
     // Strip extension; truth file is `<basename>.truth.json` next to
-    // the PDF/PNG in shared/receipts/<chain>/.
+    // the PDF/PNG in shared/receipts/<chain>/. Android prefers its own
+    // .truth.android.json flavor copy (see receipt-detail's fetch note).
     const base = sourcePdf.replace(/\.(pdf|png|jpg|jpeg)$/i, '');
-    const url = `${HTTP_TRUTH_ROOT}/${chain}/${base}.truth.json`;
-    try {
-        const res = await fetch(url);
-        if (!res.ok) return null;
-        return (await res.json()) as TruthFile;
-    } catch {
-        return null;
+    const names = Platform.OS === 'android'
+        ? [`${base}.truth.android.json`, `${base}.truth.json`]
+        : [`${base}.truth.json`];
+    for (const n of names) {
+        try {
+            const res = await fetch(`${HTTP_TRUTH_ROOT}/${chain}/${n}`);
+            if (!res.ok) continue;
+            return (await res.json()) as TruthFile;
+        } catch { /* try next */ }
     }
+    return null;
 };
 
 const readManifest = async (chain: ChainName): Promise<ManifestEntry[]> => {
@@ -257,34 +258,11 @@ const downloadPageToCache = async (chain: ChainName, pageName: string): Promise<
 };
 
 /**
- * (Per-page OCR now goes through the SHARED ocrReceiptPages pipeline —
- * the batch must run exactly what the Analyze scan runs.)
+ * (Per-page OCR goes through the SHARED ocrReceiptPages pipeline, and chain
+ * detection + parse/ensemble/re-OCR through the SHARED receiptScanFlow —
+ * the batch runs exactly what the Analyze scan runs, it only renders and
+ * scores the result differently.)
  */
-
-
-const detectChain = (lines: PageLine[]): ChainName | null => {
-    const texts = lines.map((l) => l.text);
-    // Rimi / Maxima checked before Norfa — their headers are strict
-    // enough that false-positives on a Norfa receipt are unlikely, but
-    // Norfa's `NORFOS` token is narrower so keeping it near the end
-    // makes the ordering symmetric with how isXReceipt detectors
-    // became over time.
-    if (isRimiReceipt(texts)) return 'rimi';
-    if (isMaximaReceipt(texts)) return 'maxima';
-    if (isIkiReceipt(texts)) return 'iki' as ChainName;
-    if (isNorfaReceipt(texts)) return 'norfa';
-    if (isLidlReceipt(texts)) return 'lidl';
-    return null;
-};
-
-const runParser = (chain: ChainName | 'iki', lines: PageLine[]) => {
-    if (chain === 'maxima') return parseMaximaReceipt(lines as any, PARSER_OPTS);
-    if (chain === 'rimi') return parseRimiReceipt(lines as any);
-    if (chain === 'iki') return parseIkiReceipt(lines as any);
-    if (chain === 'norfa') return parseNorfaReceipt(lines as any);
-    if (chain === 'lidl') return parseLidlReceipt(lines as any, PARSER_OPTS);
-    return null;
-};
 
 /**
  * Per-product candidate match via the backend's /match endpoint (same
@@ -407,7 +385,7 @@ export default function ReceiptBatchScreen() {
         let allLines: PageLine[] = [];
         let pageMetas: PageMeta[] = []; // for snapshot → detail screen
         let detected: ChainName | 'iki' | null = null;
-        let parsed: ReturnType<typeof runParser> = null;
+        let parsed: any = null;
         try {
             if (devicePdf && devicePdfAvailable() && entry.pdf) {
                 // Production share-flow parity: pull the RAW pdf and convert
@@ -422,7 +400,10 @@ export default function ReceiptBatchScreen() {
                     // DEBUG drop-box: ship the converted pixels back to the dev
                     // machine so the native conversion chain output can be
                     // inspected there (receipts/_logs/<chain>/<file>/…png).
-                    for (let p = 0; p < pages.length; p++) {
+                    // OFF by default: base64ing a multi-MB page and POSTing it
+                    // added seconds PER PAGE to every batch run — flip the
+                    // const only when actively inspecting the native output.
+                    for (let p = 0; SHIP_CONVERTED_PAGES_DEBUG && p < pages.length; p++) {
                         try {
                             const pngBase64 = await FileSystem.readAsStringAsync(pages[p], {
                                 encoding: FileSystem.EncodingType.Base64,
@@ -446,7 +427,12 @@ export default function ReceiptBatchScreen() {
             // stripHealing for ALL sources — photos included: their engine-
             // dropped rows only heal through strips, and the splice guards
             // (dedupe, sliver filter, anchor preservation) carry the risk.
-            const ocr = await ocrReceiptPages(cachedUris, 'auto', { document: true, stripHealing: true });
+            // document mode PER SOURCE (live parity): a live Analyze PHOTO runs
+            // ocrImageEnhanced with document:false (fromPdfParam !== '1');
+            // only PDF pages run document mode. The batch used to force
+            // document:true for photos too — different OCR sizing than live.
+            const isPdfSource = !!entry.pdf;
+            const ocr = await ocrReceiptPages(cachedUris, 'auto', { document: isPdfSource, stripHealing: true });
             allLines = ocr.allLines as PageLine[];
             pageMetas = ocr.pageMetas.map((m, i) => ({
                 name: entry.pages[i],
@@ -455,64 +441,35 @@ export default function ReceiptBatchScreen() {
                 yOffsetInParserSpace: m.yOffsetScaled,
                 receiptXLeft: m.receiptXLeftScaled,
                 receiptXRight: m.receiptXRightScaled,
+                frameScale: m.frameScale,
+                pageMaxY: m.pageMaxYScaled,
             }));
 
-            detected = detectChain(allLines);
+            // Chain detection reads the MERGED line texts — same input as the
+            // live scan (its lineTexts come from ocrResult.mergedLines).
+            detected = detectReceiptChain(ocr.mergedLines.map((l) => l.text)).chain;
             if (!detected) {
-                return { ...row, state: 'no-chain', message: 'isXReceipt detectors all false' };
+                return { ...row, state: 'no-chain', message: 'chain detectors (incl. VAT fallback) all missed' };
             }
 
-            // Same parser INPUT as the live scan: IKI parses the merged rows,
-            // the other chains parse raw lines.
-            const linesFor = (o: { allLines: unknown[]; mergedLines: unknown[] }) =>
-                (detected === 'iki' ? o.mergedLines : o.allLines) as PageLine[];
-            parsed = runParser(detected, linesFor(ocr));
+            // THE shared scan flow — the exact chain-specific parse → ensemble
+            // → section/whole-section re-OCR → graft chain the Analyze screen
+            // runs (utils/receiptScanFlow). The batch adds no orchestration of
+            // its own; it only renders and scores the result.
+            const flow = await parseChainReceipt(detected, {
+                ocr: { allLines: ocr.allLines, mergedLines: ocr.mergedLines, pageMetas: ocr.pageMetas },
+                imageUris: cachedUris,
+                document: isPdfSource,
+            });
+            parsed = flow.parsed;
             if (!parsed) {
                 return { ...row, state: 'error', message: 'parser returned null' };
             }
-            // The PRIMARY parse often has the richest names (later lanes can
-            // win the arithmetic while dropping a wrapped name row) — kept for
-            // a final graft after ensemble/section re-OCR.
-            const primaryParsed = parsed;
-
-            // Phase-5 ensemble — SAME shared implementation as the Analyze scan
-            // (flagged primary parse → ML Kit second opinion → arithmetic picks).
-            const outcome = await ensembleSecondOpinion(
-                parsed,
-                cachedUris,
-                (second) => runParser(detected!, linesFor(second))!,
-                { document: true, stripHealing: true, primaryLines: ocr.allLines as { yTop: number; yBottom: number; text: string }[] },
-            );
-            if (outcome.engine === 'second' && outcome.secondOcr) {
-                parsed = outcome.parsed;
-                allLines = outcome.secondOcr.allLines as PageLine[];
-            }
-
-            // PHOTO section re-OCR — recon-failed single-page photos get one
-            // document-mode re-read of the product section (the photo path's
-            // counterpart of the PDF strip healing; same wiring as the live
-            // scan). IKI is excluded: it parses merged lines and has its own
-            // whole-section machinery.
-            if (!entry.pdf && cachedUris.length === 1
-                && (parsed as any)?.footer?.reconciled === false && pageMetas[0]) {
-                const o = await sectionReocrIfFlagged(
-                    parsed as any,
-                    allLines as any,
-                    ocr.pageMetas[0].uri,
-                    ocr.pageMetas[0].pixelWidth,
-                    ocr.pageMetas[0].pixelHeight,
-                    'auto',
-                    (ls) => runParser(detected!, ls as PageLine[]) as any,
-                );
-                if (o.applied) {
-                    parsed = o.parsed;
-                    allLines = o.lines as PageLine[];
-                }
-            }
-            // Final name graft from the primary read (no-op when identical).
-            if (parsed !== primaryParsed) {
-                parsed = graftRicherFields(primaryParsed as any, parsed as any) as typeof parsed;
-            }
+            // Snapshot/band lines follow the winning read: second-engine OCR
+            // when the ensemble flipped, then the rimi section re-OCR's
+            // respliced lines when that applied.
+            if (flow.secondOcr) allLines = flow.secondOcr.allLines as PageLine[];
+            if (flow.sectionOcrLines) allLines = flow.sectionOcrLines as PageLine[];
         } finally {
             for (const u of cachedUris) {
                 FileSystem.deleteAsync(u, { idempotent: true }).catch(() => {});
@@ -545,6 +502,9 @@ export default function ReceiptBatchScreen() {
                 // these over its own naive sum (recon-aware chains only).
                 reconciled: (parsed.footer as any)?.reconciled ?? null,
                 reconDelta: (parsed.footer as any)?.reconDelta ?? null,
+                // Fused/mixed-read events the merger saw — persisted so the
+                // section re-OCR gate's state is visible in the log blobs.
+                ocrSuspects: (parsed.footer as any)?.ocrSuspects ?? null,
             },
         };
 
@@ -556,6 +516,10 @@ export default function ReceiptBatchScreen() {
             parsedData,
             dryRun: !persist,
             userId,
+            // Per-combo tracking: the server keeps rawLines.<platform>.json /
+            // parsedData.<platform>.json copies so iOS and Android runs stop
+            // clobbering each other's OCR snapshots.
+            platform: Platform.OS,
         };
         const res = await fetch(`${API_BASE_URL}/api/receipts/batch-log`, {
             method: 'POST',
@@ -640,6 +604,20 @@ export default function ReceiptBatchScreen() {
             reconciled: (parsed.footer as any)?.reconciled ?? null,
             reconDelta: (parsed.footer as any)?.reconDelta ?? null,
         };
+        // The EXACT region sets the Analyze screen hands ReceiptPhotoView /
+        // BandCropImage (header lineRegions∥region, per-product regions 1:1
+        // with snapProducts, footer lineRegions∥region, skipped) — the dev
+        // detail screen renders through the SAME components with these.
+        const snapRegions = {
+            header: Array.isArray((parsed.header as any)?.lineRegions)
+                ? (parsed.header as any).lineRegions
+                : parsed.header?.region ? [parsed.header.region] : [],
+            products: (parsed.products ?? []).map((p: any) => p.region ?? null),
+            footer: ((parsed.footer as any)?.lineRegions?.length ?? 0) > 0
+                ? (parsed.footer as any).lineRegions
+                : (parsed.footer as any)?.region ? [(parsed.footer as any).region] : [],
+            skipped: (parsed as any).skippedRegions ?? [],
+        };
 
         // V2 step 1 + step 2 (Maxima only today): identify product
         // band boundaries (step 1) and convert each band into a
@@ -714,6 +692,7 @@ export default function ReceiptBatchScreen() {
                     bands,
                     products: snapProducts,
                     footer: snapFooter,
+                    regions: snapRegions,
                     taggedBands: [...fieldBands, ...productTagged] as any,
                 });
             } catch (e) {
@@ -774,6 +753,7 @@ export default function ReceiptBatchScreen() {
                     bands,
                     products: snapProducts,
                     footer: snapFooter,
+                    regions: snapRegions,
                     taggedBands: planV2.bands,
                 });
             } catch (e) {
@@ -833,6 +813,7 @@ export default function ReceiptBatchScreen() {
                     bands,
                     products: snapProducts,
                     footer: snapFooter,
+                    regions: snapRegions,
                     taggedBands: planV2.bands,
                 });
             } catch (e) {
@@ -849,7 +830,7 @@ export default function ReceiptBatchScreen() {
         // are dropped entirely per project policy.
         if (detected === 'lidl') {
             try {
-                const planV2 = findReceiptBandsLidl(allLines as any, PARSER_OPTS);
+                const planV2 = findReceiptBandsLidl(allLines as any, LIDL_PARSER_OPTS);
                 status.bandsV2Count = planV2.bands.length;
                 const summary = planV2.bands
                     .map((b) => `${b.label}=${Math.round(b.yTop)}-${Math.round(b.yBottom)}`)
@@ -893,10 +874,42 @@ export default function ReceiptBatchScreen() {
                     bands,
                     products: snapProducts,
                     footer: snapFooter,
+                    regions: snapRegions,
                     taggedBands: planV2.bands,
                 });
             } catch (e) {
                 console.warn('[batch] Lidl V2 step 1+2 failed:', e);
+            }
+        }
+
+        // IKI snapshot: no V2 band planner here — each parsed product already
+        // carries its merged-line region, which IS the band (same page-pixel
+        // space as the page images, so the detail screen's crops line up).
+        // 1:1 bands↔products keeps the detail's band→product index mapping
+        // trivially aligned for the item-truth checkmarks.
+        if (detected === 'iki') {
+            try {
+                const ikiProducts = (parsed.products ?? []) as any[];
+                const bands: BandResult[] = ikiProducts.map((p) => ({
+                    band: {
+                        yTop: p.region?.yTop ?? 0,
+                        yBottom: p.region?.yBottom ?? 0,
+                    },
+                    product: p,
+                    warnings: [],
+                }));
+                status.bandsV2Count = bands.length;
+                setReceiptSnapshot(makeSnapshotKey(row.chain, row.sourcePdf), {
+                    chain: row.chain,
+                    sourcePdf: row.sourcePdf,
+                    pages: pageMetas,
+                    bands,
+                    products: snapProducts,
+                    footer: snapFooter,
+                    regions: snapRegions,
+                });
+            } catch (e) {
+                console.warn('[batch] iki snapshot failed:', e);
             }
         }
 
@@ -978,7 +991,9 @@ export default function ReceiptBatchScreen() {
                     await fetch(`${API_BASE_URL}/api/receipts/batch-log/finalize`, {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ chain }),
+                        // platform → _baseline.<platform>.json: run-over-run
+                        // diffs always compare the SAME OCR/parser combo.
+                        body: JSON.stringify({ chain, platform: Platform.OS }),
                     });
                 } catch {}
             }
@@ -1032,8 +1047,11 @@ export default function ReceiptBatchScreen() {
                 const denom = Math.max(productsTruthTotal, 1);
                 const aggregateScore =
                     Math.round((productsCorrectTotal / denom) * 1000) / 1000;
-                const runId = `${chain}-${isoStamp}`;
+                // Platform in the runId AND payload: _results files sort into
+                // per-combo series (rimi-android-…, rimi-ios-…) for diffing.
+                const runId = `${chain}-${Platform.OS}-${isoStamp}`;
                 const payload = {
+                    platform: Platform.OS,
                     $schema: 'parser-test-v1',
                     runId,
                     completedAt: new Date().toISOString(),
@@ -1145,7 +1163,7 @@ export default function ReceiptBatchScreen() {
                 )}
                 {statuses.map((s, idx) => {
                     const canNavigate = (s.chain === 'maxima' || s.chain === 'rimi' ||
-                        s.chain === 'norfa' || s.chain === 'lidl') && s.state === 'done';
+                        s.chain === 'norfa' || s.chain === 'lidl' || s.chain === 'iki') && s.state === 'done';
                     const canRun = s.state === 'pending' || s.state === 'error' || s.state === 'no-chain';
                     return (
                         <TouchableOpacity

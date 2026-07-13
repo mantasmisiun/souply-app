@@ -51,6 +51,35 @@ export interface PageMeta {
      * always 0. For multi-page, prevYOffset + prevPixelHeight + gap.
      */
     yOffsetInParserSpace: number;
+    /** OCR downscale factor (ReceiptOcrPageMeta.frameScale). */
+    frameScale?: number;
+    /** Max line yBottom on this page, page-local (ReceiptOcrPageMeta
+     *  .pageMaxYScaled) — the shared BandCropImage picks pages with it. */
+    pageMaxY?: number;
+}
+
+/**
+ * Region in parser/image pixel space — structurally the ReceiptRegion the
+ * Analyze screen feeds ReceiptPhotoView/BandCropImage (kind labels, skew
+ * corners, mid-column step). Stored verbatim from the parse so the dev
+ * detail screen renders bands/crops with the SAME components + inputs as
+ * the Analyze Kvitas/Prekės tabs.
+ */
+export interface SnapshotRegion {
+    yTop: number;
+    yBottom: number;
+    xLeft: number;
+    xRight: number;
+    kind?: string;
+    yLeftTop?: number;
+    yRightTop?: number;
+    yLeftBottom?: number;
+    yRightBottom?: number;
+    xMid?: number;
+    yMidTop?: number;
+    yMidBottom?: number;
+    yMidTopR?: number;
+    yMidBottomR?: number;
 }
 
 /**
@@ -116,6 +145,19 @@ export interface ReceiptSnapshot {
         receiptNo: string | null;
         reconciled: boolean | null;
         reconDelta: number | null;
+    };
+    /**
+     * The EXACT region sets the Analyze screen hands ReceiptPhotoView
+     * (header lineRegions∥region, product regions, footer lineRegions∥
+     * region, skipped) — chain-agnostic, straight from the FINAL parse.
+     * products[] is 1:1 with `products` above, so the detail screen's
+     * per-product BandCropImage crops the same band Analyze would.
+     */
+    regions?: {
+        header: SnapshotRegion[];
+        products: (SnapshotRegion | null)[];
+        footer: SnapshotRegion[];
+        skipped: SnapshotRegion[];
     };
 }
 

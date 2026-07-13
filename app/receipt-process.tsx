@@ -82,9 +82,7 @@ import {
     TIMEOUT_STANDARD_MS,
 } from "../utils/fetchWithTimeout";
 import {
-    isIkiReceipt,
     parseIkiHeaderOnly,
-    parseIkiReceipt,
     type IkiFooter,
     type IkiHeader,
     type IkiProduct,
@@ -92,33 +90,25 @@ import {
 import { RECOGNITION, type ItemConfidence } from "@shared/recognitionConfig";
 import ConfidenceBadge from "../components/ConfidenceBadge";
 import {
-    isMaximaReceipt,
     parseMaximaHeaderOnly,
-    parseMaximaReceipt,
     type MaximaFooter,
     type MaximaHeader,
     type MaximaProduct,
 } from "@shared/parsers/maximaParser";
 import {
-    isLidlReceipt,
     parseLidlHeaderOnly,
-    parseLidlReceipt,
     type LidlFooter,
     type LidlHeader,
     type LidlProduct,
 } from "@shared/parsers/lidlParser";
 import {
-    isNorfaReceipt,
     parseNorfaHeaderOnly,
-    parseNorfaReceipt,
     type NorfaFooter,
     type NorfaHeader,
     type NorfaProduct,
 } from "@shared/parsers/norfaParser";
 import {
-    isRimiReceipt,
     parseRimiHeaderOnly,
-    parseRimiReceipt,
     LabeledRegion,
     Region,
     RimiFooter,
@@ -126,28 +116,18 @@ import {
     RimiProduct
 } from "@shared/parsers/rimiParser";
 import { parseProductName } from "@shared/parsers/productNameParser";
-import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
 import { redactReceiptText, detectCardMaskBands, clampMaskBandsToProtected, wordCentreInMaskBand, looksLikePiiText, type MaskBand } from "@shared/parsers/cardMaskDetection";
 import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
 import { requestStoreResolution, completeStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
-import { ocrReceiptPages, computeReceiptXBoundsForPage, reocrFusedRows } from "../utils/receiptOcrPipeline";
-import { ensembleSecondOpinion } from "../utils/parseEnsemble";
-import { sectionReocrIfFlagged, graftRicherFields } from "../utils/sectionReocr";
+import { ocrReceiptPages } from "../utils/receiptOcrPipeline";
+import { detectReceiptChain, parseChainReceipt } from "../utils/receiptScanFlow";
 import { StoreResolutionOverlay } from "../components/receipt/StoreResolutionOverlay";
-import { ocrImageEnhanced } from "../utils/mlkitOcr";
-import { refineFooterBands } from "../utils/footerBandRefine";
-import { maybeReocrProducts, maybeReocrFooter, maybeReocrHeader, type ReocrOutcome } from "../utils/productReocr";
-import { makeProductStripReocr, reportReocrOutcome } from "../utils/productReocrDevice";
 import { launchDocumentScanner } from "../utils/launchDocumentScanner";
 import { MaterialProgress } from "../components/MaterialProgress";
 import { useProfileStore } from '../state/profileStore';
 
-// Toggle for the iOS-only row-fragment merger in the Maxima + Lidl
-// parsers. iOS MLKit splits each receipt row into multiple boxes at
-// near-same y-coords; the merger glues them back into one Android-
-// shaped line. Android emits one OCR line per row already, so the
-// option stays off and the existing pipeline is bit-for-bit identical.
-const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
+// Parser options (fragment-merger flags etc.) live in utils/receiptScanFlow
+// (SCAN_PARSER_OPTS) — the single source of truth shared with the dev batch.
 
 /**
  * DEV: paste-friendly dump of what a chain parser produced from the OCR text.
@@ -2548,96 +2528,20 @@ export default function ProcessReceiptScreen() {
         words?: { text: string; xLeft: number; xRight: number; yTop: number; yBottom: number; cornerPoints?: { x: number; y: number }[] }[];
       }
 
-      const allLines: LineWithFrame[] = [];
-      let combinedFrameScale = 1;
-      let yOffset = 0; // running accumulator across pages in Image-pixel space
-      let firstPageDims: { width: number; height: number } | null = null;
-      let firstPageUri: string | null = null;
-      const collectedPageMetas: PageMeta[] = [];
-
-      for (let pageIdx = 0; pageIdx < imageUris.length; pageIdx++) {
-        // Camera photos held sideways come through as landscape — rotate to
-        // portrait first so the parser sees the receipt upright. No-op for
-        // PDFs / screenshots that already arrive in portrait.
-        const pageUri = await ensurePortraitOrientation(imageUris[pageIdx]);
-
-        // Shared helper. Auto-tiles when the image is tall enough to hit
-        // MLKit's ~4096 px soft cap (Lidl thermal receipts typically),
-        // which otherwise silently halves character detail. Returns
-        // lines already in page-pixel space with any per-tile offsets
-        // applied, plus the pixelWidth/Height matching that space.
-        const ocr = await ocrImageEnhanced(pageUri, 'auto', { document: fromPdfParam === '1' });
-        // Fused/dropped-row strip re-OCR — SAME healing pass as the shared
-        // pipeline (ocrReceiptPages) runs for the batch/recovery paths, so
-        // interactive scans can't diverge. PDFs and photos alike (a photo's
-        // engine-dropped rows only heal through strips); fail-safe no-op.
-        ocr.lines = await reocrFusedRows(pageUri, ocr.pixelWidth, ocr.pixelHeight, ocr.lines as any, 'auto') as any;
-        const pageDims = { width: ocr.pixelWidth, height: ocr.pixelHeight };
-        if (pageIdx === 0) firstPageDims = pageDims;
-        if (pageIdx === 0) firstPageUri = pageUri;
-        const frameScale = ocr.frameScale;
-        if (pageIdx === 0) combinedFrameScale = frameScale;
-
-        console.log(`=== PAGE ${pageIdx + 1}/${imageUris.length} ===`);
-        console.log(
-          `Image dims: ${pageDims.width} x ${pageDims.height}${ocr.tiled ? ` (tiled into ${ocr.tileCount})` : ''}`,
-        );
-        console.log(`MLKit max: ${ocr.mlkitMaxX} x ${ocr.mlkitMaxY}`);
-        console.log(
-          `frameScale: ${frameScale.toFixed(3)}, yOffset: ${yOffset.toFixed(0)}`,
-        );
-
-        let pageMaxYScaled = 0;
-        const pageLineBounds: { l: number; r: number }[] = [];
-        const offY = (v: number | undefined) => (v == null ? undefined : v + yOffset);
-        for (const line of ocr.lines) {
-          if (line.yBottom > pageMaxYScaled) pageMaxYScaled = line.yBottom;
-          pageLineBounds.push({ l: line.xLeft, r: line.xRight });
-          allLines.push({
-            text: line.text,
-            yTop: line.yTop + yOffset,
-            yBottom: line.yBottom + yOffset,
-            xLeft: line.xLeft,
-            xRight: line.xRight,
-            yLeftTop: offY(line.yLeftTop),
-            yRightTop: offY(line.yRightTop),
-            yLeftBottom: offY(line.yLeftBottom),
-            yRightBottom: offY(line.yRightBottom),
-            words: line.words?.map((w) => ({
-              ...w, yTop: w.yTop + yOffset, yBottom: w.yBottom + yOffset,
-              cornerPoints: w.cornerPoints?.map((p) => ({ x: p.x, y: p.y + yOffset })),
-            })),
-          });
-        }
-
-        // Receipt horizontal bounds — SHARED implementation (density histogram +
-        // price-column clamp) in receiptOcrPipeline, same one the dev batch and
-        // the recovery flow use, so bounds can never drift between entry points.
-        const xb = computeReceiptXBoundsForPage(ocr.lines, pageDims.width, `PAGE ${pageIdx + 1}`);
-        const receiptXLeftScaled = xb.left;
-        const receiptXRightScaled = xb.right;
-        console.log(
-          `PAGE ${pageIdx + 1} receipt x-bounds (pixels): left=${Math.round(receiptXLeftScaled)}, right=${Math.round(receiptXRightScaled)}, pageW=${pageDims.width}, yExtent=${Math.round(pageMaxYScaled)}, yOffset=${Math.round(yOffset)}, peak=${xb.peak}`,
-        );
-
-        collectedPageMetas.push({
-          uri: pageUri,
-          pixelWidth: pageDims.width,
-          pixelHeight: pageDims.height,
-          frameScale,
-          yOffsetScaled: yOffset,
-          pageMaxYScaled,
-          receiptXLeftScaled,
-          receiptXRightScaled,
-        });
-
-        // Offset subsequent pages by the actual scaled content extent of this
-        // page (not pageDims.height, which can report a decoder-sampled size
-        // smaller than the real MLKit coordinate space, causing pages to
-        // overlap during merging). +50 px buffer to keep last-line-of-page-N
-        // safely separated from first-line-of-page-N+1.
-        yOffset += pageMaxYScaled + 50;
-      }
+      // SHARED OCR pipeline — the exact per-page loop the dev batch and the
+      // recovery flow run (rotate-portrait → enhanced/tiled OCR → fused/
+      // dropped-row strip healing → per-page x-bounds → y-offset concat →
+      // adjacent-row merge). The interactive scan must never branch off it,
+      // or batch results stop predicting what a user sees here.
+      const ocrResult = await ocrReceiptPages(imageUris, 'auto', {
+        document: fromPdfParam === '1',
+        stripHealing: true,
+      });
+      const allLines: LineWithFrame[] = ocrResult.allLines as LineWithFrame[];
+      const firstPageDims: { width: number; height: number } | null =
+        { width: ocrResult.firstPageWidth, height: ocrResult.firstPageHeight };
+      const firstPageUri: string | null = ocrResult.firstPageUri;
+      const collectedPageMetas: PageMeta[] = ocrResult.pageMetas;
 
       setPageMetas(collectedPageMetas);
 
@@ -2651,8 +2555,6 @@ export default function ProcessReceiptScreen() {
 
       const dims = firstPageDims ?? { width: 0, height: 0 };
       setImageDims(dims);
-      const frameScale = combinedFrameScale;
-      allLines.sort((a, b) => a.yTop - b.yTop);
 
       // Detect bank/loyalty/cashier redaction boxes for the pre-upload image
       // masking. allLines are in image-pixel space, so the boxes map 1:1 onto
@@ -2688,38 +2590,9 @@ export default function ProcessReceiptScreen() {
       }
       setMaskBands(detectedMaskBands);
 
-      const mergedLines: LineWithFrame[] = [];
-      const PRICE_RE = /^\d+[.,]\s?\d{2}\s*[AB]\s*$/;
-      const ROW_THRESHOLD = 30 * frameScale;
-
-      for (const line of allLines) {
-        if (mergedLines.length > 0) {
-          const last = mergedLines[mergedLines.length - 1];
-          if (Math.abs(line.yTop - last.yTop) < ROW_THRESHOLD) {
-            if (PRICE_RE.test(line.text)) {
-              mergedLines.push({ ...line });
-            } else if (PRICE_RE.test(last.text)) {
-              mergedLines.splice(mergedLines.length - 1, 0, { ...line });
-            } else {
-              last.text = last.text + " " + line.text;
-              last.yTop = Math.min(last.yTop, line.yTop);
-              last.yBottom = Math.max(last.yBottom, line.yBottom);
-              last.xLeft = Math.min(last.xLeft, line.xLeft);
-              last.xRight = Math.max(last.xRight, line.xRight);
-              // Carry the merged line's WORD boxes too (kept x-sorted). Without this the merged
-              // line exposes only the FIRST row's words, so when MLKit fuses two STACKED print-rows
-              // (dense product/payment sections on a narrow capture), the parser's word re-clustering
-              // can't split them back apart and two products collapse into one (receipt-160). This
-              // mirrors the shared utils/receiptOcrPipeline.ts merge, from which this copy diverged.
-              if (line.words?.length) {
-                last.words = [...(last.words ?? []), ...line.words].sort((a, b) => a.xLeft - b.xLeft);
-              }
-            }
-            continue;
-          }
-        }
-        mergedLines.push({ ...line });
-      }
+      // Adjacent-row merge comes from the SAME shared pipeline call (iki +
+      // chain detection consume these; the other parsers take raw allLines).
+      const mergedLines: LineWithFrame[] = ocrResult.mergedLines as LineWithFrame[];
 
       const lineTexts = mergedLines.map((l) => l.text);
       ocrLineTexts = lineTexts; // expose to the bail helpers defined above the try
@@ -2805,14 +2678,11 @@ export default function ProcessReceiptScreen() {
       // isXReceipt checks are cheap regex; the real parse runs below regardless.
       linkListIdRef.current = fallbackLinkId;
       const expectedChainIds = Object.keys(linkMap).map(Number);
+      // SHARED chain detection (fingerprints in live order + VAT fallback) —
+      // the same call routes the parse below and the dev batch harness.
+      const detectedScan = detectReceiptChain(lineTexts);
       if (expectedChainIds.length > 0) {
-        const detectedChainId =
-          isRimiReceipt(lineTexts) ? 2 :
-          isMaximaReceipt(lineTexts) ? 1 :
-          isNorfaReceipt(lineTexts) ? 4 :
-          isLidlReceipt(lineTexts) ? 5 :
-          isIkiReceipt(lineTexts) ? 3 :
-          (detectChainByVatCode(lineTexts)?.chainId ?? null);
+        const detectedChainId = detectedScan.chainId;
         if (detectedChainId != null && linkMap[detectedChainId] != null) {
           // Auto-detected store — link target resolved, no prompt.
           linkListIdRef.current = linkMap[detectedChainId];
@@ -2841,16 +2711,17 @@ export default function ProcessReceiptScreen() {
       // match requests were still in flight. Keep the overlay until
       // products have been parsed + matched.
       //
-      // Backup chain detection via the seller's PVM/VAT code — only consulted
-      // when ALL the primary text-fingerprint detectors miss, so the normal
-      // path is unchanged.
-      const vatChainId =
-        isRimiReceipt(lineTexts) || isMaximaReceipt(lineTexts) || isNorfaReceipt(lineTexts) ||
-        isLidlReceipt(lineTexts) || isIkiReceipt(lineTexts)
-          ? null
-          : (detectChainByVatCode(lineTexts)?.chainId ?? null);
+      // Args every parseChainReceipt call below shares — THE single scan flow
+      // (utils/receiptScanFlow): chain parse → Phase-5 ensemble → rimi photo
+      // section re-OCR + primary-name graft → iki whole-section re-OCR +
+      // footer band refine. The dev batch runs the identical call.
+      const scanFlowArgs = {
+        ocr: { allLines, mergedLines, pageMetas: collectedPageMetas },
+        imageUris,
+        document: fromPdfParam === '1',
+      };
 
-      if (isRimiReceipt(lineTexts) || vatChainId === 2) {
+      if (detectedScan.chain === 'rimi') {
         // V2 Rimi parser does its own same-row absorption inside
         // findProductBandsInternal, so it expects RAW OCR lines.
         // The outer `mergedLines` blob fused header/product rows
@@ -2871,46 +2742,13 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        let parsed = parseRimiReceipt(allLines);
-        const rimiPrimaryParsed = parsed;
+        const parsed = (await parseChainReceipt('rimi', scanFlowArgs)).parsed;
         logParsedReview('RIMI', parsed);
-        // Phase-5 ensemble — same shared implementation as the IKI branch and
-        // the dev batch harness (flagged parse OR fused-row geometry → ML Kit
-        // second opinion → arithmetic + fewer-fusions arbitration).
-        {
-          const outcome = await ensembleSecondOpinion(
-            parsed,
-            imageUris,
-            (second) => parseRimiReceipt(second.allLines as any) as typeof parsed,
-            { document: fromPdfParam === '1', stripHealing: true, primaryLines: allLines },
-          );
-          if (outcome.engine === 'second') parsed = outcome.parsed;
-        }
-        // PHOTO section re-OCR (recon-failed single-page photos) — mirrors the
-        // batch harness so its results keep predicting live scans.
-        if (fromPdfParam !== '1' && imageUris.length === 1 && firstPageUri && firstPageDims
-            && parsed.footer.reconciled === false) {
-          const o = await sectionReocrIfFlagged(
-            parsed,
-            allLines as any,
-            firstPageUri,
-            firstPageDims.width,
-            firstPageDims.height,
-            'auto',
-            (ls) => parseRimiReceipt(ls as any) as typeof parsed,
-          );
-          if (o.applied) parsed = o.parsed;
-        }
-        // Final name graft from the primary read (no-op when identical) —
-        // later lanes may win the arithmetic while dropping a name row.
-        if (parsed !== rimiPrimaryParsed) {
-          parsed = graftRicherFields(rimiPrimaryParsed as any, parsed as any) as typeof parsed;
-        }
         if (!(await ensureHasProducts(parsed.products, 'RIMI'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyRimiResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
-      } else if (isMaximaReceipt(lineTexts) || vatChainId === 1) {
+      } else if (detectedScan.chain === 'maxima') {
         // Maxima parser does its own splitMergedLines + same-row
         // handling internally, so it expects RAW OCR lines, not the
         // outer `mergedLines` blob. Passing the merged blob caused
@@ -2934,7 +2772,7 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        let parsed = parseMaximaReceipt(allLines, PARSER_OPTS);
+        const parsed = (await parseChainReceipt('maxima', scanFlowArgs)).parsed;
         if (__DEV__) {
           // Diagnostic: surface what the parser actually captured
           // from the footer so we can compare against the printed
@@ -2952,21 +2790,11 @@ export default function ProcessReceiptScreen() {
           );
         }
         logParsedReview('MAXIMA', parsed);
-        // Phase-5 ensemble — parity with the IKI branch / dev batch harness.
-        {
-          const outcome = await ensembleSecondOpinion(
-            parsed,
-            imageUris,
-            (second) => parseMaximaReceipt(second.allLines as any, PARSER_OPTS) as typeof parsed,
-            { document: fromPdfParam === '1', stripHealing: true, primaryLines: allLines },
-          );
-          if (outcome.engine === 'second') parsed = outcome.parsed;
-        }
         if (!(await ensureHasProducts(parsed.products, 'MAXIMA'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyMaximaResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
-      } else if (isNorfaReceipt(lineTexts) || vatChainId === 4) {
+      } else if (detectedScan.chain === 'norfa') {
         // Norfa V2 (hard-walled bands + per-band extract) consumes
         // RAW OCR lines — its mergeRowFragments pass needs the
         // original y-coords intact. Same reasoning as Rimi/Maxima.
@@ -2985,23 +2813,13 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        let parsed = parseNorfaReceipt(allLines);
+        const parsed = (await parseChainReceipt('norfa', scanFlowArgs)).parsed;
         logParsedReview('NORFA', parsed);
-        // Phase-5 ensemble — parity with the IKI branch / dev batch harness.
-        {
-          const outcome = await ensembleSecondOpinion(
-            parsed,
-            imageUris,
-            (second) => parseNorfaReceipt(second.allLines as any) as typeof parsed,
-            { document: fromPdfParam === '1', stripHealing: true, primaryLines: allLines },
-          );
-          if (outcome.engine === 'second') parsed = outcome.parsed;
-        }
         if (!(await ensureHasProducts(parsed.products, 'NORFA'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyNorfaResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
-      } else if (isLidlReceipt(lineTexts) || vatChainId === 5) {
+      } else if (detectedScan.chain === 'lidl') {
         // Lidl V2 (hard-walled bands + per-band extract) consumes
         // RAW OCR lines — same reasoning as Rimi/Maxima/Norfa.
         // Phone-photographed thermal print so OCR is rougher than
@@ -3023,23 +2841,13 @@ export default function ProcessReceiptScreen() {
           region: earlyHeader.region,
         });
 
-        let parsed = parseLidlReceipt(allLines, PARSER_OPTS);
+        const parsed = (await parseChainReceipt('lidl', scanFlowArgs)).parsed;
         logParsedReview('LIDL', parsed);
-        // Phase-5 ensemble — parity with the IKI branch / dev batch harness.
-        {
-          const outcome = await ensembleSecondOpinion(
-            parsed,
-            imageUris,
-            (second) => parseLidlReceipt(second.allLines as any, PARSER_OPTS) as typeof parsed,
-            { document: fromPdfParam === '1', stripHealing: true, primaryLines: allLines },
-          );
-          if (outcome.engine === 'second') parsed = outcome.parsed;
-        }
         if (!(await ensureHasProducts(parsed.products, 'LIDL'))) return;
         if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
         await applyLidlResult(parsed.header, parsed.products, parsed.footer);
         setLoading(false);
-      } else if (isIkiReceipt(lineTexts) || vatChainId === 3) {
+      } else if (detectedScan.chain === 'iki') {
         const earlyHeader = parseIkiHeaderOnly(mergedLines);
         setHeader({
           chainName: "IKI",
@@ -3088,77 +2896,34 @@ export default function ProcessReceiptScreen() {
         wordsDumpRef.current = buildWordsDump(mergedLines);
         wordsSrcRef.current = "scan";
 
-        let parsed = parseIkiReceipt(mergedLines);
+        // The user-facing ensure* gates run BETWEEN the ensemble and the
+        // whole-section re-OCR (their historical position) via the flow's
+        // beforeIkiReocr hook; the hard-bail flavour is tracked so the two
+        // exits keep their distinct loading behaviour.
+        let ikiFieldsGateFailed = false;
+        const flow = await parseChainReceipt('iki', {
+          ...scanFlowArgs,
+          reportIkiReocr: true,
+          beforeIkiReocr: async (p: any) => {
+            if (!(await ensureHasProducts(p.products, 'IKI'))) return false;
+            if (!(await ensureKeyReceiptFields(p.footer))) { ikiFieldsGateFailed = true; return false; }
+            return true;
+          },
+        });
+        const parsed = flow.parsed;
         console.log(
           `[parse] IKI → ${parsed.products.length} product(s), total=${parsed.footer.total}, ` +
           `date=${parsed.footer.date}, receiptNo=${parsed.footer.receiptNo}`,
         );
         logParsedReview('IKI', parsed);
-
-        // ── PHASE-5 ENSEMBLE (iOS): Apple Vision is the primary reader; ML Kit is the
-        // second opinion. The two engines misread DIFFERENTLY, so when Vision's parse
-        // fails SELF-VERIFICATION (doesn't reconcile, or left phantom/priceless lines),
-        // re-read the same image with ML Kit and let the receipt's own arithmetic pick
-        // the better result. Runs ONLY on flagged parses (the happy path pays nothing);
-        // both engines report in source-image pixels, so bands/masks stay valid either
-        // way. Android's counterpart is the strip re-OCR pass below. ──
-        // Phase-5 ensemble — SHARED implementation (utils/parseEnsemble), the
-        // same code path the dev batch harness runs, so batch results and
-        // Analyze results can never drift.
-        {
-          const outcome = await ensembleSecondOpinion(
-            parsed,
-            imageUris,
-            (second) => parseIkiReceipt(second.mergedLines as any) as typeof parsed,
-            { document: fromPdfParam === '1', stripHealing: true, primaryLines: allLines },
-          );
-          if (outcome.engine === 'second' && outcome.secondOcr) {
-            parsed = outcome.parsed;
-            wordsDumpRef.current = buildWordsDump(outcome.secondOcr.mergedLines as any);
-          }
+        // A stored wordsDump must reproduce the STORED parse — re-emit it from
+        // the winning engine's lines when the ensemble flipped to ML Kit.
+        if (flow.secondOcr) {
+          wordsDumpRef.current = buildWordsDump(flow.secondOcr.mergedLines as any);
         }
-        if (!(await ensureHasProducts(parsed.products, 'IKI'))) return;
-        if (!(await ensureKeyReceiptFields(parsed.footer))) { setLoading(false); return; }
-        // WHOLE-SECTION PRODUCT re-OCR (flagged, Android only): when a product is a suspect
-        // (dropped name "?", garbled/no price, amount-in-name, collapsed band) OR the receipt
-        // doesn't reconcile beyond ~€1, the ENTIRE product section is re-cropped+upscaled+re-OCR'd
-        // in one isolated pass, the fresh lines splice back in, and the WHOLE receipt re-parses (so
-        // all global post-passes re-apply). Kept only if it strictly improves — fewer garbage,
-        // reconciliation no worse, footer total unchanged. Fail-safe: any error/reject keeps
-        // `parsed`. Whole-section (not per-band) is what fixes cross-row OCR scrambles. See
-        // utils/productReocr.ts.
-        if (PRODUCT_REOCR_ENABLED && Platform.OS === 'android' && firstPageUri && firstPageDims) {
-          const reOcr = makeProductStripReocr(firstPageUri, firstPageDims.width, firstPageDims.height);
-          let lines = mergedLines;
-          // Re-OCR each receipt SECTION whose defect signal fires, in order, chaining the accepted
-          // line stream. Each pass is fail-safe (rejects keep the prior parse). The defect ROUTES the
-          // tool at the right section: garbled products → product strip; clean products that don't
-          // reconcile → the payment block (the TOTAL is wrong, not a product); garbled address →
-          // header. threshold 1.0 sits above deposit-fold noise.
-          const passes: [string, () => Promise<ReocrOutcome>][] = [
-            ['products', () => maybeReocrProducts(parsed, lines, reOcr, { reasons: ['no-name', 'no-price', 'amount-in-name', 'collapsed-band', 'garbled-name'] })],
-            ['footer', () => maybeReocrFooter(parsed, lines, reOcr, { reconcileThreshold: 1.0 })],
-            ['header', () => maybeReocrHeader(parsed, lines, reOcr)],
-            ['products-recon', () => maybeReocrProducts(parsed, lines, reOcr, { reconcileThreshold: 1.0 })],
-          ];
-          for (const [label, run] of passes) {
-            const o = await run();
-            devLog(`productReocr.${label}`, { accepted: o.accepted, detail: o.detail });
-            void reportReocrOutcome(parsed.footer.receiptNo, o.accepted, o.detail);
-            if (o.accepted) { parsed = o.parsed; lines = o.lines; }
-          }
-        }
-        // Option A: rebuild footer field bands (date/time/receiptNo/total) from a fresh
-        // ISOLATED re-OCR of each strip — fixes guessed bands when MLKit dropped the
-        // value's word boxes. Fail-safe (keeps the original band if the re-OCR misses).
-        if (firstPageUri && firstPageDims) {
-          parsed.footer.lineRegions = await refineFooterBands(
-            firstPageUri,
-            parsed.footer.lineRegions,
-            { date: parsed.footer.date, time: parsed.footer.time, receiptNo: parsed.footer.receiptNo, total: parsed.footer.total },
-            firstPageDims.width,
-            firstPageDims.height,
-          );
+        if (flow.ikiGateFailed) {
+          if (ikiFieldsGateFailed) setLoading(false);
+          return;
         }
         await applyIkiResult(parsed.header, parsed.products, parsed.footer, parsed.skippedRegions ?? []);
         setLoading(false);
