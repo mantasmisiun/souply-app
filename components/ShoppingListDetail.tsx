@@ -155,8 +155,13 @@ interface Props {
     listId: number;
     /** Passed from the basket creation flow to know how many items to wait for */
     expectedCount?: number;
-    /** When true (multi-store mode), the all-items-checked completion prompt is suppressed */
+    /** True in multi-store mode: header/chips come from the parent, and the
+     *  all-items-checked completion confirm hands continuation to `onCompleted`. */
     isPartOfBasket?: boolean;
+    /** Multi-store: called after this store's list is confirmed completed.
+     *  Return true when the parent handled continuation (switched to the next
+     *  store's list); false → default behaviour (leave the screen). */
+    onCompleted?: () => boolean;
     /** Title row override — multi-store passes the joined chain short names
      *  (e.g. "Maxima · Rimi"). Single store derives it from the list. */
     headerTitle?: string;
@@ -174,6 +179,7 @@ export function ShoppingListDetail({
     listId,
     expectedCount,
     isPartOfBasket = false,
+    onCompleted,
     headerTitle,
     headerSubtitle,
     pinnedHeader,
@@ -429,7 +435,10 @@ export function ShoppingListDetail({
             }
         }
 
-        if (!isPartOfBasket && newChecked && updatedItems.every(i => i.isChecked)) {
+        // Split-basket sub-lists prompt too (previously suppressed via
+        // !isPartOfBasket — a two-store trip never got the finish confirm);
+        // on confirm the parent switches to the next unfinished store.
+        if (newChecked && updatedItems.length > 0 && updatedItems.every(i => i.isChecked)) {
             const key = `sl_prompted_${id}`;
             const already = await AsyncStorage.getItem(key);
             if (already === '1') return;
@@ -891,6 +900,10 @@ export function ShoppingListDetail({
                                         headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify({ status: 'completed' }),
                                     });
+                                    // Multi-store: the parent switches to the next
+                                    // unfinished store's list; only leave when this
+                                    // was the last (or a single-store list).
+                                    if (onCompleted?.()) return;
                                     router.back();
                                 }}
                             >

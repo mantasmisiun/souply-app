@@ -34,6 +34,9 @@ export default function UnifiedShoppingListScreen() {
     const [entriesLoaded, setEntriesLoaded] = useState(!basketId);
     const [activeListId, setActiveListId] = useState(parseInt(id));
     const [listSummaries, setListSummaries] = useState<Map<number, { itemCount: number; checkedCount: number }>>(new Map());
+    // Sub-lists the user confirmed completed THIS visit — drives which store the
+    // completion confirm advances to next (server status isn't refetched here).
+    const [completedListIds, setCompletedListIds] = useState<Set<number>>(new Set());
 
     // Load split basket entries from AsyncStorage (very fast local read)
     useEffect(() => {
@@ -114,6 +117,30 @@ export default function UnifiedShoppingListScreen() {
         );
     }
 
+    // A store's list was confirmed completed — hop to the next store that still
+    // has unchecked items (or any not-yet-completed sibling when counts are
+    // unknown). Returns false when this was the last one → the detail leaves.
+    const handleSubListCompleted = () => {
+        if (!isMulti) return false;
+        const done = new Set(completedListIds).add(activeListId);
+        setCompletedListIds(done);
+        // Zero out the finished store's chip badge without a refetch.
+        setListSummaries(prev => {
+            const next = new Map(prev);
+            const s = next.get(activeListId);
+            if (s) next.set(activeListId, { ...s, checkedCount: s.itemCount });
+            return next;
+        });
+        const next = entries.find(e => {
+            if (e.listId === activeListId || done.has(e.listId)) return false;
+            const summary = listSummaries.get(e.listId);
+            return summary ? summary.checkedCount < summary.itemCount : true;
+        });
+        if (!next) return false;
+        setActiveListId(next.listId);
+        return true;
+    };
+
     return (
         <View style={{ flex: 1 }}>
             <ShoppingListDetail
@@ -121,6 +148,7 @@ export default function UnifiedShoppingListScreen() {
                 listId={activeListId}
                 expectedCount={expectedCount ? parseInt(expectedCount) : undefined}
                 isPartOfBasket={isMulti}
+                onCompleted={handleSubListCompleted}
                 headerTitle={storeNames}
                 headerSubtitle={storeAddresses}
                 pinnedHeader={isMulti ? (
