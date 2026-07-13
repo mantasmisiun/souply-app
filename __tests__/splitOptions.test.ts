@@ -88,15 +88,17 @@ describe('buildSplitOptions', () => {
         expect(opts[0].storeIds).toEqual([99]);
     });
 
-    it('computes saving vs the average full-coverage store, floored at 0', () => {
+    it('computes saving vs the tapped single store, floored at 0', () => {
+        // Saving is measured against the tapped store's OWN total (store 1 = €30),
+        // not an average baseline — so an equal-or-worse split shows €0.
         const combos = [
-            combo([1, 2], 28, { extraDistanceKm: 4 }),   // baseline 33.33 - 28 = 5.33
-            combo([1, 3], 40, { extraDistanceKm: 4 }),   // 33.33 - 40 < 0 → floored to 0
+            combo([1, 2], 28, { extraDistanceKm: 4 }),   // 30 - 28 = 2.00
+            combo([1, 3], 40, { extraDistanceKm: 4 }),   // 30 - 40 < 0 → floored to 0
         ];
         const opts = buildSplitOptions(combos, results, [], 1);
         const s12 = opts.find(o => o.key === comboKey([1, 2]))!;
         const s13 = opts.find(o => o.key === comboKey([1, 3]))!;
-        expect(s12.saving).toBeCloseTo(5.33, 2);
+        expect(s12.saving).toBeCloseTo(2, 2);
         expect(s13.saving).toBe(0);
     });
 

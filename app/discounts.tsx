@@ -1,6 +1,6 @@
 import {
     View, FlatList, ScrollView, TouchableOpacity, Text, TextInput,
-    StyleSheet, ActivityIndicator, RefreshControl, Keyboard
+    StyleSheet, ActivityIndicator, RefreshControl, Keyboard, Modal, Pressable
 } from 'react-native';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
@@ -15,7 +15,7 @@ import { useBasketState } from '../state/basketState';
 import { addProductToBasket } from '../utils/basketUtils';
 import { resolveCanonicalStep } from '../utils/canonicalStep';
 import { ProductImage } from '../components/ProductImage';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../constants/theme';
 import { getUserId } from '../config/user';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -25,6 +25,10 @@ import { Toast, type ToastHandle } from '../components/Toast';
 import { ScalePressable } from '../components/ScalePressable';
 import { SkeletonBox } from '../components/SkeletonBox';
 import { ChainLogoStrip } from '../components/ChainLogoStrip';
+import { ChainLogoChip } from '../components/ChainLogoChip';
+import { FilterDropdownModal, type FilterOption } from '../components/FilterDropdownModal';
+import { StoreFilterButton } from '../components/StoreFilterButton';
+import { categoryIcon } from '../constants/categoryIcons';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '../utils/fetchWithTimeout';
@@ -38,13 +42,8 @@ interface L2Category {
     parentCategoryId: number;
     l1Id: number;
     l1Name: string;
-}
-
-function formatFreshness(ts: number, t: (k: string, v?: any) => string): string {
-    const minutes = Math.max(0, Math.floor((Date.now() - ts) / 60000));
-    if (minutes < 1) return t('discounts.freshNow');
-    if (minutes < 60) return t('discounts.freshMinutes', { count: minutes });
-    return t('discounts.freshHours', { count: Math.floor(minutes / 60) });
+    /** Canonical Lithuanian L1 name — stable emoji-lookup key across UI locales. */
+    l1NameKey?: string;
 }
 
 interface DiscountedProduct {
@@ -59,6 +58,10 @@ interface DiscountedProduct {
     unit: string | null;
     hasWeighable: boolean;
     bestDiscountPct: number;
+    /** Cross-store real discount (badge v2): cheapest chain's unit price vs the
+     *  market average. NULL → single-store / unit-incomparable → 🔥 + bestDiscountPct. */
+    realDiscountPct?: number | null;
+    cheapestChainId?: number | null;
     /** Canonical-unit fields populated server-side (productCanonical.ts). */
     canonicalUnit: string | null;
     canonicalStep: number | null;
@@ -71,6 +74,38 @@ interface CardCallbacks {
     onDecrement: (item: DiscountedProduct, qty: number) => void;
     onIncrement: (item: DiscountedProduct, qty: number) => void;
 }
+
+const CHAIN_NAME_BY_ID: Record<number, string> = { 1: 'Maxima', 2: 'Rimi', 3: 'Iki', 4: 'Norfa', 5: 'Lidl' };
+
+/** chainLogos can arrive as an array, or a single/double-encoded JSON string
+ *  from MariaDB — always normalise to an array before reading chainId. */
+function parseChainLogos(raw: DiscountedProduct['chainLogos']): { chainId: number; logoUrl: string | null }[] {
+    if (!raw) return [];
+    let v: unknown = raw;
+    for (let i = 0; i < 2 && typeof v === 'string'; i++) {
+        try { v = JSON.parse(v); } catch { return []; }
+    }
+    return Array.isArray(v) ? (v as { chainId: number; logoUrl: string | null }[]) : [];
+}
+
+/** A dropdown-trigger pill (store / category / subcategory) with a ▾ caret. */
+const FilterChip = memo(({ label, active, onPress, styles, colors }: {
+    label: string;
+    active: boolean;
+    onPress: () => void;
+    styles: ReturnType<typeof makeStyles>;
+    colors: AppTheme;
+}) => (
+    <TouchableOpacity
+        style={[styles.bubble, styles.filterChip, active && styles.bubbleActive]}
+        onPress={onPress}
+        activeOpacity={0.7}
+    >
+        <Text style={[styles.bubbleText, active && styles.bubbleTextActive]} numberOfLines={1}>{label}</Text>
+        <Ionicons name="chevron-down" size={14} color={active ? colors.onPrimary : colors.textSecondary} />
+    </TouchableOpacity>
+));
+FilterChip.displayName = 'FilterChip';
 
 const DiscountProductCard = memo(({
     item, quantity, isAdding, styles, colors, addLabel,
@@ -101,7 +136,16 @@ const DiscountProductCard = memo(({
                 <ProductImage uris={item.imageUrls} imageStyle={styles.productImage} placeholderStyle={styles.productImagePlaceholder} emojiStyle={styles.productImageEmoji} />
                 <ChainLogoStrip chainLogos={item.chainLogos} style={{ position: 'absolute', top: 6, left: 6 }} />
                 <View style={styles.discountBadge}>
-                    <Text style={styles.discountBadgeText}>🔥 -{item.bestDiscountPct}%</Text>
+                    {item.realDiscountPct != null && item.cheapestChainId != null ? (
+                        // Cross-store real discount: the cheapest chain's logo replaces the
+                        // fire — "cheapest HERE, X% below the market average".
+                        <View style={styles.discountBadgeInner}>
+                            <ChainLogoChip chainId={item.cheapestChainId} size={16} />
+                            <Text style={styles.discountBadgeText}>-{item.realDiscountPct}%</Text>
+                        </View>
+                    ) : (
+                        <Text style={styles.discountBadgeText}>🔥 -{item.bestDiscountPct}%</Text>
+                    )}
                 </View>
             </TouchableOpacity>
             <View style={styles.productInfo}>
@@ -150,6 +194,14 @@ export default function DiscountsScreen() {
     }, [templateItems, isTemplateMode]);
 
     const [selectedL2, setSelectedL2] = useState<number | null>(null);
+    const [selectedL1, setSelectedL1] = useState<number | null>(null);
+    /** null = all stores (the default); a Set is the explicit checked subset. */
+    const [selectedChainIds, setSelectedChainIds] = useState<Set<number> | null>(null);
+    // Store filter now lives in <StoreFilterButton> (self-contained dropdown);
+    // this shared dropdown only drives the L1/L2 category filters.
+    const [openFilter, setOpenFilter] = useState<null | 'l1' | 'l2'>(null);
+    const [anchorY, setAnchorY] = useState(0);
+    const filterRowRef = useRef<View>(null);
     const [search, setSearch] = useState('');
     /** When true the nav-bar title flips to a TextInput that filters the
      *  in-screen list (no navigation). Mirrors the template editor's
@@ -158,6 +210,7 @@ export default function DiscountsScreen() {
     const [searchOpen, setSearchOpen] = useState(false);
     const searchInputRef = useRef<TextInput>(null);
     const [addingIds, setAddingIds] = useState<Set<number>>(() => new Set());
+    const [infoOpen, setInfoOpen] = useState(false);
     const toastRef = useRef<ToastHandle>(null);
 
     // L2 categories — small, never changes during a session. Cached
@@ -183,7 +236,6 @@ export default function DiscountsScreen() {
         isFetching,
         isError,
         refetch,
-        dataUpdatedAt,
     } = useQuery<DiscountedProduct[]>({
         queryKey: ['discounts'],
         queryFn: async () => {
@@ -203,12 +255,98 @@ export default function DiscountsScreen() {
         [allProducts],
     );
 
+    // The /api/categories/l2 payload already carries l1Id/l1Name per row, so the
+    // L1 "Kategorijos" list, the per-L1 "Subkategorijos" list, and the l2->l1
+    // lookup all derive from it — no extra endpoint.
+    const l2ToL1 = useMemo(() => {
+        const m = new Map<number, number>();
+        for (const c of l2Categories) m.set(c.id, c.l1Id);
+        return m;
+    }, [l2Categories]);
+
+    const activeL1Ids = useMemo(() => {
+        const s = new Set<number>();
+        for (const c of l2Categories) if (activeL2Ids.has(c.id)) s.add(c.l1Id);
+        return s;
+    }, [l2Categories, activeL2Ids]);
+
+    const l1Options = useMemo<FilterOption[]>(() => {
+        const seen = new Map<number, { label: string; icon: string }>();
+        for (const c of l2Categories) {
+            if (activeL1Ids.has(c.l1Id) && !seen.has(c.l1Id)) {
+                // Same emoji + lookup rule as Naršyti's category list (shared map).
+                seen.set(c.l1Id, { label: c.l1Name, icon: categoryIcon(c.l1NameKey, c.l1Name) });
+            }
+        }
+        return [...seen.entries()].map(([id, { label, icon }]) => ({
+            id, label,
+            leading: <Text style={{ fontSize: 18 }}>{icon}</Text>,
+        }));
+    }, [l2Categories, activeL1Ids]);
+
+    const l2Options = useMemo<FilterOption[]>(() => {
+        if (selectedL1 == null) return [];
+        return l2Categories
+            .filter(c => c.l1Id === selectedL1 && activeL2Ids.has(c.id))
+            .map(c => ({ id: c.id, label: c.name }));
+    }, [l2Categories, selectedL1, activeL2Ids]);
+
+    // STORE filter: a discount item has no scalar chainId — its stores live in
+    // chainLogos[] (a product can be in several). Derive the selectable chains
+    // from the union present in the loaded discounts.
+    const availableChainIds = useMemo(() => {
+        const set = new Set<number>();
+        for (const p of allProducts) {
+            for (const cl of parseChainLogos(p.chainLogos)) {
+                if (cl && typeof cl.chainId === 'number') set.add(cl.chainId);
+            }
+        }
+        return [...set].sort((a, b) => a - b);
+    }, [allProducts]);
+
+    const storeOptions = useMemo<FilterOption[]>(
+        () => availableChainIds.map(id => ({
+            id,
+            label: CHAIN_NAME_BY_ID[id] ?? `#${id}`,
+            leading: <ChainLogoChip chainId={id} size={24} />,
+        })),
+        [availableChainIds],
+    );
+
+    // First logoUrl seen per chain — the selected-store logo strip (inside
+    // StoreFilterButton) renders these (same ChainLogoStrip rules as the cards).
+    const chainLogoUrlById = useMemo(() => {
+        const m = new Map<number, string | null>();
+        for (const p of allProducts) {
+            for (const cl of parseChainLogos(p.chainLogos)) {
+                if (cl && typeof cl.chainId === 'number' && !m.has(cl.chainId)) m.set(cl.chainId, cl.logoUrl ?? null);
+            }
+        }
+        return m;
+    }, [allProducts]);
+
     useEffect(() => {
         if (selectedL2 != null && !activeL2Ids.has(selectedL2)) setSelectedL2(null);
     }, [activeL2Ids, selectedL2]);
 
+    // If the chosen L1 vanishes from the loaded discounts, drop it (and its L2).
+    useEffect(() => {
+        if (selectedL1 != null && !activeL1Ids.has(selectedL1)) { setSelectedL1(null); setSelectedL2(null); }
+    }, [activeL1Ids, selectedL1]);
+
     const products = useMemo(() => {
         let list = allProducts;
+        // STORE: keep items offered by at least one checked chain. Skipped when
+        // all chains are selected (default) so items survive even if their
+        // chainLogos is empty/unparseable.
+        if (selectedChainIds && selectedChainIds.size < availableChainIds.length) {
+            list = list.filter(p => parseChainLogos(p.chainLogos).some(cl => selectedChainIds.has(cl.chainId)));
+        }
+        // L1 category, derived per item via l2CategoryId -> l1Id.
+        if (selectedL1 != null) {
+            list = list.filter(p => p.l2CategoryId != null && l2ToL1.get(p.l2CategoryId) === selectedL1);
+        }
+        // L2 subcategory.
         if (selectedL2 != null) list = list.filter(p => p.l2CategoryId === selectedL2);
         const trimmed = search.trim();
         if (trimmed) {
@@ -220,7 +358,44 @@ export default function DiscountsScreen() {
             list = list.filter((p) => fuzzyMatches(p.name, trimmed));
         }
         return list;
-    }, [allProducts, selectedL2, search]);
+    }, [allProducts, selectedChainIds, availableChainIds, selectedL1, selectedL2, l2ToL1, search]);
+
+    const toggleChain = useCallback((id: number) => {
+        setSelectedChainIds(prev => {
+            // From "All stores": the first tap selects ONLY the tapped store — the
+            // one-tap narrowing start (never "all minus one").
+            if (prev == null) return new Set([id]);
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            // Auto-collapse both edges back to "All stores": an empty selection would
+            // show zero products, and a full selection IS all stores.
+            if (next.size === 0 || next.size >= availableChainIds.length) return null;
+            return next;
+        });
+    }, [availableChainIds]);
+
+    const selectAllStores = useCallback(() => setSelectedChainIds(null), []);
+
+    const selectL1 = useCallback((id: number | null) => {
+        setSelectedL1(id);
+        setSelectedL2(null); // changing the L1 resets the subcategory to "Visi"
+    }, []);
+
+    const openDropdown = useCallback((which: 'l1' | 'l2') => setOpenFilter(which), []);
+
+    const l1Label = selectedL1 != null
+        ? (() => {
+            const label = l1Options.find(o => o.id === selectedL1)?.label;
+            if (!label) return t('discounts.filterCategories');
+            // Same emoji as the dropdown option (and Naršyti) — carried into the chip.
+            const c = l2Categories.find(c => c.l1Id === selectedL1);
+            return `${categoryIcon(c?.l1NameKey, c?.l1Name)} ${label}`;
+        })()
+        : t('discounts.filterCategories');
+    const l2Label = selectedL2 != null
+        ? (l2Options.find(o => o.id === selectedL2)?.label ?? t('discounts.filterSubcategories'))
+        : t('discounts.filterSubcategories');
+    const hasFilters = storeOptions.length > 1 || l1Options.length > 0;
 
     const { draftBasketId, setDraftBasketId, sessionBasketId, clearSessionBasket } = useBasketState();
     const [basketQuantities, setBasketQuantities] = useState<Record<number, number>>({});
@@ -456,13 +631,19 @@ export default function DiscountsScreen() {
                     : <GlassIconButton icon="search" onPress={() => setSearchOpen(true)} />}
                 collapsing={searchOpen ? null : (
                     <ScreenHeading
-                        title="Nuolaidos"
-                        subtitle={dataUpdatedAt > 0 && allProducts.length > 0
-                            ? formatFreshness(dataUpdatedAt, t)
-                            : undefined}
+                        title={t('discounts.title')}
+                        trailing={
+                            <TouchableOpacity
+                                onPress={() => setInfoOpen(true)}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                accessibilityLabel={t('discounts.infoTitle')}
+                            >
+                                <Ionicons name="help-circle-outline" size={26} color={colors.textSecondary} />
+                            </TouchableOpacity>
+                        }
                     />
                 )}
-                pinned={(searchOpen || activeL2Ids.size > 0) ? (
+                pinned={(searchOpen || hasFilters) ? (
                     <>
                         {searchOpen && (
                             <View style={styles.searchFieldWrap}>
@@ -479,33 +660,41 @@ export default function DiscountsScreen() {
                                 />
                             </View>
                         )}
-                        {activeL2Ids.size > 0 && (
-                        <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            contentContainerStyle={styles.bubblesContainer}
-                            style={styles.bubblesRow}
-                        >
-                            <TouchableOpacity
-                                style={[styles.bubble, selectedL2 === null && styles.bubbleActive]}
-                                onPress={() => setSelectedL2(null)}
-                            >
-                                <Text style={[styles.bubbleText, selectedL2 === null && styles.bubbleTextActive]}>
-                                    Visos kategorijos
-                                </Text>
-                            </TouchableOpacity>
-                            {l2Categories.filter(cat => activeL2Ids.has(cat.id)).map(cat => (
-                                <TouchableOpacity
-                                    key={cat.id}
-                                    style={[styles.bubble, selectedL2 === cat.id && styles.bubbleActive]}
-                                    onPress={() => setSelectedL2(selectedL2 === cat.id ? null : cat.id)}
+                        {hasFilters && (
+                            <View ref={filterRowRef} style={styles.bubblesRow}>
+                                <ScrollView
+                                    horizontal
+                                    showsHorizontalScrollIndicator={false}
+                                    contentContainerStyle={styles.bubblesContainer}
                                 >
-                                    <Text style={[styles.bubbleText, selectedL2 === cat.id && styles.bubbleTextActive]}>
-                                        {cat.name}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
-                        </ScrollView>
+                                    {storeOptions.length > 1 && (
+                                        <StoreFilterButton
+                                            storeOptions={storeOptions}
+                                            selectedIds={selectedChainIds}
+                                            onToggle={toggleChain}
+                                            onAll={selectAllStores}
+                                            logoUrlById={chainLogoUrlById}
+                                            label={t('discounts.filterStores')}
+                                            allLabel={t('discounts.filterAllStores')}
+                                            title={t('discounts.filterStores')}
+                                        />
+                                    )}
+                                    {l1Options.length > 0 && (
+                                        <FilterChip
+                                            styles={styles} colors={colors}
+                                            label={l1Label} active={selectedL1 != null}
+                                            onPress={() => openDropdown('l1')}
+                                        />
+                                    )}
+                                    {selectedL1 != null && l2Options.length > 0 && (
+                                        <FilterChip
+                                            styles={styles} colors={colors}
+                                            label={l2Label} active={selectedL2 != null}
+                                            onPress={() => openDropdown('l2')}
+                                        />
+                                    )}
+                                </ScrollView>
+                            </View>
                         )}
                     </>
                 ) : undefined}
@@ -518,11 +707,11 @@ export default function DiscountsScreen() {
                                 {Array.from({ length: 6 }).map((_, i) => (
                                     <View key={i} style={{ flexDirection: 'row', gap: 12 }}>
                                         {[0, 1].map(j => (
-                                            <View key={j} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: 12, padding: 12, gap: 8 }}>
-                                                <SkeletonBox height={100} borderRadius={8} />
+                                            <View key={j} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: 12, gap: 8, ...elevation.level2 }}>
+                                                <SkeletonBox height={110} borderRadius={radius.md} />
                                                 <SkeletonBox height={12} borderRadius={6} />
                                                 <SkeletonBox width={80} height={12} borderRadius={6} />
-                                                <SkeletonBox height={32} borderRadius={8} />
+                                                <SkeletonBox height={36} borderRadius={radius.pill} />
                                             </View>
                                         ))}
                                     </View>
@@ -651,6 +840,38 @@ export default function DiscountsScreen() {
                     }
                 }}
             />
+            <FilterDropdownModal
+                visible={openFilter !== null}
+                title={openFilter === 'l1' ? t('discounts.filterCategories') : t('discounts.filterSubcategories')}
+                options={openFilter === 'l1' ? l1Options : l2Options}
+                onClose={() => setOpenFilter(null)}
+                config={openFilter === 'l1'
+                    ? { mode: 'single', selectedId: selectedL1, allLabel: t('discounts.filterAllCategories'), onSelect: selectL1 }
+                    : { mode: 'single', selectedId: selectedL2, allLabel: t('discounts.filterAllSubcategories'), onSelect: setSelectedL2 }}
+            />
+            <Modal visible={infoOpen} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setInfoOpen(false)}>
+                <Pressable style={styles.infoOverlay} onPress={() => setInfoOpen(false)}>
+                    <Pressable style={styles.infoCard} onPress={() => {}}>
+                        <Text style={styles.infoTitle}>{t('discounts.infoTitle')}</Text>
+                        {([
+                            [1, <Text key="i1" style={styles.infoBulletIcon}>🏷️</Text>],
+                            [2, <Text key="i2" style={styles.infoBulletIcon}>🔄</Text>],
+                            // A miniature of the ACTUAL cross-store badge (pink pill, -30%)
+                            // so the reader instantly knows which badge is meant.
+                            [3, <View key="i3" style={styles.infoBadgeSample}><Text style={styles.infoBadgeSampleText}>-30%</Text></View>],
+                            [4, <Text key="i4" style={styles.infoBulletIcon}>🔥</Text>],
+                        ] as const).map(([n, icon]) => (
+                            <View key={n} style={styles.infoBulletRow}>
+                                <View style={styles.infoBulletLead}>{icon}</View>
+                                <Text style={styles.infoBulletText}>{t(`discounts.infoBullet${n}`)}</Text>
+                            </View>
+                        ))}
+                        <ScalePressable style={styles.infoButton} onPress={() => setInfoOpen(false)}>
+                            <Text style={styles.infoButtonText}>{t('common.gotIt')}</Text>
+                        </ScalePressable>
+                    </Pressable>
+                </Pressable>
+            </Modal>
             <Toast ref={toastRef} />
         </>
     );
@@ -672,9 +893,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         marginHorizontal: 16,
         marginTop: 8,
         marginBottom: 4,
-        borderRadius: 10,
-        paddingHorizontal: 12,
-        paddingVertical: 8,
+        borderRadius: radius.pill,
+        paddingHorizontal: 14,
+        paddingVertical: 9,
         gap: 8,
         borderWidth: 1,
         borderColor: c.border,
@@ -691,8 +912,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10,
     },
     searchField: {
-        borderWidth: 1, borderColor: c.border, borderRadius: 10,
-        paddingHorizontal: 12, paddingVertical: 9,
+        borderWidth: 1, borderColor: c.border, borderRadius: radius.pill,
+        paddingHorizontal: 16, paddingVertical: 10,
         fontSize: 16, color: c.textPrimary,
     },
     bubblesRow: {
@@ -708,9 +929,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         gap: 8,
     },
     bubble: {
-        paddingHorizontal: 14,
-        paddingVertical: 7,
-        borderRadius: 20,
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: radius.pill,
         borderWidth: 1,
         borderColor: c.border,
         backgroundColor: c.cardBackground,
@@ -718,6 +939,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     bubbleActive: {
         backgroundColor: c.primary,
         borderColor: c.primary,
+        ...elevation.level1,
     },
     bubbleText: {
         fontSize: 13,
@@ -727,16 +949,60 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         color: c.onPrimary,
         fontWeight: '600',
     },
+    filterChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+    },
+    infoOverlay: {
+        flex: 1,
+        backgroundColor: c.overlayBackdrop,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 24,
+    },
+    infoCard: {
+        backgroundColor: c.cardBackground,
+        borderRadius: radius.xl,
+        padding: 24,
+        width: '100%',
+        maxWidth: 360,
+        ...elevation.level3,
+    },
+    infoTitle: {
+        fontSize: 17,
+        fontWeight: '700',
+        color: c.textPrimary,
+        textAlign: 'center',
+        marginBottom: 16,
+    },
+    infoBulletRow: { flexDirection: 'row', gap: 10, marginBottom: 12, alignItems: 'flex-start' },
+    infoBulletLead: { minWidth: 44, alignItems: 'center', paddingTop: 1 },
+    infoBulletIcon: { fontSize: 17, lineHeight: 21 },
+    infoBadgeSample: {
+        backgroundColor: c.primary,
+        borderRadius: radius.pill,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+    },
+    infoBadgeSampleText: { color: c.onPrimary, fontSize: 11, fontWeight: '700' },
+    infoBulletText: { flex: 1, fontSize: 14, lineHeight: 21, color: c.textPrimary },
+    infoButton: {
+        marginTop: 8,
+        backgroundColor: c.primary,
+        borderRadius: radius.pill,
+        paddingVertical: 12,
+        alignItems: 'center',
+    },
+    infoButtonText: { color: c.onPrimary, fontSize: 15, fontWeight: '600' },
     list: { padding: 12 },
     row: { gap: 12, marginBottom: 12 },
     productCard: {
         backgroundColor: c.cardBackground,
-        borderRadius: 12,
+        borderRadius: radius.lg,
         padding: 12,
         alignItems: 'center',
-        elevation: 1,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05, shadowRadius: 2,
+        ...elevation.level2,
         flex: 1,
         maxWidth: '50%',
     },
@@ -747,26 +1013,29 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'center',
         marginBottom: 8,
     },
-    productImage: { width: '100%', height: '100%' },
+    productImage: { width: '100%', height: '100%', borderRadius: radius.md },
     productImagePlaceholder: {
         width: '100%', height: '100%',
         alignItems: 'center', justifyContent: 'center',
-        backgroundColor: c.surfaceMuted, borderRadius: 8,
+        backgroundColor: c.surfaceMuted, borderRadius: radius.md,
     },
     productImageEmoji: { fontSize: 44, opacity: 0.4 },
     discountBadge: {
         position: 'absolute',
-        top: 4,
-        right: 4,
+        top: 6,
+        right: 6,
         backgroundColor: c.primary,
-        borderRadius: 8,
-        paddingHorizontal: 6,
-        paddingVertical: 3,
+        borderRadius: radius.pill,
+        paddingHorizontal: 9,
+        paddingVertical: 4,
+        ...elevation.level1,
     },
+    discountBadgeInner: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     discountBadgeText: {
-        fontSize: 11,
-        fontWeight: '700',
+        fontSize: 12,
+        fontWeight: '800',
         color: c.onPrimary,
+        letterSpacing: 0.2,
     },
     productInfo: { flex: 1, width: '100%', marginBottom: 10 },
     productName: { fontSize: 13, color: c.textPrimary, lineHeight: 18 },
@@ -774,7 +1043,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     addButton: {
         width: '100%',
         backgroundColor: c.primary,
-        borderRadius: 8,
+        borderRadius: radius.pill,
         paddingVertical: 10,
         alignItems: 'center',
     },
@@ -822,7 +1091,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'space-between',
         borderWidth: 1,
         borderColor: c.primary,
-        borderRadius: 8,
+        borderRadius: radius.pill,
         paddingVertical: 6,
         paddingHorizontal: 10,
     },

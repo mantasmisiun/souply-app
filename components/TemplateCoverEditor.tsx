@@ -11,7 +11,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import Reanimated, { runOnJS, FadeInDown, FadeOutUp, LinearTransition } from 'react-native-reanimated';
 import ColorPicker, { Panel1, HueSlider } from 'reanimated-color-picker';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, radius, type AppTheme } from '../constants/theme';
 import { type TemplateCoverImage } from '../utils/basketTemplatesApi';
 import { coverEmoji } from '../utils/templateCover';
 import { EMOJI_CATALOG } from '../utils/emojiCatalog';
@@ -270,7 +270,7 @@ export function TemplateCoverEditor({
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     modalRoot: { flex: 1, justifyContent: 'flex-end' },
     backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)' },
-    sheet: { backgroundColor: c.pageBackground, borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: '90%', paddingBottom: 12 },
+    sheet: { backgroundColor: c.pageBackground, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, maxHeight: '90%', paddingBottom: 12 },
     grabArea: { alignItems: 'center', paddingTop: 10, paddingBottom: 4 },
     pill: { width: 40, height: 5, borderRadius: 3, backgroundColor: c.border },
     bodyWrap: { flexShrink: 1 },
@@ -284,16 +284,16 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         alignItems: 'center', justifyContent: 'center',
         borderWidth: 2, borderColor: c.pageBackground,
     },
-    nameInput: { flex: 1, fontSize: 17, fontWeight: '600', color: c.textPrimary, borderWidth: 1, borderColor: c.border, borderRadius: 12, paddingHorizontal: 14, paddingVertical: 12 },
+    nameInput: { flex: 1, fontSize: 17, fontWeight: '600', color: c.textPrimary, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: 14, paddingVertical: 12 },
     section: { fontSize: 12, fontWeight: '700', textTransform: 'uppercase', letterSpacing: 1, color: c.textSecondary, marginBottom: 8, marginTop: 4 },
     swatchRow: { flexDirection: 'row', gap: 12, marginBottom: 12, flexWrap: 'wrap' },
     swatch: { width: 36, height: 36, borderRadius: 18, borderWidth: 3, borderColor: 'transparent' },
     swatchActive: { borderColor: c.textPrimary },
     customChip: { backgroundColor: c.surfaceMuted ?? c.cardBackground, alignItems: 'center', justifyContent: 'center', borderColor: c.border },
     customWrap: { marginBottom: 12 },
-    wheelPanel: { height: 160, borderRadius: 12 },
+    wheelPanel: { height: 160, borderRadius: radius.lg },
     hue: { borderRadius: 8, marginTop: 4 },
-    hexRow: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: c.border, borderRadius: 10, paddingHorizontal: 12, marginTop: 10 },
+    hexRow: { flexDirection: 'row', alignItems: 'center', gap: 6, borderWidth: 1, borderColor: c.border, borderRadius: radius.md, paddingHorizontal: 12, marginTop: 10 },
     hexPrefix: { fontSize: 16, fontWeight: '700', color: c.textSecondary },
     hexInput: { flex: 1, fontSize: 16, color: c.textPrimary, paddingVertical: 10 },
     emojiGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 18 },
@@ -301,8 +301,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     emojiCellActive: { borderColor: c.primary },
     emojiGlyph: { fontSize: 26 },
     actions: { flexDirection: 'row', gap: 12, paddingHorizontal: 20, paddingTop: 10 },
-    cancelBtn: { flex: 1, borderRadius: 14, paddingVertical: 15, alignItems: 'center', backgroundColor: c.cardBackground },
+    cancelBtn: { flex: 1, borderRadius: radius.pill, paddingVertical: 15, alignItems: 'center', backgroundColor: c.cardBackground },
     cancelText: { color: c.textSecondary, fontSize: 16, fontWeight: '700' },
-    doneBtn: { flex: 2, backgroundColor: c.primary, borderRadius: 14, paddingVertical: 15, alignItems: 'center' },
+    doneBtn: { flex: 2, backgroundColor: c.primary, borderRadius: radius.pill, paddingVertical: 15, alignItems: 'center' },
     doneText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });

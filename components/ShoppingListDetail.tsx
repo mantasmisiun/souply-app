@@ -1,10 +1,20 @@
 import {
-    View, Text, TouchableOpacity, StyleSheet, ActivityIndicator,
-    Alert, TextInput, Platform, Modal, KeyboardAvoidingView, Keyboard,
-} from 'react-native';
+    View,
+    Text,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    TextInput,
+    Platform,
+    Modal,
+    KeyboardAvoidingView,
+    Keyboard,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { KeyboardStickyView } from 'react-native-keyboard-controller';
+import { LiquidGlass } from './LiquidGlass';
 import { SkeletonBox } from './SkeletonBox';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useCollapsingHeader, CollapsingHeader } from './CollapsingHeader';
@@ -18,7 +28,7 @@ import { ContextMenu } from './ContextMenu';
 import { API_BASE_URL } from '../config/api';
 import { getUserId } from '../config/user';
 import { ProductImage } from './ProductImage';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, spacing, radius, elevation, iconSize, avatarSize, typography, type AppTheme } from '../constants/theme';
 import * as Haptics from 'expo-haptics';
 import { formatEuro } from '../utils/formatCurrency';
 import { formatStoreStreet } from '../utils/formatAddress';
@@ -86,12 +96,12 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
     return (
         <View style={[styles.card, item.isChecked && styles.cardChecked]}>
             <TouchableOpacity
-                style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+                style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md }}
                 onPress={() => onToggle(item)}
                 activeOpacity={0.7}
             >
                 <View style={[styles.checkCircle, item.isChecked && styles.checkCircleChecked]}>
-                    {item.isChecked && <Ionicons name="checkmark" size={16} color={colors.onPrimary} />}
+                    {item.isChecked && <Ionicons name="checkmark" size={iconSize.sm} color={colors.onPrimary} />}
                 </View>
                 <View style={styles.imageContainer}>
                     <ProductImage
@@ -129,7 +139,7 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
                 onPress={() => onRemove(item.id)}
                 hitSlop={8}
             >
-                <Ionicons name="trash-outline" size={16} color={colors.textMuted} />
+                <Ionicons name="trash-outline" size={iconSize.sm} color={colors.textMuted} />
             </TouchableOpacity>
         </View>
     );
@@ -211,6 +221,9 @@ export function ShoppingListDetail({
     const [shareToken, setShareToken] = useState<string | null>(null);
     const [shareStatus, setShareStatus] = useState<'pending' | 'claimed' | 'expired' | 'error'>('pending');
     const [shareLoading, setShareLoading] = useState(false);
+    // "?" toggle in the share sheet — expands the detailed how-it-works text.
+    const [shareHelpOpen, setShareHelpOpen] = useState(false);
+    useEffect(() => { if (!shareOpen) setShareHelpOpen(false); }, [shareOpen]);
 
     const shownCouponsRef = useRef<Set<string>>(new Set());
     const [couponQueue, setCouponQueue] = useState<string[]>([]);
@@ -549,9 +562,9 @@ export function ShoppingListDetail({
                 collapsing={<ScreenHeading title={headerTitle ?? t('shoppingListDetail.fallbackTitle')} subtitle={headerSubtitle} />}
                 pinned={pinnedHeader}
             />
-            <View style={[styles.container, { paddingTop: header.paddingTop + 16, paddingHorizontal: 16, gap: 10 }]}>
+            <View style={[styles.container, { paddingTop: header.paddingTop + spacing.lg, paddingHorizontal: spacing.lg, gap: spacing.sm }]}>
                 {Array.from({ length: 8 }).map((_, i) => (
-                    <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: 10, padding: 14, flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+                    <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: spacing.lg, flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
                         <SkeletonBox width={22} height={22} borderRadius={6} />
                         <View style={{ flex: 1, gap: 6 }}>
                             <SkeletonBox width={180} height={13} borderRadius={6} />
@@ -603,7 +616,7 @@ export function ShoppingListDetail({
                     {pendingDeleteRef.current && (
                         <View style={[styles.undoToastWrap, { top: header.paddingTop }]} pointerEvents="box-none">
                             <TouchableOpacity style={styles.undoToast} onPress={undoItemDelete} activeOpacity={0.85}>
-                                <Ionicons name="arrow-undo" size={14} color={colors.onPrimary} />
+                                <Ionicons name="arrow-undo" size={iconSize.xs} color={colors.onPrimary} />
                                 <Text style={styles.undoToastText}>{t('shoppingListDetail.deletedUndo')}</Text>
                             </TouchableOpacity>
                         </View>
@@ -650,9 +663,11 @@ export function ShoppingListDetail({
                         keyboard reliably (manual padding under-lifts in Android
                         edge-to-edge). */}
                     <KeyboardStickyView>
-                    {/* Floating search results — sit above the pinned add bar */}
+                    {/* Floating search results — a glass card above the floating bar */}
                     {showSearchResults && (
-                        <View style={styles.floatingResults}>
+                        <View style={styles.resultsWrap}>
+                            <View style={styles.resultsShadow}>
+                            <LiquidGlass style={styles.floatingResults} fallback="solid">
                             {searchResults.map((product, index) => {
                                 const alreadyInList = items.some(i => i.productId === product.productId);
                                 return (
@@ -670,7 +685,7 @@ export function ShoppingListDetail({
                                             setSearchResults([]);
                                         }}
                                     >
-                                        {alreadyInList && <Ionicons name="checkmark-circle" size={18} color={colors.primary} style={{ marginRight: 8 }} />}
+                                        {alreadyInList && <Ionicons name="checkmark-circle" size={iconSize.md} color={colors.primary} style={{ marginRight: spacing.sm }} />}
                                         <Text style={styles.searchResultText}>{product.storeProductName}</Text>
                                     </TouchableOpacity>
                                 );
@@ -683,41 +698,60 @@ export function ShoppingListDetail({
                                     promptQuantity(null, name, false);
                                 }}
                             >
-                                <Ionicons name="add-circle-outline" size={18} color={colors.primary} />
+                                <Ionicons name="add-circle-outline" size={iconSize.md} color={colors.primary} />
                                 <Text style={styles.customItemText}>{t('shoppingListDetail.addCustom', { name: quickAddText })}</Text>
                             </TouchableOpacity>
+                            </LiquidGlass>
+                            </View>
                         </View>
                     )}
 
-                    {/* Pinned add bar — only for active lists. Bottom inset clears
-                        the Android nav bar (skipped while the keyboard is open). */}
+                    {/* Floating search / add bar — glass on iOS, solid on Android,
+                        detached above the safe area like the tab bar. */}
                     {list?.status === 'active' && (
-                        <View style={[styles.addBar, { paddingBottom: 12 + (kbHeight > 0 ? 0 : insets.bottom) }]}>
-                            <Ionicons name="add-circle-outline" size={20} color={colors.primary} />
-                            <TextInput
-                                style={styles.addBarInput}
-                                value={quickAddText}
-                                onChangeText={(text) => { setQuickAddText(text); handleSearch(text); }}
-                                placeholder={t('shoppingListDetail.searchPlaceholder')}
-                                placeholderTextColor={colors.textMuted}
-                                onSubmitEditing={() => {
-                                    const name = quickAddText.trim();
-                                    if (!name) return;
-                                    setQuickAddText('');
-                                    setSearchQuery('');
-                                    setSearchResults([]);
-                                    addProduct(null, name, 1, false, null, null);
-                                }}
-                                returnKeyType="done"
-                            />
-                            {quickAddText.length > 0 && (
+                        <View style={[styles.addBarWrap, { paddingBottom: kbHeight > 0 ? spacing.sm : insets.bottom + spacing.sm }]}>
+                            <View style={styles.addBarShadow}>
+                            <LiquidGlass style={styles.addBar} fallback="solid">
+                                <Ionicons name="search" size={iconSize.md} color={colors.textMuted} />
+                                <TextInput
+                                    style={styles.addBarInput}
+                                    value={quickAddText}
+                                    onChangeText={(text) => { setQuickAddText(text); handleSearch(text); }}
+                                    placeholder={t('shoppingListDetail.searchPlaceholder')}
+                                    placeholderTextColor={colors.textMuted}
+                                    onSubmitEditing={() => {
+                                        const name = quickAddText.trim();
+                                        if (!name) return;
+                                        setQuickAddText('');
+                                        setSearchQuery('');
+                                        setSearchResults([]);
+                                        addProduct(null, name, 1, false, null, null);
+                                    }}
+                                    returnKeyType="done"
+                                />
+                                {quickAddText.length > 0 && (
+                                    <TouchableOpacity
+                                        onPress={() => { setQuickAddText(''); setSearchQuery(''); setSearchResults([]); }}
+                                        hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                                    >
+                                        <Ionicons name="close-circle" size={iconSize.md} color={colors.textMuted} />
+                                    </TouchableOpacity>
+                                )}
                                 <TouchableOpacity
-                                    onPress={() => { setQuickAddText(''); setSearchQuery(''); setSearchResults([]); }}
-                                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                                    style={styles.addBarBtn}
+                                    onPress={() => {
+                                        const name = quickAddText.trim();
+                                        if (!name) return;
+                                        setQuickAddText('');
+                                        setSearchQuery('');
+                                        setSearchResults([]);
+                                        addProduct(null, name, 1, false, null, null);
+                                    }}
                                 >
-                                    <Ionicons name="close" size={18} color={colors.textSecondary} />
+                                    <Ionicons name="add" size={iconSize.md} color={colors.onPrimary} />
                                 </TouchableOpacity>
-                            )}
+                            </LiquidGlass>
+                            </View>
                         </View>
                     )}
                     </KeyboardStickyView>
@@ -749,7 +783,7 @@ export function ShoppingListDetail({
                                     }}
                                 >
                                     <View style={[styles.checkbox, modalIsWeighable ? styles.checkboxChecked : null]}>
-                                        {modalIsWeighable ? <Ionicons name="checkmark" size={14} color={colors.onPrimary} /> : null}
+                                        {modalIsWeighable ? <Ionicons name="checkmark" size={iconSize.xs} color={colors.onPrimary} /> : null}
                                     </View>
                                     <Text style={styles.weighableLabel}>Sveriamas</Text>
                                 </TouchableOpacity>
@@ -826,7 +860,7 @@ export function ShoppingListDetail({
                         </Text>
                         <TouchableOpacity style={styles.couponDontShowRow} onPress={() => setCouponDontShow(v => !v)}>
                             <View style={[styles.checkbox, couponDontShow && styles.checkboxChecked]}>
-                                {couponDontShow && <Ionicons name="checkmark" size={14} color="#fff" />}
+                                {couponDontShow && <Ionicons name="checkmark" size={iconSize.xs} color="#fff" />}
                             </View>
                             <Text style={styles.couponDontShowLabel}>{t('shoppingListDetail.couponNeverShow')}</Text>
                         </TouchableOpacity>
@@ -901,11 +935,30 @@ export function ShoppingListDetail({
                             </>
                         ) : (
                             <>
-                                <Text style={styles.shareTitle}>{t('shoppingListDetail.shareTitle')}</Text>
+                                <View style={styles.shareTitleRow}>
+                                    <Text style={styles.shareTitle}>{t('shoppingListDetail.shareTitle')}</Text>
+                                    <TouchableOpacity
+                                        onPress={() => setShareHelpOpen(o => !o)}
+                                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                        accessibilityLabel="?"
+                                        style={{ marginBottom: 6 }}
+                                    >
+                                        <Ionicons
+                                            name="help-circle-outline"
+                                            size={20}
+                                            color={shareHelpOpen ? colors.primary : colors.textMuted}
+                                        />
+                                    </TouchableOpacity>
+                                </View>
                                 <Text style={styles.shareSubtitle}>{t('shoppingListDetail.shareSubtitle')}</Text>
+                                {shareHelpOpen && (
+                                    <View style={styles.shareHelpBox}>
+                                        <Text style={styles.shareHelpText}>{t('shoppingListDetail.shareHelpBody')}</Text>
+                                    </View>
+                                )}
                                 <View style={styles.shareQrWrap}>
                                     {shareLoading || !shareToken ? (
-                                        <ActivityIndicator size="large" color={colors.primary} />
+                                        <MaterialProgress size="large" color={colors.primary} />
                                     ) : (
                                         <BrandedQR value={shareToken} size={220} />
                                     )}
@@ -924,108 +977,111 @@ export function ShoppingListDetail({
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
-    centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
-    headerLogo: { width: 32, height: 32, marginLeft: 8, borderRadius: 6 },
+    centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl },
 
     progressContainer: {
-        flexDirection: 'row', alignItems: 'center', padding: 12,
-        backgroundColor: c.cardBackground, borderBottomWidth: 1, borderBottomColor: c.border, gap: 10,
+        flexDirection: 'row', alignItems: 'center', padding: spacing.md,
+        backgroundColor: c.cardBackground, borderBottomWidth: 1, borderBottomColor: c.border, gap: spacing.sm,
     },
-    progressBar: { flex: 1, height: 8, backgroundColor: c.border, borderRadius: 4, overflow: 'hidden' },
-    progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: 4 },
-    progressText: { fontSize: 13, color: c.textSecondary, minWidth: 50, textAlign: 'right' },
+    progressBar: { flex: 1, height: 8, backgroundColor: c.border, borderRadius: radius.pill, overflow: 'hidden' },
+    progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: radius.pill },
+    progressText: { ...typography.label, fontWeight: '400', color: c.textSecondary, minWidth: 50, textAlign: 'right' },
 
-    scrollContent: { paddingBottom: 40 },
-    listInner: { paddingTop: 16, paddingHorizontal: 12 },
+    scrollContent: { paddingBottom: spacing.xxxl },
+    listInner: { paddingTop: spacing.lg, paddingHorizontal: spacing.md },
 
     sectionHeader: {
-        fontSize: 12, fontWeight: '700', color: c.textMuted,
+        ...typography.labelSmall, fontWeight: '700', color: c.textMuted,
         textTransform: 'uppercase', letterSpacing: 0.6,
-        paddingHorizontal: 4, paddingTop: 16, paddingBottom: 6,
+        paddingHorizontal: spacing.xs, paddingTop: spacing.lg, paddingBottom: 6,
     },
     listContainer: {
-        backgroundColor: c.cardBackground, marginBottom: 10,
-        borderRadius: 10, overflow: 'hidden',
-        elevation: 1, shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 2,
+        backgroundColor: c.cardBackground, marginBottom: spacing.sm,
+        borderRadius: radius.lg, overflow: 'hidden',
+        ...elevation.level1,
     },
     card: {
         backgroundColor: c.cardBackground, flexDirection: 'row',
-        alignItems: 'center', paddingHorizontal: 14, paddingVertical: 12, gap: 12,
+        alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.md,
     },
-    divider: { height: 0.5, backgroundColor: c.border, marginLeft: 14 },
+    divider: { height: 0.5, backgroundColor: c.border, marginLeft: spacing.lg },
     cardChecked: { opacity: 0.5 },
     checkCircle: {
-        width: 22, height: 22, borderRadius: 11,
+        width: 22, height: 22, borderRadius: radius.pill,
         borderWidth: 2, borderColor: c.border,
         alignItems: 'center', justifyContent: 'center', flexShrink: 0,
     },
     checkCircleChecked: { backgroundColor: c.primary, borderColor: c.primary },
-    imageContainer: { width: 40, height: 40, flexShrink: 0 },
-    productImage: { width: 40, height: 40, borderRadius: 8 },
+    imageContainer: { width: avatarSize.md, height: avatarSize.md, flexShrink: 0 },
+    productImage: { width: avatarSize.md, height: avatarSize.md, borderRadius: radius.sm },
     imagePlaceholder: {
-        width: 40, height: 40, borderRadius: 8,
+        width: avatarSize.md, height: avatarSize.md, borderRadius: radius.sm,
         backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center',
     },
     imageEmoji: { fontSize: 22, opacity: 0.4 },
     cardContent: { flex: 1 },
-    itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
+    itemName: { ...typography.bodySmallStrong, color: c.textPrimary },
     itemNameChecked: { textDecorationLine: 'line-through', color: c.textMuted },
-    itemQuantity: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
-    itemPrice: { fontSize: 14, fontWeight: '500', color: c.primary },
+    itemQuantity: { ...typography.labelSmall, fontWeight: '400', color: c.textSecondary, marginTop: 2 },
+    itemPrice: { ...typography.bodySmall, fontWeight: '500', color: c.primary },
     itemPriceChecked: { color: c.textMuted },
-    deleteBtn: { paddingLeft: 8, paddingVertical: 4 },
+    deleteBtn: { paddingLeft: spacing.sm, paddingVertical: spacing.xs },
 
-    emptyText: { fontSize: 16, color: c.textSecondary },
+    emptyText: { ...typography.body, color: c.textSecondary },
 
-    // ── Floating search results ───────────────────────────────────────────────
+    // ── Floating search results (glass card above the bar) ────────────────────
+    resultsWrap: { paddingHorizontal: spacing.lg, marginBottom: spacing.sm },
+    resultsShadow: { borderRadius: radius.lg, ...elevation.level3 },
     floatingResults: {
         backgroundColor: c.cardBackground,
-        borderTopWidth: 0.5, borderTopColor: c.border,
+        borderRadius: radius.lg, overflow: 'hidden',
+        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
         maxHeight: 280,
-        elevation: 8,
-        shadowColor: '#000', shadowOffset: { width: 0, height: -2 },
-        shadowOpacity: 0.1, shadowRadius: 4,
     },
     searchResultItem: {
-        padding: 12, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
+        padding: spacing.md, borderBottomWidth: 1, borderBottomColor: c.borderSubtle,
         flexDirection: 'row', alignItems: 'center',
     },
-    searchResultText: { fontSize: 14, color: c.textPrimary },
-    customItemButton: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12 },
-    customItemText: { fontSize: 14, color: c.primary },
+    searchResultText: { ...typography.bodySmall, color: c.textPrimary },
+    customItemButton: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.md },
+    customItemText: { ...typography.bodySmall, color: c.primary },
 
-    // ── Pinned add bar ────────────────────────────────────────────────────────
+    // ── Floating search / add bar ─────────────────────────────────────────────
+    // Wrapper holds the margins; the shadow lives on a non-clipped layer so the
+    // glass pill (overflow hidden) can still cast it (same trick as the map).
+    addBarWrap: { paddingHorizontal: spacing.lg },
+    addBarShadow: { borderRadius: radius.pill, ...elevation.level3 },
     addBar: {
-        flexDirection: 'row', alignItems: 'center', gap: 10,
-        paddingHorizontal: 16, paddingVertical: 12,
+        flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+        paddingLeft: spacing.lg, paddingRight: spacing.xs, paddingVertical: spacing.xs,
         backgroundColor: c.cardBackground,
-        borderTopWidth: 0.5, borderTopColor: c.border,
+        borderRadius: radius.pill, overflow: 'hidden',
+        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
     },
-    addBarInput: { flex: 1, fontSize: 14, color: c.textPrimary, paddingVertical: 2 },
+    addBarInput: { flex: 1, ...typography.bodySmall, color: c.textPrimary, paddingVertical: 2 },
+    addBarBtn: { width: 36, height: 36, borderRadius: radius.pill, backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center' },
 
     // ── Undo toast ────────────────────────────────────────────────────────────
     undoToastWrap: { position: 'absolute', left: 0, right: 0, zIndex: 60, alignItems: 'center' },
     undoToast: {
-        flexDirection: 'row', alignItems: 'center', gap: 8,
+        flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
         backgroundColor: c.textPrimary,
-        marginHorizontal: 16, marginTop: 12,
-        paddingVertical: 10, paddingHorizontal: 14,
-        borderRadius: 10, alignSelf: 'center', zIndex: 50,
+        marginHorizontal: spacing.lg, marginTop: spacing.md,
+        paddingVertical: spacing.sm, paddingHorizontal: spacing.lg,
+        borderRadius: radius.md, alignSelf: 'center', zIndex: 50,
     },
-    undoToastText: { color: c.onPrimary, fontSize: 13, fontWeight: '600' },
+    undoToastText: { ...typography.label, color: c.onPrimary },
 
     // ── Menu overlay ──────────────────────────────────────────────────────────
     menuOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, zIndex: 100 },
     menuContainer: {
-        position: 'absolute', top: 8, right: 12,
-        backgroundColor: c.cardBackground, borderRadius: 10,
-        elevation: 8, shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4,
+        position: 'absolute', top: spacing.sm, right: spacing.md,
+        backgroundColor: c.cardBackground, borderRadius: radius.md,
+        ...elevation.level3,
         minWidth: 180,
     },
-    menuItem: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, borderRadius: 10 },
-    menuItemText: { fontSize: 14, color: c.textPrimary },
+    menuItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.lg, borderRadius: radius.md },
+    menuItemText: { ...typography.bodySmall, color: c.textPrimary },
 
     // ── Quantity modal ────────────────────────────────────────────────────────
     modalOverlay: {
@@ -1033,83 +1089,92 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'center', alignItems: 'center',
     },
     modalContainer: {
-        backgroundColor: c.cardBackground, borderRadius: 16, padding: 24, width: '90%',
-        elevation: 8, shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 8,
+        backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: spacing.xl, width: '90%',
+        ...elevation.level3,
     },
-    modalTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginBottom: 12 },
-    completeModalBody: { fontSize: 14, color: c.textSecondary, marginBottom: 20, lineHeight: 20 },
-    modalLabel: { fontSize: 13, color: c.textSecondary, marginBottom: 8 },
+    modalTitle: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary, marginBottom: spacing.md },
+    completeModalBody: { ...typography.bodySmall, color: c.textSecondary, marginBottom: spacing.xl },
+    modalLabel: { ...typography.label, fontWeight: '400', color: c.textSecondary, marginBottom: spacing.sm },
     modalInput: {
-        borderWidth: 1, borderColor: c.border, borderRadius: 8,
-        padding: 12, fontSize: 18, color: c.textPrimary, textAlign: 'center', marginBottom: 16,
+        borderWidth: 1, borderColor: c.border, borderRadius: radius.sm,
+        padding: spacing.md, fontSize: 18, color: c.textPrimary, textAlign: 'center', marginBottom: spacing.lg,
     },
-    modalButtons: { flexDirection: 'row', gap: 10 },
-    modalCancel: { flex: 1, padding: 12, borderRadius: 8, borderWidth: 1, borderColor: c.border, alignItems: 'center' },
-    modalCancelText: { fontSize: 14, color: c.textSecondary, fontWeight: '600' },
-    modalConfirm: { flex: 1, padding: 12, borderRadius: 8, backgroundColor: c.primary, alignItems: 'center' },
-    modalConfirmText: { fontSize: 14, color: c.onPrimary, fontWeight: '600' },
-    weighableRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 16 },
-    weighableLabel: { fontSize: 14, color: c.textPrimary },
+    modalButtons: { flexDirection: 'row', gap: spacing.sm },
+    modalCancel: { flex: 1, padding: spacing.md, borderRadius: radius.pill, borderWidth: 1, borderColor: c.border, alignItems: 'center' },
+    modalCancelText: { ...typography.bodySmallStrong, color: c.textSecondary },
+    modalConfirm: { flex: 1, padding: spacing.md, borderRadius: radius.pill, backgroundColor: c.primary, alignItems: 'center' },
+    modalConfirmText: { ...typography.bodySmallStrong, color: c.onPrimary },
+    weighableRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.lg },
+    weighableLabel: { ...typography.bodySmall, color: c.textPrimary },
     checkbox: {
-        width: 22, height: 22, borderRadius: 11,
+        width: 22, height: 22, borderRadius: radius.pill,
         borderWidth: 2, borderColor: c.primary, alignItems: 'center', justifyContent: 'center',
     },
     checkboxChecked: { backgroundColor: c.primary, borderColor: c.primary },
 
     // ── Quantity presets ──────────────────────────────────────────────────────
-    presetsRow: { flexDirection: 'row', gap: 8, marginBottom: 14, flexWrap: 'wrap' },
+    presetsRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg, flexWrap: 'wrap' },
     presetBtn: {
-        paddingHorizontal: 14, paddingVertical: 7, borderRadius: 20,
+        paddingHorizontal: spacing.lg, paddingVertical: 7, borderRadius: radius.pill,
         borderWidth: 1, borderColor: c.border, backgroundColor: c.pageBackground,
     },
     presetBtnActive: { backgroundColor: c.primary, borderColor: c.primary },
-    presetBtnText: { fontSize: 13, color: c.textSecondary, fontWeight: '500' },
+    presetBtnText: { ...typography.label, fontWeight: '500', color: c.textSecondary },
     presetBtnTextActive: { color: c.onPrimary, fontWeight: '700' },
 
     // ── Share modal ───────────────────────────────────────────────────────────
     shareOverlay: { flex: 1, backgroundColor: c.overlayBackdrop, alignItems: 'center', justifyContent: 'center' },
     shareContainer: {
-        backgroundColor: c.cardBackground, borderRadius: 16,
-        paddingVertical: 24, paddingHorizontal: 28, width: '85%', alignItems: 'center',
-        elevation: 8, shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 8,
+        backgroundColor: c.cardBackground, borderRadius: radius.lg,
+        paddingVertical: spacing.xl, paddingHorizontal: spacing.xl, width: '85%', alignItems: 'center',
+        ...elevation.level3,
     },
-    shareTitle: { fontSize: 18, fontWeight: '700', color: c.textPrimary, marginBottom: 6, textAlign: 'center' },
-    shareSubtitle: { fontSize: 13, color: c.textSecondary, marginBottom: 16, textAlign: 'center' },
+    shareTitle: { ...typography.subheading, color: c.textPrimary, marginBottom: 6, textAlign: 'center' },
+    // Title + the "?" help toggle side by side (the icon rides the title's
+    // 6px bottom margin via its own offset).
+    shareTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
+    shareSubtitle: { ...typography.label, fontWeight: '400', color: c.textSecondary, marginBottom: spacing.lg, textAlign: 'center' },
+    shareHelpBox: {
+        backgroundColor: c.surfaceMuted,
+        borderRadius: radius.md,
+        paddingVertical: spacing.sm,
+        paddingHorizontal: spacing.md,
+        marginTop: -spacing.sm,
+        marginBottom: spacing.lg,
+    },
+    shareHelpText: { ...typography.caption, color: c.textSecondary, lineHeight: 17 },
     shareQrWrap: {
-        marginBottom: 18,
+        marginBottom: spacing.lg,
         minWidth: 244, minHeight: 244, alignItems: 'center', justifyContent: 'center',
     },
-    shareCloseBtn: { paddingHorizontal: 24, paddingVertical: 12, backgroundColor: c.primary, borderRadius: 8 },
-    shareCloseBtnText: { color: c.onPrimary, fontSize: 14, fontWeight: '600' },
+    shareCloseBtn: { paddingHorizontal: spacing.xl, paddingVertical: spacing.md, backgroundColor: c.primary, borderRadius: radius.pill },
+    shareCloseBtnText: { ...typography.bodySmallStrong, color: c.onPrimary },
     shareCheckCircle: {
-        width: 72, height: 72, borderRadius: 36, backgroundColor: c.success,
-        alignItems: 'center', justifyContent: 'center', marginBottom: 16,
+        width: 72, height: 72, borderRadius: radius.pill, backgroundColor: c.success,
+        alignItems: 'center', justifyContent: 'center', marginBottom: spacing.lg,
     },
 
-    // ── Coupon modals ─────────────────────────────────────────────────────────
+    // ── Coupon modals (brand yellow/blue colours kept literal) ────────────────
     couponBadge: {
         flexDirection: 'row', alignSelf: 'flex-start',
         backgroundColor: '#FFF3B0', borderWidth: 1, borderColor: '#FFCC00',
-        borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2, marginTop: 4,
+        borderRadius: radius.sm, paddingHorizontal: 6, paddingVertical: 2, marginTop: spacing.xs,
     },
-    couponBadgeText: { fontSize: 10, fontWeight: '700', color: '#003D8F' },
+    couponBadgeText: { ...typography.caption, fontWeight: '700', color: '#003D8F' },
     couponModalContainer: {
-        backgroundColor: c.cardBackground, borderRadius: 16,
-        paddingVertical: 28, paddingHorizontal: 24, width: '85%', alignItems: 'center',
-        elevation: 8, shadowColor: '#000',
-        shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 8,
+        backgroundColor: c.cardBackground, borderRadius: radius.lg,
+        paddingVertical: spacing.xl, paddingHorizontal: spacing.xl, width: '85%', alignItems: 'center',
+        ...elevation.level3,
     },
     couponBadgeLarge: {
         backgroundColor: '#FFF3B0', borderWidth: 2, borderColor: '#FFCC00',
-        borderRadius: 8, paddingHorizontal: 16, paddingVertical: 8, marginBottom: 18,
+        borderRadius: radius.sm, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, marginBottom: spacing.lg,
     },
-    couponBadgeLargeText: { fontSize: 20, fontWeight: '800', color: '#003D8F' },
-    couponModalTitle: { fontSize: 18, fontWeight: '700', color: c.textPrimary, marginBottom: 8, textAlign: 'center' },
-    couponModalBody: { fontSize: 14, color: c.textSecondary, textAlign: 'center', lineHeight: 20, marginBottom: 16 },
-    couponDontShowRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 20 },
-    couponDontShowLabel: { fontSize: 13, color: c.textSecondary },
-    couponModalBtn: { paddingHorizontal: 32, paddingVertical: 12, backgroundColor: '#003D8F', borderRadius: 8 },
-    couponModalBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
+    couponBadgeLargeText: { ...typography.heading, fontWeight: '800', color: '#003D8F' },
+    couponModalTitle: { ...typography.subheading, color: c.textPrimary, marginBottom: spacing.sm, textAlign: 'center' },
+    couponModalBody: { ...typography.bodySmall, color: c.textSecondary, textAlign: 'center', marginBottom: spacing.lg },
+    couponDontShowRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginBottom: spacing.xl },
+    couponDontShowLabel: { ...typography.label, fontWeight: '400', color: c.textSecondary },
+    couponModalBtn: { paddingHorizontal: spacing.xxl, paddingVertical: spacing.md, backgroundColor: '#003D8F', borderRadius: radius.pill },
+    couponModalBtnText: { ...typography.bodySmallStrong, fontWeight: '700', color: '#fff' },
 });

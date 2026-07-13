@@ -1,15 +1,24 @@
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Modal, Dimensions, ActivityIndicator } from 'react-native';
+import {
+    View,
+    Text,
+    ScrollView,
+    TouchableOpacity,
+    StyleSheet,
+    Modal,
+    Dimensions,
+ Animated as RNAnimated } from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
 import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { ProductImage } from '../../components/ProductImage';
-import React, { useEffect, useState, useMemo, useRef, useCallback } from 'react';
+import React, { useEffect, useLayoutEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
-import { useTheme, type AppTheme } from '../../constants/theme';
-import MiniPriceChart, { PriceChartSvg, type PricePoint, type RangeKey, preparePriceData, filterByRange } from '../../components/MiniPriceChart';
+import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
+import MiniPriceChart, { PriceChartSvg, type PricePoint, preparePriceData, timeXPositions } from '../../components/MiniPriceChart';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import { useTranslation } from 'react-i18next';
 import { formatDate, formatEuro, formatAmountStr } from '../../utils/formatCurrency';
@@ -77,7 +86,7 @@ const shortDate = (d: string) =>
     formatDate(d, { month: 'short', day: 'numeric' });
 
 // Must stay in sync with MODAL_CHART_PADDING in MiniPriceChart.tsx for hit-test math.
-const MODAL_CHART_PADDING = { top: 14, bottom: 18, left: 46, right: 10 };
+const MODAL_CHART_PADDING = { top: 14, bottom: 34, left: 0, right: 0 };
 
 function ModalChart({
     prices,
@@ -89,23 +98,86 @@ function ModalChart({
     styles: ReturnType<typeof makeStyles>;
 }) {
     const { t } = useTranslation();
-    const [rangeKey, setRangeKey] = useState<RangeKey>('all');
     const [crosshairIndex, setCrosshairIndex] = useState<number | null>(null);
     const crosshairTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    const [pickerOpen, setPickerOpen] = useState(false);
 
     const allData = useMemo(() => preparePriceData(prices), [prices]);
-    const data = useMemo(() => filterByRange(allData, rangeKey), [allData, rangeKey]);
+
+    // ── ONE MONTH AT A TIME ──────────────────────────────────────────────
+    const now = new Date();
+    const nowYm = now.getFullYear() * 12 + now.getMonth();
+    const firstYm = useMemo(() => {
+        if (!allData.length) return nowYm;
+        const d = new Date(allData[0].date);
+        return d.getFullYear() * 12 + d.getMonth();
+    }, [allData, nowYm]);
+    const [viewYm, setViewYm] = useState(nowYm);
+    const [pickerYear, setPickerYear] = useState(now.getFullYear());
+    const shiftMonth = (d: 1 | -1) => {
+        setViewYm(ym => Math.max(firstYm, Math.min(nowYm, ym + d)));
+        setCrosshairIndex(null);
+    };
+    const viewYear = Math.floor(viewYm / 12);
+    const viewMonth = viewYm % 12;
+    const monthLabel = formatDate(new Date(viewYear, viewMonth, 1), { month: 'long', year: 'numeric' });
+
+    // Fixed y-scale: top = the product's all-time maximum, bottom = 0 — every
+    // month renders on the identical scale.
+    const yMax = useMemo(() => Math.max(0, ...allData.map(p => Number(p.price) || 0)), [allData]);
+
+    // Build one month's view: in-month points + a virtual CARRY-IN of the last
+    // pre-month point (the price known when the month began). Its promo rides
+    // along only if it was still running at the month's start — the chart's
+    // promoEnd logic then ends it at the right date inside the month.
+    const buildMonth = useCallback((ym: number) => {
+        const y = Math.floor(ym / 12), m = ym % 12;
+        const start = new Date(y, m, 1).getTime();
+        const endRaw = new Date(y, m + 1, 1).getTime();
+        const end = Math.min(endRaw, Date.now());
+        const inMonth = allData.filter(pt => {
+            const tp = new Date(pt.date).getTime();
+            return tp >= start && tp < endRaw;
+        });
+        const prev = [...allData].reverse().find(pt => new Date(pt.date).getTime() < start);
+        if (!prev) return { data: inMonth, window: { start, end } };
+        const promoAlive = prev.promoPrice != null &&
+            (prev.promoEnd == null || new Date(prev.promoEnd).getTime() > start);
+        const carryIn: PricePoint = {
+            ...prev,
+            date: new Date(start).toISOString(),
+            promoPrice: promoAlive ? prev.promoPrice : null,
+            promoEnd: promoAlive ? prev.promoEnd : null,
+            virtual: true,
+        };
+        return { data: [carryIn, ...inMonth], window: { start, end } };
+    }, [allData]);
+    // Three panes so a pan FOLLOWS THE FINGER, showing the neighbour month's data
+    // as it slides in (not a discrete pop on release).
+    const monthCur = useMemo(() => buildMonth(viewYm), [buildMonth, viewYm]);
+    const monthPrev = useMemo(() => buildMonth(viewYm - 1), [buildMonth, viewYm]);
+    const monthNext = useMemo(() => buildMonth(viewYm + 1), [buildMonth, viewYm]);
+    const data = monthCur.data;
+    const chartWindow = monthCur.window;
+    const windowEnd = chartWindow.end;
 
     const chartWidth = MODAL_CHART_MIN_WIDTH;
+    // Fixed right gutter for the CURRENT price labels — outside the pan strip, so
+    // panning never drags the axis labels along.
+    const GUTTER = 44;
+    const paneWidth = chartWidth - GUTTER;
+    // Origin distance between adjacent panes: plot areas butt together (each pane's
+    // left padding lands exactly on the neighbour's right padding), so a pan shows
+    // one CONTINUOUS line across the month boundary — no dead gap.
+    const paneStep = paneWidth - (MODAL_CHART_PADDING.left + MODAL_CHART_PADDING.right);
 
     // Compute point X positions for gesture hit-testing (must match PriceChartSvg math)
     const padding = MODAL_CHART_PADDING;
-    const chartW = chartWidth - padding.left - padding.right;
-    const pointXs = useMemo(() => data.map((_, i) =>
-        data.length === 1
-            ? padding.left + chartW / 2
-            : padding.left + (i / (data.length - 1)) * chartW
-    ), [data, chartW]);
+    const chartW = paneWidth - padding.left - padding.right;
+    // Same TIME-scaled positions the SVG draws (month window domain) — the
+    // crosshair must hit-test against where the points actually are.
+    const pointXs = useMemo(() => timeXPositions(data, chartW, padding.left, chartWindow),
+        [data, chartW, chartWindow.start, chartWindow.end]);
 
     const handleChartTouch = (x: number) => {
         if (!pointXs.length) return;
@@ -115,14 +187,82 @@ function ModalChart({
         if (crosshairTimer.current) clearTimeout(crosshairTimer.current);
         crosshairTimer.current = setTimeout(() => setCrosshairIndex(null), 3000);
     };
+    // GESTURE INTENT: an immediate horizontal pull is a PAN (the chart follows the
+    // finger, neighbour month sliding in); touch-and-hold (or a tap) is a SCRUB.
+    // Once decided, the gesture keeps its mode.
+    const panX = useRef(new RNAnimated.Value(0)).current;
+    const gestureRef = useRef<{ x0: number; t0: number; mode: 'undecided' | 'pan' | 'scrub' } | null>(null);
+    const animatingRef = useRef(false);
+    // Commit AFTER the slide: the strip stays parked at ±paneStep until the new month
+    // renders; the effect below then recenters it in the same commit — without this
+    // the old month flashed at center for a frame between setValue(0) and React's
+    // re-render.
+    const settlePan = (target: number, after?: () => void) => {
+        animatingRef.current = true;
+        RNAnimated.timing(panX, { toValue: target, duration: 180, useNativeDriver: true }).start(() => {
+            if (after) after();
+            else { panX.setValue(0); animatingRef.current = false; }
+        });
+    };
+    useLayoutEffect(() => {
+        panX.setValue(0);
+        animatingRef.current = false;
+    }, [viewYm, panX]);
+    // The ‹ › buttons ride the same slide animation as a pan.
+    const slideToMonth = (d: 1 | -1) => {
+        if (animatingRef.current) return;
+        if (d === 1 && viewYm >= nowYm) return;
+        if (d === -1 && viewYm <= firstYm) return;
+        settlePan(-d * paneStep, () => shiftMonth(d));
+    };
+    const handleTouchStart = (x: number) => {
+        gestureRef.current = { x0: x, t0: Date.now(), mode: 'undecided' };
+    };
+    const handleTouchMove = (x: number) => {
+        const g = gestureRef.current;
+        if (!g) return;
+        const dx = x - g.x0;
+        if (g.mode === 'undecided') {
+            if (Math.abs(dx) > 12) g.mode = 'pan';
+            else if (Date.now() - g.t0 > 160) g.mode = 'scrub';
+            else return;
+        }
+        if (g.mode === 'pan') {
+            // Rubber-band at the data bounds instead of sliding into nothing.
+            let d = dx;
+            if (d > 0 && viewYm <= firstYm) d = d * 0.25;
+            if (d < 0 && viewYm >= nowYm) d = d * 0.25;
+            panX.setValue(d);
+            if (crosshairIndex !== null) setCrosshairIndex(null);
+        } else {
+            handleChartTouch(x);
+        }
+    };
+    const handleTouchEnd = (x: number) => {
+        const g = gestureRef.current;
+        gestureRef.current = null;
+        if (!g) return;
+        if (g.mode === 'pan') {
+            const dx = x - g.x0;
+            if (dx < -paneWidth * 0.28 && viewYm < nowYm) settlePan(-paneStep, () => shiftMonth(1));
+            else if (dx > paneWidth * 0.28 && viewYm > firstYm) settlePan(paneStep, () => shiftMonth(-1));
+            else settlePan(0);
+        } else {
+            handleChartTouch(x);   // tap, or the scrub's final position
+        }
+    };
 
     // Show crosshair point or last point
     const displayIndex = crosshairIndex ?? (data.length > 0 ? data.length - 1 : null);
     const displayPt = displayIndex !== null ? data[displayIndex] : null;
+    // The DEFAULT display (no scrub) represents the window's end ("now" for the
+    // current month): a promo dead by then must not render as the price.
+    // A SCRUBBED historical point keeps its promo — it was running on that date.
+    const displayPromoActive = displayPt != null && displayPt.promoPrice != null &&
+        (crosshairIndex !== null ||
+            displayPt.promoEnd == null || new Date(displayPt.promoEnd).getTime() >= windowEnd);
 
-    const RANGE_LABELS: Record<RangeKey, string> = { '1M': '1M', '3M': '3M', '6M': '6M', 'all': t('product.rangeAll') };
-
-    if (data.length === 0) {
+    if (allData.length === 0) {
         return (
             <View style={styles.chartModalEmpty}>
                 <Text style={styles.chartModalEmptyText}>{t('product.noDataForPeriod')}</Text>
@@ -136,7 +276,7 @@ function ModalChart({
             {displayPt && (
                 <View style={styles.chartPriceDisplay}>
                     <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
-                        {displayPt.promoPrice !== null && displayPt.promoPrice !== undefined ? (
+                        {displayPromoActive ? (
                             <>
                                 <Text style={styles.chartDisplayPromo}>
                                     {formatEuro(Number(displayPt.promoPrice))}
@@ -155,41 +295,157 @@ function ModalChart({
                 </View>
             )}
 
-            {/* Range pills */}
-            <View style={styles.rangePills}>
-                {(['1M', '3M', '6M', 'all'] as RangeKey[]).map(key => (
-                    <TouchableOpacity
-                        key={key}
-                        style={[styles.rangePill, rangeKey === key && styles.rangePillActive]}
-                        onPress={() => { setRangeKey(key); setCrosshairIndex(null); }}
-                    >
-                        <Text style={[styles.rangePillText, rangeKey === key && styles.rangePillTextActive]}>
-                            {RANGE_LABELS[key]}
-                        </Text>
-                    </TouchableOpacity>
-                ))}
+            {/* Month navigator: ‹ [month year] › — label opens the year/month picker */}
+            <View style={styles.monthNavRow}>
+                <TouchableOpacity
+                    onPress={() => slideToMonth(-1)}
+                    disabled={viewYm <= firstYm}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                    <Ionicons name="chevron-back" size={20}
+                        color={viewYm <= firstYm ? colors.border : colors.textSecondary} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => { setPickerYear(viewYear); setPickerOpen(true); }}>
+                    <Text style={styles.monthNavLabel}>{monthLabel}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                    onPress={() => slideToMonth(1)}
+                    disabled={viewYm >= nowYm}
+                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                    <Ionicons name="chevron-forward" size={20}
+                        color={viewYm >= nowYm ? colors.border : colors.textSecondary} />
+                </TouchableOpacity>
             </View>
 
-            {/* Chart */}
-            <View style={{ width: chartWidth, height: MODAL_CHART_HEIGHT }}>
-                <PriceChartSvg
-                    data={data}
-                    width={chartWidth}
-                    height={MODAL_CHART_HEIGHT}
-                    colors={colors}
-                    isModal={true}
-                    activePtIndex={crosshairIndex}
-                    shortDate={shortDate}
-                    formatEuro={formatEuro}
-                />
-                <View
-                    style={{ position: 'absolute', top: 0, left: 0, width: chartWidth, height: MODAL_CHART_HEIGHT }}
-                    onStartShouldSetResponder={() => true}
-                    onMoveShouldSetResponder={() => true}
-                    onResponderGrant={e => handleChartTouch(e.nativeEvent.locationX)}
-                    onResponderMove={e => handleChartTouch(e.nativeEvent.locationX)}
-                />
+            {/* Chart: three contiguous month panes (pan follows the finger) + fixed price gutter */}
+            <View style={{ width: chartWidth, height: MODAL_CHART_HEIGHT, flexDirection: 'row' }}>
+                <View style={{ width: paneWidth, height: MODAL_CHART_HEIGHT, overflow: 'hidden' }}>
+                    <RNAnimated.View
+                        style={{
+                            flexDirection: 'row',
+                            width: paneWidth * 3,
+                            marginLeft: -paneStep,
+                            transform: [{ translateX: panX }],
+                        }}
+                    >
+                        {[monthPrev, monthCur, monthNext].map((mo, idx) => (
+                            <View
+                                key={idx}
+                                style={{
+                                    width: paneWidth,
+                                    height: MODAL_CHART_HEIGHT,
+                                    marginLeft: idx > 0 ? -(padding.left + padding.right) : 0,
+                                }}
+                            >
+                                {mo.data.length > 0 ? (
+                                    <PriceChartSvg
+                                        data={mo.data}
+                                        width={paneWidth}
+                                        height={MODAL_CHART_HEIGHT}
+                                        colors={colors}
+                                        isModal={true}
+                                        activePtIndex={idx === 1 ? crosshairIndex : null}
+                                        shortDate={shortDate}
+                                        formatEuro={formatEuro}
+                                        window={mo.window}
+                                        yMax={yMax}
+                                        pointDateLabels
+                                    />
+                                ) : (
+                                    <View style={styles.chartModalEmpty}>
+                                        <Text style={styles.chartModalEmptyText}>{t('product.noDataForPeriod')}</Text>
+                                    </View>
+                                )}
+                            </View>
+                        ))}
+                    </RNAnimated.View>
+                    <View
+                        style={{ position: 'absolute', top: 0, left: 0, width: paneWidth, height: MODAL_CHART_HEIGHT }}
+                        onStartShouldSetResponder={() => true}
+                        onMoveShouldSetResponder={() => true}
+                        onResponderGrant={e => handleTouchStart(e.nativeEvent.locationX)}
+                        onResponderMove={e => handleTouchMove(e.nativeEvent.locationX)}
+                        onResponderRelease={e => handleTouchEnd(e.nativeEvent.locationX)}
+                    />
+                </View>
+                {/* CURRENT price labels — the month's latest known regular (+ live promo) */}
+                <View style={{ width: GUTTER, height: MODAL_CHART_HEIGHT }}>
+                    {(() => {
+                        const lastPt = data.length > 0 ? data[data.length - 1] : null;
+                        if (!lastPt) return null;
+                        const chartH = MODAL_CHART_HEIGHT - padding.top - padding.bottom;
+                        const hi = yMax > 0 ? yMax * 1.05 : 1;
+                        const yFor = (v: number) => padding.top + chartH - (v / hi) * chartH;
+                        const promoLive = lastPt.promoPrice != null &&
+                            (lastPt.promoEnd == null || new Date(lastPt.promoEnd).getTime() >= windowEnd);
+                        return (
+                            <>
+                                {/* Current-price ring markers — FIXED overlay at the pane edge,
+                                    never covered by a sliding pane, never dragged by a pan. */}
+                                <View style={[styles.gutterRing, { borderColor: colors.textSecondary, top: yFor(Number(lastPt.price)) - 5 }]} />
+                                <View style={[styles.gutterDot, { backgroundColor: colors.textSecondary, top: yFor(Number(lastPt.price)) - 3 }]} />
+                                <Text style={[styles.gutterPrice, { color: colors.textSecondary, top: yFor(Number(lastPt.price)) - 7 }]}>
+                                    {formatEuro(Number(lastPt.price))}
+                                </Text>
+                                {promoLive && (
+                                    <>
+                                        <View style={[styles.gutterRing, { borderColor: colors.primary, top: yFor(Number(lastPt.promoPrice)) - 5 }]} />
+                                        <View style={[styles.gutterDot, { backgroundColor: colors.primary, top: yFor(Number(lastPt.promoPrice)) - 3 }]} />
+                                        <Text style={[styles.gutterPrice, { color: colors.primary, top: yFor(Number(lastPt.promoPrice)) - 7 }]}>
+                                            {formatEuro(Number(lastPt.promoPrice))}
+                                        </Text>
+                                    </>
+                                )}
+                            </>
+                        );
+                    })()}
+                </View>
             </View>
+
+            {/* Year + month picker */}
+            {pickerOpen && (
+                <View style={styles.monthPicker}>
+                    <View style={styles.monthPickerYearRow}>
+                        <TouchableOpacity onPress={() => setPickerYear(y => y - 1)}
+                            disabled={pickerYear <= Math.floor(firstYm / 12)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Ionicons name="chevron-back" size={18}
+                                color={pickerYear <= Math.floor(firstYm / 12) ? colors.border : colors.textSecondary} />
+                        </TouchableOpacity>
+                        <Text style={styles.monthPickerYear}>{pickerYear}</Text>
+                        <TouchableOpacity onPress={() => setPickerYear(y => y + 1)}
+                            disabled={pickerYear >= Math.floor(nowYm / 12)}
+                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                            <Ionicons name="chevron-forward" size={18}
+                                color={pickerYear >= Math.floor(nowYm / 12) ? colors.border : colors.textSecondary} />
+                        </TouchableOpacity>
+                    </View>
+                    <View style={styles.monthPickerGrid}>
+                        {Array.from({ length: 12 }, (_, m) => {
+                            const ym = pickerYear * 12 + m;
+                            const enabled = ym >= firstYm && ym <= nowYm;
+                            const active = ym === viewYm;
+                            return (
+                                <TouchableOpacity
+                                    key={m}
+                                    style={[styles.monthPickerCell, active && styles.monthPickerCellActive]}
+                                    disabled={!enabled}
+                                    onPress={() => { setViewYm(ym); setCrosshairIndex(null); setPickerOpen(false); }}
+                                >
+                                    <Text style={[
+                                        styles.monthPickerCellText,
+                                        !enabled && { color: colors.border },
+                                        active && styles.monthPickerCellTextActive,
+                                    ]}>
+                                        {formatDate(new Date(pickerYear, m, 1), { month: 'short' })}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                </View>
+            )}
 
             {/* Legend */}
             <View style={styles.chartModalFooter}>
@@ -434,7 +690,7 @@ export default function ProductDetailScreen() {
 
     if (loading) return (
         <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, gap: 10 }}>
-            <View style={{ backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, gap: 10 }}>
+            <View style={{ backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: 16, gap: 10 }}>
                 {Array.from({ length: 4 }).map((_, i) => (
                     <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                         <SkeletonBox width={52} height={52} borderRadius={8} />
@@ -517,21 +773,29 @@ export default function ProductDetailScreen() {
                                     <View style={styles.spInfo}>
                                         <Text style={styles.spName} numberOfLines={2}>{sp.storeProductName}</Text>
                                         {amountStr ? <Text style={styles.spAmount}>{amountStr}</Text> : null}
-                                        {latestPrice && (
-                                            <View style={styles.priceRow}>
-                                                <Text style={[
-                                                    styles.spPrice,
-                                                    latestPrice.promoPrice != null && styles.spPriceStrike,
-                                                ]}>
-                                                    {formatEuro(Number(latestPrice.price))}
-                                                </Text>
-                                                {latestPrice.promoPrice && (
-                                                    <Text style={styles.spPromoPrice}>
-                                                        {formatEuro(Number(latestPrice.promoPrice))}
+                                        {latestPrice && (() => {
+                                            // A promo is only a promo while it RUNS: past promoEnd the
+                                            // strike-through + promo price would advertise a dead deal
+                                            // (čiobreliai: expired 1,60 shown next to crossed-out 2,29).
+                                            // No promoEnd (receipt-observed) = treated as active.
+                                            const promoActive = latestPrice.promoPrice != null &&
+                                                (latestPrice.promoEnd == null || new Date(latestPrice.promoEnd).getTime() >= Date.now());
+                                            return (
+                                                <View style={styles.priceRow}>
+                                                    <Text style={[
+                                                        styles.spPrice,
+                                                        promoActive && styles.spPriceStrike,
+                                                    ]}>
+                                                        {formatEuro(Number(latestPrice.price))}
                                                     </Text>
-                                                )}
-                                            </View>
-                                        )}
+                                                    {promoActive && (
+                                                        <Text style={styles.spPromoPrice}>
+                                                            {formatEuro(Number(latestPrice.promoPrice))}
+                                                        </Text>
+                                                    )}
+                                                </View>
+                                            );
+                                        })()}
                                     </View>
                                 </View>
                                 <View style={styles.spRight}>
@@ -577,7 +841,7 @@ export default function ProductDetailScreen() {
                         activeOpacity={0.8}
                     >
                         {isAdding
-                            ? <ActivityIndicator size="small" color="#fff" />
+                            ? <MaterialProgress size="small" color="#fff" />
                             : <Ionicons name="albums-outline" size={20} color="#fff" />}
                         <Text style={styles.addButtonText}>{t('basketTab.templates.addToTemplate')}</Text>
                     </TouchableOpacity>
@@ -598,7 +862,7 @@ export default function ProductDetailScreen() {
                         activeOpacity={0.8}
                     >
                         {isAdding
-                            ? <ActivityIndicator size="small" color="#fff" />
+                            ? <MaterialProgress size="small" color="#fff" />
                             : <Ionicons name="cart-outline" size={20} color="#fff" />}
                         <Text style={styles.addButtonText}>{t('product.addToBasket')}</Text>
                     </TouchableOpacity>
@@ -701,13 +965,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.cardBackground,
         marginHorizontal: 16,
         marginTop: 10,
-        borderRadius: 12,
+        borderRadius: radius.lg,
         padding: 12,
-        elevation: 1,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
+        ...elevation.level1,
     },
     spLeft: {
         flex: 1,
@@ -718,12 +978,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     spImage: {
         width: 52,
         height: 52,
-        borderRadius: 8,
+        borderRadius: radius.md,
     },
     spImagePlaceholder: {
         width: 52,
         height: 52,
-        borderRadius: 8,
+        borderRadius: radius.md,
         backgroundColor: c.surfaceSubtle,
         alignItems: 'center',
         justifyContent: 'center',
@@ -810,10 +1070,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     chartModalCard: {
         backgroundColor: c.cardBackground,
-        borderRadius: 16,
+        borderRadius: radius.xl,
         padding: 20,
         width: '100%',
         maxWidth: 480,
+        ...elevation.level3,
     },
     chartModalTitle: {
         fontSize: 16,
@@ -884,28 +1145,69 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
 
     // Range pills
-    rangePills: {
+    gutterPrice: {
+        position: 'absolute',
+        left: 10,
+        fontSize: 10,
+        fontWeight: '600',
+    },
+    gutterRing: {
+        position: 'absolute',
+        left: -8,
+        width: 10, height: 10, borderRadius: 5,
+        borderWidth: 1.5,
+        opacity: 0.4,
+    },
+    gutterDot: {
+        position: 'absolute',
+        left: -6,
+        width: 6, height: 6, borderRadius: 3,
+    },
+    monthNavRow: {
         flexDirection: 'row',
-        gap: 6,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 14,
         marginBottom: 10,
     },
-    rangePill: {
-        paddingHorizontal: 10,
-        paddingVertical: 4,
-        borderRadius: 12,
-        backgroundColor: c.softAccent,
+    monthNavLabel: {
+        fontSize: 14,
+        fontWeight: '600',
+        color: c.textPrimary,
+        minWidth: 150,
+        textAlign: 'center',
+        textTransform: 'capitalize',
     },
-    rangePillActive: {
-        backgroundColor: c.primary,
+    monthPicker: {
+        position: 'absolute',
+        top: 74,
+        alignSelf: 'center',
+        backgroundColor: c.cardBackground,
+        borderRadius: radius.lg,
+        borderWidth: StyleSheet.hairlineWidth,
+        borderColor: c.border,
+        padding: 12,
+        width: 260,
+        ...elevation.level3,
     },
-    rangePillText: {
-        fontSize: 12,
-        fontWeight: '500',
-        color: c.textSecondary,
+    monthPickerYearRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        paddingHorizontal: 8,
+        marginBottom: 8,
     },
-    rangePillTextActive: {
-        color: c.onPrimary,
+    monthPickerYear: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
+    monthPickerGrid: { flexDirection: 'row', flexWrap: 'wrap' },
+    monthPickerCell: {
+        width: '25%',
+        paddingVertical: 9,
+        alignItems: 'center',
+        borderRadius: radius.md,
     },
+    monthPickerCellActive: { backgroundColor: c.primary },
+    monthPickerCellText: { fontSize: 13, color: c.textPrimary, textTransform: 'capitalize' },
+    monthPickerCellTextActive: { color: c.onPrimary, fontWeight: '700' },
     // Chart price display (above range pills)
     chartPriceDisplay: {
         flexDirection: 'row',
@@ -940,8 +1242,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         left: 0,
         right: 0,
         backgroundColor: c.cardBackground,
-        borderTopWidth: 0.5,
-        borderTopColor: c.border,
+        borderTopLeftRadius: radius.lg,
+        borderTopRightRadius: radius.lg,
+        ...elevation.level3,
         paddingHorizontal: 16,
         paddingTop: 10,
     },
@@ -951,7 +1254,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'center',
         gap: 8,
         backgroundColor: c.primary,
-        borderRadius: 12,
+        borderRadius: radius.pill,
         paddingVertical: 14,
     },
     addButtonDone: {

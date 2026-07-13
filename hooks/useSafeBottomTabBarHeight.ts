@@ -2,6 +2,7 @@ import { useContext } from 'react';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
+import { FLOATING_TAB_BAR_CLEARANCE } from '../components/FloatingPillTabBar';
 
 // Standard UITabBar item height on iOS. The full clearance is this + the
 // home-indicator inset (49 + 34 = 83).
@@ -28,6 +29,11 @@ const IOS_TAB_BAR_ITEM_HEIGHT = 49;
 export function useSafeBottomTabBarHeight(): number {
     const contextHeight = useContext(BottomTabBarHeightContext);
     const insets = useSafeAreaInsets();
+    // Android uses the floating pill bar (FloatingPillTabBar), which is
+    // absolutely positioned and reserves no layout space — so the measured
+    // context height is unreliable. Return its known clearance + the (stable)
+    // Android gesture inset instead.
+    if (Platform.OS === 'android') return FLOATING_TAB_BAR_CLEARANCE + insets.bottom;
     if (contextHeight != null) return contextHeight;
     if (Platform.OS === 'ios') {
         // Prefer the stable startup inset; only fall back to the live inset if

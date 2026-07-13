@@ -1,6 +1,11 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ScrollView, ActivityIndicator,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    ScrollView,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Stack, useFocusEffect } from 'expo-router';
 import { useTranslation } from 'react-i18next';
@@ -13,11 +18,12 @@ import { FlagsQueue } from '../../../components/admin/queue/FlagsQueue';
 import { UncategorisedQueue } from '../../../components/admin/queue/UncategorisedQueue';
 import { ImagesQueue } from '../../../components/admin/queue/ImagesQueue';
 import { AmountsQueue } from '../../../components/admin/queue/AmountsQueue';
+import { FailedReceiptsQueue } from '../../../components/admin/queue/FailedReceiptsQueue';
 
-type ChipId = 'all' | 'flags' | 'uncategorised' | 'images' | 'amounts';
+type ChipId = 'all' | 'flags' | 'uncategorised' | 'images' | 'amounts' | 'failedReceipts';
 type QueueType = Exclude<ChipId, 'all'>;
 
-const PRIORITY: QueueType[] = ['flags', 'uncategorised', 'images', 'amounts'];
+const PRIORITY: QueueType[] = ['flags', 'uncategorised', 'images', 'amounts', 'failedReceipts'];
 
 export default function QueueScreen() {
     const colors = useTheme();
@@ -92,6 +98,7 @@ export default function QueueScreen() {
         { id: 'uncategorised', label: t('admin.tabUncategorised') },
         { id: 'images', label: t('admin.tabImages') },
         { id: 'amounts', label: t('admin.tabAmounts') },
+        { id: 'failedReceipts', label: t('admin.tabFailed') },
     ];
 
     const activeQueueType: QueueType =
@@ -122,7 +129,7 @@ export default function QueueScreen() {
                                 </Text>
                                 {chip.id !== 'all' && badge(chip.id as QueueType)}
                                 {chip.id === 'all' && countsLoading && (
-                                    <ActivityIndicator size={10} color={active ? colors.onPrimary : colors.textSecondary} style={{ marginLeft: 4 }} />
+                                    <MaterialProgress size={10} color={active ? colors.onPrimary : colors.textSecondary} style={{ marginLeft: 4 }} />
                                 )}
                             </TouchableOpacity>
                         );
@@ -142,6 +149,9 @@ export default function QueueScreen() {
                 )}
                 {activeQueueType === 'amounts' && (
                     <AmountsQueue onEmpty={isAll ? handleEmpty : undefined} />
+                )}
+                {activeQueueType === 'failedReceipts' && (
+                    <FailedReceiptsQueue onEmpty={isAll ? handleEmpty : undefined} />
                 )}
             </View>
         </View>

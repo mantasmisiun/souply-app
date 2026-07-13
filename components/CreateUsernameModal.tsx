@@ -1,6 +1,13 @@
 import {
-    View, Text, TextInput, TouchableOpacity, StyleSheet, Modal, ActivityIndicator, Alert,
-} from 'react-native';
+    View,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    StyleSheet,
+    Modal,
+    Alert,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Ionicons } from '@expo/vector-icons';
@@ -91,7 +98,7 @@ export function CreateUsernameModal({ visible, onDone, onDismiss }: { visible: b
                             placeholderTextColor={colors.textMuted}
                             editable={!busy}
                         />
-                        {checkState.checking && <ActivityIndicator size="small" color={colors.primary} />}
+                        {checkState.checking && <MaterialProgress size="small" color={colors.primary} />}
                         {!checkState.checking && checkState.available === true && (
                             <Ionicons name="checkmark-circle" size={20} color={colors.primary} />
                         )}
@@ -108,7 +115,7 @@ export function CreateUsernameModal({ visible, onDone, onDismiss }: { visible: b
                         activeOpacity={0.85}
                     >
                         {busy
-                            ? <ActivityIndicator color="#fff" />
+                            ? <MaterialProgress color="#fff" />
                             : <Text style={styles.ctaText}>{t('basketTab.templates.usernameConfirm')}</Text>}
                     </TouchableOpacity>
                 </View>

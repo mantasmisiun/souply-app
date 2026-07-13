@@ -1,7 +1,7 @@
 import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, radius, type AppTheme } from '../constants/theme';
 
 export type NoticeVariant = 'info' | 'success' | 'warning' | 'banner';
 
@@ -55,7 +55,7 @@ export function SystemNoticeCard({
 
     if (layout === 'banner') {
         return (
-            <View style={[styles.banner, { borderColor: tint }]}>
+            <View style={[styles.banner, { borderLeftColor: tint }]}>
                 {icon && <Ionicons name={icon} size={18} color={tint} />}
                 <View style={{ flex: 1 }}>
                     <Text style={styles.bannerTitle} numberOfLines={2}>{title}</Text>
@@ -123,7 +123,7 @@ export function SystemNoticeCard({
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     card: {
         backgroundColor: c.cardBackground,
-        borderRadius: 14, padding: 16, marginBottom: 14,
+        borderRadius: radius.lg, padding: 16, marginBottom: 14,
         gap: 8, borderWidth: 1,
         position: 'relative',
     },
@@ -137,12 +137,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     body: { fontSize: 13, color: c.textSecondary, lineHeight: 18 },
     actions: { flexDirection: 'row', gap: 10, marginTop: 6 },
     secondaryBtn: {
-        paddingHorizontal: 14, paddingVertical: 9, borderRadius: 8,
+        paddingHorizontal: 14, paddingVertical: 9, borderRadius: radius.pill,
         borderWidth: 1, borderColor: c.border,
     },
     secondaryBtnText: { fontSize: 13, fontWeight: '600', color: c.textSecondary },
     primaryBtn: {
-        paddingHorizontal: 16, paddingVertical: 9, borderRadius: 8,
+        paddingHorizontal: 16, paddingVertical: 9, borderRadius: radius.pill,
     },
     primaryBtnText: { fontSize: 13, fontWeight: '700', color: c.onPrimary },
 
@@ -151,7 +151,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.cardBackground,
         paddingHorizontal: 14, paddingVertical: 10,
         marginBottom: 10,
-        borderRadius: 10, borderLeftWidth: 3,
+        borderRadius: radius.lg, borderWidth: 3, borderColor: 'transparent',
     },
     bannerTitle: { fontSize: 13, fontWeight: '600', color: c.textPrimary },
     bannerBody: { fontSize: 12, color: c.textSecondary, marginTop: 2 },

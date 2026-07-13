@@ -1,10 +1,18 @@
-import { View, FlatList, TouchableOpacity, Text, StyleSheet, ActivityIndicator } from 'react-native';
+import {
+    View,
+    FlatList,
+    TouchableOpacity,
+    Text,
+    StyleSheet,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
+import { categoryIcon } from '../../constants/categoryIcons';
 import { useSafeBottomTabBarHeight } from '../../hooks/useSafeBottomTabBarHeight';
 import { SkeletonBox } from '../SkeletonBox';
 
@@ -18,19 +26,6 @@ export interface Category {
     parentCategoryId: number | null;
 }
 
-const CATEGORY_ICONS: Record<string, string> = {
-    'Daržovės ir vaisiai': '🫜',
-    'Pieno gaminiai, kiaušiniai ir majonezas': '🥛',
-    'Duonos gaminiai ir konditerija': '🍞',
-    'Mėsa, žuvis ir kulinarija': '🥩',
-    'Bakalėja': '🫙',
-    'Šaldytas maistas': '🧊',
-    'Gėrimai': '🥤',
-    'Kūdikių ir vaikų prekės': '🍼',
-    'Kosmetika ir higiena': '🧴',
-    'Švaros ir gyvūnų prekės': '🧹',
-    'Namai ir laisvalaikis': '🏠',
-};
 
 const EMPTY_L2: Category[] = [];
 
@@ -75,7 +70,7 @@ const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, onSelectL2
     };
 
     const l2Rows = l2.length === 0 ? (
-        <ActivityIndicator size="small" color={colors.primary} style={{ padding: 12 }} />
+        <MaterialProgress size="small" color={colors.primary} style={{ padding: 12 }} />
     ) : (
         l2.map((cat, index) => (
             <View key={cat.id}>
@@ -97,7 +92,7 @@ const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, onSelectL2
                 style={[styles.l1Row, isExpanded && styles.l1RowExpanded]}
                 onPress={() => onToggle(item.id)}
             >
-                <Text style={styles.l1Icon}>{CATEGORY_ICONS[item.nameKey ?? item.name] || '📦'}</Text>
+                <Text style={styles.l1Icon}>{categoryIcon(item.nameKey, item.name)}</Text>
                 <Text style={styles.l1Text}>{item.name}</Text>
                 <Animated.View style={chevronStyle}>
                     <Ionicons name="chevron-down" size={20} color={isExpanded ? colors.primary : colors.success} />
@@ -196,8 +191,8 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
                         style={{
                             flexDirection: 'row', alignItems: 'center', gap: 12,
                             paddingHorizontal: 16, paddingVertical: 14,
-                            backgroundColor: colors.cardBackground, borderRadius: 12,
-                            borderLeftWidth: 3, borderLeftColor: colors.softAccent,
+                            backgroundColor: colors.cardBackground, borderRadius: radius.lg,
+                            borderWidth: 3, borderColor: 'transparent', borderLeftColor: colors.softAccent,
                         }}
                     >
                         <SkeletonBox width={24} height={24} borderRadius={6} />
@@ -239,12 +234,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     list: { paddingHorizontal: 16, paddingTop: 16, gap: 10 },
     l1Container: {
         backgroundColor: c.cardBackground,
-        borderRadius: 12,
+        borderRadius: radius.lg,
         overflow: 'hidden',
-        elevation: 1,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.06, shadowRadius: 2,
-        borderLeftWidth: 3,
+        ...elevation.level1,
+        borderWidth: 3, borderColor: 'transparent',
         borderLeftColor: c.softAccent,
     },
     l1ContainerExpanded: {

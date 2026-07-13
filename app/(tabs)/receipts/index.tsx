@@ -1,35 +1,47 @@
-import { Ionicons } from "@expo/vector-icons";
+import {
+    Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
-import { Stack, useFocusEffect, useRouter } from "expo-router";
+import { Stack,
+    useFocusEffect,
+    useRouter } from "expo-router";
 import { useSafeBottomTabBarHeight } from "../../../hooks/useSafeBottomTabBarHeight";
-import { StoreChipBar } from "../../../components/StoreChipBar";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { StoreFilterButton } from "../../../components/StoreFilterButton";
+import { DateFilterButton } from "../../../components/DateFilterButton";
+import type { FilterOption } from "../../../components/FilterDropdownModal";
+import { useCallback,
+    useEffect,
+    useMemo,
+    useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
-import { useReceiptQueueStore, type QueueItem } from "../../../state/receiptQueueStore";
+import { useReceiptQueueStore,
+    type QueueItem } from "../../../state/receiptQueueStore";
 import {
     ActivityIndicator,
     Alert,
     FlatList,
-    Image,
     Modal,
     Pressable,
     RefreshControl,
+    ScrollView,
     StyleSheet,
     Text,
     TouchableOpacity,
     View,
 } from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { API_BASE_URL } from "../../../config/api";
 import { getUserId } from "../../../config/user";
-import { useTheme, type AppTheme } from "../../../constants/theme";
+import { useTheme, spacing, radius, elevation, iconSize, typography, type AppTheme } from "../../../constants/theme";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { glassHeaderOptions } from "../../../constants/navHeader";
 import { ScreenHeading } from "../../../components/ScreenHeading";
 import { useCollapsingHeader, CollapsingHeader } from "../../../components/CollapsingHeader";
-import { chainBrandName, chainBrandColor } from "../../../utils/chainBrandName";
+import { chainBrandName, chainBrandColor, chainIdByName } from "../../../utils/chainBrandName";
+import { launchDocumentScanner } from "../../../utils/launchDocumentScanner";
+import { ChainLogoChip } from "../../../components/ChainLogoChip";
 import { SkeletonBox } from "../../../components/SkeletonBox";
 import { PendingSwipesBanner } from "../../../components/PendingSwipesBanner";
 import { DEV_MODE } from "../../../constants/flags";
@@ -41,6 +53,12 @@ import { fetchWithTimeout, TIMEOUT_HEAVY_MS, TIMEOUT_STANDARD_MS } from "../../.
 import { formatDate } from "../../../utils/formatCurrency";
 import { useNetworkStatus } from "../../../state/networkStatus";
 import { useLevelStore } from "../../../state/levelStore";
+import { useSettingsStore } from "../../../state/settingsStore";
+
+// MODULE-LEVEL one-shot for the resume prompt. A per-component ref resets if the
+// Receipts screen remounts (tab re-focus, Fast Refresh), which can stack a second
+// Alert — this survives remounts so the prompt shows at most once per app session.
+let resumePromptShownThisSession = false;
 
 interface Receipt {
   id: number;
@@ -72,6 +90,33 @@ const safeJsonParse = (raw: string): any => {
     return null;
   }
 };
+
+// ── Receipt DATE (the date printed on the receipt, not the upload time) ──
+// Parse a loose "YYYY-MM-DD" / "YYYY.MM.DD" / "YYYY/M/D" (optionally with a
+// time tail) into a local Date; null when unparseable.
+const parseYMD = (str: string | null | undefined): Date | null => {
+  if (!str) return null;
+  const m = String(str).match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
+  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  const d = new Date(str);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+
+// The receipt's own footer date (parsed blob) takes priority over the stored
+// receiptDate column — same source the card shows.
+const receiptFooterDateStr = (r: Receipt): string | null => {
+  const pd = r.parsedData;
+  if (!pd) return null;
+  const obj = typeof pd === "string" ? safeJsonParse(pd) : pd;
+  const raw = (obj as any)?.footer?.date ?? (obj as any)?.date ?? null;
+  return typeof raw === "string" && raw.trim() ? raw : null;
+};
+
+const receiptDateObj = (r: Receipt): Date | null =>
+  parseYMD(receiptFooterDateStr(r) ?? r.receiptDate);
+
+const sameDay = (a: Date, b: Date) =>
+  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
 
 function queueStatusLabel(item: QueueItem, t: TFunction): string {
   if (item.status === "pending") return t('receipts.status.pending');
@@ -119,7 +164,10 @@ export default function ReceiptsScreen() {
   const checkCandidate = useLevelStore(s => s.checkCandidate);
   useFocusEffect(useCallback(() => { checkCandidate(); }, [checkCandidate]));
   const [receipts, setReceipts] = useState<Receipt[]>([]);
-  const [selectedChain, setSelectedChain] = useState<string | null>(null);
+  // Store filter: null = all stores; otherwise the explicit checked chainId set.
+  const [selectedChainIds, setSelectedChainIds] = useState<Set<number> | null>(null);
+  // Date filter: null = no filter; otherwise show only that exact day.
+  const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
@@ -127,19 +175,23 @@ export default function ReceiptsScreen() {
   const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
   const [previewOnly, setPreviewOnly] = useState(false);
   const [pdfConverting, setPdfConverting] = useState(false);
+  // DEV-ONLY: long-press a receipt for a small action menu (Re-OCR + hard-delete).
+  const [deleteTarget, setDeleteTarget] = useState<Receipt | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [reocring, setReocring] = useState(false);
   const queueItems = useReceiptQueueStore((s) => s.items);
   const removeQueueItem = useReceiptQueueStore((s) => s.removeItem);
   const recentIds = useReceiptQueueStore((s) => s.recentIds);
   const pruneRecentIds = useReceiptQueueStore((s) => s.pruneRecentIds);
   const addItems = useReceiptQueueStore((s) => s.addItems);
 
+  // Default scan: the OS document scanner (native edge-detect + auto-capture +
+  // de-skew). Covers normal-length receipts.
   const onPickCamera = () => {
     setUploadMenuOpen(false);
-    if (previewOnly) {
-      router.push(`/receipt/capture?preview=true` as any);
-    } else {
-      router.push("/receipt/capture" as any);
-    }
+    // The dismiss-before-present delay now lives inside launchDocumentScanner,
+    // so every scan entry point (here, shopping list, fail-gate retry) is guarded.
+    launchDocumentScanner(router, { preview: previewOnly });
   };
 
   const onPickFile = async () => {
@@ -224,6 +276,56 @@ export default function ReceiptsScreen() {
     }
   };
 
+  // DEV-ONLY: hard delete a receipt + all spawned data (prices, orphan SPs,
+  // MinIO image). Server refuses outside dev.
+  const confirmDeleteReceipt = async () => {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/receipts/${deleteTarget.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setReceipts((prev) => prev.filter((r) => r.id !== deleteTarget.id));
+      setDeleteTarget(null);
+      await fetchReceipts();
+    } catch (e) {
+      Alert.alert("Delete failed", String(e));
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  // DEV-ONLY: re-run the FULL pipeline (OCR → parse → match → save) on the receipt's
+  // STORED photo, so a parser fix can be re-tested against the SAME image without a
+  // retake (a retake gives slightly different OCR every time). Downloads the photo, then
+  // hands it to the fresh-scan flow; the OLD receipt (same receiptNo) is deleted just
+  // before the new one is created (in receipt-process), so a re-parse that bails to
+  // "retake" doesn't destroy the receipt. Caveat: the stored photo is the downscaled/
+  // redacted upload, so the OCR won't be byte-identical to the original camera scan — but
+  // it IS deterministic across runs, which is the point.
+  const confirmReOcr = async () => {
+    if (!deleteTarget || reocring || deleting) return;
+    const target = deleteTarget;
+    setReocring(true);
+    try {
+      const imgRes = await fetch(`${API_BASE_URL}/api/receipts/${target.id}/image`);
+      const imgData = await imgRes.json().catch(() => null);
+      if (!imgRes.ok || !imgData?.url) throw new Error(`photo url HTTP ${imgRes.status}`);
+      const dest = `${FileSystem.cacheDirectory}reocr_${target.id}_${Date.now()}.jpg`;
+      const dl = await FileSystem.downloadAsync(imgData.url, dest);
+      if (dl.status !== 200) throw new Error(`photo download HTTP ${dl.status}`);
+      setDeleteTarget(null);
+      router.push(
+        `/receipt-process?uris=${encodeURIComponent(dl.uri)}&reocrReceiptId=${target.id}` as any,
+      );
+    } catch (e) {
+      Alert.alert(t('receipts.devReocr.failed'), String(e));
+    } finally {
+      setReocring(false);
+    }
+  };
+
   const hasPendingProcessing = useMemo(
     () =>
       receipts.some(
@@ -261,12 +363,25 @@ export default function ReceiptsScreen() {
     }
   }, [receipts, recentIds, pruneRecentIds]);
 
+  // Gate the resume prompt on settings hydration: Alert.alert captures its strings
+  // IMPERATIVELY at call time, so firing it before settingsStore has run
+  // i18n.changeLanguage(deviceLanguage) freezes the modal to the hardcoded init
+  // language (lt) even on an English device — the "not language aware" report. A
+  // reactively-rendered <Modal> wouldn't have this, but a native Alert would; so
+  // wait for `hydrated`, by which point i18next is on the resolved language.
+  const settingsHydrated = useSettingsStore((s) => s.hydrated);
   useEffect(() => {
+    console.log(`[RESUME] effect fire — hydrated=${settingsHydrated} shownThisSession=${resumePromptShownThisSession}`);
+    // Claim the one-shot SYNCHRONOUSLY, before the await, and at MODULE level so a
+    // remount can't stack a second Alert.
+    if (!settingsHydrated || resumePromptShownThisSession) return;
+    resumePromptShownThisSession = true;
     let active = true;
     (async () => {
       const draft = await loadReceiptDraft();
-      if (!active) return;
-      if (!draft) return;
+      console.log(`[RESUME] draft loaded — hasDraft=${!!draft} active=${active} uris=${draft?.imageUris?.length ?? 0}`);
+      if (!active || !draft) return;
+      console.log('[RESUME] SHOWING ALERT');
       Alert.alert(
         t('receipts.resume.title'),
         t('receipts.resume.body'),
@@ -275,19 +390,21 @@ export default function ReceiptsScreen() {
             text: t('common.cancel'),
             style: "cancel",
             onPress: () => {
+              console.log('[RESUME] CANCEL tapped');
               clearReceiptDraft().catch(() => {});
             },
           },
           {
             text: t('common.continue'),
             onPress: () => {
+              console.log('[RESUME] CONTINUE tapped -> navigate');
               const params = new URLSearchParams();
               if (draft.imageUris.length > 1) {
                 params.set("uris", draft.imageUris.join(","));
               } else {
                 params.set("uri", draft.imageUris[0]);
               }
-              router.push(`/receipt-process?${params.toString()}` as any);
+              router.navigate(`/receipt-process?${params.toString()}` as any);
             },
           },
         ],
@@ -296,7 +413,10 @@ export default function ReceiptsScreen() {
     return () => {
       active = false;
     };
-  }, []);
+    // `t` intentionally omitted — see the sync-claim comment above; re-running on a
+    // language change would risk a second prompt. Fires once when hydration completes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsHydrated]);
 
   const getStatusColor = (item: Receipt) => {
     if (hasPendingSwipes(item)) return colors.warning;
@@ -358,37 +478,103 @@ export default function ReceiptsScreen() {
     } as any);
   };
 
-  const chainFilters = useMemo(() => {
-    const acc = new Map<string, { name: string; logoUrl: string | null; count: number }>();
+  // Store filter options (multi-select), keyed by chainId — derived from the
+  // receipts present, most-frequent chain first. `logoUrlById` feeds the
+  // selected-logos trigger in StoreFilterButton.
+  const { storeOptions, logoUrlById } = useMemo(() => {
+    const acc = new Map<number, { label: string; logo: string | null; count: number }>();
+    const logos = new Map<number, string | null>();
     for (const r of receipts) {
       if (!r.chainName) continue;
+      const id = chainIdByName(r.chainName);
+      if (!id) continue;
       const logo = r.chainMiniLogoUrl ?? r.chainLogoUrl ?? null;
-      const existing = acc.get(r.chainName);
+      const existing = acc.get(id);
       if (existing) {
         existing.count += 1;
-        if (!existing.logoUrl && logo) existing.logoUrl = logo;
+        if (!existing.logo && logo) existing.logo = logo;
       } else {
-        acc.set(r.chainName, { name: r.chainName, logoUrl: logo, count: 1 });
+        acc.set(id, { label: chainBrandName(r.chainName), logo, count: 1 });
       }
+      if (logo && !logos.has(id)) logos.set(id, logo);
     }
-    return Array.from(acc.values()).sort((a, b) => b.count - a.count);
+    const opts: FilterOption[] = Array.from(acc.entries())
+      .sort((a, b) => b[1].count - a[1].count)
+      .map(([id, v]) => ({
+        id,
+        label: v.label,
+        leading: <ChainLogoChip chainId={id} name={v.label} logoUrl={v.logo} size={24} />,
+      }));
+    return { storeOptions: opts, logoUrlById: logos };
   }, [receipts]);
 
-  useEffect(() => {
-    if (selectedChain === null) return;
-    if (!chainFilters.some((c) => c.name === selectedChain)) {
-      setSelectedChain(null);
+  const toggleStore = useCallback((id: number) => {
+    setSelectedChainIds((prev) => {
+      if (prev == null) return new Set([id]); // from "all" → narrow to just this one
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      // Empty or full selection both collapse back to "all stores".
+      if (next.size === 0 || next.size >= storeOptions.length) return null;
+      return next;
+    });
+  }, [storeOptions.length]);
+
+  const selectAllStores = useCallback(() => setSelectedChainIds(null), []);
+
+  // Calendar marks: "YYYY-MM-DD" → chain dot colours (deduped per chain, so a
+  // day with two Rimi receipts shows one red dot; Rimi + IKI shows red + green).
+  const receiptDots = useMemo(() => {
+    const m = new Map<string, string[]>();
+    const seen = new Map<string, Set<string>>();
+    for (const r of receipts) {
+      const d = receiptDateObj(r);
+      if (!d || !r.chainName) continue;
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const chains = seen.get(key) ?? new Set<string>();
+      if (chains.has(r.chainName)) continue;
+      chains.add(r.chainName);
+      seen.set(key, chains);
+      const arr = m.get(key) ?? [];
+      arr.push(chainBrandColor(r.chainName));
+      m.set(key, arr);
     }
-  }, [chainFilters, selectedChain]);
+    return m;
+  }, [receipts]);
+
+  // Drop any selected chains that vanish from the loaded receipts.
+  useEffect(() => {
+    if (selectedChainIds == null) return;
+    const valid = new Set(storeOptions.map((o) => o.id));
+    const kept = new Set([...selectedChainIds].filter((id) => valid.has(id)));
+    if (kept.size !== selectedChainIds.size) {
+      setSelectedChainIds(kept.size === 0 ? null : kept);
+    }
+  }, [storeOptions, selectedChainIds]);
 
   const listData: ListItem[] = useMemo(() => {
     const out: ListItem[] = [];
     for (const q of queueItems) out.push({ kind: "queue", data: q });
-    const filtered = selectedChain
-      ? receipts.filter((r) => r.chainName === selectedChain)
-      : receipts;
-    const recent = filtered.filter((r) => recentIds.includes(r.id));
-    const older = filtered.filter((r) => !recentIds.includes(r.id));
+    let filtered = receipts;
+    // STORE (multi): skipped when all stores are selected so unknown-chain
+    // receipts survive; otherwise keep only the checked chains.
+    if (selectedChainIds && selectedChainIds.size < storeOptions.length) {
+      filtered = filtered.filter((r) => {
+        const id = r.chainName ? chainIdByName(r.chainName) : 0;
+        return id ? selectedChainIds.has(id) : false;
+      });
+    }
+    // DATE (exact day) — against the receipt's own date.
+    if (selectedDate) {
+      filtered = filtered.filter((r) => {
+        const d = receiptDateObj(r);
+        return d ? sameDay(d, selectedDate) : false;
+      });
+    }
+    // Sort by the receipt date (newest first); undated receipts sink to the end.
+    const byReceiptDateDesc = (a: Receipt, b: Receipt) =>
+      (receiptDateObj(b)?.getTime() ?? -Infinity) - (receiptDateObj(a)?.getTime() ?? -Infinity);
+    const recent = filtered.filter((r) => recentIds.includes(r.id)).sort(byReceiptDateDesc);
+    const older = filtered.filter((r) => !recentIds.includes(r.id)).sort(byReceiptDateDesc);
     if (recent.length > 0) {
       out.push({ kind: "section", title: t('receipts.sections.new'), id: "sec-nauji" });
       for (const r of recent) out.push({ kind: "receipt", data: r });
@@ -398,7 +584,7 @@ export default function ReceiptsScreen() {
     }
     for (const r of older) out.push({ kind: "receipt", data: r });
     return out;
-  }, [queueItems, receipts, recentIds, selectedChain]);
+  }, [queueItems, receipts, recentIds, selectedChainIds, selectedDate, storeOptions.length]);
 
   if (loading) {
     return (
@@ -412,20 +598,20 @@ export default function ReceiptsScreen() {
           paddingHorizontal: 12, paddingVertical: 10,
         }}>
           {Array.from({ length: 4 }).map((_, i) => (
-            <SkeletonBox key={i} width={i === 0 ? 64 : 80} height={32} borderRadius={20} />
+            <SkeletonBox key={i} width={i === 0 ? 64 : 80} height={32} borderRadius={radius.lg} />
           ))}
         </View>
         <View style={[styles.list, { paddingTop: 16 }]}>
           {Array.from({ length: 5 }).map((_, i) => (
-            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10, gap: 12 }}>
-              <SkeletonBox width={32} height={32} borderRadius={6} />
+            <View key={i} style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: spacing.lg, marginBottom: spacing.md, gap: spacing.md }}>
+              <SkeletonBox width={32} height={32} borderRadius={radius.sm} />
               <View style={{ flex: 1, gap: 8 }}>
-                <SkeletonBox width='70%' height={13} borderRadius={6} />
-                <SkeletonBox width='45%' height={11} borderRadius={6} />
+                <SkeletonBox width='70%' height={13} borderRadius={radius.sm} />
+                <SkeletonBox width='45%' height={11} borderRadius={radius.sm} />
               </View>
-              <View style={{ alignItems: 'flex-end', gap: 8 }}>
-                <SkeletonBox width={48} height={11} borderRadius={6} />
-                <SkeletonBox width={56} height={18} borderRadius={8} />
+              <View style={{ alignItems: 'flex-end', gap: spacing.sm }}>
+                <SkeletonBox width={48} height={11} borderRadius={radius.sm} />
+                <SkeletonBox width={56} height={18} borderRadius={radius.sm} />
               </View>
             </View>
           ))}
@@ -452,11 +638,11 @@ export default function ReceiptsScreen() {
 
     const leftIcon = (() => {
       if (isError) return (
-        <Ionicons name={isDuplicate ? "copy-outline" : "alert-circle-outline"} size={28} color={statusColor} />
+        <Ionicons name={isDuplicate ? "copy-outline" : "alert-circle-outline"} size={iconSize.xl} color={statusColor} />
       );
-      if (isAwaiting) return <Ionicons name="cloud-offline-outline" size={28} color={colors.warning} />;
-      if (isPending) return <Ionicons name="time-outline" size={28} color={colors.textMuted} />;
-      return <ActivityIndicator size="small" color={colors.primary} />;
+      if (isAwaiting) return <Ionicons name="cloud-offline-outline" size={iconSize.xl} color={colors.warning} />;
+      if (isPending) return <Ionicons name="time-outline" size={iconSize.xl} color={colors.textMuted} />;
+      return <MaterialProgress size="small" color={colors.primary} />;
     })();
 
     const subline = (() => {
@@ -478,9 +664,9 @@ export default function ReceiptsScreen() {
           isAwaiting && { borderLeftColor: colors.warning },
         ]}
       >
-        <View style={{ marginRight: 12 }}>{leftIcon}</View>
+        <View style={{ marginRight: spacing.md }}>{leftIcon}</View>
         <View style={{ flex: 1, minWidth: 0 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: spacing.sm }}>
             <Text style={styles.queueTitle} numberOfLines={1}>
               {queueCardTitle(item, t)}
             </Text>
@@ -493,8 +679,8 @@ export default function ReceiptsScreen() {
           ) : null}
         </View>
         {isError && (
-          <TouchableOpacity onPress={() => removeQueueItem(item.id)} style={{ paddingLeft: 8 }} hitSlop={8}>
-            <Ionicons name="close" size={20} color={colors.textMuted} />
+          <TouchableOpacity onPress={() => removeQueueItem(item.id)} style={{ paddingLeft: spacing.sm }} hitSlop={8}>
+            <Ionicons name="close" size={iconSize.md} color={colors.textMuted} />
           </TouchableOpacity>
         )}
         {isProcessing && (
@@ -529,9 +715,14 @@ export default function ReceiptsScreen() {
     return (
       <TouchableOpacity
         style={[styles.card, hasPendingSwipes(item) && styles.cardPending]}
+        onLongPress={__DEV__ ? () => setDeleteTarget(item) : undefined}
+        delayLongPress={500}
         onPress={() => {
+          // navigate, not push: a quick double-tap dispatches twice, and push
+          // stacks a second copy of the screen — navigate no-ops when the same
+          // route+params is already focused.
           if (hasPendingSwipes(item)) {
-            router.push({
+            router.navigate({
               pathname: "/swipe/queue",
               params: {
                 receiptIds: String(item.id),
@@ -539,25 +730,20 @@ export default function ReceiptsScreen() {
               },
             } as any);
           } else {
-            router.push(`/receipt-process?receiptId=${item.id}`);
+            router.navigate(`/receipt-process?receiptId=${item.id}`);
           }
         }}
       >
         <View style={styles.cardLeft}>
           {item.chainLogoUrl || item.chainName ? (
-            <View style={[styles.cardLogo, { backgroundColor: chainBrandColor(item.chainName ?? '') }]}>
-              {item.chainMiniLogoUrl ?? item.chainLogoUrl ? (
-                <Image
-                  source={{ uri: (item.chainMiniLogoUrl ?? item.chainLogoUrl) as string }}
-                  style={styles.cardLogoImage}
-                  resizeMode="contain"
-                />
-              ) : (
-                <Text style={styles.cardLogoFallback}>{(item.chainName ?? '?')[0]}</Text>
-              )}
-            </View>
+            <ChainLogoChip
+              chainId={chainIdByName(item.chainName ?? '') ?? 0}
+              name={item.chainName ?? '?'}
+              logoUrl={item.chainMiniLogoUrl ?? item.chainLogoUrl}
+              size={32}
+            />
           ) : (
-            <Ionicons name="receipt-outline" size={28} color={colors.primary} />
+            <Ionicons name="receipt-outline" size={iconSize.xl} color={colors.primary} />
           )}
         </View>
         <View style={styles.cardContent}>
@@ -594,17 +780,32 @@ export default function ReceiptsScreen() {
         controller={header}
         background={colors.cardBackground}
         collapsing={<ScreenHeading title={t('tabs.receipts')} />}
-        pinned={chainFilters.length > 1 ? (
-          <StoreChipBar
-            chips={chainFilters.map(f => ({
-              id: f.name,
-              label: chainBrandName(f.name),
-              logoUrl: f.logoUrl,
-            }))}
-            selectedId={selectedChain}
-            onSelect={id => setSelectedChain(id as string | null)}
-            allLabel={t('receipts.filterAll')}
-          />
+        pinned={(storeOptions.length > 1 || receipts.length > 0) ? (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={styles.filterRow}
+          >
+            {storeOptions.length > 1 && (
+              <StoreFilterButton
+                storeOptions={storeOptions}
+                selectedIds={selectedChainIds}
+                onToggle={toggleStore}
+                onAll={selectAllStores}
+                logoUrlById={logoUrlById}
+                label={t('receipts.filterStores')}
+                allLabel={t('receipts.filterAllStores')}
+                title={t('receipts.filterStores')}
+              />
+            )}
+            <DateFilterButton
+              value={selectedDate}
+              onChange={setSelectedDate}
+              label={t('receipts.filterDate')}
+              markedDates={receiptDots}
+            />
+          </ScrollView>
         ) : undefined}
       />
       <Animated.FlatList
@@ -667,7 +868,7 @@ export default function ReceiptsScreen() {
           setUploadMenuOpen(true);
         }}
       >
-        <Ionicons name="add" size={28} color={colors.onPrimary} />
+        <Ionicons name="add" size={iconSize.xl} color={colors.onPrimary} />
       </TouchableOpacity>
 
       <Modal
@@ -677,11 +878,70 @@ export default function ReceiptsScreen() {
       >
         <View style={styles.menuBackdrop}>
           <View style={[styles.menuCard, { alignItems: "center", gap: 12 }]}>
-            <ActivityIndicator size="large" color={colors.primary} />
+            <MaterialProgress size="large" color={colors.primary} />
             <Text style={styles.menuTitle}>{t('receipts.menu.pdfConverting')}</Text>
           </View>
         </View>
       </Modal>
+
+      {/* DEV-ONLY: long-press delete confirmation. Gated on __DEV__ so it only
+          exists in dev/Metro bundles and is absent from release/prod builds. */}
+      {__DEV__ && (
+        <Modal
+          visible={deleteTarget !== null}
+          transparent
+          animationType="fade"
+          onRequestClose={() => !deleting && !reocring && setDeleteTarget(null)}
+        >
+          <Pressable style={styles.menuBackdrop} onPress={() => !deleting && !reocring && setDeleteTarget(null)}>
+            <Pressable style={styles.menuCard} onPress={(e) => e.stopPropagation()}>
+              <Text style={styles.menuTitle}>{t('receipts.devReocr.menuTitle')}</Text>
+              <Text style={[styles.cardAddress, { marginBottom: spacing.sm }]}>
+                {deleteTarget?.storeName || deleteTarget?.chainName || `#${deleteTarget?.id ?? ''}`}
+              </Text>
+              {/* Re-OCR: re-run the whole pipeline on the STORED photo (same image, fresh parse). */}
+              <TouchableOpacity
+                style={[styles.menuRow, { justifyContent: 'center' }, (deleting || reocring) && { opacity: 0.5 }]}
+                disabled={deleting || reocring}
+                onPress={confirmReOcr}
+              >
+                {reocring ? (
+                  <MaterialProgress size="small" color={colors.primary} />
+                ) : (
+                  <>
+                    <Ionicons name="refresh-outline" size={iconSize.lg} color={colors.primary} />
+                    <Text style={styles.menuRowText}>{t('receipts.devReocr.action')}</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+              {/* Delete: hard-delete the receipt + everything it spawned. */}
+              <TouchableOpacity
+                style={[styles.menuRow, { justifyContent: 'center' }, (deleting || reocring) && { opacity: 0.5 }]}
+                disabled={deleting || reocring}
+                onPress={confirmDeleteReceipt}
+              >
+                {deleting ? (
+                  <MaterialProgress size="small" color={colors.error} />
+                ) : (
+                  <>
+                    <Ionicons name="trash-outline" size={iconSize.lg} color={colors.error} />
+                    <Text style={[styles.menuRowText, { color: colors.error }]}>
+                      {t('receipts.devDelete.confirm')}
+                    </Text>
+                  </>
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.menuRow, { justifyContent: 'center' }]}
+                disabled={deleting || reocring}
+                onPress={() => setDeleteTarget(null)}
+              >
+                <Text style={styles.menuRowText}>{t('common.cancel')}</Text>
+              </TouchableOpacity>
+            </Pressable>
+          </Pressable>
+        </Modal>
+      )}
 
       <Modal
         visible={uploadMenuOpen}
@@ -694,12 +954,12 @@ export default function ReceiptsScreen() {
             <Text style={styles.menuTitle}>{t('receipts.menu.uploadTitle')}</Text>
 
             <TouchableOpacity style={styles.menuRow} onPress={onPickCamera}>
-              <Ionicons name="camera-outline" size={22} color={colors.primary} />
+              <Ionicons name="camera-outline" size={iconSize.lg} color={colors.primary} />
               <Text style={styles.menuRowText}>{t('receipts.menu.uploadCamera')}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.menuRow} onPress={onPickFile}>
-              <Ionicons name="cloud-upload-outline" size={22} color={colors.primary} />
+              <Ionicons name="cloud-upload-outline" size={iconSize.lg} color={colors.primary} />
               <Text style={styles.menuRowText}>{t('receipts.menu.uploadAction')}</Text>
             </TouchableOpacity>
 
@@ -738,40 +998,47 @@ export default function ReceiptsScreen() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
   container: { flex: 1, backgroundColor: c.pageBackground },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  list: { padding: 16 },
+  list: { padding: spacing.lg },
+  filterRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 10,
+  },
 
   card: {
     backgroundColor: c.cardBackground,
-    borderRadius: 12,
-    padding: 16,
-    marginBottom: 12,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
+    marginBottom: spacing.md,
     flexDirection: "row",
     alignItems: "center",
-    elevation: 2,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.08,
-    shadowRadius: 2,
-    borderLeftWidth: 3,
+    ...elevation.level1,
+    // Uniform (transparent) border + coloured left edge. A single-sided
+    // borderLeftWidth makes Android render SQUARE corners despite borderRadius;
+    // a uniform borderWidth rounds correctly while only the left shows.
+    borderWidth: 3,
+    borderColor: "transparent",
     borderLeftColor: c.softAccent,
   },
   queueCard: {
-    paddingBottom: 18,
+    paddingBottom: spacing.lg,
     overflow: "hidden",
     position: "relative",
     borderLeftColor: c.primary,
   },
   queueTitle: {
-    fontSize: 14,
-    fontWeight: "600",
+    ...typography.bodySmallStrong,
     color: c.textPrimary,
     flex: 1,
     minWidth: 0,
   },
   queueSubline: {
-    fontSize: 12,
+    ...typography.labelSmall,
+    fontWeight: "400",
     color: c.textMuted,
-    marginTop: 4,
+    marginTop: spacing.xs,
   },
   progressTrack: {
     position: "absolute",
@@ -795,48 +1062,43 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     borderLeftColor: c.primary,
     shadowOpacity: 0.12,
   },
-  cardLeft: { marginRight: 12, width: 36, alignItems: "center", justifyContent: "center" },
-  cardLogo: {
-    width: 32, height: 32, borderRadius: 6,
-    alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-  },
-  cardLogoImage: { width: 22, height: 22 },
-  cardLogoFallback: { fontSize: 14, fontWeight: '700', color: '#FFFFFF' },
+  cardLeft: { marginRight: spacing.md, width: 36, alignItems: "center", justifyContent: "center" },
   cardContent: { flex: 1, minWidth: 0 },
-  cardTitle: { fontSize: 15, fontWeight: "600", color: c.textPrimary },
-  cardAddress: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
-  cardRight: { alignItems: "flex-end", marginLeft: 8 },
-  cardDate: { fontSize: 12, color: c.textSecondary, marginBottom: 6 },
+  cardTitle: { ...typography.bodyStrong, color: c.textPrimary },
+  cardAddress: { ...typography.labelSmall, fontWeight: "400", color: c.textSecondary, marginTop: 2 },
+  cardRight: { alignItems: "flex-end", marginLeft: spacing.sm },
+  cardDate: { ...typography.labelSmall, fontWeight: "400", color: c.textSecondary, marginBottom: 6 },
   statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: radius.sm,
   },
-  statusText: { fontSize: 11, color: c.textInverse, fontWeight: "600" },
+  statusText: { ...typography.caption, fontWeight: "600", color: c.textInverse },
   sectionHeader: {
-    fontSize: 11,
+    ...typography.caption,
     fontWeight: "700",
     color: c.textMuted,
     letterSpacing: 1.2,
     textTransform: "uppercase",
-    marginTop: 4,
-    marginBottom: 8,
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
     paddingHorizontal: 2,
   },
-  emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', marginTop: 16, textAlign: 'center' },
-  emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 6, textAlign: 'center', lineHeight: 18 },
-  emptyButton: { marginTop: 20, backgroundColor: c.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: 24 },
-  emptyButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 14 },
+  emptyText: { ...typography.bodyStrong, color: c.textSecondary, marginTop: spacing.lg, textAlign: 'center' },
+  emptySubText: { ...typography.label, fontWeight: '400', color: c.textMuted, marginTop: 6, textAlign: 'center' },
+  emptyButton: { marginTop: spacing.xl, backgroundColor: c.primary, paddingHorizontal: spacing.xl, paddingVertical: spacing.md, borderRadius: radius.pill },
+  emptyButtonText: { ...typography.bodySmallStrong, fontWeight: '700', color: c.onPrimary },
   fab: {
     position: "absolute",
-    bottom: 24,
-    right: 20,
+    bottom: spacing.xl,
+    right: spacing.xl,
     backgroundColor: c.primary,
     width: 56,
     height: 56,
-    borderRadius: 28,
+    borderRadius: radius.pill,
     alignItems: "center",
     justifyContent: "center",
+    // Brand-coloured glow — bespoke, not a neutral elevation tier.
     elevation: 4,
     shadowColor: c.primaryShadow,
     shadowOffset: { width: 0, height: 3 },
@@ -847,61 +1109,59 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     flex: 1,
     backgroundColor: c.overlayBackdrop,
     justifyContent: "center",
-    padding: 24,
+    padding: spacing.xl,
   },
   menuCard: {
     backgroundColor: c.cardBackground,
-    borderRadius: 14,
-    padding: 16,
+    borderRadius: radius.lg,
+    padding: spacing.lg,
     gap: 6,
   },
   menuTitle: {
-    fontSize: 16,
+    ...typography.bodyStrong,
     fontWeight: "700",
     color: c.textPrimary,
-    marginBottom: 4,
+    marginBottom: spacing.xs,
   },
   menuRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 12,
-    paddingVertical: 12,
-    paddingHorizontal: 8,
-    borderRadius: 8,
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius.sm,
   },
   menuRowText: {
-    fontSize: 15,
-    color: c.textPrimary,
+    ...typography.bodyStrong,
     fontWeight: "500",
+    color: c.textPrimary,
   },
   previewToggle: {
     flexDirection: "row",
     alignItems: "flex-start",
-    gap: 10,
-    paddingVertical: 10,
-    paddingHorizontal: 8,
-    marginTop: 4,
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    marginTop: spacing.xs,
     borderTopWidth: 1,
     borderTopColor: c.borderSubtle,
   },
   previewToggleText: {
-    fontSize: 14,
+    ...typography.bodySmallStrong,
     color: c.textPrimary,
-    fontWeight: "600",
   },
   previewToggleHint: {
-    fontSize: 11,
+    ...typography.caption,
     color: c.textMuted,
     marginTop: 2,
   },
   menuCancel: {
     alignItems: "center",
-    paddingVertical: 12,
-    marginTop: 4,
+    paddingVertical: spacing.md,
+    marginTop: spacing.xs,
   },
   menuCancelText: {
-    fontSize: 14,
+    ...typography.bodySmallStrong,
     color: c.textSecondary,
-    fontWeight: "600",
   },
 });

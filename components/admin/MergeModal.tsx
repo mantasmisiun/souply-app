@@ -1,8 +1,14 @@
-import { useMemo } from 'react';
 import {
-    Modal, View, Text, TouchableOpacity, StyleSheet, ScrollView,
-    ActivityIndicator,
-} from 'react-native';
+    useMemo } from 'react';
+import {
+    Modal,
+    View,
+    Text,
+    TouchableOpacity,
+    StyleSheet,
+    ScrollView,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -127,7 +133,7 @@ export default function MergeModal({ visible, products, loading, onConfirm, onCa
                         activeOpacity={loading ? 1 : 0.8}
                     >
                         {loading ? (
-                            <ActivityIndicator color={colors.onPrimary} />
+                            <MaterialProgress color={colors.onPrimary} />
                         ) : (
                             <Text style={styles.confirmText}>
                                 {t('admin.catalog.mergeConfirmBtn', { count: products.length })}

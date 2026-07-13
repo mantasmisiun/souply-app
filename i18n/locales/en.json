@@ -1,4 +1,27 @@
 {
+  "locationSettings": {
+    "title": "Store search settings",
+    "storeCountLabel": "How many stores will you visit",
+    "storeCountHint1": "1 store recommended",
+    "storeCountHint2": "Compares shopping across 1 and 2 stores",
+    "storeCountHint3": "Compares shopping across up to 3-store combinations",
+    "modeLabel": "Where to look for stores?",
+    "modeGps": "GPS",
+    "modePlace": "Place",
+    "modeRoute": "Route",
+    "routeFrom": "From:",
+    "routeTo": "To:",
+    "routeHint": "Add at least one location to use route mode.",
+    "transportLabel": "Transport",
+    "transportBus": "Bus",
+    "transportCar": "Car",
+    "presetHome": "Home",
+    "presetWork": "Work",
+    "presetCustom": "Other",
+    "add": "+ Add",
+    "select": "Select",
+    "swap": "Swap direction"
+  },
   "tabs": {
     "receipts": "Analyze",
     "browse": "Browse",
@@ -219,6 +242,12 @@
       }
     },
     "tabAmounts": "Amounts",
+    "tabFailed": "Failed",
+    "failed": {
+      "empty": "No failed receipts",
+      "lines": "{{count}} OCR lines",
+      "resolve": "Dismiss"
+    },
     "amounts": {
       "leaseProgress": "{{done}} / {{total}} cards",
       "claimBatch": "Claim new batch",
@@ -476,6 +505,7 @@
     "cancel": "Cancel",
     "continue": "Continue",
     "confirm": "Confirm",
+    "clear": "Clear",
     "delete": "Delete",
     "edit": "Edit",
     "retry": "Retry",
@@ -534,14 +564,21 @@
     "createNewSub": "Start from empty"
   },
   "discounts": {
-    "freshNow": "Updated just now",
-    "freshMinutes_one": "Updated {{count}} min ago",
-    "freshMinutes_other": "Updated {{count}} min ago",
-    "freshHours_one": "Updated {{count}} hour ago",
-    "freshHours_other": "Updated {{count}} hours ago",
     "loadFailed": "Couldn't load discounts",
     "loadFailedWithCache": "Showing saved data — couldn't refresh",
-    "retry": "Try again"
+    "retry": "Try again",
+    "title": "Discounts",
+    "filterStores": "Stores",
+    "filterCategories": "Categories",
+    "filterSubcategories": "Subcategories",
+    "filterAllStores": "All stores",
+    "filterAllCategories": "All categories",
+    "filterAllSubcategories": "All subcategories",
+    "infoTitle": "How this screen works",
+    "infoBullet1": "You see discounts currently running in stores — expired deals disappear automatically.",
+    "infoBullet2": "We refresh prices a few times a week.",
+    "infoBullet3": "A badge with a store logo shows where the product is cheapest right now — that many percent below its average price elsewhere.",
+    "infoBullet4": "The flame shows the store's own advertised discount."
   },
   "browse": {
     "addToBasket": "Add",
@@ -652,6 +689,20 @@
       "bannerDisabled": "Waiting for network"
     },
     "filterAll": "All",
+    "filterStores": "Stores",
+    "filterAllStores": "All stores",
+    "filterDate": "Date",
+    "devDelete": {
+      "title": "Delete receipt (DEV)",
+      "body": "Permanently delete \"{{store}}\" and all associated data (prices, products, image)?",
+      "confirm": "Delete everything"
+    },
+    "devReocr": {
+      "menuTitle": "DEV actions",
+      "action": "Re-OCR from photo",
+      "running": "Re-reading…",
+      "failed": "Re-OCR failed"
+    },
     "menu": {
       "pdfConverting": "Converting PDF to image",
       "uploadTitle": "Upload receipt",
@@ -884,7 +935,36 @@
     "draft": "Draft",
     "calculating": "Calculating…",
     "calculate": "Calculate",
-    "calcModalSub": "Comparing prices across the 10 nearest stores"
+    "calcModalSub": "Comparing prices across the 10 nearest stores",
+    "findStores": "Find stores",
+    "findStore": "Find store",
+    "viewStores": "Stores",
+    "viewStore": "Store"
+  },
+  "results": {
+    "loading": "Calculating prices…",
+    "tapStore": "Tap a store",
+    "batchCalculating": "Calculating…",
+    "batchMore": "Price more ({{count}})",
+    "errorTitle": "Error",
+    "errorRecalc": "Couldn't recalculate",
+    "errorGetPrice": "Couldn't get price",
+    "errorPriceStores": "Couldn't price stores",
+    "errorCreateList": "Couldn't create shopping list",
+    "sheet": {
+      "storesPlural": "{{count}} stores",
+      "onlyHere": "Only at this store",
+      "savingVsSingle": "Save {{amount}} vs 1 store",
+      "navigate": "Go",
+      "createList": "Shopping list",
+      "creating": "Creating…",
+      "approxPrice": "Approx. price",
+      "missing": "Missing {{count}}",
+      "distanceKm": "{{km}} km",
+      "extraKm": "+{{km}} km detour",
+      "items_one": "{{count}} item",
+      "items_other": "{{count}} items"
+    }
   },
   "shoppingListDetail": {
     "delete": "Delete",
@@ -923,7 +1003,8 @@
     "shareConnectedSub": "Another user joined the list.",
     "shareCreateForShare": "Create a new one if you want to share.",
     "shareTitle": "Share list",
-    "shareSubtitle": "Let the other user scan the QR code.",
+    "shareSubtitle": "You'll edit the list and check off items together.",
+    "shareHelpBody": "The other person:\n• opens the app and the \"List\" tab\n• taps + and the QR button\n• scans this code (a regular camera won't read it)\n\nThe list becomes shared — you both edit and check off items.",
     "shareClose": "Close"
   },
   "swipe": {
@@ -942,7 +1023,43 @@
     "doneAllSeen": "You've reviewed all the cards in this session.",
     "fromGlobalFill": "This receipt's cards are done — helping all users",
     "undoCancel": "Undo",
-    "moreCta": "More?"
+    "moreCta": "More?",
+    "cardMatchLabel": "Recognised product",
+    "cardReceiptLabel": "Your receipt",
+    "cardQuestion": "Is this the same product?",
+    "helpButton": "I don't know what to do",
+    "cardActionDifferent": "Different",
+    "cardActionSkip": "Skip",
+    "cardActionSimilar": "Similar",
+    "cardActionIdentical": "Identical",
+    "helpTitle": "How to choose?",
+    "helpIntro": "Is the recognised product the one you bought?",
+    "helpIdentical": "Identical — exactly the same product.",
+    "helpSimilar": "Similar — a same-category substitute.",
+    "helpDifferent": "Different — another product.",
+    "helpSkip": "Skip — I'm not sure.",
+    "helpUnreadable": "If the name is unreadable — swipe left (different).",
+    "helpMatters": "What matters: the product itself, the maker, and your own judgement.",
+    "helpDoesntMatter": "Doesn't matter: pack size and price.",
+    "helpHint": "Honest answers improve your experience and give more accurate cart comparisons.",
+    "helpClose": "Got it",
+    "loadingUploading": "Uploading receipt…",
+    "loadingCropping": "Cropping items…",
+    "loadingMatching": "Matching products…",
+    "loadingApples": "Comparing apples to apples…",
+    "loadingSavings": "Counting your savings…",
+    "loadingBasket": "Loading the basket…",
+    "loadingAI": "Teaching the AI to read your receipt…",
+    "loadingPrices": "Hunting the best prices…",
+    "loadingBread": "Weighing the bread…",
+    "loadingNegotiate": "Negotiating prices with the tomatoes…",
+    "loadingMilk": "Checking the milk hasn't run off…",
+    "loadingDiscount": "Arguing with the cashier about a discount…",
+    "cropBuilding": "Cropping the receipt…",
+    "stageLoadingCards": "Dealing the cards…",
+    "cropNoGeometry": "No band geometry for this line…",
+    "cropFailed": "Crop failed: {{error}}",
+    "cropUnavailable": "Crop unavailable — receipt photo build failed."
   },
   "voteHistory": {
     "filterAll": "All",
@@ -996,7 +1113,20 @@
     "errorJoin": "Couldn't join the list",
     "errorScan": "Couldn't scan QR",
     "errorTitle": "Error",
-    "ok": "OK"
+    "ok": "OK",
+    "alignOverlap": "Line up with the previous part",
+    "hintFirst": "Capture the top of the receipt",
+    "hintNext": "Capture the next part (part {{n}})",
+    "done": "Done",
+    "retakeLast": "Retake last",
+    "guideStart": "Aim at the top, then hold steady",
+    "guideDown": "Slide down, then hold steady",
+    "guideDownMore": "Move down a bit more",
+    "guideUp": "Back up — you left a gap",
+    "guideEnd": "Looks like the end — tap Done",
+    "holdStill": "Hold still…",
+    "checking": "Checking…",
+    "captured": "Captured: {{n}}"
   },
   "comparison": {
     "calculating": "Calculating...",
@@ -1019,12 +1149,33 @@
     "footerStatTime": "Time",
     "footerStatReceiptNo": "Receipt no."
   },
+  "storeResolution": {
+    "title": "Pick the store",
+    "hint": "We couldn't recognise the store — pick it on the map.",
+    "searchPlaceholder": "Search address...",
+    "confirm": "Confirm",
+    "minChars": "Enter at least 3 characters",
+    "addressNotFound": "Address not found"
+  },
+  "receiptQueue": {
+    "scanning": "Scanning...",
+    "recognising": "Recognising...",
+    "products": "{{done}}/{{total}} items",
+    "masking": "Masking private info",
+    "saving": "Saving...",
+    "uploading": "Uploading photo..."
+  },
   "receiptProcess": {
     "tabSummary": "Summary",
     "tabProducts": "Items ({{count}})",
     "tabReceipt": "Receipt",
     "loading": "Loading data...",
     "loadingScan": "Scanning and recognising data",
+    "stageScanning": "Teaching the AI to read your receipt…",
+    "stageMatching": "Comparing apples to apples…",
+    "stageSending": "Saving the receipt to the database…",
+    "stageUploading": "Filing away the receipt photo…",
+    "stageComparing": "Hunting down the best prices…",
     "loadingSending": "Sending receipt data…",
     "loadingPhoto": "Sending photo…",
     "loadingComparison": "Calculating comparison…",
@@ -1039,9 +1190,29 @@
     "imageMissing": "The image wasn't uploaded. To reprocess this receipt, restart from the Analyze tab.",
     "duplicateTitle": "Receipt already uploaded",
     "duplicateBody": "This receipt has already been uploaded.",
+    "duplicateLinkedBody": "You'd already uploaded this receipt — we've added it to your list.",
+    "dupOtherAccountTitle": "Receipt already uploaded",
+    "dupOtherAccountBody": "This receipt was already uploaded by another user, so it can't be added.",
+    "chainGateTitle": "Wrong store's receipt?",
+    "chainGateBody": "This receipt looks like it's from \"{{detected}}\", but the list is for \"{{expected}}\". Did you shop at a different store?",
+    "chainGateDifferentStore": "I went to a different store",
+    "chainGateCancel": "Cancel",
+    "scanQualityTitle": "Receipt unreadable",
+    "scanQualityBody": "Couldn't find the receipt number and date — the photo is likely too dark or blurry. Turn on more light and rescan.",
+    "scanQualityRetake": "Rescan",
+    "scanQualityUseAnyway": "Use anyway",
+    "dateGateTitle": "Receipt date",
+    "dateGateBody": "We couldn't read the date on this receipt. Tap below and pick the date printed on it.",
+    "dateGatePlaceholder": "Tap to pick a date",
+    "dateGateConfirm": "Confirm",
+    "dateGateCancel": "Cancel",
+    "failTitle": "Couldn't process receipt",
+    "failTryAgain": "Try again",
+    "failClose": "Close",
     "errorSave": "Couldn't save receipt",
     "errorUploadUrlFields": "upload-url response is missing fields",
     "errorUploadPhoto": "Couldn't upload photo",
+    "errorMaskFailed": "Couldn't hide card details — receipt not uploaded",
     "errorSendTitle": "Couldn't send",
     "errorSendBody": "Try again later.",
     "errorProductUnmatched": "Product not recognised",
@@ -1054,6 +1225,8 @@
     "errorOcrParse": "An error occurred while reading the receipt. Try again or upload a different receipt.",
     "errorChain": "Store chain wasn't recognised. Try uploading a better photo or a different receipt.",
     "errorStore": "Store wasn't recognised. Try uploading a better photo or a different receipt.",
+    "errorNoProducts": "Couldn't read any items on this receipt. Please retake the photo, keeping it flat and well-lit.",
+    "errorDoubledScan": "The receipt appears more than once in this photo. Please retake it with a single receipt in frame.",
     "leaveProcessingTitle": "Receipt still processing",
     "leaveProcessingBody": "If you leave now, processing will continue in the background but you might see partial results.",
     "leaveWait": "Wait",
@@ -1062,9 +1235,12 @@
     "swipeEntryCount": "{{count}} cards · for better recognition",
     "swipeEntryShort": "For better recognition",
     "productsEmpty": "No products recognised",
+    "prodSkipBadge": "Hidden on production",
     "namePlaceholder": "Enter product name",
     "addPhoto": "Add photo",
-    "send": "Send"
+    "send": "Send",
+    "comboDiscount": "Bundle discount",
+    "reverifyBadge": "Reconfirm match"
   },
   "product": {
     "noDataForPeriod": "No data for the selected period",
@@ -1092,6 +1268,7 @@
     },
     "deletedUndo": "Deleted. Undo?",
     "sectionActive": "Active",
+    "sectionMissingReceipt": "Missing receipt",
     "sectionCompleted": "Completed",
     "empty": "No shopping lists yet",
     "emptyBody": "Add products to a basket, compare prices, and create a list",
@@ -1102,7 +1279,15 @@
     "fabCreate": "Create",
     "filterAll": "All",
     "searchPlaceholder": "Search lists...",
-    "noSearchResults": "Nothing found"
+    "noSearchResults": "Nothing found",
+    "receiptNeeded": "Missing receipt",
+    "receiptAdded": "Receipt added",
+    "receiptProgress": "Receipts {{have}}/{{total}}",
+    "uploadReceiptTitle": "Add receipt",
+    "uploadReceiptBody": "Take a photo or upload this store's receipt.",
+    "uploadTakePhoto": "Take photo",
+    "uploadSelectExisting": "Select from uploaded",
+    "selectExistingTitle": "Choose a receipt"
   },
   "creatorAuth": {
     "title": "Creator login",
@@ -1113,15 +1298,33 @@
     "introTitle": "Creator account",
     "introSubtitle": "Who it's for",
     "cards": {
-      "1": { "title": "Meal planner", "body": "Your weekly meal plan becomes a basket in one tap." },
-      "2": { "title": "Dietitian", "body": "Your recommended products found in seconds; clients see where they're cheapest." },
-      "3": { "title": "Recipe writer", "body": "A QR under your recipe becomes a basket on the reader's phone." },
-      "4": { "title": "Social creator", "body": "Followers tap your link and find the products at their preferred store." },
-      "5": { "title": "For creators only", "body": "These features are for content creators. Regular users don't need an account — Souply works great without one." }
+      "1": {
+        "title": "Meal planner",
+        "body": "Your weekly meal plan becomes a basket in one tap."
+      },
+      "2": {
+        "title": "Dietitian",
+        "body": "Your recommended products found in seconds; clients see where they're cheapest."
+      },
+      "3": {
+        "title": "Recipe writer",
+        "body": "A QR under your recipe becomes a basket on the reader's phone."
+      },
+      "4": {
+        "title": "Social creator",
+        "body": "Followers tap your link and find the products at their preferred store."
+      },
+      "5": {
+        "title": "For creators only",
+        "body": "These features are for content creators. Regular users don't need an account — Souply works great without one."
+      }
     }
   },
   "profilis": {
-    "creatorCta": { "title": "Creator account", "desc": "Share baskets and templates with your followers" },
+    "creatorCta": {
+      "title": "Creator account",
+      "desc": "Share baskets and templates with your followers"
+    },
     "signOut": "Sign out",
     "signOutConfirm": {
       "title": "Sign out?",
@@ -1145,6 +1348,10 @@
     "points_other": "{{count}} points",
     "savedTotal": "Saved in total",
     "couldHaveSavedTotal": "Could have saved in total",
+    "pickMonth": "Pick a month",
+    "savedThisMonth": "Saved this month",
+    "couldHaveSavedThisMonth": "Could have saved this month",
+    "vsLastMonth": "vs last month",
     "dataFootnote": "Data based on uploaded receipts",
     "voteHistory": "Vote history",
     "devTools": "Developer tools",
@@ -1163,20 +1370,34 @@
     "fallbackBody": "This receipt's photo isn't available.",
     "bands": {
       "address": "Store address",
+      "companyCode": "Company code",
       "products": "Items",
       "total": "Total",
       "dateTime": "Date and time",
-      "receiptNo": "Receipt no."
+      "receiptNo": "Receipt no.",
+      "skipped": "Not counted",
+      "private": "Private info"
     },
     "explainer": {
       "title": "What Souply recognises",
       "body": "Souply highlights each data field on the receipt with a coloured frame so you can see exactly which pixels were read and what information is collected. This data is used only for price comparison and your personal purchase analysis.",
       "addressBody": "Store address — used to match against our store catalog.",
+      "companyCodeBody": "The retailer's company / VAT code — chain details, not the store address.",
       "productsBody": "Every purchased item with name, quantity, and price.",
       "totalBody": "Receipt grand total.",
       "dateTimeBody": "Receipt date and time.",
       "receiptNoBody": "Unique receipt number — used to distinguish re-uploaded photos.",
+      "skippedBody": "Coupons, bags and loyalty-points lines — recognised but intentionally not counted as products.",
+      "privateBody": "Bank card, loyalty card numbers and the cashier's name are blacked out on your phone — this data is never stored or uploaded.",
       "close": "Got it"
     }
+  },
+  "updateGate": {
+    "hardTitle": "Update required",
+    "hardBody": "This version of the app is no longer supported. Please update to continue.",
+    "softTitle": "Update available",
+    "softBody": "A newer version with improvements is out. We recommend updating.",
+    "updateButton": "Update",
+    "later": "Later"
   }
 }

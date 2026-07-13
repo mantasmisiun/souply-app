@@ -11,9 +11,16 @@
  */
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    View, Text, Modal, TouchableOpacity, TextInput, StyleSheet,
-    ActivityIndicator, Platform, Alert,
-} from 'react-native';
+    View,
+    Text,
+    Modal,
+    TouchableOpacity,
+    TextInput,
+    StyleSheet,
+    Platform,
+    Alert,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../constants/theme';
@@ -217,7 +224,7 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
                             <TouchableOpacity style={styles.cancelBtn} onPress={onClose} disabled={busy}>
                                 <Text style={styles.cancelBtnText}>{t('basketTab.templates.publishCancel')}</Text>
                             </TouchableOpacity>
-                            {busy && <ActivityIndicator color={colors.primary} style={{ marginTop: 8 }} />}
+                            {busy && <MaterialProgress color={colors.primary} style={{ marginTop: 8 }} />}
                         </>
                     )}
 
@@ -243,7 +250,7 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
                                     returnKeyType="done"
                                     onSubmitEditing={submitUsername}
                                 />
-                                {checkState.checking && <ActivityIndicator size="small" color={colors.primary} />}
+                                {checkState.checking && <MaterialProgress size="small" color={colors.primary} />}
                                 {!checkState.checking && checkState.available === true && (
                                     <Ionicons name="checkmark-circle" size={22} color={colors.success} />
                                 )}
@@ -266,7 +273,7 @@ export function PublishWallModal({ visible, onClose, onComplete }: Props) {
                                 disabled={!checkState.available || busy}
                             >
                                 {busy
-                                    ? <ActivityIndicator color={colors.onPrimary} />
+                                    ? <MaterialProgress color={colors.onPrimary} />
                                     : <Text style={[styles.providerBtnText, { color: colors.onPrimary }]}>
                                         {t('basketTab.templates.usernameConfirm')}
                                       </Text>}

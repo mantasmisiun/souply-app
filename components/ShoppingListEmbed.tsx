@@ -3,9 +3,9 @@ import {
     Text,
     FlatList,
     StyleSheet,
-    ActivityIndicator,
     TouchableOpacity,
-} from 'react-native';
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useState, useCallback, useMemo } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -149,7 +149,7 @@ export default function ShoppingListEmbed({ listId }: Props) {
     if (loading) {
         return (
             <View style={styles.centered}>
-                <ActivityIndicator color={colors.primary} />
+                <MaterialProgress color={colors.primary} />
             </View>
         );
     }

@@ -1,7 +1,15 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView,
-    Image, Modal, Pressable, Alert,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    ScrollView,
+    Image,
+    Modal,
+    Pressable,
+    Alert,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -214,7 +222,7 @@ export function ImagesQueue({ onEmpty }: Props) {
     if (loading) {
         return (
             <View style={styles.centered}>
-                <ActivityIndicator size="large" color={colors.primary} />
+                <MaterialProgress size="large" color={colors.primary} />
             </View>
         );
     }
@@ -336,7 +344,7 @@ export function ImagesQueue({ onEmpty }: Props) {
                                 disabled={uploading || actioning}
                             >
                                 {uploading ? (
-                                    <ActivityIndicator color={colors.primary} />
+                                    <MaterialProgress color={colors.primary} />
                                 ) : (
                                     <Ionicons name="add" size={36} color={colors.primary} />
                                 )}

@@ -1,4 +1,12 @@
-import { View, FlatList, TouchableOpacity, Text, StyleSheet, ActivityIndicator, LayoutAnimation } from 'react-native';
+import {
+    View,
+    FlatList,
+    TouchableOpacity,
+    Text,
+    StyleSheet,
+    LayoutAnimation,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useEffect, useMemo, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -85,7 +93,7 @@ export default function ReceiptBrowseIndex() {
         }
     };
 
-    if (loading) return <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />;
+    if (loading) return <MaterialProgress style={styles.centered} size="large" color={colors.primary} />;
 
     return (
         <>
@@ -131,7 +139,7 @@ export default function ReceiptBrowseIndex() {
                             {isExpanded && (
                                 <View style={styles.l2Container}>
                                     {l2.length === 0 ? (
-                                        <ActivityIndicator size="small" color={colors.primary} style={{ padding: 12 }} />
+                                        <MaterialProgress size="small" color={colors.primary} style={{ padding: 12 }} />
                                     ) : (
                                         l2.map((cat, index) => (
                                             <View key={cat.id}>

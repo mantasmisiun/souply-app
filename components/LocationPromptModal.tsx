@@ -1,4 +1,12 @@
-import { View, Text, TouchableOpacity, StyleSheet, Modal, TextInput, ActivityIndicator } from 'react-native';
+import {
+    View,
+    Text,
+    TouchableOpacity,
+    StyleSheet,
+    Modal,
+    TextInput,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -104,7 +112,7 @@ export default function LocationPromptModal({
                             disabled={loading}
                         >
                             {loading ? (
-                                <ActivityIndicator size="small" color={colors.onPrimary} />
+                                <MaterialProgress size="small" color={colors.onPrimary} />
                             ) : (
                                 <Text style={styles.buttonText}>{t('locationPrompt.continue')}</Text>
                             )}

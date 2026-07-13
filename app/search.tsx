@@ -1,7 +1,14 @@
-import { Ionicons } from "@expo/vector-icons";
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import {
+    Ionicons } from "@expo/vector-icons";
+import { Stack,
+    useLocalSearchParams,
+    useRouter } from "expo-router";
 import { GlassIconButton } from "../components/GlassIconButton";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
     ActivityIndicator,
@@ -14,6 +21,7 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { API_BASE_URL } from "../config/api";
 import { useReceiptPickerState , useBasketState } from "../state/basketState";
 import { addProductToBasket } from '../utils/basketUtils';
@@ -516,7 +524,7 @@ export default function SearchScreen() {
       )}
       <View style={styles.container}>
         {searching ? (
-          <ActivityIndicator
+          <MaterialProgress
             style={styles.centered}
             size="large"
             color={colors.primary}

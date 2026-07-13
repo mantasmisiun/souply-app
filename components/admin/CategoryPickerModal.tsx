@@ -1,8 +1,22 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
-    Modal, View, Text, TextInput, TouchableOpacity, ScrollView,
-    FlatList, StyleSheet, ActivityIndicator,
-} from 'react-native';
+    memo,
+    useCallback,
+    useEffect,
+    useLayoutEffect,
+    useMemo,
+    useRef,
+    useState } from 'react';
+import {
+    Modal,
+    View,
+    Text,
+    TextInput,
+    TouchableOpacity,
+    ScrollView,
+    FlatList,
+    StyleSheet,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
@@ -108,7 +122,7 @@ const L1Item = memo(function L1Item({
             <Animated.View style={animatedContentStyle}>
                 <View onLayout={handleLayout} style={styles.l2Container}>
                     {l2.length === 0 ? (
-                        <ActivityIndicator size="small" color={colors.primary} style={{ padding: 12 }} />
+                        <MaterialProgress size="small" color={colors.primary} style={{ padding: 12 }} />
                     ) : (
                         l2.map((cat, index) => (
                             <View key={cat.id}>
@@ -344,7 +358,7 @@ export default function CategoryPickerModal({
                         </View>
 
                         {l1Loading ? (
-                            <ActivityIndicator style={{ flex: 1 }} color={colors.primary} />
+                            <MaterialProgress style={{ flex: 1 }} color={colors.primary} />
                         ) : search.trim() ? (
                             // Search results — flat L3 list
                             <FlatList
@@ -354,7 +368,7 @@ export default function CategoryPickerModal({
                                 keyboardShouldPersistTaps="handled"
                                 ListEmptyComponent={
                                     searchLoading
-                                        ? <ActivityIndicator color={colors.primary} style={{ padding: 24 }} />
+                                        ? <MaterialProgress color={colors.primary} style={{ padding: 24 }} />
                                         : <Text style={styles.emptyText}>{t('admin.categoryPicker.searchEmpty')}</Text>
                                 }
                                 renderItem={({ item }) => (
@@ -398,7 +412,7 @@ export default function CategoryPickerModal({
                         {/* L3 chips */}
                         {l3sLoading ? (
                             <View style={styles.chipsLoader}>
-                                <ActivityIndicator color={colors.primary} />
+                                <MaterialProgress color={colors.primary} />
                             </View>
                         ) : (
                             <ScrollView
@@ -437,7 +451,7 @@ export default function CategoryPickerModal({
 
                         {/* Product list */}
                         {productsLoading ? (
-                            <ActivityIndicator style={{ flex: 1 }} color={colors.primary} />
+                            <MaterialProgress style={{ flex: 1 }} color={colors.primary} />
                         ) : selectedL3 ? (
                             <KeyboardAvoidingView style={{ flex: 1 }}>
                                 <FlatList

@@ -14,30 +14,23 @@
  *      pricePerUnit, promoPrice, reconcile state) and any
  *      warnings the extractor surfaced.
  *
- * Cropping: each band region is pre-cropped via expo-image-
- * manipulator into its own small PNG (1080 × bandHeight px).
- * Earlier the crop was done at render time by overflow:hidden +
- * a negative-`top` Image inside an aspectRatio-constrained
- * container — but RN on Android downsamples large images during
- * decode based on the visible rectangle, so feeding the whole
- * page PNG to a band-shaped container threw away most of the
- * source pixels and produced barely-readable crops on phone-
- * photographed receipts (Lidl). The pre-crop file is small
- * enough to dodge the downsample heuristic, so the band's
- * source pixels render at native resolution.
- *
- * Multi-page receipts: each band knows which page it's on via
- * the page's yOffsetInParserSpace; the crop pulls from that
- * page's PNG.
+ * Rendering is 100% SHARED with the Analyze screen — the receipt-with-bands
+ * view is ReceiptPhotoView (the Kvitas tab component) and each product's
+ * band crop is BandCropImage (the Prekės tab component), both fed the same
+ * inputs the live screen passes (final-parse regions + page metas). The only
+ * screen-local work is projection: each staged page is downloaded and
+ * normalized into OCR pixel space (normalizeLoadedImage — the same helper
+ * the saved-receipt viewer uses), and multi-page regions shift into their
+ * page's local y space. Band/crop APPEARANCE can never diverge from the app.
  */
 
 import { Ionicons } from '@expo/vector-icons';
 import * as FileSystem from 'expo-file-system/legacy';
-import * as ImageManipulator from 'expo-image-manipulator';
 import { Stack, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
 import {
-    Image,
+    Dimensions,
+    Platform,
     ScrollView,
     StyleSheet,
     Text,
@@ -46,6 +39,17 @@ import {
 } from 'react-native';
 import { API_BASE_URL } from '../../config/api';
 import { devLog } from '../../utils/devLog';
+import ReceiptPhotoView from '../../components/receipt/ReceiptPhotoView';
+import { BandCropImage } from '../../components/receipt/BandCropImage';
+import { normalizeLoadedImage, type PageMeta as ImagePageMeta } from '../../utils/receiptImage';
+import {
+    compareItemTruth,
+    isItemTruthFile,
+    truthFromParsed,
+    footerFromParsed,
+    type ItemTruthFile,
+    type ProductTruthComparison,
+} from '../../utils/itemTruth';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import {
     getReceiptSnapshot,
@@ -53,11 +57,13 @@ import {
     type BandResult,
     type PageMeta,
     type ReceiptSnapshot,
+    type SnapshotRegion,
 } from '../../utils/parserTestSnapshot';
 import type { ProductBand } from '@shared/parsers/maximaParser';
 import type { RimiBandKind, RimiReceiptBand } from '@shared/parsers/rimiParser';
 import type { NorfaReceiptBand } from '@shared/parsers/norfaParser';
 import type { LidlReceiptBand } from '@shared/parsers/lidlParser';
+import type { MaskBand } from '@shared/parsers/cardMaskDetection';
 
 // Kinds emitted by any chain's V2 parser. Rimi/Norfa/Lidl share
 // structurally-identical band-kind unions; the overlay colour map
@@ -67,68 +73,50 @@ type TaggedBandKind =
     | NorfaReceiptBand['kind']
     | LidlReceiptBand['kind'];
 
-interface BandOnPage {
-    bandIdx: number;
-    /** yTop relative to THIS page's pixel space (yOffset already removed). */
-    yTopOnPage: number;
-    /** yBottom relative to THIS page's pixel space. */
-    yBottomOnPage: number;
-    /** Index of the page this band falls on (into snap.pages). */
-    pageIdx: number;
-    /**
-     * Optional band kind (Rimi/Norfa V2 — Maxima bands are all
-     * `product`). Drives the overlay rectangle's colour so the
-     * user can verify each region kind landed on the right slice
-     * of the receipt.
-     */
-    kind?: TaggedBandKind;
-    /** Short label rendered inside the rectangle (band #, `addr`, …). */
-    label?: string;
-}
-
-/**
- * Bucket each band onto the page whose y-offset range contains
- * its yTop. Returns parallel arrays: per-page band lists (for the
- * full-receipt overlay) and a flat list keyed by bandIdx (for the
- * per-product crops, where order must match `snap.bands`).
- *
- * Accepts either Maxima-style ProductBand[] (no kind / label) or
- * Rimi/Norfa-style typed bands (kind + label). The kind / label,
- * when present, flows through to the overlay so each rectangle
- * gets a colour and inline tag.
- */
 type BandLike = ProductBand | RimiReceiptBand | NorfaReceiptBand | LidlReceiptBand;
 
-const bucketBandsByPage = (
-    bands: BandLike[],
-    pages: PageMeta[],
-): { perPage: BandOnPage[][]; perBand: BandOnPage[] } => {
-    const perPage: BandOnPage[][] = pages.map(() => []);
-    const perBand: BandOnPage[] = [];
-    for (let bi = 0; bi < bands.length; bi++) {
-        const band = bands[bi];
-        let pageIdx = 0;
-        for (let i = pages.length - 1; i >= 0; i--) {
-            if (band.yTop >= pages[i].yOffsetInParserSpace) {
-                pageIdx = i;
-                break;
-            }
-        }
-        const offset = pages[pageIdx].yOffsetInParserSpace;
-        const tagged = band as Partial<RimiReceiptBand & NorfaReceiptBand & LidlReceiptBand>;
-        const onPage: BandOnPage = {
-            bandIdx: bi,
-            yTopOnPage: band.yTop - offset,
-            yBottomOnPage: band.yBottom - offset,
-            pageIdx,
-            kind: tagged.kind,
-            label: tagged.label ?? `${bi + 1}`,
-        };
-        perPage[pageIdx].push(onPage);
-        perBand.push(onPage);
+/** Card width for the shared BandCropImage (products section pads 12 a side). */
+const DETAIL_CARD_WIDTH = Dimensions.get('window').width - 24;
+
+/** Page index a parser-space yTop falls on (multi-page y concat). */
+const pageIdxFor = (yTop: number, pages: PageMeta[]): number => {
+    for (let i = pages.length - 1; i >= 0; i--) {
+        if (yTop >= pages[i].yOffsetInParserSpace) return i;
     }
-    return { perPage, perBand };
+    return 0;
 };
+
+/** Shift every y field of a region into one page's local pixel space. */
+const shiftRegion = (r: SnapshotRegion, off: number): SnapshotRegion => ({
+    ...r,
+    yTop: r.yTop - off,
+    yBottom: r.yBottom - off,
+    yLeftTop: r.yLeftTop != null ? r.yLeftTop - off : undefined,
+    yRightTop: r.yRightTop != null ? r.yRightTop - off : undefined,
+    yLeftBottom: r.yLeftBottom != null ? r.yLeftBottom - off : undefined,
+    yRightBottom: r.yRightBottom != null ? r.yRightBottom - off : undefined,
+    yMidTop: r.yMidTop != null ? r.yMidTop - off : undefined,
+    yMidBottom: r.yMidBottom != null ? r.yMidBottom - off : undefined,
+    yMidTopR: r.yMidTopR != null ? r.yMidTopR - off : undefined,
+    yMidBottomR: r.yMidBottomR != null ? r.yMidBottomR - off : undefined,
+});
+
+/** Bucket regions per page for the shared ReceiptPhotoView (one per page). */
+const bucketRegionsByPage = (
+    regions: SnapshotRegion[],
+    pages: PageMeta[],
+): SnapshotRegion[][] => {
+    const perPage: SnapshotRegion[][] = pages.map(() => []);
+    for (const r of regions) {
+        const pi = pageIdxFor(r.yTop, pages);
+        perPage[pi].push(shiftRegion(r, pages[pi].yOffsetInParserSpace));
+    }
+    return perPage;
+};
+
+/** Solid redaction-box colour per mask kind. */
+const maskKindColor = (kind: MaskBand['kind']): string =>
+    kind === 'bank' ? '#C62828' : kind === 'loyalty' ? '#EF6C00' : '#6A1B9A';
 
 /**
  * Per-kind overlay colour. Picked to be visually distinct on the
@@ -199,18 +187,129 @@ export default function ReceiptDetailScreen() {
         if (snap.taggedBands && snap.taggedBands.length > 0) return snap.taggedBands;
         return snap.bands.map((b) => b.band);
     }, [snap]);
-    const productCropBands = useMemo<BandLike[]>(
-        () => (snap ? snap.bands.map((b) => b.band) : []),
-        [snap],
+    // Regions in the EXACT shape the Analyze screen hands ReceiptPhotoView /
+    // BandCropImage. New snapshots carry them verbatim from the final parse;
+    // a legacy fallback derives flat product regions from the band list.
+    const effRegions = useMemo(() => {
+        if (!snap) return null;
+        if (snap.regions) return snap.regions;
+        const p0 = snap.pages[0];
+        const flat = (b: { yTop: number; yBottom: number }): SnapshotRegion => ({
+            yTop: b.yTop,
+            yBottom: b.yBottom,
+            xLeft: p0?.receiptXLeft ?? 0,
+            xRight: p0?.receiptXRight ?? (p0?.pixelWidth ?? 0),
+            kind: 'product',
+        });
+        return {
+            header: [] as SnapshotRegion[],
+            products: snap.bands.map((b) => flat(b.band)) as (SnapshotRegion | null)[],
+            footer: [] as SnapshotRegion[],
+            skipped: [] as SnapshotRegion[],
+        };
+    }, [snap]);
+    // Per-page buckets for the shared photo view — multi-page receipts render
+    // one ReceiptPhotoView per page, regions shifted into page-local y space.
+    const regionsByPage = useMemo(() => {
+        if (!snap || !effRegions) return null;
+        const products = effRegions.products.filter(Boolean) as SnapshotRegion[];
+        return {
+            header: bucketRegionsByPage(effRegions.header, snap.pages),
+            products: bucketRegionsByPage(products, snap.pages),
+            footer: bucketRegionsByPage(effRegions.footer, snap.pages),
+            skipped: bucketRegionsByPage(effRegions.skipped, snap.pages),
+            masks: bucketRegionsByPage((snap.maskBands ?? []) as unknown as SnapshotRegion[], snap.pages),
+        };
+    }, [snap, effRegions]);
+
+    // ── ITEM TRUTH (v2): fetch the receipt's approval file, compare the
+    // FINAL parsed products (snapshot.products) against it, and let each
+    // product row checkmark/overwrite/remove its assertion. Writes go
+    // through the dev API into shared/receipts/<chain>/ (git-versioned).
+    const [truth, setTruth] = useState<ItemTruthFile | null>(null);
+    useEffect(() => {
+        if (!snap) return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const base = snap.sourcePdf.replace(/\.(pdf|png|jpg|jpeg)$/i, '');
+                // PER-PLATFORM truth: Android reads (and saves to) its own
+                // .truth.android.json — bootstrapped as a copy of the iOS
+                // truth — so each OCR/parser combo is scored against a truth
+                // in ITS OWN OCR flavor and only genuine diffs need review.
+                // Falls back to the base (iOS) truth when no copy exists yet.
+                const names = Platform.OS === 'android'
+                    ? [`${base}.truth.android.json`, `${base}.truth.json`]
+                    : [`${base}.truth.json`];
+                for (const n of names) {
+                    const res = await fetch(`${API_BASE_URL}/receipts-truth/${snap.chain}/${n}`);
+                    if (!res.ok) continue;
+                    const j = await res.json();
+                    if (!cancelled && isItemTruthFile(j)) setTruth(j);
+                    break;
+                }
+            } catch { /* no truth yet */ }
+        })();
+        return () => { cancelled = true; };
+    }, [snap]);
+
+    const truthCmp = useMemo(
+        () => (snap?.products ? compareItemTruth(truth, snap.products, snap.footer ?? null) : null),
+        [truth, snap],
     );
-    const overlayBuckets = useMemo(
-        () => (snap ? bucketBandsByPage(overlayBands, snap.pages) : null),
-        [snap, overlayBands],
+    // Band rows display extract-level products; assertions target the FINAL
+    // parse (snapshot.products). Map band index → final-product index by
+    // counting non-skip bands.
+    const bandToProductIdx = useMemo(() => {
+        let n = 0;
+        return (snap?.bands ?? []).map((b) => (b.product ? n++ : -1));
+    }, [snap]);
+
+    const saveTruth = async (next: ItemTruthFile | null) => {
+        setTruth(next);
+        try {
+            await fetch(`${API_BASE_URL}/receipts-truth-set`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ chain: snap?.chain, file: snap?.sourcePdf, truth: next, platform: Platform.OS }),
+            });
+        } catch (e) {
+            console.warn('[truth] save failed:', e);
+        }
+    };
+    const editableTruth = (): ItemTruthFile => (
+        truth
+            ? { ...truth, products: [...truth.products] }
+            : { version: 2, source: snap?.sourcePdf ?? '', products: [], footer: null }
     );
-    const productBuckets = useMemo(
-        () => (snap ? bucketBandsByPage(productCropBands, snap.pages) : null),
-        [snap, productCropBands],
-    );
+    const checkProduct = (productIdx: number) => {
+        if (!snap?.products || !truthCmp) return;
+        const t = editableTruth();
+        const item = truthFromParsed(snap.products[productIdx], new Date().toISOString());
+        const existing = truthCmp.perProduct[productIdx]?.truthIdx;
+        if (existing != null) t.products[existing] = item;
+        else t.products.push(item);
+        void saveTruth(t);
+    };
+    const uncheckProduct = (productIdx: number) => {
+        if (!truthCmp) return;
+        const existing = truthCmp.perProduct[productIdx]?.truthIdx;
+        if (existing == null) return;
+        const t = editableTruth();
+        t.products.splice(existing, 1);
+        void saveTruth(t.products.length || t.footer ? t : null);
+    };
+    const checkFooter = () => {
+        if (!snap?.footer) return;
+        const t = editableTruth();
+        t.footer = footerFromParsed(snap.footer, new Date().toISOString());
+        void saveTruth(t);
+    };
+    const uncheckFooter = () => {
+        const t = editableTruth();
+        t.footer = null;
+        void saveTruth(t.products.length ? t : null);
+    };
 
     // iOS ImageManipulator refuses HTTP URIs and aborts with the
     // cryptic `calling the 'renderAsync' function has failed`. Cache
@@ -238,7 +337,14 @@ export default function ReceiptDetailScreen() {
                     });
                     if (cancelled) return;
                     if (dl?.status === 200 && dl?.uri) {
-                        setLocalPageUris((prev) => ({ ...prev, [page.name]: dl.uri }));
+                        // Project the downloaded file into the OCR's pixel space
+                        // (rotate-portrait + resize to the parsed dims) — the SAME
+                        // normalization the Analyze screen runs on a saved receipt's
+                        // photo (utils/receiptImage), so every region aligns 1:1
+                        // with zero per-surface scale math.
+                        const norm = await normalizeLoadedImage(dl.uri, page.pixelWidth, page.pixelHeight);
+                        if (cancelled) return;
+                        setLocalPageUris((prev) => ({ ...prev, [page.name]: norm.uri }));
                     }
                 } catch (e: any) {
                     devLog('receipt-detail.downloadThrew', { name: page.name, err: e?.message ?? String(e) });
@@ -248,7 +354,23 @@ export default function ReceiptDetailScreen() {
         return () => { cancelled = true; };
     }, [snap]);
 
-    if (!snap || !overlayBuckets || !productBuckets) {
+    // receiptImage.PageMeta view over the snapshot pages + normalized local
+    // files — the shared BandCropImage picks the page and crops in OCR space.
+    const imagePages = useMemo<ImagePageMeta[]>(() => {
+        if (!snap) return [];
+        return snap.pages.map((p) => ({
+            uri: localPageUris[p.name] ?? '',
+            pixelWidth: p.pixelWidth,
+            pixelHeight: p.pixelHeight,
+            frameScale: p.frameScale ?? 1,
+            yOffsetScaled: p.yOffsetInParserSpace,
+            pageMaxYScaled: p.pageMaxY ?? p.pixelHeight,
+            receiptXLeftScaled: p.receiptXLeft ?? 0,
+            receiptXRightScaled: p.receiptXRight ?? p.pixelWidth,
+        }));
+    }, [snap, localPageUris]);
+
+    if (!snap || !effRegions || !regionsByPage) {
         return (
             <View style={styles.centered}>
                 <Stack.Screen options={{ title: 'Detalė' }} />
@@ -299,7 +421,7 @@ export default function ReceiptDetailScreen() {
             {overviewExpanded && (
                 <View>
                     {snap.pages.map((page, pageIdx) => {
-                        const url = `${API_BASE_URL}/receipts-batch/${snap.chain}/${encodeURIComponent(page.name)}`;
+                        const localUri = localPageUris[page.name] ?? null;
                         return (
                             <View key={page.name} style={styles.pageWrap}>
                                 {snap.pages.length > 1 && (
@@ -307,16 +429,57 @@ export default function ReceiptDetailScreen() {
                                         Puslapis {pageIdx + 1}
                                     </Text>
                                 )}
-                                <ImageWithBands
-                                    uri={url}
-                                    pageWidth={page.pixelWidth}
-                                    pageHeight={page.pixelHeight}
-                                    bands={overlayBuckets.perPage[pageIdx]}
-                                    colors={colors}
+                                {/* THE Analyze Kvitas-tab component, fed the same
+                                    region sets the live screen passes — bands (incl.
+                                    skewed IKI parallelograms and the total/date/
+                                    receipt-no footer bands) can never render
+                                    differently between the two surfaces. */}
+                                <ReceiptPhotoView
+                                    imageUri={localUri}
+                                    imageDims={{ width: page.pixelWidth, height: page.pixelHeight }}
+                                    loading={!localUri}
+                                    headerRegions={regionsByPage.header[pageIdx] ?? []}
+                                    productRegions={regionsByPage.products[pageIdx] ?? []}
+                                    footerRegions={regionsByPage.footer[pageIdx] ?? []}
+                                    skippedRegions={regionsByPage.skipped[pageIdx] ?? []}
+                                    maskRegions={regionsByPage.masks[pageIdx] ?? []}
+                                    drawMasks
                                 />
                             </View>
                         );
                     })}
+                    {/* Footer (suma/data/nr/recon) truth card — directly under
+                        the receipt photo so it's inspectable in one glance.
+                        Whole card is tappable: tap = approve current values,
+                        long-press = remove the assertion. */}
+                    {snap.footer && truthCmp && (
+                        <TouchableOpacity
+                            style={styles.footerTruthCard}
+                            onPress={truthCmp.footer !== 'match' ? checkFooter : undefined}
+                            onLongPress={truthCmp.footer !== 'none' ? uncheckFooter : undefined}
+                            delayLongPress={450}
+                            activeOpacity={0.7}
+                        >
+                            <View style={styles.truthCheck}>
+                                {truthCmp.footer === 'differ' && (
+                                    <Ionicons name="warning" size={16} color={colors.error} />
+                                )}
+                                <Ionicons
+                                    name={truthCmp.footer === 'none' ? 'ellipse-outline' : 'checkmark-circle'}
+                                    size={22}
+                                    color={truthCmp.footer === 'match' ? colors.success : truthCmp.footer === 'differ' ? colors.error : colors.textMuted}
+                                />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.productName}>
+                                    Suma €{snap.footer.total ?? '—'} · {snap.footer.date ?? '—'} · nr {snap.footer.receiptNo ?? '—'} · recon {snap.footer.reconciled === true ? '✓' : snap.footer.reconciled === false ? `✗ (Δ${snap.footer.reconDelta ?? '?'})` : '—'}
+                                </Text>
+                                {truthCmp.footer === 'differ' && truthCmp.footerDiffs.map((d, i) => (
+                                    <Text key={i} style={styles.truthDiffText}>{d}</Text>
+                                ))}
+                            </View>
+                        </TouchableOpacity>
+                    )}
                     <View style={styles.bandsSection}>
                         <Text style={styles.sectionTitle}>V2 bandų y koordinatės</Text>
                         {isTaggedReceipt
@@ -353,6 +516,45 @@ export default function ReceiptDetailScreen() {
                                   </View>
                               ))}
                     </View>
+                    {/* Card / loyalty mask bands — the redaction preview
+                        the real upload flow will burn into the image. */}
+                    <View style={styles.bandsSection}>
+                        <Text style={styles.sectionTitle}>
+                            🛡 Maskuojamos juostos
+                            {snap.maskBands?.length
+                                ? ` (${snap.maskBands.length})`
+                                : ''}
+                        </Text>
+                        {!snap.maskBands || snap.maskBands.length === 0 ? (
+                            <Text style={styles.emptyText}>
+                                Banko / lojalumo kortelės neaptiktos.
+                            </Text>
+                        ) : (
+                            snap.maskBands.map((b, idx) => (
+                                <View key={idx} style={styles.bandRow}>
+                                    <View
+                                        style={[
+                                            styles.bandIdxBadge,
+                                            { backgroundColor: maskKindColor(b.kind) },
+                                        ]}
+                                    >
+                                        <Text style={styles.bandIdxText}>{b.label}</Text>
+                                    </View>
+                                    <View style={{ flex: 1 }}>
+                                        <Text style={styles.bandText}>
+                                            y {Math.round(b.yTop)}–{Math.round(b.yBottom)}
+                                            <Text style={styles.bandTextDim}>
+                                                {'  '}via {b.reasons.join(', ')}
+                                            </Text>
+                                        </Text>
+                                        <Text style={styles.bandTextDim} numberOfLines={2}>
+                                            “{b.text}”
+                                        </Text>
+                                    </View>
+                                </View>
+                            ))
+                        )}
+                    </View>
                 </View>
             )}
 
@@ -362,28 +564,48 @@ export default function ReceiptDetailScreen() {
             {showProductsList && (
                 <View style={styles.productsSection}>
                     <Text style={styles.sectionTitle}>Produktai</Text>
+                    {truthCmp && truthCmp.missing.length > 0 && (
+                        <View style={styles.truthMissingBox}>
+                            {truthCmp.missing.map((m, i) => (
+                                <Text key={i} style={styles.truthMissingText}>
+                                    ⚠ dingo iš parse: {m.name} — €{m.price.toFixed(2)} × {m.quantity} {m.unit}
+                                </Text>
+                            ))}
+                        </View>
+                    )}
                     {snap.bands.length === 0 && (
                         <Text style={styles.emptyText}>V2 nerado bandų.</Text>
                     )}
                     {snap.bands.map((bandResult, idx) => {
-                        const onPage = productBuckets.perBand[idx];
-                        const page = snap.pages[onPage.pageIdx];
-                        // file:// URI once the page has cached locally;
-                        // empty string before that — ProductRow's crop
-                        // effect bails on empty and re-runs on update.
-                        const localUri = localPageUris[page.name] ?? '';
+                        const productIdx = bandToProductIdx[idx];
+                        const cmp = productIdx >= 0 ? truthCmp?.perProduct[productIdx] ?? null : null;
+                        const finalProduct = productIdx >= 0 ? snap.products?.[productIdx] ?? null : null;
+                        // Crop region: the FINAL parsed product's own band — the
+                        // one the Analyze Prekės tab crops. Skip bands (and legacy
+                        // snapshots) fall back to a flat extract-band region at the
+                        // page's content x-bounds.
+                        const bandPage = snap.pages[pageIdxFor(bandResult.band.yTop, snap.pages)];
+                        const region: SnapshotRegion =
+                            (productIdx >= 0 ? effRegions.products[productIdx] ?? null : null)
+                            ?? {
+                                yTop: bandResult.band.yTop,
+                                yBottom: bandResult.band.yBottom,
+                                xLeft: bandPage?.receiptXLeft ?? 0,
+                                xRight: bandPage?.receiptXRight ?? (bandPage?.pixelWidth ?? 0),
+                            };
                         return (
                             <ProductRow
                                 key={idx}
                                 bandIdx={idx}
                                 bandResult={bandResult}
-                                uri={localUri}
-                                pageWidth={page.pixelWidth}
-                                pageHeight={page.pixelHeight}
-                                yTopOnPage={onPage.yTopOnPage}
-                                yBottomOnPage={onPage.yBottomOnPage}
+                                finalProduct={finalProduct}
+                                pages={imagePages}
+                                region={region}
                                 colors={colors}
                                 styles={styles}
+                                truthCmp={cmp}
+                                onTruthCheck={productIdx >= 0 ? () => checkProduct(productIdx) : undefined}
+                                onTruthRemove={productIdx >= 0 ? () => uncheckProduct(productIdx) : undefined}
                             />
                         );
                     })}
@@ -394,111 +616,60 @@ export default function ReceiptDetailScreen() {
 }
 
 /**
- * One product row: cropped band image on top, structured fields
- * below. The crop is implemented with overflow:hidden + an
- * absolutely-positioned <Image> whose pixel dimensions and y
- * offset are computed once the container's actual rendered width
- * is known via onLayout. Pixel values avoid the percentage/
- * aspectRatio interaction quirks that were producing a one-line
- * vertical drift on RN with absolutely-positioned children.
+ * One product row: cropped band image on top, structured fields below.
+ * The crop IS the Analyze Prekės-tab component (BandCropImage) fed the same
+ * page metas + parsed region — batch crops can never diverge from the app's.
  */
 const ProductRow = ({
     bandIdx,
     bandResult,
-    uri,
-    pageWidth,
-    pageHeight,
-    yTopOnPage,
-    yBottomOnPage,
+    finalProduct,
+    pages,
+    region,
     colors,
     styles,
+    truthCmp,
+    onTruthCheck,
+    onTruthRemove,
 }: {
     bandIdx: number;
     bandResult: BandResult;
-    uri: string;
-    pageWidth: number;
-    pageHeight: number;
-    yTopOnPage: number;
-    yBottomOnPage: number;
+    pages: ImagePageMeta[];
+    region: SnapshotRegion;
     colors: AppTheme;
     styles: ReturnType<typeof makeStyles>;
+    finalProduct?: NonNullable<ReceiptSnapshot['products']>[number] | null;
+    truthCmp?: ProductTruthComparison | null;
+    onTruthCheck?: () => void;
+    onTruthRemove?: () => void;
 }) => {
     const status = deriveStatus(bandResult);
     const product = bandResult.product;
-    const bandHeight = Math.max(yBottomOnPage - yTopOnPage, 1);
-    const cropAspect = pageWidth / bandHeight;
-
-    // Pre-crop the band region to a separate image file via
-    // expo-image-manipulator. Two reasons this is sharper than
-    // the previous overflow:hidden + offset trick:
-    //   1. RN on Android downsamples large images during decode
-    //      based on the display rectangle. The previous path fed
-    //      the WHOLE page (1080 × ~5000 px) to a band-shaped
-    //      container (400 × ~10 px on phone), so the decoder
-    //      threw away most of the source pixels before render.
-    //      A small pre-cropped file (1080 × bandHeight) doesn't
-    //      trip the downsample heuristic — RN decodes it fully.
-    //   2. The negative-`top` positioning interacted oddly with
-    //      RN's pixel rounding on certain DPRs, producing a
-    //      ~1 line drift on long receipts. Pre-cropping makes
-    //      the offset structurally zero.
-    const [croppedUri, setCroppedUri] = useState<string | null>(null);
-    const [cropError, setCropError] = useState<string | null>(null);
-    useEffect(() => {
-        // uri stays empty while the parent's per-page download is in
-        // flight. Bail; the effect re-runs once it populates.
-        if (!uri) return;
-        let cancelled = false;
-        const yTop = Math.max(0, Math.floor(yTopOnPage));
-        const heightPx = Math.min(
-            Math.ceil(yBottomOnPage - yTopOnPage),
-            pageHeight - yTop,
-        );
-        if (heightPx <= 0) return;
-        const cropArgs = { uri, originX: 0, originY: yTop, width: pageWidth, height: heightPx };
-        devLog('receipt-detail.cropAttempt', { bandIdx, ...cropArgs });
-        // JPEG output: PNG via expo-image-manipulator v14 on iOS
-        // trips `calling the 'renderAsync' function has failed`
-        // regardless of legacy vs new context API. JPEG output works
-        // with the same source URIs in rotatePortrait and mlkitOcr's
-        // tile crop, so the PNG encoder path is the broken one.
-        ImageManipulator.manipulateAsync(
-            uri,
-            [{ crop: { originX: 0, originY: yTop, width: pageWidth, height: heightPx } }],
-            { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
-        )
-            .then((res) => {
-                devLog('receipt-detail.cropSuccess', { bandIdx, resultUri: res?.uri });
-                if (!cancelled) setCroppedUri(res.uri);
-            })
-            .catch((e) => {
-                const errMsg = e?.message ?? String(e);
-                console.warn('[receipt-detail] band crop failed', { ...cropArgs, err: errMsg });
-                devLog('receipt-detail.cropFailed', { bandIdx, ...cropArgs, err: errMsg });
-                if (!cancelled) setCropError(errMsg);
-            });
-        return () => { cancelled = true; };
-    }, [uri, yTopOnPage, yBottomOnPage, pageWidth, pageHeight, bandIdx]);
+    // DISPLAY the FINAL parsed product when available — the band's own
+    // extract-level product predates parse-level heals (Galut salvage, ppu
+    // normalization, grafts), and showing it made rimi-30-04-2026-2's Cukrus
+    // look discount-less while the shipped parse (and the truth assertions)
+    // had akcija 0.65. Final products are per-unit normalized: totals are
+    // price×qty. Falls back to the extract product on old snapshots.
+    const fp = finalProduct ?? null;
+    const round2 = (v: number) => Math.round(v * 100) / 100;
+    // BandCropImage picks its page by yOffset — hold rendering until that
+    // page's local file has downloaded + normalized (an empty uri would
+    // fail the crop instead of retrying).
+    const cropPage = pages[pages.length ? Math.max(0, pages.findIndex((p, i) =>
+        region.yTop >= p.yOffsetScaled
+        && (i === pages.length - 1 || region.yTop < pages[i + 1].yOffsetScaled))) : 0];
+    const pageReady = !!cropPage?.uri;
 
     return (
         <View style={styles.productRow}>
-            <View
-                style={[
-                    styles.cropContainer,
-                    { aspectRatio: cropAspect, borderColor: statusColor(status, colors) },
-                ]}
-            >
-                {croppedUri && (
-                    <Image
-                        source={{ uri: croppedUri }}
-                        style={{ width: '100%', height: '100%' }}
-                        resizeMode="stretch"
+            <View style={[styles.cropContainer, { borderColor: statusColor(status, colors) }]}>
+                {pageReady && (
+                    <BandCropImage
+                        pages={pages}
+                        region={region}
+                        cardWidth={DETAIL_CARD_WIDTH}
                     />
-                )}
-                {cropError && (
-                    <Text style={styles.cropErrorText} numberOfLines={5}>
-                        crop failed: {cropError}
-                    </Text>
                 )}
             </View>
             <View style={styles.productMeta}>
@@ -508,59 +679,117 @@ const ProductRow = ({
                         #{bandIdx + 1}
                     </Text>
                     {product ? (
-                        <Text style={styles.productName} numberOfLines={2}>
-                            {product.name}
+                        // Full name, no clamp — truth review needs to see
+                        // every character; a "…" can hide the exact garble
+                        // being judged.
+                        <Text style={styles.productName}>
+                            {fp?.name ?? product.name}
                         </Text>
                     ) : (
-                        <Text style={styles.productSkipName} numberOfLines={2}>
+                        <Text style={styles.productSkipName}>
                             {skipLabel(bandResult.warnings)}
                         </Text>
                     )}
+                    {product && truthCmp && (
+                        // Item-truth checkmark: tap = approve current values
+                        // (creates/overwrites the assertion), long-press =
+                        // remove the assertion. Red warning = truth differs.
+                        <TouchableOpacity
+                            style={styles.truthCheck}
+                            onPress={truthCmp.state !== 'match' ? onTruthCheck : undefined}
+                            onLongPress={truthCmp.state !== 'unchecked' ? onTruthRemove : undefined}
+                            delayLongPress={450}
+                        >
+                            {truthCmp.state === 'differ' && (
+                                <Ionicons name="warning" size={16} color={colors.error} />
+                            )}
+                            {/* near = same product, cross-OCR-engine name flavor:
+                                amber check — SKIPPABLE, but tap re-asserts with
+                                this engine's read if you prefer it. */}
+                            <Ionicons
+                                name={truthCmp.state === 'unchecked' ? 'ellipse-outline' : 'checkmark-circle'}
+                                size={22}
+                                color={
+                                    truthCmp.state === 'match' ? colors.success
+                                    : truthCmp.state === 'near' ? colors.warning
+                                    : truthCmp.state === 'differ' ? colors.error
+                                    : colors.textMuted
+                                }
+                            />
+                        </TouchableOpacity>
+                    )}
                 </View>
+                {(truthCmp?.state === 'differ' || truthCmp?.state === 'near') && truthCmp.diffs.length > 0 && (
+                    <View style={styles.truthDiffBox}>
+                        {truthCmp.diffs.map((d, i) => (
+                            <Text key={i} style={styles.truthDiffText}>{d}</Text>
+                        ))}
+                    </View>
+                )}
                 {product && (
                     <View style={styles.productFields}>
                         {/*
-                          Parser-extracted pack size from the name (e.g.
-                          32 rit. for ZEWA, 990 ml for SOMAT, 250 g for
-                          MILLER). Shown above the price line so the
-                          discriminator the matcher uses is immediately
-                          visible — easy to spot regressions where the
-                          token didn't get caught. Renders "—" when
-                          extractPackSize returned null (e.g. a bare
-                          number with no unit suffix lost in OCR).
+                          Parser-extracted pack size from the name. Final-parse
+                          values when the snapshot carries them (post-heals);
+                          extract-level fallback otherwise.
                         */}
                         <Text style={styles.productPackSize}>
-                            {(product as any).parsedAmount != null && (product as any).parsedUnit
-                                ? `${(product as any).parsedAmount} ${(product as any).parsedUnit}`
-                                : '—'}
+                            {fp
+                                ? (fp.parsedAmount != null && fp.parsedUnit ? `${fp.parsedAmount} ${fp.parsedUnit}` : '—')
+                                : ((product as any).parsedAmount != null && (product as any).parsedUnit
+                                    ? `${(product as any).parsedAmount} ${(product as any).parsedUnit}`
+                                    : '—')}
                         </Text>
-                        {/*
-                          Gross math: <ppu>{/unit} × <qty> <unit> = <price>.
-                          For single-pack rows with no X-N line on the
-                          receipt the parser leaves pricePerUnit=null;
-                          we fall back to the line price as the per-pack
-                          price and drop the "/unit" suffix so the line
-                          reads naturally instead of "€0.49/vnt × 1 vnt".
-                        */}
-                        <Text style={styles.productPriceLine}>
-                            <Text style={styles.productPpu}>
-                                €{(product.pricePerUnit ?? product.price).toFixed(2)}
-                                {product.pricePerUnit !== null ? `/${product.unit}` : ''}
+                        {fp ? (
+                            // FINAL product: price is per-unit normalized —
+                            // line total = price × qty.
+                            <Text style={styles.productPriceLine}>
+                                <Text style={styles.productPpu}>
+                                    €{fp.price.toFixed(2)}
+                                    {fp.quantity !== 1 || fp.unit === 'kg' ? `/${fp.unit}` : ''}
+                                </Text>
+                                <Text style={styles.productSecondary}>
+                                    {' × '}
+                                    {formatQty(fp.quantity)} {fp.unit}
+                                    {' = '}
+                                </Text>
+                                <Text style={styles.productTotal}>
+                                    €{round2(fp.price * fp.quantity).toFixed(2)}
+                                </Text>
                             </Text>
-                            <Text style={styles.productSecondary}>
-                                {' × '}
-                                {formatQty(product.quantity)} {product.unit}
-                                {' = '}
+                        ) : (
+                            <Text style={styles.productPriceLine}>
+                                <Text style={styles.productPpu}>
+                                    €{(product.pricePerUnit ?? product.price).toFixed(2)}
+                                    {product.pricePerUnit !== null ? `/${product.unit}` : ''}
+                                </Text>
+                                <Text style={styles.productSecondary}>
+                                    {' × '}
+                                    {formatQty(product.quantity)} {product.unit}
+                                    {' = '}
+                                </Text>
+                                <Text style={styles.productTotal}>
+                                    €{product.price.toFixed(2)}
+                                </Text>
                             </Text>
-                            <Text style={styles.productTotal}>
-                                €{product.price.toFixed(2)}
+                        )}
+                        {fp ? (fp.promoPrice != null && (
+                            <Text style={styles.productPromoLine}>
+                                <Text style={styles.productPromoLabel}>akcija </Text>
+                                <Text style={styles.productPpu}>
+                                    €{fp.promoPrice.toFixed(2)}
+                                    {fp.quantity !== 1 || fp.unit === 'kg' ? `/${fp.unit}` : ''}
+                                </Text>
+                                <Text style={styles.productSecondary}>
+                                    {' × '}
+                                    {formatQty(fp.quantity)} {fp.unit}
+                                    {' = '}
+                                </Text>
+                                <Text style={styles.productTotal}>
+                                    €{round2(fp.promoPrice * fp.quantity).toFixed(2)}
+                                </Text>
                             </Text>
-                        </Text>
-                        {product.promoPrice !== null && (
-                            // Discount math sub-line: divide promoPrice by
-                            // quantity to get the effective per-unit price
-                            // after the per-item discount, then show the
-                            // same shape as the gross line for easy compare.
+                        )) : (product.promoPrice !== null && (
                             <Text style={styles.productPromoLine}>
                                 <Text style={styles.productPromoLabel}>akcija </Text>
                                 <Text style={styles.productPpu}>
@@ -576,7 +805,7 @@ const ProductRow = ({
                                     €{product.promoPrice.toFixed(2)}
                                 </Text>
                             </Text>
-                        )}
+                        ))}
                     </View>
                 )}
                 {bandResult.warnings.length > 0 && (
@@ -633,76 +862,6 @@ const StatusIcon = ({ status, colors }: { status: StatusKind; colors: AppTheme }
     if (status === 'WARN')
         return <Ionicons name="warning" size={18} color={color} />;
     return <Ionicons name="close-circle-outline" size={18} color={color} />;
-};
-
-const ImageWithBands = ({
-    uri,
-    pageWidth,
-    pageHeight,
-    bands,
-    colors,
-}: {
-    uri: string;
-    pageWidth: number;
-    pageHeight: number;
-    bands: BandOnPage[];
-    colors: AppTheme;
-}) => {
-    const aspect = pageWidth / pageHeight;
-    return (
-        <View style={{ width: '100%', aspectRatio: aspect, position: 'relative' }}>
-            <Image
-                source={{ uri }}
-                style={{ width: '100%', height: '100%' }}
-                resizeMode="contain"
-            />
-            {bands.map((b) => {
-                const topPct = (b.yTopOnPage / pageHeight) * 100;
-                const heightPct =
-                    ((b.yBottomOnPage - b.yTopOnPage) / pageHeight) * 100;
-                const { border, fill } = bandKindColor(b.kind, colors.primary);
-                const labelText = b.label ?? `${b.bandIdx + 1}`;
-                return (
-                    <View
-                        key={b.bandIdx}
-                        pointerEvents="none"
-                        style={{
-                            position: 'absolute',
-                            left: 0,
-                            right: 0,
-                            top: `${topPct}%`,
-                            height: `${heightPct}%`,
-                            borderWidth: 1.5,
-                            borderColor: border,
-                            backgroundColor: fill,
-                        }}
-                    >
-                        <View
-                            style={{
-                                position: 'absolute',
-                                left: 2,
-                                top: 2,
-                                paddingHorizontal: 4,
-                                paddingVertical: 1,
-                                backgroundColor: border,
-                                borderRadius: 3,
-                            }}
-                        >
-                            <Text
-                                style={{
-                                    color: colors.onPrimary,
-                                    fontSize: 9,
-                                    fontWeight: '700',
-                                }}
-                            >
-                                {labelText}
-                            </Text>
-                        </View>
-                    </View>
-                );
-            })}
-        </View>
-    );
 };
 
 const makeStyles = (c: AppTheme) =>
@@ -842,5 +1001,44 @@ const makeStyles = (c: AppTheme) =>
             color: c.textSecondary,
             fontFamily: 'monospace',
             marginBottom: 2,
+        },
+        truthCheck: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 2,
+            paddingLeft: 8,
+            paddingVertical: 2,
+        },
+        truthDiffBox: {
+            marginTop: 4,
+            padding: 6,
+            borderRadius: 6,
+            backgroundColor: c.error + '18',
+        },
+        truthDiffText: {
+            fontSize: 11,
+            color: c.error,
+            fontFamily: 'monospace',
+            marginBottom: 1,
+        },
+        truthMissingBox: {
+            marginBottom: 8,
+            padding: 8,
+            borderRadius: 8,
+            backgroundColor: c.error + '22',
+        },
+        truthMissingText: {
+            fontSize: 12,
+            color: c.error,
+            marginBottom: 2,
+        },
+        footerTruthCard: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
+            marginTop: 10,
+            padding: 10,
+            borderRadius: 8,
+            backgroundColor: c.surfaceMuted,
         },
     });

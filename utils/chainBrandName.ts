@@ -81,3 +81,21 @@ export function chainBrandColor(chainName: string): string {
 export function chainBrandColorById(chainId: number): string {
     return CHAIN_BRAND_COLORS_BY_ID[chainId] ?? '#9E9E9E';
 }
+
+const CHAIN_ID_BY_NAME: { match: RegExp; id: number }[] = [
+    { match: /maxima/i,  id: 1 },
+    { match: /rimi/i,    id: 2 },
+    { match: /\biki\b/i, id: 3 },
+    { match: /norf/i,    id: 4 },
+    { match: /lidl/i,    id: 5 },
+];
+
+/** Resolve a chain's canonical id (1-5) from its name, so name-keyed screens
+ *  (e.g. the shopping list) can use the chainId-based ChainLogoChip / baked
+ *  chain badges. Returns null for chains outside the bundled set (e.g. Barbora). */
+export function chainIdByName(chainName: string): number | null {
+    for (const entry of CHAIN_ID_BY_NAME) {
+        if (entry.match.test(chainName)) return entry.id;
+    }
+    return null;
+}

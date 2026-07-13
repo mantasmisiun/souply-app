@@ -1,7 +1,14 @@
 import {
-    View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator,
-    RefreshControl, ScrollView, Image,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    FlatList,
+    TouchableOpacity,
+    RefreshControl,
+    ScrollView,
+    Image,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -145,7 +152,7 @@ export default function ReceiptsScreen() {
 
             {loading ? (
                 <View style={styles.centered}>
-                    <ActivityIndicator size="large" color={colors.primary} />
+                    <MaterialProgress size="large" color={colors.primary} />
                 </View>
             ) : (
                 <Animated.FlatList
@@ -165,7 +172,7 @@ export default function ReceiptsScreen() {
                     }
                     ListFooterComponent={loadingMore ? (
                         <View style={styles.footerLoader}>
-                            <ActivityIndicator color={colors.primary} />
+                            <MaterialProgress color={colors.primary} />
                         </View>
                     ) : null}
                     ItemSeparatorComponent={() => <View style={styles.separator} />}

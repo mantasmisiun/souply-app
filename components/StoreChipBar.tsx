@@ -1,7 +1,8 @@
 import React, { useMemo } from 'react';
-import { ScrollView, TouchableOpacity, Text, Image, StyleSheet, View } from 'react-native';
+import { ScrollView, TouchableOpacity, Text, StyleSheet, View } from 'react-native';
 import { useTheme, type AppTheme } from '../constants/theme';
-import { chainBrandColor } from '../utils/chainBrandName';
+import { chainIdByName } from '../utils/chainBrandName';
+import { ChainLogoChip } from './ChainLogoChip';
 
 export interface StoreChip {
     id: string | number;
@@ -46,17 +47,11 @@ export function StoreChipBar({ chips, selectedId, onSelect, allLabel }: Props) {
                     return (
                         <TouchableOpacity
                             key={String(chip.id)}
-                            style={[styles.chip, active && styles.chipActive]}
+                            style={[styles.chip, chip.logoUrl ? styles.chipWithLogo : null, active && styles.chipActive]}
                             onPress={() => onSelect(active && hasAll ? null : chip.id)}
                         >
                             {chip.logoUrl ? (
-                                <View style={[styles.chipLogoTile, { backgroundColor: chainBrandColor(chip.label) }]}>
-                                    <Image
-                                        source={{ uri: chip.logoUrl }}
-                                        style={styles.chipLogo}
-                                        resizeMode="contain"
-                                    />
-                                </View>
+                                <ChainLogoChip chainId={chainIdByName(chip.label) ?? 0} name={chip.label} logoUrl={chip.logoUrl} size={20} />
                             ) : null}
                             <Text style={[styles.chipText, active && styles.chipTextActive]}>
                                 {chip.label}
@@ -91,12 +86,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderRadius: 20, borderWidth: 1,
         borderColor: c.border, backgroundColor: c.cardBackground,
     },
+    // With a leading logo, the horizontal inset matches the vertical inset (7)
+    // so the round badge sits equidistant from the left, top and bottom borders
+    // and the right padding mirrors the left.
+    chipWithLogo: { paddingHorizontal: 7 },
     chipActive: { backgroundColor: c.primary, borderColor: c.primary },
-    chipLogoTile: {
-        width: 20, height: 20, borderRadius: 4,
-        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-    },
-    chipLogo: { width: 14, height: 14 },
     chipText: { fontSize: 13, color: c.textPrimary },
     chipTextActive: { color: c.onPrimary, fontWeight: '600' },
     countBadge: {

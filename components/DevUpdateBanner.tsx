@@ -1,5 +1,14 @@
-import { useCallback, useEffect, useState } from 'react';
-import { StyleSheet, Text, View, TouchableOpacity, ActivityIndicator, AppState } from 'react-native';
+import {
+    useCallback,
+    useEffect,
+    useState } from 'react';
+import { StyleSheet,
+    Text,
+    View,
+    TouchableOpacity,
+    AppState,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import * as Updates from 'expo-updates';
@@ -95,7 +104,7 @@ export function DevUpdateBanner() {
                     disabled={reloading}
                 >
                     {reloading
-                        ? <ActivityIndicator size="small" color={colors.primary} />
+                        ? <MaterialProgress size="small" color={colors.primary} />
                         : <Text style={styles.btnText}>{t('banners.devUpdate.restart')}</Text>}
                 </TouchableOpacity>
             </View>

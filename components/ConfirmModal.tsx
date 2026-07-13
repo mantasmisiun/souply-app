@@ -1,7 +1,12 @@
 import React, { useMemo } from 'react';
 import {
-    View, Text, Modal, TouchableOpacity, StyleSheet, ActivityIndicator,
-} from 'react-native';
+    View,
+    Text,
+    Modal,
+    TouchableOpacity,
+    StyleSheet,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, type AppTheme } from '../constants/theme';
 
@@ -58,7 +63,7 @@ export function ConfirmModal({
                             activeOpacity={0.8}
                         >
                             {busy
-                                ? <ActivityIndicator color="#fff" />
+                                ? <MaterialProgress color="#fff" />
                                 : <Text style={styles.confirmText}>{confirmLabel}</Text>}
                         </TouchableOpacity>
                     </View>

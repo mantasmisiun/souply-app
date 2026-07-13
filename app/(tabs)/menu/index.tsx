@@ -1,4 +1,4 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, Image, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, Alert } from 'react-native';
 import Animated, {
     Easing,
     FadeIn,
@@ -9,14 +9,14 @@ import Animated, {
     withTiming,
 } from 'react-native-reanimated';
 import { GlassIconButton } from '../../../components/GlassIconButton';
-import { useRouter , useFocusEffect } from 'expo-router';
+import { useRouter , useFocusEffect, useNavigation } from 'expo-router';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../../../constants/theme';
+import { useTheme, spacing, radius, elevation, iconSize, typography, type AppTheme } from '../../../constants/theme';
 import { getLevelData, getLevelName } from '../../../constants/levels';
 import { DonutChart, type DonutSlice } from '../../../components/DonutChart';
 import { BarChart, type BarSlice } from '../../../components/BarChart';
@@ -26,7 +26,10 @@ import { useAuthState } from '../../../state/authState';
 import CreatorProfileHeader from '../../../components/CreatorProfileHeader';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatEuro } from '../../../utils/formatCurrency';
-import { chainBrandColor } from '../../../utils/chainBrandName';
+import { formatMonthKey, formatMonthRange, monthAbbr, parseMonthKey } from '../../../utils/monthNames';
+import MonthYearPicker from '../../../components/MonthYearPicker';
+import { chainBrandColor, chainIdByName } from '../../../utils/chainBrandName';
+import { ChainLogoChip } from '../../../components/ChainLogoChip';
 import * as Haptics from 'expo-haptics';
 import Constants from 'expo-constants';
 
@@ -51,11 +54,16 @@ const CHART_PAGE_HEIGHT = 520;
 function Legend({
     items,
     selectedIndex,
+    formatValue,
 }: {
     items: { label: string; color: string; value: number; logoUri?: string | null }[];
     selectedIndex?: number | null;
+    // Per-row value formatter. Defaults to euro; the Stores page passes a
+    // percent-of-month formatter.
+    formatValue?: (value: number) => string;
 }) {
     const colors = useTheme();
+    const fmtValue = formatValue ?? formatEuro;
     const anySelected = selectedIndex !== null && selectedIndex !== undefined;
     return (
         <Animated.View style={legendStyles.container} layout={LinearTransition.duration(280)}>
@@ -70,18 +78,12 @@ function Legend({
                     >
                         <View style={[legendStyles.row, dimmed && legendStyles.rowDimmed]}>
                             {item.logoUri ? (
-                                <View style={[legendStyles.logoTile, { backgroundColor: chainBrandColor(item.label) }]}>
-                                    <Image
-                                        source={{ uri: item.logoUri }}
-                                        style={legendStyles.logo}
-                                        resizeMode="contain"
-                                    />
-                                </View>
+                                <ChainLogoChip chainId={chainIdByName(item.label) ?? 0} name={item.label} size={20} />
                             ) : (
                                 <View style={[legendStyles.dot, { backgroundColor: item.color }]} />
                             )}
                             <Text style={[legendStyles.label, { color: colors.textSecondary }]} numberOfLines={1}>{item.label}</Text>
-                            <Text style={[legendStyles.value, { color: colors.textPrimary }]}>{formatEuro(item.value)}</Text>
+                            <Text style={[legendStyles.value, { color: colors.textPrimary }]}>{fmtValue(item.value)}</Text>
                         </View>
                     </Animated.View>
                 );
@@ -90,17 +92,12 @@ function Legend({
     );
 }
 const legendStyles = StyleSheet.create({
-    container: { alignSelf: 'stretch', marginTop: 8, gap: 3 },
-    row: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    container: { alignSelf: 'stretch', marginTop: spacing.sm, gap: spacing.xs },
+    row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
     rowDimmed: { opacity: 0.3 },
-    dot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
-    logoTile: {
-        width: 20, height: 20, borderRadius: 4, flexShrink: 0,
-        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-    },
-    logo: { width: 14, height: 14 },
-    label: { flex: 1, fontSize: 13 },
-    value: { fontSize: 13, fontWeight: '600', flexShrink: 0 },
+    dot: { width: 10, height: 10, borderRadius: radius.pill, flexShrink: 0 },
+    label: { flex: 1, ...typography.label, fontWeight: '400' },
+    value: { ...typography.label, flexShrink: 0 },
 });
 
 /**
@@ -126,19 +123,21 @@ function CreatorAccountCTA({ styles, router, t }: any) {
                 <Text style={styles.creatorCtaTitle}>{t('profilis.creatorCta.title')}</Text>
                 <Text style={styles.creatorCtaDesc}>{t('profilis.creatorCta.desc')}</Text>
             </View>
-            <Ionicons name="arrow-forward" size={20} color="#fff" />
+            <Ionicons name="arrow-forward" size={iconSize.md} color="#fff" />
         </TouchableOpacity>
     );
 }
 
 export default function ProfilisScreen() {
     const colors = useTheme();
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
+    const navigation = useNavigation();
     // Collapsing header: "Profilis" title hides on scroll (no pinned filter).
     const header = useCollapsingHeader();
     const tabBarHeight = useSafeBottomTabBarHeight();
+
     const triggerIfNewLevel = useLevelStore(s => s.triggerIfNewLevel);
 
     const profile = useProfileStore(s => s.profile);
@@ -150,13 +149,17 @@ export default function ProfilisScreen() {
     const statsLoading = useProfileStore(s => s.stats === null && s.fetching);
     const [activePage, setActivePage] = useState(0);
     const [storeSelected, setStoreSelected] = useState<number | null>(null);
+    const [storeMonthOffset, setStoreMonthOffset] = useState(0); // 0 = current month
     const [categorySelected, setCategorySelected] = useState<number | null>(null);
     // Category donut shows top N spending categories; "Žr. daugiau" toggles
     // between 5 and 10. Anything beyond the visible top-N is summed into a
     // single "Kitos" legend row (not drawn on the ring, so one dominant
     // bucket can't swallow 75% of the donut).
     const [categoryTopN, setCategoryTopN] = useState<5 | 10>(5);
-    const [monthOffset, setMonthOffset] = useState(0); // 0 = most recent 6-month window
+    const [categoryMonthOffset, setCategoryMonthOffset] = useState(0); // 0 = current month
+    const [monthEndOffset, setMonthEndOffset] = useState(0); // months back from newest that the window END sits
+    // Which carousel card's month-picker sheet is open (null = closed).
+    const [pickerTarget, setPickerTarget] = useState<null | 'store' | 'category' | 'monthly'>(null);
     const scrollRef = useRef<ComponentRef<typeof Animated.ScrollView>>(null);
 
     // Per-page measured heights. The carousel wrapper animates to the
@@ -200,9 +203,23 @@ export default function ProfilisScreen() {
         });
     }, [activePage, pageHeights, carouselHeight]);
 
+    // Apply the settings-gear headerRight on focus, and re-apply on the next
+    // frame. The native stack header attaches a beat AFTER first mount, so a
+    // one-shot mount/layout-effect set the gear before the header existed — it
+    // only showed up after a tab switch re-focused the screen. Setting it on
+    // focus catches the first focus, and the rAF re-apply lands once the native
+    // header is mounted, so the gear is present on first load.
     useFocusEffect(useCallback(() => {
         fetchProfileIfStale();
-    }, []));
+        const applyGear = () => navigation.setOptions({
+            headerRight: () => (
+                <GlassIconButton icon="settings-outline" onPress={() => router.push('/settings' as any)} />
+            ),
+        });
+        applyGear();
+        const raf = requestAnimationFrame(applyGear);
+        return () => cancelAnimationFrame(raf);
+    }, [navigation, router]));
 
     const devItems: { label: string; icon: keyof typeof Ionicons.glyphMap; route: string }[] = [
         { label: t('profilis.devReceiptBatch'), icon: 'flask-outline', route: '/dev/receipt-batch' },
@@ -212,71 +229,143 @@ export default function ProfilisScreen() {
     const progressPercent = profile ? Math.round(profile.progressFraction * 100) : 0;
     const level = profile?.level ?? 1;
 
-    const storeSlices: DonutSlice[] = (stats?.storeBreakdown ?? []).map(s => ({
-        label: s.chainName, value: s.total, color: s.color, logoUri: s.miniLogoUrl,
-        brandColor: chainBrandColor(s.chainName),
-    }));
-    // Server returns categoryBreakdown already truncated with a synthetic
-    // "Kitos" aggregate as the last item; the full per-category split lives
-    // in kitaBreakdown. Reconstruct the full list, sort by spend, then take
-    // top N for the ring. Anything not in the ring is summed for the legend.
-    const rawCategoryBreakdown = stats?.categoryBreakdown ?? [];
-    const rawKitaBreakdown = stats?.kitaBreakdown ?? [];
-    const realCategories = rawKitaBreakdown.length > 0
-        ? rawCategoryBreakdown.slice(0, -1)
-        : rawCategoryBreakdown;
-    const allCategorySlices: DonutSlice[] = [...realCategories, ...rawKitaBreakdown]
+    // Shared month axis for the per-month donuts (Stores + Categories): the
+    // monthlySpending series (earliest→current, zero-filled) so the user can
+    // page even to months with no data (empty donut). offset 0 = current (last
+    // entry); increasing offset goes older.
+    const monthsAxis = (stats?.monthlySpending ?? []).map(m => m.month);
+    const monthsMaxOffset = Math.max(0, monthsAxis.length - 1);
+    const monthKeyAt = (offset: number): string | null => monthsAxis.length > 0
+        ? monthsAxis[monthsAxis.length - 1 - Math.min(offset, monthsMaxOffset)]
+        : null;
+    const pctOf = (v: number, total: number) =>
+        total > 0 ? `${Math.round((v / total) * 100)}%` : '0%';
+
+    // Stores donut — scoped to the selected month; legend shows each store's
+    // share of the month total as a percentage.
+    const effStoreOffset = Math.min(storeMonthOffset, monthsMaxOffset);
+    const storeMonthKey = monthKeyAt(storeMonthOffset);
+    const storeMonthSlices: DonutSlice[] = (storeMonthKey ? (stats?.storeBreakdownByMonth?.[storeMonthKey] ?? []) : [])
+        .map(s => ({
+            label: s.chainName, value: s.total, color: s.color, logoUri: s.miniLogoUrl,
+            brandColor: chainBrandColor(s.chainName),
+        }));
+    const storeMonthTotal = storeMonthSlices.reduce((sum, s) => sum + s.value, 0);
+    const storeCanOlder = effStoreOffset < monthsMaxOffset; // older months exist before the current view
+    const storeCanNewer = effStoreOffset > 0;               // paged back → can return toward now
+    const storeMonthLabel = storeMonthKey ? formatMonthKey(storeMonthKey, i18n.language) : '';
+    const formatStorePct = (v: number) => pctOf(v, storeMonthTotal);
+
+    // Categories donut — scoped to the selected month (same axis as Stores).
+    // The server sends the FULL per-month list; the client does its own top-N
+    // ring + "Kitos" aggregate and shows each category's share as a percentage.
+    const effCategoryOffset = Math.min(categoryMonthOffset, monthsMaxOffset);
+    const categoryMonthKey = monthKeyAt(categoryMonthOffset);
+    const allCategorySlices: DonutSlice[] = (categoryMonthKey ? (stats?.categoryBreakdownByMonth?.[categoryMonthKey] ?? []) : [])
         .map(c => ({ label: c.categoryName, value: c.total, color: c.color }))
         .sort((a, b) => b.value - a.value);
+    const categoryMonthTotal = allCategorySlices.reduce((s, c) => s + c.value, 0);
+    const categoryCanOlder = effCategoryOffset < monthsMaxOffset;
+    const categoryCanNewer = effCategoryOffset > 0;
+    const categoryMonthLabel = categoryMonthKey ? formatMonthKey(categoryMonthKey, i18n.language) : '';
+    const formatCategoryPct = (v: number) => pctOf(v, categoryMonthTotal);
     const displayCategorySlices = allCategorySlices.slice(0, categoryTopN);
     const hiddenCategorySlices = allCategorySlices.slice(categoryTopN);
     const kitosTotal = hiddenCategorySlices.reduce((s, c) => s + c.value, 0);
     const canToggleCategoryTopN = allCategorySlices.length > 5;
-    const barData: BarSlice[] = (stats?.monthlySpending ?? []).map(m => ({
-        label: m.label, total: m.total, month: m.month,
-    }));
+    // Bar labels are derived client-side from the month key (localized: LT
+    // "lie", EN "Jul") — the server's label field is Lithuanian-only.
+    const barData: BarSlice[] = (stats?.monthlySpending ?? []).map(m => {
+        const p = parseMonthKey(m.month);
+        return { label: p ? monthAbbr(p[1], i18n.language) : m.label, total: m.total, month: m.month };
+    });
 
-    // Monthly chart shows a 6-month window; monthOffset pages back 6 at a time
-    // (0 = most recent). The API returns the full series (oldest→newest,
-    // zero-filled) so navigation is pure client-side windowing — no refetch.
+    // Monthly chart shows a 6-month window. monthEndOffset = how many months
+    // back from the newest the window END sits (0 = ends at the current month).
+    // Chevrons page by 6; the picker sets an arbitrary anchor so the chosen
+    // month becomes the window's last bar. Series is oldest→newest, zero-filled
+    // — navigation is pure client-side windowing, no refetch.
     const MONTH_WINDOW = 6;
-    const maxMonthOffset = Math.max(0, Math.ceil(barData.length / MONTH_WINDOW) - 1);
-    const effMonthOffset = Math.min(monthOffset, maxMonthOffset);
-    const monthEnd = Math.max(0, barData.length - MONTH_WINDOW * effMonthOffset);
+    const maxEndOffset = Math.max(0, barData.length - 1);
+    const effEndOffset = Math.min(monthEndOffset, maxEndOffset);
+    const monthEnd = Math.max(1, barData.length - effEndOffset);
     const monthStart = Math.max(0, monthEnd - MONTH_WINDOW);
     const windowedBars = barData.slice(monthStart, monthEnd);
     const monthlyMax = Math.max(...windowedBars.map(b => b.total), 0);
     const canOlderMonths = monthStart > 0;          // older months exist before the window
-    const canNewerMonths = effMonthOffset > 0;       // paged back → can return toward now
-    const monthRangeLabel = (() => {
-        if (windowedBars.length === 0) return '';
-        const first = windowedBars[0];
-        const last = windowedBars[windowedBars.length - 1];
-        const y1 = first.month?.slice(0, 4);
-        const y2 = last.month?.slice(0, 4);
-        return y1 === y2
-            ? `${first.label}–${last.label} ${y2}`
-            : `${first.label} ${y1} – ${last.label} ${y2}`;
-    })();
+    const canNewerMonths = effEndOffset > 0;         // paged back → can return toward now
+    const monthRangeLabel = windowedBars.length > 0
+        ? formatMonthRange(windowedBars[0].month ?? '', windowedBars[windowedBars.length - 1].month ?? '', i18n.language)
+        : '';
+
+    // Month-picker bounds: earliest data month → current month (no future).
+    const minMonthKey = monthsAxis[0] ?? null;
+    const maxMonthKey = monthsAxis[monthsAxis.length - 1] ?? null;
+    const pickerValue = pickerTarget === 'store' ? storeMonthKey
+        : pickerTarget === 'category' ? categoryMonthKey
+        : pickerTarget === 'monthly' ? (windowedBars[windowedBars.length - 1]?.month ?? maxMonthKey)
+        : maxMonthKey;
+    const openPicker = (target: 'store' | 'category' | 'monthly') => {
+        if (minMonthKey && maxMonthKey) setPickerTarget(target);
+    };
+    const handleMonthPick = (key: string) => {
+        const idx = monthsAxis.indexOf(key);
+        if (idx < 0) return;
+        const offsetFromEnd = (monthsAxis.length - 1) - idx; // 0 = current month
+        if (pickerTarget === 'store') { setStoreMonthOffset(offsetFromEnd); setStoreSelected(null); }
+        else if (pickerTarget === 'category') { setCategoryMonthOffset(offsetFromEnd); setCategorySelected(null); }
+        else if (pickerTarget === 'monthly') { setMonthEndOffset(offsetFromEnd); }
+    };
 
     const pages = [
         {
             title: t('profilis.carouselStores'),
             content: (
                 <View style={styles.chartPage}>
-                    <DonutChart
-                        data={storeSlices}
-                        size={180}
-                        thickness={32}
-                        emptyColor={colors.borderSubtle}
-                        selectedIndex={storeSelected}
-                        onSelect={setStoreSelected}
-                        cardBackground={colors.cardBackground}
-                    />
-                    <Legend
-                        items={storeSlices.map(s => ({ label: s.label, color: s.color, value: s.value, logoUri: s.logoUri }))}
-                        selectedIndex={storeSelected}
-                    />
+                    <View style={styles.monthNavRow}>
+                        <TouchableOpacity
+                            onPress={() => { setStoreMonthOffset(o => o + 1); setStoreSelected(null); }}
+                            disabled={!storeCanOlder}
+                            hitSlop={10}
+                            style={styles.monthNavBtn}
+                        >
+                            <Ionicons name="chevron-back" size={20}
+                                color={storeCanOlder ? colors.textPrimary : colors.borderSubtle} />
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => openPicker('store')} style={styles.monthLabelBtn} hitSlop={8} activeOpacity={0.6}>
+                            <Text style={styles.monthRangeLabel}>{storeMonthLabel}</Text>
+                            <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={() => { setStoreMonthOffset(o => Math.max(0, o - 1)); setStoreSelected(null); }}
+                            disabled={!storeCanNewer}
+                            hitSlop={10}
+                            style={styles.monthNavBtn}
+                        >
+                            <Ionicons name="chevron-forward" size={20}
+                                color={storeCanNewer ? colors.textPrimary : colors.borderSubtle} />
+                        </TouchableOpacity>
+                    </View>
+                    {storeMonthSlices.length > 0 ? (
+                        <>
+                            <DonutChart
+                                data={storeMonthSlices}
+                                size={180}
+                                thickness={32}
+                                emptyColor={colors.borderSubtle}
+                                selectedIndex={storeSelected}
+                                onSelect={setStoreSelected}
+                                cardBackground={colors.cardBackground}
+                            />
+                            <Legend
+                                items={storeMonthSlices.map(s => ({ label: s.label, color: s.color, value: s.value, logoUri: s.logoUri }))}
+                                selectedIndex={storeSelected}
+                                formatValue={formatStorePct}
+                            />
+                        </>
+                    ) : (
+                        <Text style={styles.emptyChartText}>{t('profilis.noData')}</Text>
+                    )}
                 </View>
             ),
         },
@@ -284,51 +373,82 @@ export default function ProfilisScreen() {
             title: t('profilis.carouselCategories'),
             content: (
                 <View style={styles.categoryChartPage}>
-                    <DonutChart
-                        data={displayCategorySlices}
-                        size={180}
-                        thickness={32}
-                        emptyColor={colors.borderSubtle}
-                        selectedIndex={categorySelected}
-                        onSelect={setCategorySelected}
-                        cardBackground={colors.cardBackground}
-                        defaultCenterLabel={t('profilis.topN', { n: categoryTopN })}
-                    />
-                    <Legend
-                        items={displayCategorySlices.map(c => ({ label: c.label, color: c.color, value: c.value }))}
-                        selectedIndex={categorySelected}
-                    />
-                    {kitosTotal > 0 && (
-                        <Animated.View
-                            style={styles.kitosRow}
-                            entering={FadeIn.duration(280)}
-                            exiting={FadeOut.duration(160)}
-                            layout={LinearTransition.duration(280)}
-                        >
-                            <View style={[styles.kitosDot, { backgroundColor: colors.textMuted }]} />
-                            <Text style={[styles.kitosLabel, { color: colors.textSecondary }]} numberOfLines={1}>
-                                {t('profilis.kitosLabel')}
-                            </Text>
-                            <Text style={[styles.kitosAmount, { color: colors.textPrimary }]}>
-                                {formatEuro(kitosTotal)}
-                            </Text>
-                        </Animated.View>
-                    )}
-                    {canToggleCategoryTopN && (
+                    <View style={styles.monthNavRow}>
                         <TouchableOpacity
-                            style={styles.kitosToggleBtn}
-                            onPress={() => {
-                                Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-                                setCategoryTopN(prev => (prev === 5 ? 10 : 5));
-                                setCategorySelected(null);
-                            }}
-                            activeOpacity={0.7}
-                            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            onPress={() => { setCategoryMonthOffset(o => o + 1); setCategorySelected(null); }}
+                            disabled={!categoryCanOlder}
+                            hitSlop={10}
+                            style={styles.monthNavBtn}
                         >
-                            <Text style={[styles.kitosToggleText, { color: colors.primary }]}>
-                                {categoryTopN === 5 ? t('profilis.kitosShowMore') : t('profilis.kitosShowLess')}
-                            </Text>
+                            <Ionicons name="chevron-back" size={20}
+                                color={categoryCanOlder ? colors.textPrimary : colors.borderSubtle} />
                         </TouchableOpacity>
+                        <TouchableOpacity onPress={() => openPicker('category')} style={styles.monthLabelBtn} hitSlop={8} activeOpacity={0.6}>
+                            <Text style={styles.monthRangeLabel}>{categoryMonthLabel}</Text>
+                            <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={() => { setCategoryMonthOffset(o => Math.max(0, o - 1)); setCategorySelected(null); }}
+                            disabled={!categoryCanNewer}
+                            hitSlop={10}
+                            style={styles.monthNavBtn}
+                        >
+                            <Ionicons name="chevron-forward" size={20}
+                                color={categoryCanNewer ? colors.textPrimary : colors.borderSubtle} />
+                        </TouchableOpacity>
+                    </View>
+                    {allCategorySlices.length > 0 ? (
+                        <>
+                            <DonutChart
+                                data={displayCategorySlices}
+                                size={180}
+                                thickness={32}
+                                emptyColor={colors.borderSubtle}
+                                selectedIndex={categorySelected}
+                                onSelect={setCategorySelected}
+                                cardBackground={colors.cardBackground}
+                                defaultCenterLabel={t('profilis.topN', { n: categoryTopN })}
+                            />
+                            <Legend
+                                items={displayCategorySlices.map(c => ({ label: c.label, color: c.color, value: c.value }))}
+                                selectedIndex={categorySelected}
+                                formatValue={formatCategoryPct}
+                            />
+                            {kitosTotal > 0 && (
+                                <Animated.View
+                                    style={styles.kitosRow}
+                                    entering={FadeIn.duration(280)}
+                                    exiting={FadeOut.duration(160)}
+                                    layout={LinearTransition.duration(280)}
+                                >
+                                    <View style={[styles.kitosDot, { backgroundColor: colors.textMuted }]} />
+                                    <Text style={[styles.kitosLabel, { color: colors.textSecondary }]} numberOfLines={1}>
+                                        {t('profilis.kitosLabel')}
+                                    </Text>
+                                    <Text style={[styles.kitosAmount, { color: colors.textPrimary }]}>
+                                        {formatCategoryPct(kitosTotal)}
+                                    </Text>
+                                </Animated.View>
+                            )}
+                            {canToggleCategoryTopN && (
+                                <TouchableOpacity
+                                    style={styles.kitosToggleBtn}
+                                    onPress={() => {
+                                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                                        setCategoryTopN(prev => (prev === 5 ? 10 : 5));
+                                        setCategorySelected(null);
+                                    }}
+                                    activeOpacity={0.7}
+                                    hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                                >
+                                    <Text style={[styles.kitosToggleText, { color: colors.primary }]}>
+                                        {categoryTopN === 5 ? t('profilis.kitosShowMore') : t('profilis.kitosShowLess')}
+                                    </Text>
+                                </TouchableOpacity>
+                            )}
+                        </>
+                    ) : (
+                        <Text style={styles.emptyChartText}>{t('profilis.noData')}</Text>
                     )}
                 </View>
             ),
@@ -339,7 +459,7 @@ export default function ProfilisScreen() {
                 <View style={styles.barChartPage}>
                     <View style={styles.monthNavRow}>
                         <TouchableOpacity
-                            onPress={() => setMonthOffset(o => o + 1)}
+                            onPress={() => setMonthEndOffset(o => Math.min(maxEndOffset, o + MONTH_WINDOW))}
                             disabled={!canOlderMonths}
                             hitSlop={10}
                             style={styles.monthNavBtn}
@@ -347,9 +467,12 @@ export default function ProfilisScreen() {
                             <Ionicons name="chevron-back" size={20}
                                 color={canOlderMonths ? colors.textPrimary : colors.borderSubtle} />
                         </TouchableOpacity>
-                        <Text style={styles.monthRangeLabel}>{monthRangeLabel}</Text>
+                        <TouchableOpacity onPress={() => openPicker('monthly')} style={styles.monthLabelBtn} hitSlop={8} activeOpacity={0.6}>
+                            <Text style={styles.monthRangeLabel}>{monthRangeLabel}</Text>
+                            <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+                        </TouchableOpacity>
                         <TouchableOpacity
-                            onPress={() => setMonthOffset(o => Math.max(0, o - 1))}
+                            onPress={() => setMonthEndOffset(o => Math.max(0, o - MONTH_WINDOW))}
                             disabled={!canNewerMonths}
                             hitSlop={10}
                             style={styles.monthNavBtn}
@@ -398,11 +521,11 @@ export default function ProfilisScreen() {
             {/* Level card */}
             <View style={styles.levelCard}>
                 {loading ? (
-                    <View style={{ width: '100%', alignItems: 'center', gap: 12, paddingVertical: 8 }}>
+                    <View style={{ width: '100%', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.sm }}>
                         <SkeletonBox width={56} height={56} borderRadius={28} />
                         <SkeletonBox width='40%' height={14} borderRadius={7} />
                         <SkeletonBox width='55%' height={12} borderRadius={6} />
-                        <SkeletonBox width='100%' height={8} borderRadius={4} style={{ marginTop: 4 }} />
+                        <SkeletonBox width='100%' height={8} borderRadius={radius.pill} style={{ marginTop: spacing.xs }} />
                         <SkeletonBox width='50%' height={11} borderRadius={6} />
                     </View>
                 ) : (
@@ -424,33 +547,59 @@ export default function ProfilisScreen() {
                 )}
             </View>
 
-            {/* Savings card — only shown when there is a non-zero figure */}
-            {!statsLoading && (stats?.totalSavings ?? 0) !== 0 && (
-                <View style={styles.savingsCard}>
-                    <Ionicons
-                        name={(stats?.totalSavings ?? 0) > 0 ? 'trending-up-outline' : 'trending-down-outline'}
-                        size={22}
-                        color={(stats?.totalSavings ?? 0) > 0 ? colors.success : colors.textSecondary}
-                        style={{ marginRight: 12 }}
-                    />
-                    <View style={{ flex: 1 }}>
-                        <Text style={styles.savingsLabel}>
-                            {(stats?.totalSavings ?? 0) > 0 ? t('profilis.savedTotal') : t('profilis.couldHaveSavedTotal')}
-                        </Text>
-                        <Text style={[styles.savingsAmount, { color: (stats?.totalSavings ?? 0) > 0 ? colors.success : colors.textPrimary }]}>
-                            {formatEuro(Math.abs(stats?.totalSavings ?? 0))}
-                        </Text>
+            {/* Savings card — current month only, with a change-vs-last-month
+                chip. Only shown when this month has a non-zero figure. */}
+            {!statsLoading && (stats?.savingsThisMonth ?? 0) !== 0 && (() => {
+                const saved = stats?.savingsThisMonth ?? 0;
+                const positive = saved > 0;
+                const lastMonth = stats?.savingsLastMonth ?? 0;
+                // € change vs last month's savings figure. Hidden when there's
+                // no last-month baseline. Up = savings improved (delta ≥ 0).
+                const hasBaseline = lastMonth !== 0;
+                const delta = saved - lastMonth;
+                const deltaUp = delta >= 0;
+                return (
+                    <View style={styles.savingsCard}>
+                        <Ionicons
+                            name={positive ? 'trending-up-outline' : 'trending-down-outline'}
+                            size={22}
+                            color={positive ? colors.success : colors.textSecondary}
+                            style={{ marginRight: spacing.md }}
+                        />
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.savingsLabel}>
+                                {positive ? t('profilis.savedThisMonth') : t('profilis.couldHaveSavedThisMonth')}
+                            </Text>
+                            <Text style={[styles.savingsAmount, { color: positive ? colors.success : colors.textPrimary }]}>
+                                {formatEuro(Math.abs(saved))}
+                            </Text>
+                        </View>
+                        {hasBaseline && (
+                            <View style={styles.savingsChange}>
+                                <View style={styles.savingsChangeChip}>
+                                    <Ionicons
+                                        name={deltaUp ? 'arrow-up' : 'arrow-down'}
+                                        size={12}
+                                        color={deltaUp ? colors.success : colors.textSecondary}
+                                    />
+                                    <Text style={[styles.savingsChangePct, { color: deltaUp ? colors.success : colors.textSecondary }]}>
+                                        {formatEuro(Math.abs(delta))}
+                                    </Text>
+                                </View>
+                                <Text style={styles.savingsChangeCaption}>{t('profilis.vsLastMonth')}</Text>
+                            </View>
+                        )}
                     </View>
-                </View>
-            )}
+                );
+            })()}
 
             {/* Stats carousel */}
             <View style={styles.statsCard}>
                 <Text style={styles.sectionTitle}>{t('profilis.statsTitle')}</Text>
                 {statsLoading ? (
-                    <View style={{ gap: 16, paddingVertical: 24, alignItems: 'center' }}>
+                    <View style={{ gap: spacing.lg, paddingVertical: spacing.xl, alignItems: 'center' }}>
                         <SkeletonBox width={160} height={160} borderRadius={80} style={{ alignSelf: 'center' }} />
-                        <View style={{ width: '100%', gap: 8 }}>
+                        <View style={{ width: '100%', gap: spacing.sm }}>
                             <SkeletonBox width='60%' height={12} borderRadius={6} style={{ alignSelf: 'center' }} />
                             <SkeletonBox width='45%' height={12} borderRadius={6} style={{ alignSelf: 'center' }} />
                             <SkeletonBox width='50%' height={12} borderRadius={6} style={{ alignSelf: 'center' }} />
@@ -513,14 +662,14 @@ export default function ProfilisScreen() {
             </View>
 
             {/* Quick links */}
-            <View style={{ marginTop: 8 }}>
+            <View style={{ marginTop: spacing.sm }}>
                 <TouchableOpacity
                     style={styles.row}
                     onPress={() => router.push('/profile/vote-history')}
                 >
-                    <Ionicons name="layers-outline" size={22} color={colors.textSecondary} />
+                    <Ionicons name="layers-outline" size={iconSize.lg} color={colors.textSecondary} />
                     <Text style={styles.rowText}>{t('profilis.voteHistory')}</Text>
-                    <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+                    <Ionicons name="chevron-forward" size={iconSize.md} color={colors.textMuted} />
                 </TouchableOpacity>
 
                 {/* Admin panel entry — only when the server marks this
@@ -546,11 +695,11 @@ export default function ProfilisScreen() {
                             }
                         }}
                     >
-                        <Ionicons name="shield-checkmark-outline" size={22} color={colors.primary} />
+                        <Ionicons name="shield-checkmark-outline" size={iconSize.lg} color={colors.primary} />
                         <Text style={[styles.rowText, { color: colors.primary, fontWeight: '600' }]}>
                             {t('admin.enterButton')}
                         </Text>
-                        <Ionicons name="chevron-forward" size={18} color={colors.primary} />
+                        <Ionicons name="chevron-forward" size={iconSize.md} color={colors.primary} />
                     </TouchableOpacity>
                 )}
             </View>
@@ -558,7 +707,7 @@ export default function ProfilisScreen() {
             {/* Dev tools — visible in Metro dev mode AND in the EAS DEV variant.
                 EAS-built internal-distribution bundles minify with __DEV__=false. */}
             {IS_DEV_BUILD && (
-                <View style={{ marginTop: 24 }}>
+                <View style={{ marginTop: spacing.xl }}>
                     <Text style={styles.sectionTitle}>{t('profilis.devTools')}</Text>
                     {devItems.map((item) => (
                         <TouchableOpacity
@@ -566,9 +715,9 @@ export default function ProfilisScreen() {
                             style={styles.row}
                             onPress={() => router.push(item.route as any)}
                         >
-                            <Ionicons name={item.icon} size={22} color={colors.textSecondary} />
+                            <Ionicons name={item.icon} size={iconSize.lg} color={colors.textSecondary} />
                             <Text style={styles.rowText}>{item.label}</Text>
-                            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+                            <Ionicons name="chevron-forward" size={iconSize.md} color={colors.textMuted} />
                         </TouchableOpacity>
                     ))}
                 </View>
@@ -578,77 +727,90 @@ export default function ProfilisScreen() {
             <CreatorAccountCTA styles={styles} router={router} t={t} />
         </Animated.ScrollView>
 
+        {/* Shared month/year picker for all three carousel cards. */}
+        {minMonthKey && maxMonthKey && (
+            <MonthYearPicker
+                visible={pickerTarget !== null}
+                value={pickerValue ?? maxMonthKey}
+                minKey={minMonthKey}
+                maxKey={maxMonthKey}
+                onSelect={handleMonthPick}
+                onClose={() => setPickerTarget(null)}
+            />
+        )}
         </View>
     );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
-    content: { padding: 16, paddingBottom: 40 },
+    content: { padding: spacing.lg, paddingBottom: spacing.xxxl },
 
     levelCard: {
         backgroundColor: c.cardBackground,
-        borderRadius: 16,
-        padding: 24,
+        borderRadius: radius.lg,
+        padding: spacing.xl,
         alignItems: 'center',
-        marginBottom: 12,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.06,
-        shadowRadius: 4,
-        elevation: 2,
+        marginBottom: spacing.md,
+        ...elevation.level1,
     },
     iconCircle: {
-        width: 80,
-        height: 80,
-        borderRadius: 40,
+        width: 80, height: 80, borderRadius: radius.pill,
         backgroundColor: c.primaryMuted,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginBottom: 12,
+        alignItems: 'center', justifyContent: 'center',
+        marginBottom: spacing.md,
     },
     levelEmoji: { fontSize: 40, lineHeight: 48 },
-    levelLabel: { fontSize: 13, color: c.textMuted, fontWeight: '600', textTransform: 'uppercase', letterSpacing: 1 },
-    levelName: { fontSize: 22, fontWeight: '700', color: c.textPrimary, marginTop: 2, marginBottom: 4 },
-    points: { fontSize: 14, color: c.textSecondary, marginBottom: 16 },
+    levelLabel: { ...typography.label, color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
+    levelName: { ...typography.priceLarge, fontWeight: '700', color: c.textPrimary, marginTop: 2, marginBottom: spacing.xs },
+    points: { ...typography.bodySmall, color: c.textSecondary, marginBottom: spacing.lg },
     progressTrack: {
         width: '100%', height: 8,
-        backgroundColor: c.borderSubtle, borderRadius: 4,
+        backgroundColor: c.borderSubtle, borderRadius: radius.pill,
         overflow: 'hidden', marginBottom: 6,
     },
-    progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: 4 },
-    progressLabel: { fontSize: 12, color: c.textMuted },
+    progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: radius.pill },
+    progressLabel: { ...typography.labelSmall, fontWeight: '400', color: c.textMuted },
 
     savingsCard: {
         backgroundColor: c.cardBackground,
-        borderRadius: 16,
-        paddingVertical: 16,
-        paddingHorizontal: 20,
-        marginBottom: 12,
+        borderRadius: radius.lg,
+        paddingVertical: spacing.lg,
+        paddingHorizontal: spacing.xl,
+        marginBottom: spacing.md,
         flexDirection: 'row',
         alignItems: 'center',
         borderWidth: 1,
         borderColor: c.borderSubtle,
     },
-    savingsLabel: { fontSize: 13, color: c.textSecondary, fontWeight: '500', marginBottom: 2 },
-    savingsAmount: { fontSize: 20, fontWeight: '700' },
+    savingsLabel: { ...typography.label, fontWeight: '500', color: c.textSecondary, marginBottom: 2 },
+    savingsAmount: { ...typography.heading, fontWeight: '700' },
+    savingsChange: { alignItems: 'flex-end', marginLeft: spacing.sm },
+    savingsChangeChip: {
+        flexDirection: 'row', alignItems: 'center', gap: 2,
+        backgroundColor: c.primaryMuted,
+        paddingVertical: 3, paddingHorizontal: spacing.sm,
+        borderRadius: radius.pill,
+    },
+    savingsChangePct: { ...typography.labelSmall, fontWeight: '700' },
+    savingsChangeCaption: { ...typography.caption, color: c.textMuted, marginTop: 2 },
 
     statsCard: {
         backgroundColor: c.cardBackground,
-        borderRadius: 16,
-        padding: 20,
-        marginBottom: 8,
+        borderRadius: radius.lg,
+        padding: spacing.xl,
+        marginBottom: spacing.sm,
         overflow: 'hidden',
     },
     sectionTitle: {
-        fontSize: 13, fontWeight: '700', color: c.textMuted,
-        marginBottom: 4, textTransform: 'uppercase', letterSpacing: 0.5,
+        ...typography.label, fontWeight: '700', color: c.textMuted,
+        marginBottom: spacing.xs, textTransform: 'uppercase', letterSpacing: 0.5,
     },
     carouselTitleRow: {
-        flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 16,
+        flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginBottom: spacing.lg,
     },
     carouselTitle: {
-        fontSize: 15, fontWeight: '600', color: c.textPrimary, flex: 1,
+        ...typography.bodyStrong, color: c.textPrimary, flex: 1,
     },
     // Carousel pages size to their content. The carousel wrapper itself
     // animates its height to match the active page (see carouselAnimatedStyle),
@@ -658,56 +820,59 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'flex-start',
         width: '100%',
-        paddingBottom: 8,
+        paddingBottom: spacing.sm,
     },
     barChartPage: {
         alignSelf: 'stretch',
-        paddingBottom: 8,
+        paddingBottom: spacing.sm,
     },
     categoryChartPage: {
         alignItems: 'center',
         justifyContent: 'flex-start',
-        paddingTop: 4,
-        paddingBottom: 8,
+        paddingTop: spacing.xs,
+        paddingBottom: spacing.sm,
         width: '100%',
     },
-    emptyChartText: { fontSize: 14, color: c.textMuted, fontStyle: 'italic', marginVertical: 32, textAlign: 'center' },
+    emptyChartText: { ...typography.bodySmall, color: c.textMuted, fontStyle: 'italic', marginVertical: spacing.xxl, textAlign: 'center' },
     monthNavRow: {
+        alignSelf: 'stretch',
         flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-        paddingHorizontal: 4, marginBottom: 4,
+        paddingHorizontal: spacing.xs, marginBottom: spacing.xs,
     },
-    monthNavBtn: { padding: 6, borderRadius: 8 },
-    monthRangeLabel: { fontSize: 13, fontWeight: '700', color: c.textSecondary },
+    monthNavBtn: { padding: 6, borderRadius: radius.sm },
+    monthLabelBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    monthRangeLabel: { ...typography.label, fontWeight: '700', color: c.textSecondary },
 
-    dots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: 16, marginBottom: 8 },
-    dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: c.borderSubtle },
+    dots: { flexDirection: 'row', justifyContent: 'center', gap: 6, marginTop: spacing.lg, marginBottom: spacing.sm },
+    dot: { width: 6, height: 6, borderRadius: radius.pill, backgroundColor: c.borderSubtle },
     dotActive: { backgroundColor: c.primary, width: 16 },
 
-    finePrint: { fontSize: 11, color: c.textMuted, textAlign: 'center', marginTop: 4 },
+    finePrint: { ...typography.caption, color: c.textMuted, textAlign: 'center', marginTop: spacing.xs },
 
     row: {
-        flexDirection: 'row', alignItems: 'center', gap: 12,
+        flexDirection: 'row', alignItems: 'center', gap: spacing.md,
         backgroundColor: c.cardBackground,
-        paddingVertical: 14, paddingHorizontal: 16,
-        borderRadius: 10, marginBottom: 8,
+        paddingVertical: spacing.lg, paddingHorizontal: spacing.lg,
+        borderRadius: radius.md, marginBottom: spacing.sm,
     },
-    rowText: { flex: 1, fontSize: 15, color: c.textPrimary, fontWeight: '500' },
+    rowText: { flex: 1, ...typography.bodyStrong, fontWeight: '500', color: c.textPrimary },
     creatorCta: {
-        flexDirection: 'row', alignItems: 'center', gap: 14,
+        flexDirection: 'row', alignItems: 'center', gap: spacing.lg,
         backgroundColor: c.primary,
-        paddingVertical: 16, paddingHorizontal: 16,
-        borderRadius: 18, marginTop: 24,
+        paddingVertical: spacing.lg, paddingHorizontal: spacing.lg,
+        borderRadius: radius.lg, marginTop: spacing.xl,
+        // Coloured brand glow — bespoke, not a neutral elevation tier.
         shadowColor: c.primary, shadowOpacity: 0.35, shadowRadius: 12,
         shadowOffset: { width: 0, height: 6 }, elevation: 4,
     },
     creatorCtaBadge: {
-        width: 44, height: 44, borderRadius: 14,
+        width: 44, height: 44, borderRadius: radius.md,
         backgroundColor: 'rgba(255,255,255,0.18)',
         alignItems: 'center', justifyContent: 'center',
     },
     creatorCtaEmoji: { fontSize: 22 },
-    creatorCtaTitle: { fontSize: 16, fontWeight: '800', color: '#fff' },
-    creatorCtaDesc: { fontSize: 12.5, color: 'rgba(255,255,255,0.85)', marginTop: 2 },
+    creatorCtaTitle: { ...typography.bodyStrong, fontWeight: '800', color: '#fff' },
+    creatorCtaDesc: { ...typography.labelSmall, fontWeight: '400', color: 'rgba(255,255,255,0.85)', marginTop: 2 },
 
     // "Kitos" aggregate row — visually identical to a Legend row (dot +
     // label + amount). Shown below the legend, separated by a hairline
@@ -715,23 +880,23 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     kitosRow: {
         flexDirection: 'row',
         alignItems: 'center',
-        gap: 8,
-        marginTop: 8,
+        gap: spacing.sm,
+        marginTop: spacing.sm,
         paddingTop: 6,
         borderTopWidth: StyleSheet.hairlineWidth,
         borderTopColor: c.borderSubtle,
     },
-    kitosDot: { width: 10, height: 10, borderRadius: 5, flexShrink: 0 },
-    kitosLabel: { flex: 1, fontSize: 13 },
-    kitosAmount: { fontSize: 13, fontWeight: '600', flexShrink: 0 },
+    kitosDot: { width: 10, height: 10, borderRadius: radius.pill, flexShrink: 0 },
+    kitosLabel: { flex: 1, ...typography.label, fontWeight: '400' },
+    kitosAmount: { ...typography.label, flexShrink: 0 },
 
     // Toggle button at the bottom of the category page that flips top-N
     // between 5 and 10.
     kitosToggleBtn: {
-        marginTop: 10,
+        marginTop: spacing.sm,
         alignSelf: 'center',
         paddingVertical: 6,
-        paddingHorizontal: 12,
+        paddingHorizontal: spacing.md,
     },
-    kitosToggleText: { fontSize: 13, fontWeight: '600' },
+    kitosToggleText: { ...typography.label },
 });

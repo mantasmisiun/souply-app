@@ -6,7 +6,7 @@ import { ProductImage } from '../ProductImage';
 import { ChainLogoStrip } from '../ChainLogoStrip';
 import { ScalePressable } from '../ScalePressable';
 import { QuantityControl } from '../QuantityControl';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
 
 type ImageUrlList = (string | null | undefined)[] | string | null;
 type ChainLogo = { chainId: number; logoUrl: string | null };
@@ -96,14 +96,10 @@ export default memo(BasketProductCard);
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     productCard: {
         backgroundColor: c.cardBackground,
-        borderRadius: 12,
+        borderRadius: radius.lg,
         padding: 12,
         alignItems: 'center',
-        elevation: 1,
-        shadowColor: '#000',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
-        shadowRadius: 2,
+        ...elevation.level2,
         flex: 1,
         maxWidth: '50%',
     },
@@ -114,14 +110,14 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'center',
         marginBottom: 8,
     },
-    productImage: { width: '100%', height: '100%' },
+    productImage: { width: '100%', height: '100%', borderRadius: radius.md },
     productImagePlaceholder: {
         width: '100%',
         height: '100%',
         alignItems: 'center',
         justifyContent: 'center',
         backgroundColor: c.surfaceMuted,
-        borderRadius: 8,
+        borderRadius: radius.md,
     },
     productImageEmoji: { fontSize: 44, opacity: 0.4 },
     productInfo: { flex: 1, width: '100%', marginBottom: 10 },
@@ -130,7 +126,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     addButton: {
         width: '100%',
         backgroundColor: c.primary,
-        borderRadius: 8,
+        borderRadius: radius.pill,
         paddingVertical: 10,
         alignItems: 'center',
     },

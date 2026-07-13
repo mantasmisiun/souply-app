@@ -8,7 +8,7 @@ import { APP_ENV } from './env';
  *   1. Metro (`__DEV__=true`) → derive host from Metro's hostUri, so the LAN
  *      IP that serves the JS bundle is where Express on :3000 lives too.
  *   2. APP_ENV 'dev' (EAS dev variant, no Metro) → hardcoded laptop LAN IP.
- *   3. APP_ENV 'staging' (EAS staging variant) → api.souply.manofoto (souply_test).
+ *   3. APP_ENV 'staging' (EAS staging variant) → souply-api.manofoto (souply_test).
  *   4. Production → api.souply.lt (souply_production).
  */
 
@@ -37,14 +37,19 @@ const getDevHost = (): string => {
         cfg?.manifest?.debuggerHost ??
         '';
     const host = String(hostUri).split(':')[0].trim();
-    return host || 'localhost';
+    // When Metro is served over USB (adb reverse) the host is localhost/127.0.0.1 — but the API is
+    // NOT on the device's own loopback. Fall back to the laptop's LAN IP so the JS bundle can stream
+    // over USB (fast) while API calls still go over Wi-Fi — including AFTER you unplug to photograph a
+    // receipt. (On Wi-Fi Metro this returns the LAN IP directly, unchanged.)
+    if (!host || host === 'localhost' || host === '127.0.0.1') return DEV_VARIANT_LAN_HOST;
+    return host;
 };
 
 const DEV_LAN_URL = `http://${getDevHost()}:3000`;
 const DEV_VARIANT_LAN_URL = `http://${DEV_VARIANT_LAN_HOST}:3000`;
 // Staging API (souply-api-staging → souply_staging). LAN-gated by Traefik, so
 // only reachable from the home network / WireGuard — fine for the staging app.
-const STAGING_URL = 'https://api.souply.manofoto.dpdns.org';
+const STAGING_URL = 'https://souply-api.manofoto.dpdns.org';
 // Permanent production endpoint (souply-api → souply_production).
 const PROD_URL = 'https://api.souply.lt';
 

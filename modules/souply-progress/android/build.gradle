@@ -1,0 +1,22 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'lt.souply.progress'
+version = '0.1.0'
+
+android {
+  namespace 'lt.souply.progress'
+  defaultConfig {
+    versionCode 1
+    versionName '0.1.0'
+  }
+}
+
+dependencies {
+  // Material Components 1.14.0 — adds the M3 Expressive WAVY CircularProgressIndicator
+  // (wave amplitude / wavelength). gradle resolves the app to the highest version in
+  // the graph, so this lifts the whole app from 1.12.0 → 1.14.0 (backward-compatible).
+  implementation 'com.google.android.material:material:1.14.0'
+}

@@ -44,6 +44,13 @@ app-example
 /ios
 /android
 
+# Local Expo modules — keep the source, ignore native build output
+modules/*/android/build/
+modules/*/android/.gradle/
+modules/*/android/.cxx/
+modules/*/ios/build/
+modules/*/ios/Pods/
+
 # Synced copy of /Project/shared/ — populated by `npm run sync-shared`
 # before each EAS build so the upload includes the parser source. The
 # canonical edit point is /Project/shared/ at the monorepo root.

@@ -111,6 +111,14 @@ export default {
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       package: BUNDLE_ID,
+      // Android Maps SDK key — set via Expo's native android config because
+      // react-native-maps 1.20.x ships no config plugin (free key: Google Cloud
+      // Console → enable "Maps SDK for Android" → GOOGLE_MAPS_API_KEY_ANDROID).
+      config: {
+        googleMaps: {
+          apiKey: process.env.GOOGLE_MAPS_API_KEY_ANDROID || '',
+        },
+      },
       // Precise + approximate location for accurate nearest-store results and
       // map centering. FINE requires a Play Console "Location permissions"
       // declaration + prominent in-app disclosure (handled at submission).
@@ -136,11 +144,23 @@ export default {
       favicon: ICON,
     },
     plugins: [
+      '@react-native-community/datetimepicker',
       [
         'expo-build-properties',
         {
           ios: {
             deploymentTarget: '16.0',
+            // GoogleSignIn 9.x pulls AppCheckCore (a Swift pod) whose deps
+            // GoogleUtilities + RecaptchaInterop are Obj-C pods that don't define
+            // a module map — so a static-library build fails ("Swift pods cannot
+            // be integrated as static libraries"). Force modular headers on those
+            // two so AppCheckCore can import them. (Expo already enables modular
+            // headers for GoogleSignIn/ReachabilitySwift; this covers the deeper
+            // transitive chain CocoaPods resolved at build time.)
+            extraPods: [
+              { name: 'GoogleUtilities', modular_headers: true },
+              { name: 'RecaptchaInterop', modular_headers: true },
+            ],
           },
           android: {
             // DEV variant only: allow plain-HTTP to the LAN dev API
@@ -163,6 +183,10 @@ export default {
       ],
       'expo-router',
       'expo-localization',
+      // expo-font@14 ships a config plugin; bare entry is a no-op (no fonts to
+      // embed natively) but is the SDK-54-recommended setup and stops the
+      // `expo install` auto-add nag on the dynamic config.
+      'expo-font',
       'expo-secure-store',
       'expo-web-browser',
       [
@@ -186,15 +210,9 @@ export default {
           },
         },
       ],
-      [
-        'react-native-maps',
-        {
-          // Android requires a Maps SDK API key (free, Google Cloud Console →
-          // enable "Maps SDK for Android" → create key → set GOOGLE_MAPS_API_KEY_ANDROID).
-          // iOS uses Apple Maps by default — no key needed.
-          androidGoogleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY_ANDROID || '',
-        },
-      ],
+      // NOTE: react-native-maps 1.20.x (pinned for new-arch interop — 1.21+ broke Android
+      // marker/tile rendering) ships NO Expo config plugin, so the Android Maps SDK key is
+      // set via `android.config.googleMaps.apiKey` below instead of a plugin entry here.
       [
         'expo-share-intent',
         {
@@ -232,6 +250,13 @@ export default {
         '@react-native-google-signin/google-signin',
         { iosUrlScheme: process.env.GOOGLE_IOS_URL_SCHEME || 'com.googleusercontent.apps.placeholder' },
       ],
+      // OS document scanner (ML Kit Document Scanner on Android, VisionKit on
+      // iOS) for normal-length receipts: native edge-detect + auto-capture +
+      // de-skew, on-device & free.
+      [
+        'react-native-document-scanner-plugin',
+        { cameraPermission: 'Souply naudoja kamerą kvitams nuskaityti.' },
+      ],
       // Must come last: strips unused permissions (mic / media-audio /
       // draw-over) that the plugins above pull in. See the plugin file.
       './plugins/withBlockedPermissions',
@@ -248,6 +273,12 @@ export default {
       },
     },
     owner: 'souply-solutions',
+    // runtimeVersion = the app.json `version` (policy 'appVersion'). This is the OTA
+    // COMPATIBILITY GATE (Phase 3): an EAS Update bundle is only ever offered to a native
+    // build whose runtimeVersion matches, so OTA JS can never land on an incompatible native
+    // ABI. Bump `version` whenever you ship a change that needs a new native binary (a new
+    // native module, or a breaking API contract) — that also cuts the OTA channel so old
+    // natives stop pulling new JS, and it's the same key the server version gate floors on.
     runtimeVersion: {
       policy: 'appVersion',
     },
@@ -256,6 +287,14 @@ export default {
       requestHeaders: {
         'expo-channel-name': IS_DEV ? 'dev' : IS_STAGING ? 'staging' : 'production',
       },
+      // Same-session, behind-the-native-splash OTA apply on COLD START (Phase 3): the
+      // launcher checks for an update on load and waits up to fallbackToCacheTimeout ms for
+      // it to download before rendering — so a fresh bundle applies THIS launch instead of
+      // next. If the check/download exceeds the timeout (slow network), it falls back to the
+      // cached/embedded bundle and the update applies on a later launch. Warm-published
+      // updates (app already running) are handled by the JS hook useAppUpdates.
+      checkAutomatically: 'ON_LOAD',
+      fallbackToCacheTimeout: 12000,
     },
   },
 };

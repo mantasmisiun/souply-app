@@ -1,9 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    View, Text, ScrollView, TouchableOpacity, StyleSheet,
-    Alert, ActivityIndicator, Modal, TextInput, Switch,
-    Image, Pressable, Dimensions,
-} from 'react-native';
+    View,
+    Text,
+    ScrollView,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    Modal,
+    TextInput,
+    Switch,
+    Image,
+    Pressable,
+    Dimensions,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -14,7 +24,7 @@ import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { ProductImage } from '../../../components/ProductImage';
 import { SkeletonBox } from '../../../components/SkeletonBox';
-import MiniPriceChart, { PriceChartSvg, preparePriceData, filterByRange, type PricePoint, type RangeKey } from '../../../components/MiniPriceChart';
+import MiniPriceChart, { PriceChartSvg, preparePriceData, filterByRange, timeXPositions, type PricePoint, type RangeKey } from '../../../components/MiniPriceChart';
 import { ChainLogoStrip } from '../../../components/ChainLogoStrip';
 import { getChainMiniLogoUrl } from '../../../utils/chainBrandName';
 import CategoryPickerModal from '../../../components/admin/CategoryPickerModal';
@@ -67,11 +77,9 @@ function ModalChart({
     const chartWidth = MODAL_CHART_MIN_WIDTH;
     const padding = MODAL_CHART_PADDING;
     const chartW = chartWidth - padding.left - padding.right;
-    const pointXs = useMemo(() => data.map((_, i) =>
-        data.length === 1
-            ? padding.left + chartW / 2
-            : padding.left + (i / (data.length - 1)) * chartW
-    ), [data, chartW]);
+    // Same TIME-scaled positions the SVG draws (domain [first point, now]) — the
+    // crosshair must hit-test against where the points actually are.
+    const pointXs = useMemo(() => timeXPositions(data, chartW, padding.left), [data, chartW]);
 
     const handleChartTouch = (x: number) => {
         if (!pointXs.length) return;
@@ -262,7 +270,7 @@ function SpEditModal({
                         disabled={saving}
                     >
                         {saving
-                            ? <ActivityIndicator size="small" color={colors.primary} />
+                            ? <MaterialProgress size="small" color={colors.primary} />
                             : <Text style={styles.editHeaderSave}>{t('common.save')}</Text>}
                     </TouchableOpacity>
                 </View>
@@ -298,7 +306,7 @@ function SpEditModal({
                                     disabled={uploading}
                                 >
                                     {uploading
-                                        ? <ActivityIndicator color={colors.primary} />
+                                        ? <MaterialProgress color={colors.primary} />
                                         : <Ionicons name="add" size={28} color={colors.primary} />}
                                 </Pressable>
                                 {/* Remove slot */}
@@ -647,7 +655,7 @@ export default function AdminProductDetailScreen() {
                             />
                             {deletingSpId === sp.id && (
                                 <View style={styles.deletingOverlay}>
-                                    <ActivityIndicator color={colors.primary} />
+                                    <MaterialProgress color={colors.primary} />
                                 </View>
                             )}
                         </View>

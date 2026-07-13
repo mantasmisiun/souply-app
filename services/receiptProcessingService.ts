@@ -1,8 +1,10 @@
-import TextRecognition from "@react-native-ml-kit/text-recognition";
-import * as ImageManipulator from "expo-image-manipulator";
-import { Image } from "react-native";
 import { parseProductName } from "@shared/parsers/productNameParser";
-import { ocrImageTiled } from "../utils/mlkitOcr";
+import { detectCardMaskBands, redactReceiptText, type MaskBand } from "@shared/parsers/cardMaskDetection";
+import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
+import { requestStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
+import { router } from "expo-router";
+import i18n from "../i18n";
+import { ocrReceiptPages } from "../utils/receiptOcrPipeline";
 import { API_BASE_URL } from "../config/api";
 import { getUserId } from "../config/user";
 import {
@@ -37,7 +39,15 @@ import {
   type LabeledRegion,
   type Region,
 } from "@shared/parsers/rimiParser";
+import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
 import { REGIONS_VERSION } from "./regionsRehydrationService";
+import { Platform } from "react-native";
+
+// iOS MLKit splits rows into 2-4 near-same-y boxes; the Maxima+Lidl parsers carry an
+// xLeft-sorted row merger behind this flag. Every parse surface must pass the SAME flag
+// (interactive receipt-process, region rehydration, recovery, and this headless queue) —
+// a site that omits it produces a DIFFERENT parse of the same photo on iOS.
+const PARSER_OPTS = { iosOcr: Platform.OS === "ios" };
 
 export interface ProcessingResult {
   receiptId: number;
@@ -49,7 +59,8 @@ export type ProcessingFailReason =
   | "ocr_error"
   | "chain_unrecognized"
   | "store_unrecognized"
-  | "post_failed";
+  | "post_failed"
+  | "mask_failed";
 
 export class ProcessingError extends Error {
   constructor(
@@ -87,105 +98,16 @@ interface MatchedProduct {
   amount: number | null;
   sizeUnit: string | null;
   pricePerUnit: number | null;
+  // Carried from the parser so the server resolver sees that a by-weight line
+  // is weighable (without it the resolver treats null as a form mismatch).
+  isWeighable?: boolean | null;
   rawLines: string[];
   region: Region;
 }
 
-async function rotatePortrait(uri: string): Promise<string> {
-  const dims = await new Promise<{ width: number; height: number }>(
-    (resolve, reject) => {
-      Image.getSize(uri, (width, height) => resolve({ width, height }), reject);
-    },
-  );
-  if (dims.height >= dims.width) return uri;
-  const [cw, ccw] = await Promise.all([
-    ImageManipulator.manipulateAsync(uri, [{ rotate: 90 }], {
-      compress: 1,
-      format: ImageManipulator.SaveFormat.JPEG,
-    }),
-    ImageManipulator.manipulateAsync(uri, [{ rotate: -90 }], {
-      compress: 1,
-      format: ImageManipulator.SaveFormat.JPEG,
-    }),
-  ]);
-  const [ocrCW, ocrCCW] = await Promise.all([
-    TextRecognition.recognize(cw.uri),
-    TextRecognition.recognize(ccw.uri),
-  ]);
-  const countLines = (r: { blocks: { lines: unknown[] }[] }) =>
-    r.blocks.reduce((s, b) => s + b.lines.length, 0);
-  return countLines(ocrCW) >= countLines(ocrCCW) ? cw.uri : ccw.uri;
-}
-
-async function ocrAllPages(imageUris: string[]): Promise<{
-  allLines: LineWithFrame[];
-  mergedLines: LineWithFrame[];
-  frameScale: number;
-  /** First page, post-rotation: this is what we upload + crop against. */
-  firstPageUri: string;
-  firstPageWidth: number;
-  firstPageHeight: number;
-}> {
-  const allLines: LineWithFrame[] = [];
-  let frameScale = 1;
-  let yOffset = 0;
-  let firstPageUri = imageUris[0] ?? "";
-  let firstPageWidth = 0;
-  let firstPageHeight = 0;
-
-  for (let pageIdx = 0; pageIdx < imageUris.length; pageIdx++) {
-    const pageUri = await rotatePortrait(imageUris[pageIdx]);
-    const ocr = await ocrImageTiled(pageUri);
-    if (pageIdx === 0) {
-      frameScale = ocr.frameScale;
-      firstPageUri = pageUri;
-      firstPageWidth = ocr.pixelWidth;
-      firstPageHeight = ocr.pixelHeight;
-    }
-
-    let pageMaxYScaled = 0;
-    for (const line of ocr.lines) {
-      if (line.yBottom > pageMaxYScaled) pageMaxYScaled = line.yBottom;
-      allLines.push({
-        text: line.text,
-        yTop: line.yTop + yOffset,
-        yBottom: line.yBottom + yOffset,
-        xLeft: line.xLeft,
-        xRight: line.xRight,
-      });
-    }
-    yOffset += pageMaxYScaled + 50;
-  }
-
-  allLines.sort((a, b) => a.yTop - b.yTop);
-
-  const mergedLines: LineWithFrame[] = [];
-  const PRICE_RE = /^\d+[.,]\s?\d{2}\s*[AB]\s*$/;
-  const ROW_THRESHOLD = 30 * frameScale;
-
-  for (const line of allLines) {
-    if (mergedLines.length > 0) {
-      const last = mergedLines[mergedLines.length - 1];
-      if (Math.abs(line.yTop - last.yTop) < ROW_THRESHOLD) {
-        if (PRICE_RE.test(line.text)) {
-          mergedLines.push({ ...line });
-        } else if (PRICE_RE.test(last.text)) {
-          mergedLines.splice(mergedLines.length - 1, 0, { ...line });
-        } else {
-          last.text = last.text + " " + line.text;
-          last.yTop = Math.min(last.yTop, line.yTop);
-          last.yBottom = Math.max(last.yBottom, line.yBottom);
-          last.xLeft = Math.min(last.xLeft, line.xLeft);
-          last.xRight = Math.max(last.xRight, line.xRight);
-        }
-        continue;
-      }
-    }
-    mergedLines.push({ ...line });
-  }
-
-  return { allLines, mergedLines, frameScale, firstPageUri, firstPageWidth, firstPageHeight };
-}
+// OCR pipeline (rotate + tile + multi-page merge) is shared with account
+// recovery via `utils/receiptOcrPipeline.ts` so the two paths can never drift.
+const ocrAllPages = ocrReceiptPages;
 
 /**
  * Map a local file URI to the MIME type the server-side presigner expects.
@@ -307,7 +229,7 @@ async function matchProducts(
     pricePerUnit: number | null;
     parsedAmount?: number | null;
     parsedUnit?: string | null;
-    isWeighable?: boolean;
+    isWeighable?: boolean | null;
     rawLines: string[];
     region: Region;
   }[],
@@ -318,7 +240,7 @@ async function matchProducts(
   const promises = rawProducts.map(async (p) => {
     const { strippedName, amount: nameAmount, unit: nameUnit } = parseProductName(
       p.name,
-      p.isWeighable,
+      p.isWeighable ?? undefined,
     );
     const matchName = strippedName || p.name;
     let resolvedAmount = p.parsedAmount ?? nameAmount;
@@ -335,6 +257,11 @@ async function matchProducts(
     }
 
     let altMatches: unknown[] = [];
+    // Absurd-length guard — see receipt-process.tsx (the receipt-272 mega-line hang).
+    if (matchName.length > 80) {
+      console.warn(`[match] skipped absurd-length name (${matchName.length} chars)`);
+      return { altMatches: [] } as any;
+    }
     try {
       const params = new URLSearchParams({ chainId: String(chainId), name: matchName });
       // Send the parser-extracted pack size so the matcher can prefer
@@ -377,6 +304,7 @@ async function matchProducts(
       amount: resolvedAmount,
       sizeUnit: resolvedUnit,
       pricePerUnit: p.pricePerUnit,
+      isWeighable: p.isWeighable ?? null,
       rawLines: p.rawLines,
       region: p.region,
     } as MatchedProduct;
@@ -418,7 +346,7 @@ async function logFail(
 async function postReceipt(
   parsedData: object,
   signal: AbortSignal,
-): Promise<{ receiptId: number; mandatorySwipesRequired: number }> {
+): Promise<{ receiptId: number; mandatorySwipesRequired: number; duplicate?: boolean }> {
   const userId = await getUserId();
   const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts`, {
     method: "POST",
@@ -429,6 +357,14 @@ async function postReceipt(
   });
   const data = await res.json();
   if (res.status === 409) {
+    // The receipt already exists — typically because a PRIOR run of THIS item committed
+    // the create but was killed before the image upload (leaving the row image-less). If
+    // the server hands back the existing id, return it as duplicate so the caller RE-RUNS
+    // the image-upload step against it (recovering the missing photo) instead of dropping
+    // the item permanently image-less. Only bail when there's no id to recover.
+    if (Number.isFinite(data?.existingReceiptId)) {
+      return { receiptId: Number(data.existingReceiptId), mandatorySwipesRequired: 0, duplicate: true };
+    }
     throw new ProcessingError("post_failed", "Kvitas jau įkeltas");
   }
   if (!res.ok || !data?.id) {
@@ -452,7 +388,7 @@ function buildHeader(
 ) {
   return {
     chainName, chainId, storeCode, storeAddress, storeId, storeName,
-    storeAddressMatched, matchConfidence, matchLoading: false, rawText, region,
+    storeAddressMatched, matchConfidence, rawText, region, // matchLoading dropped (transient UI state)
     lineRegions,
     // Stamp so mobile can detect when persisted regions came from an
     // older parser revision and force a re-OCR rehydration.
@@ -461,12 +397,56 @@ function buildHeader(
 }
 
 function buildFooter(
-  f: { total: number | null; date: string; time: string; receiptNo: string; totalSavings: number | null; rawText: string; region: Region; lineRegions: LabeledRegion[] },
+  f: { total: number | null; date: string; time: string; receiptNo: string; totalSavings: number | null; comboDiscount?: number | null; rawText: string; region: Region; lineRegions: LabeledRegion[] },
 ) {
-  return { total: f.total, date: f.date, time: f.time, receiptNo: f.receiptNo, totalSavings: f.totalSavings, rawText: f.rawText, region: f.region, lineRegions: f.lineRegions };
+  // rawText + region dropped from the persisted footer — byte-identical duplicates of
+  // header.rawText/region, which stays the single source of truth. comboDiscount (IKI
+  // bare-RINKINYS set deal) MUST pass through this whitelist — the server subtracts it
+  // from savings + the visited-store comparison basket.
+  return { total: f.total, date: f.date, time: f.time, receiptNo: f.receiptNo, totalSavings: f.totalSavings, comboDiscount: f.comboDiscount ?? null, lineRegions: f.lineRegions };
+}
+
+/**
+ * Strip bank/loyalty card numbers + cashier name from the stored parsedData
+ * (rawText fields + product rawLines) and stamp geometry-only redaction boxes
+ * so the Kvitas-tab overlay can re-draw them. Mirrors receipt-process.tsx's
+ * buildParsedData — the queue pipeline must give the same privacy guarantee.
+ */
+function redactQueueParsedData(parsedData: object, maskBands: MaskBand[]): object {
+  const pd = parsedData as Record<string, any>;
+  return {
+    ...pd,
+    header: pd.header ? { ...pd.header, rawText: redactReceiptText(pd.header.rawText) } : pd.header,
+    products: Array.isArray(pd.products)
+      ? pd.products.map((p: any) => ({
+          ...p,
+          rawLines: Array.isArray(p.rawLines) ? p.rawLines.map(redactReceiptText) : p.rawLines,
+        }))
+      : pd.products,
+    // New blobs carry no footer.rawText (deduped); only redact it if an OLD blob still has one.
+    footer: pd.footer
+      ? { ...pd.footer, ...(pd.footer.rawText != null ? { rawText: redactReceiptText(pd.footer.rawText) } : {}) }
+      : pd.footer,
+    maskBands: maskBands.map((b) => ({
+      yTop: b.yTop, yBottom: b.yBottom, xLeft: b.xLeft, xRight: b.xRight, kind: b.kind,
+    })),
+  };
 }
 
 // ── Chain processors ──────────────────────────────────────────────────────────
+
+/**
+ * The store address didn't auto-match — surface the map store-resolution screen
+ * (chain known, store not) and await the user's pick. This service is headless,
+ * so it uses expo-router's imperative `router`. null = user backed out.
+ */
+async function promptStoreResolution(chainId: number, chainName: string, address: string | null, rawText?: string | null) {
+  const prefill = address || pickAddressFromRawText(rawText);
+  console.log(`[storeResolution] (queue) ${chainName} prefill=${JSON.stringify(prefill)}`);
+  const pending = requestStoreResolution(chainId, chainName, prefill);
+  router.push("/receipt/store-resolution" as any);
+  return await pending;
+}
 
 async function processRimi(
   allLines: LineWithFrame[],
@@ -475,7 +455,11 @@ async function processRimi(
 ): Promise<object> {
   const chainId = 2;
   const parsed = parseRimiReceipt(allLines);
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  if (!store) {
+    const chosen = await promptStoreResolution(chainId, "RIMI", parsed.header.storeAddress || null, parsed.header.rawText);
+    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
+  }
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "RIMI", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Rimi parduotuvė neatpažinta");
@@ -495,8 +479,12 @@ async function processMaxima(
   onProgress?: (done: number, total: number) => void,
 ): Promise<object> {
   const chainId = 1;
-  const parsed = parseMaximaReceipt(allLines);
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  const parsed = parseMaximaReceipt(allLines, PARSER_OPTS);
+  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  if (!store) {
+    const chosen = await promptStoreResolution(chainId, "MAXIMA", parsed.header.storeAddress || null, parsed.header.rawText);
+    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
+  }
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "MAXIMA", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Maxima parduotuvė neatpažinta");
@@ -507,6 +495,9 @@ async function processMaxima(
     promoPrice: mp.promoPrice,
     quantity: mp.quantity,
     unit: mp.unit,
+    // Weighed-vs-packaged signal — the matcher's weighable gate and the resolver's
+    // self-heal are inert without it (it was silently dropped here for every chain).
+    isWeighable: (mp as MaximaProduct & { isWeighable?: boolean | null }).isWeighable ?? (mp.unit === 'kg' ? true : null),
     pricePerUnit: mp.pricePerUnit,
     rawLines: mp.rawLines,
     region: mp.region,
@@ -527,7 +518,11 @@ async function processNorfa(
 ): Promise<object> {
   const chainId = 4;
   const parsed = parseNorfaReceipt(allLines);
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  if (!store) {
+    const chosen = await promptStoreResolution(chainId, "NORFA", parsed.header.storeAddress || null, parsed.header.rawText);
+    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
+  }
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "NORFA", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Norfa parduotuvė neatpažinta");
@@ -538,6 +533,9 @@ async function processNorfa(
     promoPrice: np.promoPrice,
     quantity: np.quantity,
     unit: np.unit,
+    // Weighed-vs-packaged signal — the matcher's weighable gate and the resolver's
+    // self-heal are inert without it (it was silently dropped here for every chain).
+    isWeighable: (np as NorfaProduct & { isWeighable?: boolean | null }).isWeighable ?? (np.unit === 'kg' ? true : null),
     pricePerUnit: np.pricePerUnit,
     rawLines: np.rawLines,
     region: np.region,
@@ -557,8 +555,12 @@ async function processLidl(
   onProgress?: (done: number, total: number) => void,
 ): Promise<object> {
   const chainId = 5;
-  const parsed = parseLidlReceipt(allLines);
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  const parsed = parseLidlReceipt(allLines, PARSER_OPTS);
+  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  if (!store) {
+    const chosen = await promptStoreResolution(chainId, "LIDL", parsed.header.storeAddress || null, parsed.header.rawText);
+    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
+  }
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "LIDL", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Lidl parduotuvė neatpažinta");
@@ -569,6 +571,13 @@ async function processLidl(
     promoPrice: lp.promoPrice,
     quantity: lp.quantity,
     unit: lp.unit,
+    // Weighed-vs-packaged signal — the matcher's weighable gate and the resolver's
+    // self-heal are inert without it (it was silently dropped here for every chain).
+    isWeighable: (lp as LidlProduct & { isWeighable?: boolean | null }).isWeighable ?? (lp.unit === 'kg' ? true : null),
+    // Pack-size reference (weighable → 1 kg) so matchProducts resolves
+    // amount/sizeUnit — else weighables render with no amount. rimi parity.
+    parsedAmount: lp.parsedAmount ?? null,
+    parsedUnit: lp.parsedUnit ?? null,
     pricePerUnit: lp.pricePerUnit,
     rawLines: lp.rawLines,
     region: lp.region,
@@ -589,7 +598,11 @@ async function processIki(
 ): Promise<object> {
   const chainId = 3;
   const parsed = parseIkiReceipt(mergedLines);
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
+  if (!store) {
+    const chosen = await promptStoreResolution(chainId, "IKI", parsed.header.storeAddress || null, parsed.header.rawText);
+    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
+  }
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "IKI", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "IKI parduotuvė neatpažinta");
@@ -600,6 +613,9 @@ async function processIki(
     promoPrice: ip.promoPrice,
     quantity: ip.quantity,
     unit: ip.unit,
+    // Weighed-vs-packaged signal — the matcher's weighable gate and the resolver's
+    // self-heal are inert without it (it was silently dropped here for every chain).
+    isWeighable: ip.isWeighable ?? (ip.unit === 'kg' ? true : null),
     pricePerUnit: ip.pricePerUnit,
     rawLines: ip.rawLines,
     region: ip.region,
@@ -621,7 +637,7 @@ export async function processOneReceipt(
   onProgress?: (step: string, done?: number, total?: number) => void,
 ): Promise<ProcessingResult> {
   try {
-    onProgress?.("Nuskaitoma...");
+    onProgress?.(i18n.t("receiptQueue.scanning"));
     const {
       allLines,
       mergedLines,
@@ -640,20 +656,30 @@ export async function processOneReceipt(
       throw new ProcessingError("ocr_no_text", "Nepavyko nuskaityti teksto");
     }
 
-    onProgress?.("Atpažįstama...");
+    onProgress?.(i18n.t("receiptQueue.recognising"));
     let parsedData: object;
     const reportMatch = (d: number, t: number) =>
-      onProgress?.(`${d}/${t} prekės`, d, t);
+      onProgress?.(i18n.t("receiptQueue.products", { done: d, total: t }), d, t);
 
-    if (isRimiReceipt(lineTexts)) {
+    // Primary text-fingerprint detection; fall back to the seller's PVM/VAT
+    // code (chain-specific, printed on every receipt) when those all miss.
+    const chainId =
+      isRimiReceipt(lineTexts) ? 2 :
+      isMaximaReceipt(lineTexts) ? 1 :
+      isNorfaReceipt(lineTexts) ? 4 :
+      isLidlReceipt(lineTexts) ? 5 :
+      isIkiReceipt(lineTexts) ? 3 :
+      (detectChainByVatCode(lineTexts)?.chainId ?? null);
+
+    if (chainId === 2) {
       parsedData = await processRimi(allLines, signal, reportMatch);
-    } else if (isMaximaReceipt(lineTexts)) {
+    } else if (chainId === 1) {
       parsedData = await processMaxima(allLines, signal, reportMatch);
-    } else if (isNorfaReceipt(lineTexts)) {
+    } else if (chainId === 4) {
       parsedData = await processNorfa(allLines, signal, reportMatch);
-    } else if (isLidlReceipt(lineTexts)) {
+    } else if (chainId === 5) {
       parsedData = await processLidl(allLines, signal, reportMatch);
-    } else if (isIkiReceipt(lineTexts)) {
+    } else if (chainId === 3) {
       parsedData = await processIki(mergedLines, signal, reportMatch);
     } else {
       await logFail("chain_unrecognized", {
@@ -663,11 +689,17 @@ export async function processOneReceipt(
       throw new ProcessingError("chain_unrecognized", "Parduotuvės tinklas neatpažintas");
     }
 
+    // Detect bank/loyalty/cashier redaction boxes (image-pixel space), then
+    // strip the same data from the stored parsedData. The queue pipeline gets
+    // the SAME privacy guarantee as the interactive flow.
+    const maskBands = detectCardMaskBands(allLines);
+    console.log(`[MASK] (queue) detected ${maskBands.length} band(s)`);
+
     // Inject image metadata so loadExistingReceipt can size pageMetas
     // without a separate Image.getSize round-trip. filePath stays null
     // until uploadReceiptImage PATCHes the receipt row below.
     const parsedDataWithImage = {
-      ...(parsedData as Record<string, unknown>),
+      ...(redactQueueParsedData(parsedData, maskBands) as Record<string, unknown>),
       image: {
         uri: firstPageUri,
         width: firstPageWidth,
@@ -676,16 +708,28 @@ export async function processOneReceipt(
       },
     };
 
-    onProgress?.("Išsaugoma...");
+    onProgress?.(i18n.t("receiptQueue.saving"));
     const postResult = await postReceipt(parsedDataWithImage, signal);
 
-    // Background-but-awaited image upload. Without this, the dev band-
-    // crop preview on the receipt detail screen has nothing to slice
-    // (the `/api/receipts/:id/image` endpoint returns null). Failures
-    // are non-fatal — the receipt data is already persisted; we just
-    // lose the dev preview for that receipt.
-    onProgress?.("Įkeliama nuotrauka...");
-    await uploadReceiptImage(postResult.receiptId, firstPageUri, signal);
+    // Burn the black redaction boxes into the image BEFORE upload (via the
+    // global off-screen ViewShot host — this service is headless). FAIL-CLOSED:
+    // if the redacted copy can't be produced, SKIP the image upload entirely
+    // rather than PUT the original that still shows a card number.
+    let uploadUri: string | null = firstPageUri;
+    if (maskBands.length > 0) {
+      onProgress?.(i18n.t("receiptQueue.masking"));
+      try {
+        uploadUri = await buildRedactedUploadUri(firstPageUri, firstPageWidth, firstPageHeight, maskBands);
+      } catch (e) {
+        console.warn("[MASK] (queue) redaction failed — skipping image upload:", e);
+        await logFail("mask_failed", { ocrLineCount: lineTexts.length });
+        uploadUri = null;
+      }
+    }
+    if (uploadUri) {
+      onProgress?.(i18n.t("receiptQueue.uploading"));
+      await uploadReceiptImage(postResult.receiptId, uploadUri, signal);
+    }
 
     return postResult;
   } catch (e) {

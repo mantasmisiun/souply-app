@@ -1,7 +1,15 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView,
-    Image, Pressable, TextInput, Alert,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    ScrollView,
+    Image,
+    Pressable,
+    TextInput,
+    Alert,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
@@ -346,7 +354,7 @@ export function FlagsQueue({ onEmpty }: Props) {
     if (loading) {
         return (
             <View style={styles.centered}>
-                <ActivityIndicator size="large" color={colors.primary} />
+                <MaterialProgress size="large" color={colors.primary} />
             </View>
         );
     }
@@ -412,7 +420,7 @@ export function FlagsQueue({ onEmpty }: Props) {
                         />
                     ) : crop.status === 'loading' ? (
                         <View style={[styles.cropFallback, styles.cropFallbackPlaceholder]}>
-                            <ActivityIndicator size="small" color={colors.primary} />
+                            <MaterialProgress size="small" color={colors.primary} />
                         </View>
                     ) : (
                         <View style={[styles.cropFallback, styles.cropFallbackPlaceholder]}>
@@ -590,7 +598,7 @@ export function FlagsQueue({ onEmpty }: Props) {
                                     onPress={onUploadOwn}
                                     disabled={uploading || actioning}
                                 >
-                                    {uploading ? <ActivityIndicator color={colors.primary} /> : <Ionicons name="add" size={32} color={colors.primary} />}
+                                    {uploading ? <MaterialProgress color={colors.primary} /> : <Ionicons name="add" size={32} color={colors.primary} />}
                                 </Pressable>
                                 <Text style={styles.candidateLabel} numberOfLines={2}>
                                     {uploading ? t('admin.flags.imageUploading') : t('admin.flags.imageUpload')}
@@ -724,7 +732,7 @@ export function FlagsQueue({ onEmpty }: Props) {
                     onPress={onConfirm}
                     disabled={actioning}
                 >
-                    {actioning ? <ActivityIndicator color={colors.onPrimary} /> : <Text style={styles.primaryBtnText}>{t('admin.flags.confirm')}</Text>}
+                    {actioning ? <MaterialProgress color={colors.onPrimary} /> : <Text style={styles.primaryBtnText}>{t('admin.flags.confirm')}</Text>}
                 </TouchableOpacity>
                 <TouchableOpacity style={styles.dismissBtn} onPress={onDismiss} disabled={actioning}>
                     <Text style={styles.dismissBtnText}>{t('admin.flags.dismiss')}</Text>
@@ -809,7 +817,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     cropFallbackText: { color: c.textMuted, fontSize: 12 },
 
     section: { marginTop: 4, padding: 12, borderRadius: 12, borderWidth: 1, borderColor: c.borderSubtle, backgroundColor: c.pageBackground, gap: 8 },
-    sectionFlagged: { borderColor: c.primary, borderLeftWidth: 4, backgroundColor: c.primary + '12' },
+    sectionFlagged: { borderWidth: 4, borderColor: 'transparent', borderLeftColor: c.primary, backgroundColor: c.primary + '12' },
     sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     sectionTitle: { fontSize: 12, fontWeight: '700', color: c.textSecondary, textTransform: 'uppercase' },
     sectionTitleFlagged: { color: c.primary },

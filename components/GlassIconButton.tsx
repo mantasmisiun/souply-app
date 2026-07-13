@@ -1,4 +1,4 @@
-import { Pressable, View, StyleSheet } from 'react-native';
+import { Platform, Pressable, View, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../constants/theme';
 import { LiquidGlass } from './LiquidGlass';
@@ -42,6 +42,10 @@ export function GlassIconButton({
     const tint = disabled ? colors.textMuted : (color ?? colors.primary);
     const disc = size + 14;
     const iconEl = <Ionicons name={icon} size={size} color={tint} />;
+    // The glass pill is an iOS-only affordance (Liquid Glass / blur capsule).
+    // Android header buttons app-wide are bare icons — the blur fallback
+    // rendered as a dark-tinted circle there (visible in light mode).
+    const showGlass = glass && Platform.OS === 'ios';
 
     return (
         <Pressable
@@ -55,7 +59,7 @@ export function GlassIconButton({
                 marginHorizontal: 4,
             })}
         >
-            {glass ? (
+            {showGlass ? (
                 <LiquidGlass
                     style={[styles.disc, styles.glassDisc, { width: disc, height: disc, borderRadius: disc / 2 }]}
                 >

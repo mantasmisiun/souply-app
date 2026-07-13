@@ -4,7 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useMemo } from 'react';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
 import { ScalePressable } from '../ScalePressable';
 import { useTemplateAddState } from '../../state/templateAddState';
 import { ltPluralSuffix } from '../../utils/ltPlural';
@@ -63,7 +63,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         flexDirection: 'row', alignItems: 'center',
         paddingHorizontal: 16, paddingTop: 12, gap: 12,
         backgroundColor: c.cardBackground,
-        borderTopWidth: 1, borderTopColor: c.border,
+        borderTopLeftRadius: radius.lg,
+        borderTopRightRadius: radius.lg,
+        ...elevation.level3,
     },
     left: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
     count: { fontSize: 14, fontWeight: '600', color: c.primary },
@@ -71,7 +73,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         flexDirection: 'row', alignItems: 'center', gap: 4,
         backgroundColor: c.primary,
         paddingVertical: 10, paddingHorizontal: 16,
-        borderRadius: 10,
+        borderRadius: radius.pill,
     },
     btnText: { fontSize: 14, fontWeight: '700', color: c.onPrimary },
 });

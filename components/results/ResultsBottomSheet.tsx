@@ -1,12 +1,25 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Image, StyleSheet, TouchableOpacity, Pressable, ActivityIndicator, ScrollView, Dimensions, PanResponder } from 'react-native';
-import Animated, { SlideInDown, SlideOutDown, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import {
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    Pressable,
+    Dimensions,
+    Platform,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
+import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
+import { GlassStageSheet, SHEET_HANDLE_H, type GlassStageSheetRef } from '../GlassStageSheet';
 import { Ionicons } from '@expo/vector-icons';
-import { type AppTheme } from '../../constants/theme';
+import { spacing, radius, typography, iconSize, avatarSize, type AppTheme } from '../../constants/theme';
 import { type SheetOption } from '../../utils/splitOptions';
-import { chainPinImage } from '../../utils/chainLogoAssets';
-import { chainBrandColorById, chainBrandName } from '../../utils/chainBrandName';
+import { ChainLogoChip } from '../ChainLogoChip';
+import { chainBrandName } from '../../utils/chainBrandName';
 import { formatEuro } from '../../utils/formatCurrency';
+import { useTranslation } from 'react-i18next';
+import { LiquidGlass } from '../LiquidGlass';
+import { concentricRadius } from '../../utils/displayCorners';
 
 // SheetOption lives in utils/splitOptions (pure + unit-tested). Re-export so
 // existing imports from this component keep working.
@@ -15,85 +28,90 @@ export type { SheetOption };
 const SCREEN_H = Dimensions.get('window').height;
 const PEEK_GAP = 26;   // sliver of the next card shown when collapsed
 
-const prekes = (n: number) => {
-    const m10 = n % 10, m100 = n % 100;
-    if (m10 === 1 && m100 !== 11) return 'prekė';
-    if (m10 >= 2 && m10 <= 9 && (m100 < 10 || m100 >= 20)) return 'prekės';
-    return 'prekių';
-};
+/** "1.4 km" / "850 m" — distance display, switching to metres under 1 km. Units
+ *  are universal, so no translation needed. */
+function formatDistance(km: number): string {
+    return km < 1 ? `${Math.round(km * 100) * 10} m` : `${km.toFixed(1)} km`;
+}
+
 
 /** Circular chain badge — the same baked pin asset used on the map markers. */
-function ChainLogo({ chainId, chainName, size, colors }: {
-    chainId: number; chainName: string; size: number; colors: AppTheme;
+// Thin wrapper over the shared ChainLogoChip so the sheet and the map pill draw
+// the chain badge identically (glyph on its brand-coloured disc).
+function ChainLogo({ chainId, chainName, size }: {
+    chainId: number; chainName: string; size: number; colors?: AppTheme;
 }) {
-    const asset = chainPinImage(chainId, false);
-    if (asset != null) {
-        return <Image source={asset} style={{ width: size, height: size }} resizeMode="contain" />;
-    }
-    return (
-        <View style={{
-            width: size, height: size, borderRadius: size / 2,
-            backgroundColor: chainBrandColorById(chainId),
-            alignItems: 'center', justifyContent: 'center',
-        }}>
-            <Text style={{ color: '#FFFFFF', fontSize: size * 0.42, fontWeight: '800' }}>
-                {(chainName[0] ?? '?').toUpperCase()}
-            </Text>
-        </View>
-    );
+    return <ChainLogoChip chainId={chainId} name={chainName} size={size} />;
 }
-
-function Radio({ selected, colors }: { selected: boolean; colors: AppTheme }) {
-    return (
-        <View style={[styles_radio.ring, { borderColor: selected ? colors.primary : colors.border }]}>
-            {selected && <View style={[styles_radio.dot, { backgroundColor: colors.primary }]} />}
-        </View>
-    );
-}
-const styles_radio = StyleSheet.create({
-    ring: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-    dot: { width: 11, height: 11, borderRadius: 6 },
-});
 
 /** A selectable combo (or baseline single) row with a radio, in the multi sheet. */
-function OptionCard({ option, selected, styles, colors, onPress, onLayout }: {
+// MEMOIZED with a stable onSelect(key) interface: every stage settle re-renders
+// MultiSheet on the JS thread right as the release spring runs on the UI thread
+// — without memo all cards re-rendered each time (an inline onPress closure per
+// card defeated any bail-out). Now only the cards whose `selected` flips render.
+const OptionCard = React.memo(function OptionCard({ option, selected, styles, colors, onSelect, onLayout }: {
     option: SheetOption; selected: boolean; styles: Styles; colors: AppTheme;
-    onPress: () => void; onLayout?: (h: number) => void;
+    onSelect: (key: string) => void; onLayout?: (h: number) => void;
 }) {
+    const { t } = useTranslation();
     const multi = option.stores.length > 1;
     return (
         <Pressable
-            onPress={onPress}
+            onPress={() => onSelect(option.key)}
             onLayout={onLayout ? e => onLayout(e.nativeEvent.layout.height) : undefined}
             style={[styles.card, selected && styles.cardSelected]}
         >
+            {/* Plain translucent wash, NOT a glass surface: the native glass
+                material draws specular rim highlights on the corners (the
+                "lighter top-left / bottom-right edges") which we don't want on
+                the cards — and the sheet beneath is already frosted, so the
+                cards need no blur of their own to read as glassy. */}
+            <View style={styles.cardGlass}>
             <View style={styles.cardTopRow}>
-                <Radio selected={selected} colors={colors} />
                 {multi ? (
                     <View style={styles.logoStack}>
                         {option.stores.map((s, i) => (
-                            <View key={s.storeId} style={i > 0 ? { marginLeft: -16 } : undefined}>
-                                <ChainLogo chainId={s.chainId} chainName={s.chainName} size={38} colors={colors} />
+                            <View key={s.storeId} style={i > 0 ? { marginLeft: -spacing.lg } : undefined}>
+                                <ChainLogo chainId={s.chainId} chainName={s.chainName} size={avatarSize.md} colors={colors} />
                             </View>
                         ))}
                     </View>
                 ) : (
-                    <ChainLogo chainId={option.stores[0].chainId} chainName={option.stores[0].chainName} size={40} colors={colors} />
+                    <ChainLogo chainId={option.stores[0].chainId} chainName={option.stores[0].chainName} size={avatarSize.md} colors={colors} />
                 )}
                 <View style={styles.cardMid}>
                     {multi ? (
                         <>
-                            <Text style={styles.cardTitle}>{option.stores.length} parduotuvės</Text>
-                            {option.saving > 0 && <Text style={styles.saving}>Sutaupote {formatEuro(option.saving)}</Text>}
+                            <Text style={styles.cardTitle}>{t('results.sheet.storesPlural', { count: option.stores.length })}</Text>
+                            <View style={styles.cardBadgeRow}>
+                                {option.detourKm != null && option.detourKm > 0 && (
+                                    <View style={[styles.metaChip, styles.detourChip]}>
+                                        <Ionicons name="navigate-outline" size={iconSize.xs} color={colors.warning} />
+                                        <Text style={[styles.metaText, styles.detourChipText]} allowFontScaling={false}>{`+ ${formatDistance(option.detourKm)}`}</Text>
+                                    </View>
+                                )}
+                                {option.saving > 0 && (
+                                    <View style={[styles.metaChip, styles.savingChip]}>
+                                        <Ionicons name="pricetag-outline" size={iconSize.xs} color={colors.success} />
+                                        <Text style={[styles.metaText, styles.savingChipText]} allowFontScaling={false}>{`- ${formatEuro(option.saving)}`}</Text>
+                                    </View>
+                                )}
+                            </View>
                         </>
                     ) : (
                         <>
                             <Text style={styles.cardTitle} numberOfLines={1}>{chainBrandName(option.stores[0].chainName)}</Text>
-                            <Text style={styles.cardSub} numberOfLines={1}>Tik šioje parduotuvėje</Text>
+                            <Text style={styles.cardSub} numberOfLines={1}>{t('results.sheet.onlyHere')}</Text>
+                            {Number.isFinite(option.stores[0].distance) && option.stores[0].distance > 0 && (
+                                <View style={[styles.metaChip, styles.cardMetaChip, styles.savingChip]}>
+                                    <Ionicons name="navigate-outline" size={iconSize.xs} color={colors.success} />
+                                    <Text style={[styles.metaText, styles.savingChipText]}>{formatDistance(option.stores[0].distance)}</Text>
+                                </View>
+                            )}
                         </>
                     )}
                 </View>
-                <Text style={styles.price}>{formatEuro(option.total)}</Text>
+                <Text style={styles.price} allowFontScaling={false}>{formatEuro(option.total)}</Text>
             </View>
 
             {multi && option.combo && (
@@ -103,18 +121,16 @@ function OptionCard({ option, selected, styles, colors, onPress, onLayout }: {
                         return (
                             <Text key={s.storeId} style={styles.breakdownLine} numberOfLines={1}>
                                 <Text style={styles.breakdownChain}>{chainBrandName(s.chainName)}</Text>
-                                {`  ${count} ${prekes(count)} · ${s.storeAddress}`}
+                                {`  ${t('results.sheet.items', { count })} · ${s.storeAddress}`}
                             </Text>
                         );
                     })}
-                    {option.combo.extraDistanceKm > 0.05 && (
-                        <Text style={styles.breakdownDist}>+{option.combo.extraDistanceKm.toFixed(1)} km kelio</Text>
-                    )}
                 </View>
             )}
+            </View>
         </Pressable>
     );
-}
+});
 
 type Props = {
     options: SheetOption[];
@@ -138,17 +154,21 @@ function Actions({ styles, colors, creatingList, onNavigate, onCreateList, botto
     styles: Styles; colors: AppTheme; creatingList: boolean;
     onNavigate: () => void; onCreateList: () => void; bottomInset: number;
 }) {
+    const { t } = useTranslation();
+    // The sheet floats ABOVE the home indicator now, so the bar needs no inset
+    // padding of its own (bottomInset positions the whole sheet instead).
+    void bottomInset;
     return (
-        <View style={[styles.actions, { paddingBottom: Math.max(bottomInset, 12) + 10 }]}>
+        <View style={[styles.actions, { paddingBottom: spacing.md }]}>
             <TouchableOpacity style={styles.navigateBtn} onPress={onNavigate}>
-                <Ionicons name="navigate-outline" size={20} color={colors.primary} />
-                <Text style={styles.navigateText}>Vykti</Text>
+                <Ionicons name="navigate-outline" size={iconSize.md} color={colors.primary} />
+                <Text style={styles.navigateText}>{t('results.sheet.navigate')}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.listBtn} onPress={onCreateList} disabled={creatingList}>
                 {creatingList
-                    ? <ActivityIndicator size="small" color={colors.onPrimary} />
-                    : <Ionicons name="list-outline" size={20} color={colors.onPrimary} />}
-                <Text style={styles.listText}>{creatingList ? 'Kuriama…' : 'Pirkinių sąrašas'}</Text>
+                    ? <MaterialProgress size="small" color={colors.onPrimary} />
+                    : <Ionicons name="list-outline" size={iconSize.md} color={colors.onPrimary} />}
+                <Text style={styles.listText}>{creatingList ? t('results.sheet.creating') : t('results.sheet.createList')}</Text>
             </TouchableOpacity>
         </View>
     );
@@ -166,46 +186,50 @@ export default function ResultsBottomSheet(props: Props) {
 /* ── Single-store: one beautiful auto-height card (never clips). ─────────── */
 function SingleSheet({ options, onNavigate, onCreateList, creatingList, colors, bottomInset, onHeightChange }: Props) {
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    const { t } = useTranslation();
     const store = options[0]?.stores[0];
     if (!store) return null;
+    const bottomOffset = spacing.sm; // match the side margins (see MultiSheet)
+    const cornerR = concentricRadius(bottomInset, spacing.sm); // concentric with the display
     return (
         <Animated.View
             entering={SlideInDown.duration(240)}
             exiting={SlideOutDown.duration(180)}
-            style={styles.sheet}
-            onLayout={e => onHeightChange?.(e.nativeEvent.layout.height)}
+            style={[styles.sheet, { bottom: bottomOffset, borderRadius: cornerR }]}
+            onLayout={e => onHeightChange?.(e.nativeEvent.layout.height + bottomOffset)}
         >
+            <LiquidGlass fallback="blur" style={[styles.sheetGlass, { borderRadius: cornerR }]}>
             {/* No drag pill: the single-store sheet is auto-height and can't
                 expand, so a handle would imply a gesture that does nothing.
                 Keep the area for top breathing room under the rounded corners. */}
             <View style={styles.handleArea} />
             <View style={styles.singlePad}>
                 <View style={styles.singleHeader}>
-                    <ChainLogo chainId={store.chainId} chainName={store.chainName} size={46} colors={colors} />
+                    <ChainLogo chainId={store.chainId} chainName={store.chainName} size={avatarSize.lg} colors={colors} />
                     <View style={styles.singleMid}>
                         <Text style={styles.singleTitle} numberOfLines={1}>{chainBrandName(store.chainName)}</Text>
                         <Text style={styles.singleAddr} numberOfLines={1}>{store.storeAddress}</Text>
                     </View>
-                    <Text style={styles.singlePrice}>{formatEuro(options[0].total)}</Text>
+                    <Text style={styles.singlePrice} allowFontScaling={false}>{formatEuro(options[0].total)}</Text>
                 </View>
 
                 <View style={styles.metaRow}>
                     {Number.isFinite(store.distance) && store.distance > 0 && (
                         <View style={styles.metaChip}>
-                            <Ionicons name="navigate-outline" size={13} color={colors.textMuted} />
-                            <Text style={styles.metaText}>{store.distance.toFixed(1)} km</Text>
+                            <Ionicons name="navigate-outline" size={iconSize.xs} color={colors.textMuted} />
+                            <Text style={styles.metaText}>{formatDistance(store.distance)}</Text>
                         </View>
                     )}
                     {store.isApproximated && (
                         <View style={styles.metaChip}>
-                            <Ionicons name="sparkles-outline" size={13} color={colors.textMuted} />
-                            <Text style={styles.metaText}>Apytikslė kaina</Text>
+                            <Ionicons name="sparkles-outline" size={iconSize.xs} color={colors.textMuted} />
+                            <Text style={styles.metaText}>{t('results.sheet.approxPrice')}</Text>
                         </View>
                     )}
                     {store.missingItemNames.length > 0 && (
                         <View style={[styles.metaChip, styles.warnChip]}>
-                            <Ionicons name="alert-circle-outline" size={13} color={colors.warning} />
-                            <Text style={[styles.metaText, { color: colors.warning }]}>Trūksta {store.missingItemNames.length}</Text>
+                            <Ionicons name="alert-circle-outline" size={iconSize.xs} color={colors.warning} />
+                            <Text style={[styles.metaText, { color: colors.warning }]}>{t('results.sheet.missing', { count: store.missingItemNames.length })}</Text>
                         </View>
                     )}
                 </View>
@@ -213,210 +237,174 @@ function SingleSheet({ options, onNavigate, onCreateList, creatingList, colors, 
 
             <Actions styles={styles} colors={colors} creatingList={creatingList}
                 onNavigate={onNavigate} onCreateList={onCreateList} bottomInset={bottomInset} />
+            </LiquidGlass>
         </Animated.View>
     );
 }
 
-const HANDLE_H = 30;        // drag affordance height
+const HANDLE_H = 30;        // drag affordance height (styles.handleArea — SingleSheet)
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-/* ── Multi-option: draggable 3-stage sheet; action bar always pinned. ────── */
+/* ── Multi-option: draggable 3-stage sheet on the shared GlassStageSheet. ──
+   All stage machinery (worklet drag, glass frame, transform-only slide, the
+   stage-3 edge dock) lives in components/GlassStageSheet — this is just the
+   results-specific content: snap-point math, the option cards and the action
+   bar. */
 function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, creatingList, colors, bottomInset, onHeightChange }: Props) {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [firstCardH, setFirstCardH] = useState(120);
     const [contentH, setContentH] = useState(0);
     const [actionsH, setActionsH] = useState(90);
-    const [stage, setStage] = useState(0);
-    // Bumped on each user snap so the settle effect animates even to the SAME
-    // stage (a small drag that releases back).
-    const [settleTick, setSettleTick] = useState(0);
+    const sheetRef = useRef<GlassStageSheetRef>(null);
 
-    // Snap points, ascending sheet heights: peek (top card + a sliver), an
-    // optional MIDDLE stage (scroll the list while the map stays visible so
-    // tapping a result shows on the map), and full (whole list, capped). The
-    // action bar is a fixed sibling counted in every height → never clipped.
+    // Snap points (Find-My-style detents), ascending: BAR (grabber pill + the
+    // floating action bar), PEEK (top card + a sliver), an optional MID stage
+    // (scroll the list while the map stays visible), and FULL — always the
+    // near-top detent; the shared sheet docks it edge-to-edge (dockAtLast).
     const snaps = useMemo(() => {
-        const full = Math.min(HANDLE_H + contentH + actionsH, SCREEN_H * 0.85);
-        const peek = Math.min(HANDLE_H + firstCardH + PEEK_GAP + actionsH, full);
-        const mid = clamp(HANDLE_H + actionsH + SCREEN_H * 0.42, peek, full);
-        const pts = [peek];
+        const bar = SHEET_HANDLE_H + actionsH;
+        const full = SCREEN_H * 0.85;
+        const peek = Math.min(bar + firstCardH + PEEK_GAP, full);
+        const mid = clamp(Math.min(bar + contentH, bar + SCREEN_H * 0.42), peek, full);
+        const pts = [bar];
+        if (peek > bar + 40) pts.push(peek);
         if (mid > peek + 48 && full > mid + 48) pts.push(mid);
         if (full > peek + 48) pts.push(full);
         return pts;
     }, [firstCardH, contentH, actionsH]);
 
-    const safeStage = Math.min(stage, snaps.length - 1);
-
-    const height = useSharedValue(snaps[0]);
-    const dragging = useRef(false);
-    const startH = useRef(snaps[0]);
-    const snapsRef = useRef(snaps); snapsRef.current = snaps;
-    const stageRef = useRef(safeStage); stageRef.current = safeStage;
-    // Slide-in is driven by this shared value (NOT reanimated's `entering`
-    // layout animation). A layout animation + an animated `height` on the same
-    // node fight on Fabric — the entering snapshot pins the height, so the
-    // measured peek never applies until you tap. Owning both the slide and the
-    // height in ONE animated style avoids that entirely.
-    const slideY = useSharedValue(SCREEN_H * 0.85);
-    const sheetStyle = useAnimatedStyle(() => ({
-        height: height.value,
-        transform: [{ translateY: slideY.value }],
-    }));
-    useEffect(() => { slideY.value = withTiming(0, { duration: 260 }); }, [slideY]);
-
-    // ANIMATE to the current stage on a user action (snap / tap / collapse) —
-    // tracked by safeStage + a settle tick so even a same-stage release snaps
-    // back. Reads snaps via ref, so a measurement-only change does NOT re-fire
-    // here (re-animating toward a settling `full` is what made it "drag on").
-    useEffect(() => {
-        if (dragging.current) return;
-        const s = snapsRef.current;
-        height.value = withTiming(s[Math.min(stageRef.current, s.length - 1)], { duration: 220 });
-    }, [safeStage, settleTick, height]);
-
-    // SETTLE INSTANTLY when measurements change the snap heights (first card /
-    // actions / content height land a frame after mount). Instant → fixes the
-    // "opens clipped, tap to fix" case without animating toward a moving target.
-    useEffect(() => {
-        if (dragging.current) return;
-        height.value = snaps[Math.min(stageRef.current, snaps.length - 1)];
-    }, [snaps, height]);
-
-    // New store's options → collapse back to peek (the animate effect runs it).
-    useEffect(() => { setStage(0); }, [options]);
-
-    // Report the settled stage height so the map can frame content above us.
-    useEffect(() => { onHeightChange?.(snaps[safeStage]); }, [safeStage, snaps, onHeightChange]);
-
-    const pan = useMemo(() => PanResponder.create({
-        onStartShouldSetPanResponder: () => true,
-        onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 3,
-        onPanResponderGrant: () => { dragging.current = true; startH.current = height.value; },
-        onPanResponderMove: (_, g) => {
-            const s = snapsRef.current;
-            // Clamp between peek and full — dragging down never closes the sheet
-            // (tapping the map deselects; that's the only dismiss).
-            height.value = clamp(startH.current - g.dy, s[0], s[s.length - 1]);
-        },
-        onPanResponderRelease: (_, g) => {
-            dragging.current = false;
-            const s = snapsRef.current;
-            const tap = Math.abs(g.dy) < 5 && Math.abs(g.dx) < 5;
-            if (tap) { // cycle peek → mid → full → peek
-                setStage((stageRef.current + 1) % s.length);
-                setSettleTick(t => t + 1);
-                return;
-            }
-            // Snap to the nearest height, nudged one stage by a flick's direction.
-            const h = height.value;
-            let idx = 0, best = Infinity;
-            s.forEach((v, i) => { const d = Math.abs(v - h); if (d < best) { best = d; idx = i; } });
-            if (g.vy < -0.5 && idx < s.length - 1) idx++;
-            else if (g.vy > 0.5 && idx > 0) idx--;
-            setStage(idx);
-            setSettleTick(t => t + 1);
-        },
-        onPanResponderTerminate: () => {
-            dragging.current = false;
-            setSettleTick(t => t + 1);
-            const s = snapsRef.current;
-            height.value = withTiming(s[Math.min(stageRef.current, s.length - 1)], { duration: 220 });
-        },
-    }), [height]);
+    // New store's options → back to peek.
+    useEffect(() => { sheetRef.current?.snapTo(1); }, [options]);
 
     return (
-        <Animated.View style={[styles.sheet, sheetStyle]}>
-            <View style={styles.handleArea} {...pan.panHandlers}>
-                <View style={styles.handle} />
-            </View>
-
-            <ScrollView
-                style={styles.list}
-                contentContainerStyle={styles.listContent}
-                showsVerticalScrollIndicator={safeStage > 0}
-                scrollEnabled={safeStage > 0}
-                onContentSizeChange={(_, h) => setContentH(h)}
-            >
-                {options.map((opt, i) => (
-                    <OptionCard
-                        key={opt.key}
-                        option={opt}
-                        selected={selectedKey === opt.key}
-                        styles={styles}
-                        colors={colors}
-                        onPress={() => onSelect(opt.key)}
-                        onLayout={i === 0 ? setFirstCardH : undefined}
-                    />
-                ))}
-            </ScrollView>
-
-            <View onLayout={e => setActionsH(e.nativeEvent.layout.height)}>
+        <GlassStageSheet
+            ref={sheetRef}
+            snaps={snaps}
+            initialStage={1}
+            colors={colors}
+            bottomInset={bottomInset}
+            dockAtLast
+            exitSlide
+            onHeightChange={onHeightChange}
+            onBarHeight={setActionsH}
+            onContentHeight={setContentH}
+            contentContainerStyle={styles.listContent}
+            bar={
                 <Actions styles={styles} colors={colors} creatingList={creatingList}
                     onNavigate={onNavigate} onCreateList={onCreateList} bottomInset={bottomInset} />
-            </View>
-        </Animated.View>
+            }
+        >
+            {options.map((opt, i) => (
+                <OptionCard
+                    key={opt.key}
+                    option={opt}
+                    selected={selectedKey === opt.key}
+                    styles={styles}
+                    colors={colors}
+                    onSelect={onSelect}
+                    onLayout={i === 0 ? setFirstCardH : undefined}
+                />
+            ))}
+        </GlassStageSheet>
     );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
+    // Single-store sheet (auto-height, not animated) keeps the one-piece panel.
     sheet: {
-        position: 'absolute', left: 0, right: 0, bottom: 0,
-        backgroundColor: c.cardBackground,
-        borderTopLeftRadius: 20, borderTopRightRadius: 20,
-        overflow: 'hidden',
-        elevation: 16, shadowColor: '#000', shadowOffset: { width: 0, height: -3 }, shadowOpacity: 0.18, shadowRadius: 10,
+        position: 'absolute', left: spacing.sm, right: spacing.sm, bottom: 0,
+        borderRadius: radius.xl,
+        shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 12,
     },
-    // Generous drag target; the visible pill sits centred within it.
+    sheetGlass: {
+        flex: 1, borderRadius: radius.xl, overflow: 'hidden',
+        // Painted hairline ONLY for the Android blur fallback (needs edge
+        // definition). iOS native glass carries its own system edge treatment —
+        // a border on top diverges from the default material look.
+        ...(Platform.OS === 'android'
+            ? { borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)' as const }
+            : null),
+        // Android: expo-blur renders a translucent wash, not a real blur — give it
+        // a tinted body (and elevation, which needs a background to draw) so the
+        // sheet keeps contrast over the map. iOS glass strips this automatically.
+        backgroundColor: Platform.OS === 'android' ? c.cardBackground + 'F2' : 'transparent',
+        elevation: 16,
+    },
+    // Top breathing room under the rounded corners (SingleSheet only — the
+    // draggable sheet's pill lives in GlassStageSheet).
     handleArea: { height: HANDLE_H, alignItems: 'center', justifyContent: 'center' },
-    handle: { width: 44, height: 5, borderRadius: 3, backgroundColor: c.border },
 
-    list: { flex: 1 },
-    listContent: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
+    listContent: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs, paddingBottom: spacing.sm },
 
     // ── Single-store card ──
-    singlePad: { paddingHorizontal: 16, paddingTop: 10, paddingBottom: 16 },
-    singleHeader: { flexDirection: 'row', alignItems: 'center', gap: 12 },
-    singleMid: { flex: 1, paddingRight: 8 },
-    singleTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
-    singleAddr: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+    singlePad: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.lg },
+    singleHeader: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
+    singleMid: { flex: 1, paddingRight: spacing.sm },
+    singleTitle: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
+    singleAddr: { ...typography.caption, color: c.textMuted, marginTop: 2 },
+    // Price is a bespoke display figure — no type token in the 4-pt scale fits.
     singlePrice: { fontSize: 22, fontWeight: '800', color: c.primary },
-    metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 8, marginTop: 12 },
+    metaRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.md },
+    // Chips over glass: translucent capsules (Apple's fill-on-material look) —
+    // a neutral systemGray wash for plain badges, the semantic color at low
+    // alpha for detour/saving, pill-rounded. Opaque *Muted tokens looked flat
+    // and foreign on the liquid-glass cards.
     metaChip: {
-        flexDirection: 'row', alignItems: 'center', gap: 4,
-        backgroundColor: c.surfaceMuted, borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4,
+        flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+        backgroundColor: 'rgba(120,120,128,0.16)', borderRadius: radius.pill,
+        paddingHorizontal: spacing.sm, paddingVertical: spacing.xs,
     },
-    warnChip: { backgroundColor: c.warningMuted },
-    metaText: { fontSize: 12, color: c.textMuted, fontWeight: '600' },
+    warnChip: { backgroundColor: c.warning + '2E' },
+    // metaChip used as a standalone badge inside an OptionCard column.
+    cardMetaChip: { alignSelf: 'flex-start', marginTop: spacing.xs },
+    // Decision badges on the multi-store card: detour (amber, a cost) + saving
+    // (green, the win), side by side and vivid for a quick glance.
+    cardBadgeRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.xs },
+    detourChip: { backgroundColor: c.warning + '2E' },
+    detourChipText: { color: c.warning, fontWeight: '700' },
+    savingChip: { backgroundColor: c.success + '2E' },
+    savingChipText: { color: c.success, fontWeight: '700' },
+    metaText: { ...typography.label, color: c.textSecondary },
 
     // ── Option (radio) card ──
     card: {
-        backgroundColor: c.cardBackground, borderRadius: 14, padding: 12, marginBottom: 10,
-        borderWidth: 1.5, borderColor: c.border,
+        borderRadius: radius.lg, marginBottom: spacing.sm,
+        // Borderless by default (the glass surface alone defines the card);
+        // the width stays reserved so selecting doesn't shift the layout.
+        borderWidth: 1.5, borderColor: 'transparent', overflow: 'hidden',
     },
-    cardSelected: { borderColor: c.primary, backgroundColor: c.primaryMuted ?? c.surfaceMuted },
-    cardTopRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    cardGlass: {
+        borderRadius: radius.lg - 1.5, padding: spacing.md,
+        // WHITE wash so the card reads LIGHTER than the sheet in both schemes
+        // (white lightens whatever is beneath — same tint level the user OK'd).
+        backgroundColor: 'rgba(255,255,255,0.12)',
+    },
+    // Selection = the pink ring only — no background tint over the glass.
+    cardSelected: { borderColor: c.primary },
+    cardTopRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     logoStack: { flexDirection: 'row', alignItems: 'center' },
     cardMid: { flex: 1 },
-    cardTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
-    cardSub: { fontSize: 12, color: c.textMuted, marginTop: 2 },
-    saving: { fontSize: 12, fontWeight: '700', color: c.success, marginTop: 2 },
+    cardTitle: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
+    cardSub: { ...typography.caption, color: c.textMuted, marginTop: 2 },
+    saving: { ...typography.label, fontWeight: '700', color: c.success, marginTop: 2 },
+    // Price is a bespoke display figure — no type token in the 4-pt scale fits.
     price: { fontSize: 19, fontWeight: '800', color: c.primary },
 
-    breakdown: { marginTop: 10, paddingTop: 10, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border, gap: 3 },
-    breakdownLine: { fontSize: 12, color: c.textSecondary },
+    breakdown: { marginTop: spacing.sm, paddingTop: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border, gap: spacing.xs },
+    breakdownLine: { ...typography.caption, color: c.textSecondary },
     breakdownChain: { fontWeight: '700', color: c.textPrimary },
-    breakdownDist: { fontSize: 11, color: c.textMuted, marginTop: 2 },
+    breakdownDist: { ...typography.caption, color: c.textMuted, marginTop: 2 },
 
     // ── Actions ──
-    actions: { flexDirection: 'row', gap: 10, paddingHorizontal: 16, paddingTop: 12, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },
+    actions: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
     navigateBtn: {
-        flex: 1, borderWidth: 1, borderColor: c.primary, borderRadius: 12,
-        paddingVertical: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+        flex: 1, borderWidth: 1, borderColor: c.primary, borderRadius: radius.pill,
+        paddingVertical: spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
     },
-    navigateText: { color: c.primary, fontWeight: '600', fontSize: 15 },
+    navigateText: { ...typography.bodyStrong, color: c.primary },
     listBtn: {
-        flex: 2, backgroundColor: c.primary, borderRadius: 12,
-        paddingVertical: 13, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
+        flex: 2, backgroundColor: c.primary, borderRadius: radius.pill,
+        paddingVertical: spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,
     },
-    listText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
+    listText: { ...typography.bodyStrong, fontWeight: '700', color: c.onPrimary },
 });

@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["SouplyReceiptPdfModule"]
+  },
+  "android": {
+    "modules": ["lt.souply.receiptpdf.SouplyReceiptPdfModule"]
+  }
+}

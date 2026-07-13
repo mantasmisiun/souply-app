@@ -67,6 +67,16 @@ const lightTheme = {
   borderSubtle:   '#F0F0F0',
   borderMuted:    '#EEEEEE',
 
+  // Material-3 tonal roles (Android modernization). Keyed to the beet brand
+  // instead of wallpaper dynamic colour, so the identity stays intact while
+  // gaining M3's container / state-layer / surface-tint vocabulary.
+  secondaryContainer:   '#F6D9E2',              // active-indicator / filled-tonal fill
+  onSecondaryContainer: '#7A2E45',              // icon/label/text ON the tonal fill
+  surfaceContainer:     '#F4EEF0',              // tinted elevated surface (nav bar, sheets)
+  surfaceContainerHigh: '#FBF6F8',              // one elevation step higher
+  surfaceTint:          palette.beet as string, // elevation-tint overlay colour
+  outlineVariant:       '#E6DDE1',              // tinted hairline divider
+
   // Status
   warning:        '#F57C00',
   warningMuted:   '#FFECB3',
@@ -117,6 +127,14 @@ const darkTheme: typeof lightTheme = {
   border:         '#3A3A3C',
   borderSubtle:   '#2A2A2C',
   borderMuted:    '#222224',
+
+  // Material-3 tonal roles (mirror of light; lifted for dark surfaces).
+  secondaryContainer:   '#4A2A34',
+  onSecondaryContainer: '#FBD3DE',
+  surfaceContainer:     '#262227',
+  surfaceContainerHigh: '#2F2A30',
+  surfaceTint:          palette.beet,
+  outlineVariant:       '#3A3236',
 
   // Status
   warning:        '#F59E0B',
@@ -207,3 +225,106 @@ export const Fonts = Platform.select({
     mono: "SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace",
   },
 });
+
+// ---------- Design tokens (non-colour, shared light/dark) ----------
+// Added for the Android modernization pass. Spacing / radius / type / motion
+// are theme-independent — consume directly: `import { spacing, radius } from
+// '../constants/theme'`. Elevation maps Material-3 tiers to RN shadow (iOS) +
+// `elevation` (Android). These give every screen one consistent vocabulary so
+// the floating tab bar, cards, and future polish stop using magic numbers.
+
+/** 4-pt spacing scale. */
+export const spacing = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
+  xxl: 32,
+  xxxl: 48,
+} as const;
+
+/** Corner-radius scale. `pill` is a large-but-FINITE value for fully-rounded (stadium)
+ *  shapes: RN clamps every corner to min(w,h)/2, so 100 renders identically to a huge
+ *  value for any pill/button/avatar we use (all ≤200px in their smaller dimension), while
+ *  avoiding the pathological 999 that has repeatedly crashed Android's new-arch
+ *  Border/BackgroundDrawable ("Required value was null"). Do NOT raise this back to 999. */
+export const radius = {
+  sm: 8,
+  md: 12,
+  lg: 20,
+  xl: 28,
+  pill: 100,
+} as const;
+
+/** Icon sizes (Ionicons & co). `xs` for inline meta chips, `md` for standard
+ *  action icons. Explicit scale so glyphs stay consistent across screens. */
+export const iconSize = {
+  xs: 13,
+  sm: 16,
+  md: 20,
+  lg: 24,
+  xl: 28,
+} as const;
+
+/** Avatar / chain-badge diameters, on the 8-pt grid. Used by ChainLogoChip and
+ *  the results sheet logos. */
+export const avatarSize = {
+  sm: 32,
+  md: 40,
+  lg: 48,
+} as const;
+
+/** Type scale (size / line-height / weight). Spread into a Text style:
+ *  `style={[typography.title, { color: colors.textPrimary }]}`. */
+export const typography = {
+  display:         { fontSize: 32, lineHeight: 38, fontWeight: '700' as const },
+  title:           { fontSize: 24, lineHeight: 30, fontWeight: '700' as const },
+  heading:         { fontSize: 20, lineHeight: 26, fontWeight: '600' as const },
+  subheading:      { fontSize: 18, lineHeight: 24, fontWeight: '700' as const },
+  body:            { fontSize: 16, lineHeight: 22, fontWeight: '400' as const },
+  bodyStrong:      { fontSize: 16, lineHeight: 22, fontWeight: '600' as const },
+  bodySmall:       { fontSize: 14, lineHeight: 20, fontWeight: '400' as const },
+  bodySmallStrong: { fontSize: 14, lineHeight: 20, fontWeight: '600' as const },
+  label:           { fontSize: 13, lineHeight: 18, fontWeight: '600' as const },
+  labelSmall:      { fontSize: 12, lineHeight: 16, fontWeight: '600' as const },
+  caption:         { fontSize: 11, lineHeight: 15, fontWeight: '500' as const },
+  // Price figures — bespoke weights/sizes kept as named tokens so they read
+  // identically everywhere (results sheet, list, basket).
+  price:           { fontSize: 18, lineHeight: 22, fontWeight: '700' as const },
+  priceLarge:      { fontSize: 22, lineHeight: 26, fontWeight: '800' as const },
+} as const;
+
+/** Motion primitives — durations (ms) + easing/spring for reanimated. */
+export const motion = {
+  duration: { fast: 150, base: 250, slow: 400 },
+  /** Material-3 easing as cubic-bezier control points (feed to Easing.bezier). */
+  easing: { standard: [0.2, 0, 0, 1] as const, emphasized: [0.05, 0.7, 0.1, 1] as const },
+  /** Default spring for press + the tab-bar active indicator. */
+  spring: { damping: 18, stiffness: 220, mass: 1 },
+  /** Bouncier spring for expressive shape-morph / stretch (M3 Expressive). */
+  springExpressive: { damping: 13, stiffness: 200, mass: 1 },
+} as const;
+
+/** Material-3 state-layer opacities — a translucent overlay of the role colour
+ *  laid over a surface on interaction (hover/focus/press). Pair with `withAlpha`. */
+export const stateLayer = { hover: 0.08, focus: 0.1, pressed: 0.1, dragged: 0.16 } as const;
+
+/** Apply an alpha channel to a #RRGGBB hex → rgba() string (for ripples +
+ *  state layers). Falls back to the input if it isn't a 6-digit hex. */
+export const withAlpha = (hex: string, alpha: number): string => {
+  const m = /^#([0-9a-fA-F]{6})$/.exec(hex);
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+};
+
+/** Material-3 elevation tiers → RN shadow (iOS) + `elevation` (Android).
+ *  Neutral shadow; reads softer on dark surfaces automatically. */
+export const elevation = {
+  level0: {},
+  level1: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3,  shadowOffset: { width: 0, height: 1 }, elevation: 1 },
+  level2: { shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 6,  shadowOffset: { width: 0, height: 2 }, elevation: 3 },
+  level3: { shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+  level4: { shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10 },
+} as const;

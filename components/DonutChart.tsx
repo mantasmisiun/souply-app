@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Image, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet } from 'react-native';
 import Svg, { Path, Circle } from 'react-native-svg';
 import Animated, {
     Easing,
+    interpolateColor,
     runOnJS,
     useAnimatedProps,
     useSharedValue,
@@ -13,6 +14,8 @@ import * as Haptics from 'expo-haptics';
 import { useTranslation } from 'react-i18next';
 import { formatEuro } from '../utils/formatCurrency';
 import { useTheme } from '../constants/theme';
+import { ChainLogoChip } from './ChainLogoChip';
+import { chainIdByName } from '../utils/chainBrandName';
 
 const AnimatedPath = Animated.createAnimatedComponent(Path);
 
@@ -66,56 +69,65 @@ const TEXT_BLOCK_H = 20 + 1 + 12; // ~33px
 
 type Segment = { path: string; color: string; dataIndex: number | null };
 
+/**
+ * One slice's endpoints in BOTH configurations, matched by label. Angles are
+ * absolute (degrees from 12 o'clock), so each arc interpolates its own start +
+ * sweep independently — no shared prefix-sum. That's what lets slices SLIDE to
+ * new positions on a reorder and grow/shrink in place on enter/exit, instead of
+ * morphing in a fixed order and snapping at the end.
+ */
 interface UnifiedSlice {
     label: string;
-    color: string;
+    prevStart: number;
     prevSweep: number;
+    currStart: number;
     currSweep: number;
+    prevColor: string;
+    currColor: string;
 }
 
 /**
- * Animated arc rendered during data transitions. Each instance owns its
- * own `useAnimatedProps` worklet that reads the shared `progress` value
- * and the captured `allSlices` snapshot to compute start angle (prefix
- * sum of preceding interpolated sweeps) + sweep, then emits the SVG `d`.
+ * Animated arc rendered during data transitions. Interpolates its OWN absolute
+ * start, sweep and colour between the prev and curr layouts — fully independent
+ * of the other arcs. At t=1 it lands exactly on the static (value-sorted)
+ * layout, so the animating→static handoff is seamless (no snap).
  */
 function AnimatedArc({
-    sliceIndex,
-    allSlices,
+    slice,
     progress,
     cx,
     cy,
     r,
     thickness,
 }: {
-    sliceIndex: number;
-    allSlices: UnifiedSlice[];
+    slice: UnifiedSlice;
     progress: SharedValue<number>;
     cx: number;
     cy: number;
     r: number;
     thickness: number;
 }) {
-    const slice = allSlices[sliceIndex];
     const animatedProps = useAnimatedProps(() => {
         const t = progress.value;
-        let startDeg = 0;
-        for (let j = 0; j < sliceIndex; j++) {
-            const s = allSlices[j];
-            startDeg += s.prevSweep + (s.currSweep - s.prevSweep) * t;
-        }
+        const start = slice.prevStart + (slice.currStart - slice.prevStart) * t;
         const sweep = slice.prevSweep + (slice.currSweep - slice.prevSweep) * t;
-        const arcStart = startDeg + GAP / 2;
-        const arcEnd = startDeg + sweep - GAP / 2;
-        if (arcEnd <= arcStart || sweep < 0.5) {
-            return { d: '' };
+        const stroke = interpolateColor(t, [0, 1], [slice.prevColor, slice.currColor]);
+        // A slot that fills (almost) the whole ring — the 1↔N endpoints — draws
+        // as a seamless full circle (no gap), matching the static single-slice
+        // render so the animation start/end has no notch pop.
+        if (sweep >= 360 - GAP) {
+            return { d: `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.001} ${cy - r}`, stroke };
         }
-        return { d: arcPath(cx, cy, r, arcStart, arcEnd) };
+        const arcStart = start + GAP / 2;
+        const arcEnd = start + sweep - GAP / 2;
+        if (arcEnd <= arcStart || sweep < 0.5) {
+            return { d: '', stroke };
+        }
+        return { d: arcPath(cx, cy, r, arcStart, arcEnd), stroke };
     });
     return (
         <AnimatedPath
             animatedProps={animatedProps}
-            stroke={slice.color}
             strokeWidth={thickness}
             fill="none"
             strokeLinecap="round"
@@ -143,38 +155,65 @@ export function DonutChart({
     const r = (size - thickness) / 2;
     const total = data.reduce((s, d) => s + d.value, 0);
 
-    // Slice morph animation between top-N states. `prevDataRef` holds the
-    // snapshot we're animating FROM; while `animating` is true we render
-    // the union of prev+curr slices as AnimatedPaths, each interpolating
-    // its arc between the two configurations.
+    // STICKY SLOT ORDER. Once a label appears it keeps its angular position for
+    // the life of the component. This is deliberate: a value-sorted ring
+    // reshuffles every month, and re-sorting a RING can't animate cleanly —
+    // to trade angular slots two wedges must either overlap (cross) or jump.
+    // Stable slots make every transition a pure grow/shrink (+ enter/exit) —
+    // "one constricts, the others expand" — with no overlap and no snap, and
+    // 1↔N falls out for free. Selection + the value-sorted legend are unaffected
+    // (they use the caller's data order via dataIndexByLabel below).
+    const orderRef = useRef<string[]>([]);
+    const order = orderRef.current.slice();
+    {
+        const known = new Set(order);
+        for (const s of data) if (!known.has(s.label)) { order.push(s.label); known.add(s.label); }
+    }
+    orderRef.current = order;
+    const orderedData = order
+        .map((l) => data.find((s) => s.label === l))
+        .filter((s): s is DonutSlice => !!s);
+    const dataIndexByLabel = new Map<string, number>();
+    data.forEach((s, i) => dataIndexByLabel.set(s.label, i));
+
+    // Slice morph animation. `prevDataRef` holds the (sticky-ordered) snapshot
+    // we're animating FROM; while `animating` is true we render every slot as an
+    // AnimatedPath interpolating its arc between the two configurations.
     const prevDataRef = useRef<DonutSlice[]>([]);
+    // Signature of the target we last STARTED animating toward — so an
+    // incidental re-render mid-morph doesn't restart it from 0.
+    const startedSigRef = useRef<string>('');
     const [animating, setAnimating] = useState(false);
     const progress = useSharedValue(1);
 
     const finishAnimation = useCallback(() => {
-        prevDataRef.current = data;
+        prevDataRef.current = orderedData;
         setAnimating(false);
-    }, [data]);
+    }, [orderedData]);
 
     useEffect(() => {
         const prev = prevDataRef.current;
         // First render: no animation, just record current.
         if (prev.length === 0) {
-            prevDataRef.current = data;
+            prevDataRef.current = orderedData;
             return;
         }
-        // Same shape: nothing to animate. Use length+labels as identity.
+        // Same shape (same labels + values, order-independent): nothing to do.
+        const prevByLabel = new Map(prev.map((s) => [s.label, s.value]));
         const sameShape =
-            prev.length === data.length &&
-            prev.every((s, i) => s.label === data[i].label && s.value === data[i].value);
+            prev.length === orderedData.length &&
+            orderedData.every((s) => prevByLabel.get(s.label) === s.value);
         if (sameShape) return;
-        // Skip the morph for the single-slice / empty edge cases — they
-        // render as a full circle / grey ring which doesn't decompose into
-        // separate paths.
-        if (data.length < 2 || prev.length < 2) {
-            prevDataRef.current = data;
+        // Already animating toward this exact target → don't restart from 0.
+        const sig = orderedData.map((s) => `${s.label}:${s.value}`).join('|');
+        if (startedSigRef.current === sig) return;
+        // To / from an EMPTY ring is a discrete state (grey ring) — snap.
+        const prevTotal = prev.reduce((s, x) => s + x.value, 0);
+        if (prevTotal <= 0 || total <= 0) {
+            prevDataRef.current = orderedData;
             return;
         }
+        startedSigRef.current = sig;
         progress.value = 0;
         setAnimating(true);
         progress.value = withTiming(
@@ -184,32 +223,43 @@ export function DonutChart({
                 if (finished) runOnJS(finishAnimation)();
             },
         );
-    }, [data, finishAnimation, progress]);
+    }, [orderedData, total, finishAnimation, progress]);
 
-    // Unified ordered slice list used while animating. Order: take prev
-    // ordering, then append any labels that appear only in curr. Slices
-    // missing from one side get a 0-sweep on that side so they grow or
-    // shrink in/out of existence smoothly.
+    // Unified slice list used while animating. Laid out by PREFIX SUM in the
+    // sticky order, so both sides share one order → the ring stays contiguous
+    // (no overlap) throughout, and at t=1 it equals the static layout (no snap).
+    // A slot absent on one side keeps 0 sweep there → grows from / shrinks to a
+    // zero-width arc in its own slot while neighbours reflow to fill.
     const unifiedSlices = useMemo<UnifiedSlice[]>(() => {
         if (!animating) return [];
         const prev = prevDataRef.current;
         const prevTotal = prev.reduce((s, x) => s + x.value, 0) || 1;
-        const currTotal = total || 1;
-        const labels: string[] = [];
-        const seen = new Set<string>();
-        prev.forEach(s => { if (!seen.has(s.label)) { labels.push(s.label); seen.add(s.label); } });
-        data.forEach(s => { if (!seen.has(s.label)) { labels.push(s.label); seen.add(s.label); } });
-        return labels.map(label => {
-            const prevSlice = prev.find(s => s.label === label);
-            const currSlice = data.find(s => s.label === label);
-            return {
+        const currTotal = orderedData.reduce((s, x) => s + x.value, 0) || 1;
+        const prevByLabel = new Map(prev.map((s) => [s.label, s]));
+        const currByLabel = new Map(orderedData.map((s) => [s.label, s]));
+        let prevAcc = 0;
+        let currAcc = 0;
+        const out: UnifiedSlice[] = [];
+        for (const label of order) {
+            const p = prevByLabel.get(label);
+            const c = currByLabel.get(label);
+            if (!p && !c) continue; // seen once, absent from both now
+            const prevSweep = p ? (p.value / prevTotal) * 360 : 0;
+            const currSweep = c ? (c.value / currTotal) * 360 : 0;
+            out.push({
                 label,
-                color: (currSlice ?? prevSlice)!.color,
-                prevSweep: prevSlice ? (prevSlice.value / prevTotal) * 360 : 0,
-                currSweep: currSlice ? (currSlice.value / currTotal) * 360 : 0,
-            };
-        });
-    }, [animating, data, total]);
+                prevStart: prevAcc,
+                prevSweep,
+                currStart: currAcc,
+                currSweep,
+                prevColor: (p ?? c)!.color,
+                currColor: (c ?? p)!.color,
+            });
+            prevAcc += prevSweep;
+            currAcc += currSweep;
+        }
+        return out;
+    }, [animating, order, orderedData]);
 
     // Static segments for the non-animating render path (and edge cases).
     const segments: Segment[] = [];
@@ -219,20 +269,26 @@ export function DonutChart({
             color: resolvedEmptyColor,
             dataIndex: null,
         });
-    } else if (data.length === 1) {
+    } else if (orderedData.length === 1) {
         segments.push({
             path: `M ${cx} ${cy - r} A ${r} ${r} 0 1 1 ${cx - 0.001} ${cy - r}`,
-            color: data[0].color,
-            dataIndex: 0,
+            color: orderedData[0].color,
+            dataIndex: dataIndexByLabel.get(orderedData[0].label) ?? 0,
         });
     } else {
+        // Render in the sticky slot order; map each slice back to the caller's
+        // data index so selection + legend stay aligned.
         let angle = 0;
-        data.forEach((slice, i) => {
+        orderedData.forEach((slice) => {
             const sweep = (slice.value / total) * 360;
             const start = angle + GAP / 2;
             const end = angle + sweep - GAP / 2;
             if (end > start) {
-                segments.push({ path: arcPath(cx, cy, r, start, end), color: slice.color, dataIndex: i });
+                segments.push({
+                    path: arcPath(cx, cy, r, start, end),
+                    color: slice.color,
+                    dataIndex: dataIndexByLabel.get(slice.label) ?? null,
+                });
             }
             angle += sweep;
         });
@@ -264,11 +320,10 @@ export function DonutChart({
 
             <Svg width={svgSize} height={svgSize}>
                 {animating
-                    ? unifiedSlices.map((slice, i) => (
+                    ? unifiedSlices.map((slice) => (
                         <AnimatedArc
                             key={slice.label}
-                            sliceIndex={i}
-                            allSlices={unifiedSlices}
+                            slice={slice}
                             progress={progress}
                             cx={cx}
                             cy={cy}
@@ -301,19 +356,11 @@ export function DonutChart({
                 )}
             </Svg>
 
-            {/* Logo floats above the text block without affecting its layout */}
+            {/* Selected chain's badge — the same baked map-pin asset as everywhere
+                else. Floats above the text block without affecting its layout. */}
             {selectedSlice?.logoUri && (
-                <View pointerEvents="none" style={{
-                    position: 'absolute', top: logoTop, left: logoLeft,
-                    width: LOGO_SIZE, height: LOGO_SIZE, borderRadius: 6, overflow: 'hidden',
-                    alignItems: 'center', justifyContent: 'center',
-                    backgroundColor: selectedSlice.brandColor ?? 'transparent',
-                }}>
-                    <Image
-                        source={{ uri: selectedSlice.logoUri }}
-                        style={{ width: LOGO_SIZE * 0.7, height: LOGO_SIZE * 0.7 }}
-                        resizeMode="contain"
-                    />
+                <View pointerEvents="none" style={{ position: 'absolute', top: logoTop, left: logoLeft }}>
+                    <ChainLogoChip chainId={chainIdByName(selectedSlice.label) ?? 0} name={selectedSlice.label} size={LOGO_SIZE} />
                 </View>
             )}
 

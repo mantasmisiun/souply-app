@@ -81,7 +81,7 @@ const makeStyles = (c: AppTheme) =>
       paddingLeft: 12,
       paddingRight: 14,
       marginBottom: 12,
-      borderLeftWidth: 3,
+      borderWidth: 3, borderColor: 'transparent',
       borderLeftColor: c.primary,
     },
     disabled: {

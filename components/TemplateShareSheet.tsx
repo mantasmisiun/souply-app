@@ -1,8 +1,20 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    View, Text, Modal, TouchableOpacity, StyleSheet, ActivityIndicator,
-    Share, Image, PanResponder, Animated, Platform, ToastAndroid, Alert, type LayoutChangeEvent,
-} from 'react-native';
+    View,
+    Text,
+    Modal,
+    TouchableOpacity,
+    StyleSheet,
+    Share,
+    Image,
+    PanResponder,
+    Animated,
+    Platform,
+    ToastAndroid,
+    Alert,
+    type LayoutChangeEvent,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
@@ -308,7 +320,7 @@ export function TemplateShareSheet({
                     )}
 
                     {loading && (
-                        <View style={styles.center}><ActivityIndicator color={colors.primary} /></View>
+                        <View style={styles.center}><MaterialProgress color={colors.primary} /></View>
                     )}
 
                     {error && (
@@ -362,7 +374,7 @@ export function TemplateShareSheet({
 
                             <TouchableOpacity style={styles.secondaryBtn} onPress={handleDownload} disabled={downloading} activeOpacity={0.8}>
                                 {downloading ? (
-                                    <ActivityIndicator color={colors.primary} />
+                                    <MaterialProgress color={colors.primary} />
                                 ) : (
                                     <>
                                         <Ionicons name="download-outline" size={18} color={colors.primary} />

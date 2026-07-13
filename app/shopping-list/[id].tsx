@@ -1,4 +1,8 @@
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
+import {
+    View,
+    StyleSheet,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useState, useCallback, useMemo, useEffect } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -105,7 +109,7 @@ export default function UnifiedShoppingListScreen() {
     if (!entriesLoaded) {
         return (
             <View style={styles.centered}>
-                <ActivityIndicator color={colors.primary} />
+                <MaterialProgress color={colors.primary} />
             </View>
         );
     }

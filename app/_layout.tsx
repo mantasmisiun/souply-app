@@ -5,6 +5,7 @@ import 'react-native-reanimated';
 import { useEffect } from 'react';
 import { Linking, View } from 'react-native';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import * as FileSystem from 'expo-file-system/legacy';
 
 import { useTheme, useResolvedScheme } from '../constants/theme';
@@ -13,8 +14,12 @@ import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { EnvBadge } from '../components/EnvBadge';
+import { MaskRedactionHost } from '../components/MaskRedactionHost';
 import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { UsernameGate } from '../components/UsernameGate';
+import UpdateGateModal from '../components/UpdateGateModal';
+import { useAppUpdates } from '../hooks/useAppUpdates';
+import { devicePdfAvailable, convertPdfOnDevice } from '../utils/receiptPdf';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
@@ -70,11 +75,32 @@ async function normalizeToLocalUri(uri: string, ext = '.tmp'): Promise<string> {
 }
 
 /**
- * Convert a PDF file:// path to PNG temp files via the server's
- * /api/receipts/pdf-to-image endpoint. Returns file:// URIs for each page.
+ * Convert a PDF file:// path to PNG temp files. ON-DEVICE first (native
+ * souply-receipt-pdf module: lossless wrapper extraction + enhancement, PDFKit
+ * render fallback) — the raw PDF carries unmasked PII, so it should not leave
+ * the phone, and this also works offline. The server /api/receipts/pdf-to-image
+ * endpoint remains the fallback for Android and dev clients predating the
+ * native build. Returns file:// URIs for each page.
  */
 async function pdfToImageUris(pdfPath: string): Promise<string[]> {
   const localPath = await normalizeToLocalUri(pdfPath, '.pdf');
+  if (devicePdfAvailable()) {
+    try {
+      const { pages, method } = await convertPdfOnDevice(localPath);
+      console.log(`[ShareHandler] pdf converted on-device (${method}, ${pages.length} page(s))`);
+      // Move out of the temp dir — downstream keeps these URIs through OCR,
+      // upload and the ensemble second pass; tmp can be purged by the OS.
+      const uris: string[] = [];
+      for (let i = 0; i < pages.length; i++) {
+        const dest = `${FileSystem.cacheDirectory}share_pdf_page_${Date.now()}_${i}.png`;
+        await FileSystem.moveAsync({ from: pages[i], to: dest });
+        uris.push(dest);
+      }
+      return uris;
+    } catch (e) {
+      console.log('[ShareHandler] on-device pdf convert failed → server fallback:', e);
+    }
+  }
   const base64 = await FileSystem.readAsStringAsync(localPath, {
     encoding: FileSystem.EncodingType.Base64,
   });
@@ -110,10 +136,12 @@ function ShareHandler() {
   const navigateWithFiles = async (files: { path: string; mimeType: string }[]) => {
     try {
       const allUris: string[] = [];
+      let anyPdf = false;
       for (const file of files) {
         const isPdf = file.mimeType === 'application/pdf' ||
           file.path.toLowerCase().endsWith('.pdf');
         if (isPdf) {
+          anyPdf = true;
           const pages = await pdfToImageUris(file.path);
           allUris.push(...pages);
         } else {
@@ -121,9 +149,12 @@ function ShareHandler() {
         }
       }
       if (allUris.length === 0) return;
-      const params = allUris.length === 1
+      const params: Record<string, string> = allUris.length === 1
         ? { uri: allUris[0] }
         : { uris: allUris.map(encodeURIComponent).join(',') };
+      // PDF-rendered pages get DOCUMENT-fidelity OCR (no photo downscale —
+      // that pushed thin price digits under ML Kit's glyph floor).
+      if (anyPdf) params.fromPdf = '1';
       router.push({ pathname: '/receipt-process', params } as any);
     } catch (e) {
       console.error('[ShareHandler] failed to process shared file:', e);
@@ -184,6 +215,18 @@ function RootLayout() {
       .catch(e => console.warn('[auth] hydrate failed', e));
   }, []);
 
+  // Client version gate: ask the server on launch whether this build is too old for the
+  // current backend. A 'hard' result blocks with a store gate; the per-request 426 catcher
+  // (fetch interceptor) covers a floor flipped mid-session. Fail-open — never blocks offline.
+  useEffect(() => {
+    import('../state/versionGate').then(m => m.useVersionGate.getState().checkVersion())
+      .catch(() => { /* fail open */ });
+  }, []);
+
+  // Prod OTA update-on-resume (Phase 3): download warm-published EAS updates and apply them
+  // on a foreground return after a long background. Cold-start applies natively (splash).
+  useAppUpdates();
+
   // Hydrate admin-mode flag and, if the user last left the app in admin
   // mode, route into the admin section immediately. Cheap — the store
   // reads one AsyncStorage key. No-op when the user has never been an
@@ -217,6 +260,10 @@ function RootLayout() {
   };
 
   return (
+    // RNGH gestures (results sheet, swipe queue, admin split) need this at the
+    // APP root — a GestureDetector outside a GestureHandlerRootView throws.
+    // (Some screens used to carry their own root view; one at the top covers all.)
+    <GestureHandlerRootView style={{ flex: 1 }}>
     <KeyboardProvider>
     <PersistQueryClientProvider
       client={queryClient}
@@ -244,6 +291,7 @@ function RootLayout() {
       <OfflineBanner />
       <UsernameGate />
       <LevelUpModal />
+      <UpdateGateModal />
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: colors.pageBackground },
@@ -297,11 +345,9 @@ function RootLayout() {
             map instead). Declaring headerShown:false HERE (not just inline in
             the screen) is what actually keeps the header from reserving a
             top strip — relying on the screen's inline override alone left an
-            empty header bar pushing the map down (the "black bar at the top").
-            Mirrors receipt/capture, the other full-bleed screen. */}
+            empty header bar pushing the map down (the "black bar at the top"). */}
         <Stack.Screen name="basket/results/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="shopping-list/[id]" options={{ title: t('screens.shoppingList'), headerLeft: () => <ScreenBackButton /> }} />
-        <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
         <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess'), headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
         <Stack.Screen
@@ -333,6 +379,10 @@ function RootLayout() {
       {/* Top-layer overlay (last child = highest paint order) so it sits above
           the navigator without ever altering its frame. */}
       <EnvBadge />
+      {/* Always-mounted off-screen surface used to burn card-masking boxes
+          into receipt images before upload (the headless receipt queue has
+          no ViewShot of its own). Renders nothing until a redaction runs. */}
+      <MaskRedactionHost />
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
       </View>
     </ThemeProvider>
@@ -340,6 +390,7 @@ function RootLayout() {
     </ShareIntentProvider>
     </PersistQueryClientProvider>
     </KeyboardProvider>
+    </GestureHandlerRootView>
   );
 }
 
