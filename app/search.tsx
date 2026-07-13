@@ -524,11 +524,12 @@ export default function SearchScreen() {
       )}
       <View style={styles.container}>
         {searching ? (
-          <MaterialProgress
-            style={styles.centered}
-            size="large"
-            color={colors.primary}
-          />
+          // Centering must live on a WRAPPER: styles.centered on the spinner
+          // itself stretches the native view full-screen while the drawable
+          // renders at its own size in the top-left corner.
+          <View style={styles.centered}>
+            <MaterialProgress size="large" color={colors.primary} />
+          </View>
         ) : effectiveMode === "store-products" ? (
           <FlatList<StoreGridItem>
             key="store-products-search-grid"
