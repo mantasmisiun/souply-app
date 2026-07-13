@@ -680,6 +680,15 @@
       "uploadCamera": "Fotografuoti",
       "previewToggle": "Peržiūra — neišsaugoti",
       "previewHint": "OCR ir parserio išvestis rodoma, bet kvitas nesukuriamas duomenų bazėje."
+    },
+    "liveScan": {
+      "title": "Skenuojamas kvitas",
+      "processing": "Apdorojama",
+      "matching": "{{done}} / {{total}} prekių atpažinta",
+      "needsInput": "Reikia patvirtinimo",
+      "done": "Paruošta",
+      "failed": "Nepavyko",
+      "tapToOpen": "Paspauskite, kad atidarytumėte"
     }
   },
   "basketTab": {
@@ -1215,7 +1224,9 @@
     "addPhoto": "Pridėti nuotrauką",
     "send": "Siųsti",
     "comboDiscount": "Rinkinio nuolaida",
-    "reverifyBadge": "Patvirtinkite atitikmenį"
+    "reverifyBadge": "Patvirtinkite atitikmenį",
+    "scanBusyTitle": "Skenavimas jau vyksta",
+    "scanBusyBody": "Palaukite, kol baigsis dabartinis kvito apdorojimas, ir bandykite dar kartą."
   },
   "product": {
     "noDataForPeriod": "Nėra duomenų pasirinktam laikotarpiui",
