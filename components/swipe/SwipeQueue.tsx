@@ -545,7 +545,7 @@ export function SwipeQueue({
   /** parsed.image dims used for the current DOWNLOAD-path build, so the bounded
    *  re-arm (a crop that failed only because the upload hadn't landed) can rebuild
    *  with the right dims. Null on the local fast path (it never fails this way). */
-  const cropDimsRef = useRef<{ receiptId: string; width: number; height: number } | null>(null);
+  const cropDimsRef = useRef<{ receiptId: string; width: number; height: number; regionXBounds: { left: number; right: number } | null } | null>(null);
   /** receiptId we've already scheduled ONE bounded re-arm for — caps the recovery
    *  retry at one attempt per receipt. */
   const cropRearmedRef = useRef<string | null>(null);
@@ -715,6 +715,13 @@ export function SwipeQueue({
       // clobbering a newer receipt's crop.
       if (capped.some(isReceiptCard) && currentReceiptId) {
         const rid = currentReceiptId;
+        // Receipt-strip X extent = union of the cards' band regions (bands span
+        // the printed strip). Trims the A4 whitespace on the DOWNLOAD path —
+        // the local fast path's pages already carry OCR-derived bounds.
+        const regionXs = capped.filter(isReceiptCard).map((c) => c.region).filter((r): r is NonNullable<typeof r> => r != null);
+        const regionXBounds = regionXs.length > 0
+          ? { left: Math.min(...regionXs.map((r) => r.xLeft)), right: Math.max(...regionXs.map((r) => r.xRight)) }
+          : null;
         if (localPages && localPages.receiptId === rid && localPages.pages.length > 0) {
           // (1) Local fast path — already in OCR space, nothing to download.
           cropBuildIdRef.current = rid;
@@ -724,9 +731,9 @@ export function SwipeQueue({
           // (2) Download path — guarded build, dims retained for the bounded re-arm.
           const dims = resolveImage;
           cropBuildIdRef.current = rid;
-          cropDimsRef.current = { receiptId: rid, width: dims.width, height: dims.height };
+          cropDimsRef.current = { receiptId: rid, width: dims.width, height: dims.height, regionXBounds };
           setReceiptCrop({ status: "loading", pages: [] });
-          buildReceiptPageMeta(rid, dims.width, dims.height)
+          buildReceiptPageMeta(rid, dims.width, dims.height, regionXBounds)
             .then((res) => {
               if (cropBuildIdRef.current === rid) {
                 setReceiptCrop({ status: res.pageMeta ? "ready" : "failed", pages: res.pageMeta ? [res.pageMeta] : [], error: res.error });
@@ -1092,7 +1099,7 @@ export function SwipeQueue({
       if (cropBuildIdRef.current !== rid && cropBuildIdRef.current !== null) return; // user advanced
       cropBuildIdRef.current = rid;
       setReceiptCrop({ status: "loading", pages: [] });
-      buildReceiptPageMeta(rid, dims.width, dims.height)
+      buildReceiptPageMeta(rid, dims.width, dims.height, dims.regionXBounds)
         .then((res) => {
           if (cropBuildIdRef.current === rid) {
             setReceiptCrop({ status: res.pageMeta ? "ready" : "failed", pages: res.pageMeta ? [res.pageMeta] : [], error: res.error });
