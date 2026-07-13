@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, FlatList, type ListRenderItem
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, radius, typography, type AppTheme } from '../constants/theme';
-import { formatMonthKey } from '../utils/monthNames';
+import { monthAbbr, monthLong } from '../utils/monthNames';
 
 const WEEKDAYS_LT = ['Pr', 'An', 'Tr', 'Kt', 'Pn', 'Št', 'Sk'];
 const WEEKDAYS_EN = ['Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa', 'Su'];
@@ -132,7 +132,18 @@ export function DotCalendar({
 
     const [idx, setIdx] = useState(initialIdx);
     const [w, setW] = useState(0);
+    // Drill-down views: tapping the header's MONTH name opens a month grid
+    // (with year cycling); tapping the YEAR opens a year grid. Both are
+    // clamped to the data span — no month earlier than the earliest receipt
+    // (or later than the latest) is reachable, same bound the swipe has.
+    const [mode, setMode] = useState<'days' | 'months' | 'years'>('days');
+    const [pickYear, setPickYear] = useState(() => months[initialIdx].y);
     const listRef = useRef<FlatList<Month>>(null);
+
+    const minMonthIdx = monthIndex(months[0].y, months[0].m);
+    const maxMonthIdx = monthIndex(months[maxIdx].y, months[maxIdx].m);
+    const minYear = months[0].y;
+    const maxYear = months[maxIdx].y;
 
     const onMomentumEnd = (e: NativeSyntheticEvent<NativeScrollEvent>) => {
         if (!w) return;
@@ -140,10 +151,10 @@ export function DotCalendar({
         if (i !== idx && i >= 0 && i <= maxIdx) setIdx(i);
     };
 
-    const goTo = (target: number) => {
+    const goTo = (target: number, animated = true) => {
         if (target < 0 || target > maxIdx) return;
         setIdx(target);
-        listRef.current?.scrollToIndex({ index: target, animated: true });
+        listRef.current?.scrollToIndex({ index: target, animated });
     };
 
     const renderItem = ({ item }: ListRenderItemInfo<Month>) => (
@@ -153,16 +164,103 @@ export function DotCalendar({
         />
     );
 
-    const monthLabel = formatMonthKey(`${months[idx].y}-${pad(months[idx].m + 1)}`, i18n.language);
+    const lt = i18n.language.toLowerCase().startsWith('lt');
+    const monthName = monthLong(months[idx].m + 1, i18n.language);
+    const yearStr = String(months[idx].y);
+
+    // Header label as two taps: month → month picker, year → year picker.
+    // LT is year-first ("2026 liepa"), EN month-first ("July 2026").
+    const monthTap = (
+        <TouchableOpacity key="m" hitSlop={8} onPress={() => { setPickYear(months[idx].y); setMode('months'); }}>
+            <Text style={styles.monthLabel}>{monthName}</Text>
+        </TouchableOpacity>
+    );
+    const yearTap = (
+        <TouchableOpacity key="y" hitSlop={8} onPress={() => setMode('years')}>
+            <Text style={styles.monthLabel}>{yearStr}</Text>
+        </TouchableOpacity>
+    );
+
+    if (mode === 'years') {
+        const years: number[] = [];
+        for (let y = minYear; y <= maxYear; y++) years.push(y);
+        return (
+            <View style={styles.root}>
+                <View style={styles.header}>
+                    <View style={styles.navBtn} />
+                    <Text style={styles.monthLabel}>{yearStr}</Text>
+                    <View style={styles.navBtn} />
+                </View>
+                <View style={[styles.viewport, styles.pickerWrap]}>
+                    <View style={styles.pickerGrid}>
+                        {years.map((y) => {
+                            const current = y === months[idx].y;
+                            return (
+                                <TouchableOpacity
+                                    key={y}
+                                    style={[styles.pickerCell, current && styles.pickerCellActive]}
+                                    onPress={() => { setPickYear(y); setMode('months'); }}
+                                >
+                                    <Text style={[styles.pickerCellText, current && styles.pickerCellTextActive]}>{y}</Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                </View>
+            </View>
+        );
+    }
+
+    if (mode === 'months') {
+        return (
+            <View style={styles.root}>
+                {/* Chevrons cycle the YEAR here; the centred year drills into the year grid. */}
+                <View style={styles.header}>
+                    <TouchableOpacity onPress={() => setPickYear(y => Math.max(minYear, y - 1))} disabled={pickYear <= minYear} hitSlop={10} style={styles.navBtn}>
+                        <Ionicons name="chevron-back" size={22} color={pickYear > minYear ? colors.textPrimary : colors.borderSubtle} />
+                    </TouchableOpacity>
+                    <TouchableOpacity hitSlop={8} onPress={() => setMode('years')}>
+                        <Text style={styles.monthLabel}>{pickYear}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => setPickYear(y => Math.min(maxYear, y + 1))} disabled={pickYear >= maxYear} hitSlop={10} style={styles.navBtn}>
+                        <Ionicons name="chevron-forward" size={22} color={pickYear < maxYear ? colors.textPrimary : colors.borderSubtle} />
+                    </TouchableOpacity>
+                </View>
+                <View style={[styles.viewport, styles.pickerWrap]}>
+                    <View style={styles.pickerGrid}>
+                        {Array.from({ length: 12 }, (_, m0) => {
+                            const mi = monthIndex(pickYear, m0);
+                            const inSpan = mi >= minMonthIdx && mi <= maxMonthIdx;
+                            const current = pickYear === months[idx].y && m0 === months[idx].m;
+                            return (
+                                <TouchableOpacity
+                                    key={m0}
+                                    style={[styles.pickerCell, current && styles.pickerCellActive]}
+                                    disabled={!inSpan}
+                                    onPress={() => { setMode('days'); goTo(mi - minMonthIdx, false); }}
+                                >
+                                    <Text style={[styles.pickerCellText, !inSpan && styles.pickerCellTextDisabled, current && styles.pickerCellTextActive]}>
+                                        {monthAbbr(m0 + 1, i18n.language)}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                </View>
+            </View>
+        );
+    }
 
     return (
         <View style={styles.root}>
-            {/* Month nav (chevrons + label) — static above the swiped grid. */}
+            {/* Month nav (chevrons + tappable month/year) — static above the swiped grid. */}
             <View style={styles.header}>
                 <TouchableOpacity onPress={() => goTo(idx - 1)} disabled={idx <= 0} hitSlop={10} style={styles.navBtn}>
                     <Ionicons name="chevron-back" size={22} color={idx > 0 ? colors.textPrimary : colors.borderSubtle} />
                 </TouchableOpacity>
-                <Text style={styles.monthLabel}>{monthLabel}</Text>
+                <View style={styles.labelRow}>
+                    {lt ? [yearTap, monthTap] : [monthTap, yearTap]}
+                </View>
                 <TouchableOpacity onPress={() => goTo(idx + 1)} disabled={idx >= maxIdx} hitSlop={10} style={styles.navBtn}>
                     <Ionicons name="chevron-forward" size={22} color={idx < maxIdx ? colors.textPrimary : colors.borderSubtle} />
                 </TouchableOpacity>
@@ -179,7 +277,7 @@ export function DotCalendar({
                         keyExtractor={(mo) => `${mo.y}-${mo.m}`}
                         renderItem={renderItem}
                         getItemLayout={(_, i) => ({ length: w, offset: w * i, index: i })}
-                        initialScrollIndex={initialIdx}
+                        initialScrollIndex={idx}
                         onScrollToIndexFailed={() => {}}
                         onMomentumScrollEnd={onMomentumEnd}
                         decelerationRate="fast"
@@ -201,6 +299,22 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     navBtn: { padding: 6, borderRadius: radius.sm },
     monthLabel: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary, textTransform: 'capitalize' },
+    labelRow: { flexDirection: 'row', gap: 6 },
+    pickerWrap: { justifyContent: 'center' },
+    pickerGrid: {
+        flexDirection: 'row', flexWrap: 'wrap',
+        paddingHorizontal: spacing.sm, rowGap: spacing.sm,
+    },
+    pickerCell: {
+        width: '33.33%', paddingVertical: spacing.md,
+        alignItems: 'center', justifyContent: 'center',
+    },
+    pickerCellActive: { },
+    pickerCellText: { ...typography.body, color: c.textPrimary, textTransform: 'capitalize' },
+    pickerCellTextDisabled: { color: c.borderSubtle },
+    pickerCellTextActive: {
+        color: c.primary, fontWeight: '700',
+    },
     viewport: { height: GRID_H },
     weekRow: { flexDirection: 'row' },
     weekday: {
