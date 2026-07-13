@@ -85,13 +85,39 @@ describe('compareItemTruth', () => {
         expect(c.perProduct[0].state).toBe('match'); // spacing-only name diff suppressed
     });
 
-    test('a REAL character garble still flags a name diff (Sojos aisto/maisto)', () => {
+    test('a character garble within the similarity band tiers as NEAR (skippable, still listed)', () => {
+        // Cross-OCR-engine flavor (iOS vs Android read the same row with
+        // different garbles): name-only + high similarity ⇒ 'near', which
+        // keeps the diff visible (amber) but no longer flags 'attention' —
+        // the 2026-07 per-combo tracking change.
         const c = compareItemTruth(
             file([T({ name: 'Sojos gaminys maisto gamin. ALPRO, 14 %', price: 1.89, quantity: 4 })]),
             [{ name: 'Sojos gaminys aisto garmin. ALPRO, 14 %', price: 1.89, promoPrice: null, quantity: 4, unit: 'vnt', parsedAmount: 400, parsedUnit: 'g' }],
             null,
         );
-        expect(c.perProduct[0].state).toBe('differ');
+        expect(c.perProduct[0].state).toBe('near');
         expect(c.perProduct[0].diffs.join()).toContain('name');
+        expect(c.summary).toBe('partial'); // near is acceptable (no 'attention'); partial = footer unasserted
+    });
+
+    test('a genuinely different name still tiers as DIFFER', () => {
+        const c = compareItemTruth(
+            file([T({ name: 'Sojos gaminys maisto gamin. ALPRO, 14 %', price: 1.89, quantity: 4 })]),
+            [{ name: 'Kefyras DVARO, 2,5 % rieb.', price: 1.89, promoPrice: null, quantity: 4, unit: 'vnt', parsedAmount: null, parsedUnit: null }],
+            null,
+        );
+        // Pairing may not even match these; if it does, it must be differ.
+        const st = c.perProduct[0].state;
+        expect(st === 'differ' || st === 'unchecked').toBe(true);
+        expect(c.summary).toBe('attention'); // differ OR missing either way
+    });
+
+    test('a near name with a numeric diff stays DIFFER (numbers are ground truth)', () => {
+        const c = compareItemTruth(
+            file([T({ name: 'Sojos gaminys maisto gamin. ALPRO, 14 %', price: 1.89, quantity: 4 })]),
+            [{ name: 'Sojos gaminys aisto garmin. ALPRO, 14 %', price: 2.09, promoPrice: null, quantity: 4, unit: 'vnt', parsedAmount: null, parsedUnit: null }],
+            null,
+        );
+        expect(c.perProduct[0].state).toBe('differ');
     });
 });

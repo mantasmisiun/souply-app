@@ -16,8 +16,18 @@ import type { OcrEngine } from './mlkitOcr';
 /** A name with embedded amount tokens ("MAGIJA … 0,65 84 A A") = a
  *  mis-segmented row group — flagged AND penalised, so a false-reconciled
  *  parse with junk names still gets (and loses to) the second opinion. */
+import { nameLooksGarbled, nameImplausibility } from './ltNamePlausibility';
+
 export const junkName = (n: string | undefined | null): boolean =>
     !!n && /\d[.,]\s?\d{2}|\s\d{2,}\s+[ABC](?:\s|$)/.test(n);
+
+/** Char-salad signature (kvitas 2026-03-29/iOS "Latai virta vi%X nus ucela
+ *  HEAT S. EAT CL]aukin žocn"): brackets/pipes inside a name, or a '%' glued
+ *  to a LETTER (a real percentage follows digits). Reconciliation can't see
+ *  a garbled NAME, so without this the ML Kit second opinion never fired on
+ *  a receipt whose numbers all balance. */
+export const garbledName = (n: string | undefined | null): boolean =>
+    !!n && (/[\[\]{}|~^]/.test(n) || /%(?=[A-Za-zĄČĘĖĮŠŲŪŽąčęėįšųūž])/.test(n));
 
 export const parseQuality = (r: any): number => {
     let q = 0;
@@ -26,6 +36,8 @@ export const parseQuality = (r: any): number => {
     q += Math.min(prods.length, 30);
     q -= prods.filter((pp: any) => !pp.name || pp.name === '?').length * 8;
     q -= prods.filter((pp: any) => junkName(pp.name)).length * 8;
+    q -= prods.filter((pp: any) => garbledName(pp.name)).length * 8;
+    q -= prods.filter((pp: any) => nameLooksGarbled(pp.name)).length * 8;
     q -= prods.filter((pp: any) => !(pp.price > 0)).length * 5;
     if (!r?.footer?.reconciled && Number.isFinite(r?.footer?.reconDelta)) {
         q -= Math.min(30, Math.abs(r.footer.reconDelta) * 10);
@@ -67,7 +79,8 @@ export const parseIsFlagged = (parsed: any): boolean => {
     const footer = parsed?.footer;
     if (footer && 'reconciled' in footer && footer.reconciled !== true) return true;
     return (parsed?.products ?? []).some(
-        (pp: any) => !pp.name || pp.name === '?' || junkName(pp.name) || !(pp.price > 0),
+        (pp: any) => !pp.name || pp.name === '?' || junkName(pp.name) || garbledName(pp.name)
+            || nameLooksGarbled(pp.name) || !(pp.price > 0),
     );
 };
 
@@ -121,7 +134,32 @@ export async function ensembleSecondOpinion<P>(
         console.log(
             `[ensemble] vision=${q1} mlkit=${q2} fused=${fused1}→${fused2} (${Date.now() - t0}ms) → keeping ${secondWins ? 'ML KIT' : 'vision'}`,
         );
-        if (secondWins) return { parsed: parsed2, secondOcr: second, engine: 'second' };
+        // CROSS-ENGINE NAME GRAFT: whichever parse wins on arithmetic, a
+        // product whose NAME trips the trigram plausibility check adopts the
+        // OTHER engine's read of the same row — matched strictly by price AND
+        // quantity — when that read is substantially more plausible. Vision
+        // rots perfectly legible thermal names withOUT breaking any number
+        // ("Coioa daminua maiato mamin" for "Sojos gaminys maisto gamin.",
+        // ios-receipt-55 #14), so quality/recon arbitration alone can never
+        // repair them; the per-row graft can, and its gate is symmetric — a
+        // clean winner name is never touched.
+        const graftNames = (winner: any, loser: any): void => {
+            for (const wp of winner?.products ?? []) {
+                const wi = nameImplausibility(wp.name);
+                if (!(wi.n >= 8 && wi.frac >= 0.18)) continue;
+                const lp = (loser?.products ?? []).find((cand: any) =>
+                    cand?.name && Math.abs((cand.price ?? -1) - (wp.price ?? -2)) <= 0.011 &&
+                    Math.abs((cand.quantity ?? -1) - (wp.quantity ?? -2)) <= 0.0011);
+                if (!lp) continue;
+                const li = nameImplausibility(lp.name);
+                if (li.frac <= wi.frac - 0.15) wp.name = lp.name;
+            }
+        };
+        if (secondWins) {
+            graftNames(parsed2, primaryParsed);
+            return { parsed: parsed2, secondOcr: second, engine: 'second' };
+        }
+        graftNames(primaryParsed, parsed2);
         return keepPrimary;
     } catch (e) {
         console.log('[ensemble] second opinion failed (kept primary):', e);

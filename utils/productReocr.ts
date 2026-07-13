@@ -30,7 +30,13 @@ const MIN_BAND_H = 8;
 // A DIGIT wedged BETWEEN two letters inside a word ("DŽ10VINTOS"←DŽIOVINTOS, "RYZA1S") is almost
 // always an OCR letter→digit substitution (I→1, O→0, IO→10), i.e. a garbled NAME. Letters on BOTH
 // sides keep it tight: a leading "5L"/"30%"/"2,5kg" (digit at a word edge) is NOT flagged.
-const NAME_GARBLE = /[A-Za-zĄČĘĖĮŠŲŪŽąčęėįšųūž]\d+[A-Za-zĄČĘĖĮŠŲŪŽąčęėįšųūž]/;
+// Two more signals from receipt-388 ("SKANĖ JA RYŽIA1 BASMAlI"):
+//   - a bare digit ENDING a ≥3-letter uppercase run ("RYŽIA1") — the same I→1 rot at the word
+//     edge (size tokens like "5L"/"800G" have the digit FIRST, so they stay out);
+//   - a single lowercase 'l' SANDWICHED between uppercase letters ("BASMAlI"←BASMATI, the T's
+//     crossbar faded) — genuine mixed-case words carry lowercase RUNS, never one lone letter.
+// A false suspect only costs one re-OCR attempt; the accept-guard keeps any no-better read out.
+const NAME_GARBLE = /[A-Za-zĄČĘĖĮŠŲŪŽąčęėįšųūž]\d+[A-Za-zĄČĘĖĮŠŲŪŽąčęėįšųūž]|[A-ZĄČĘĖĮŠŲŪŽ]{3,}\d(?![\d,.:%/])|[A-ZĄČĘĖĮŠŲŪŽ]l[A-ZĄČĘĖĮŠŲŪŽ]/;
 
 export type SuspectReason = 'no-name' | 'amount-in-name' | 'no-price' | 'collapsed-band' | 'garbled-name' | 'reconciliation';
 

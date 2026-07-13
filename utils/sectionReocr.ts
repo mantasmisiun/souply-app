@@ -1,4 +1,5 @@
 import * as ImageManipulator from 'expo-image-manipulator';
+import { devLog } from './devLog';
 import { ocrImageEnhanced, type OcrEngine } from './mlkitOcr';
 import type { LineWithFrame } from './receiptOcrPipeline';
 
@@ -130,9 +131,13 @@ export async function sectionReocrIfFlagged<P extends ParsedLike>(
     parseFn: (lines: LineWithFrame[]) => P,
 ): Promise<SectionReocrOutcome<P>> {
     const keep: SectionReocrOutcome<P> = { parsed, lines, applied: false };
-    // Only an EXPLICIT reconciliation failure qualifies — undefined means the
-    // chain has no recon and this lane has no arbitration signal.
-    if (parsed.footer.reconciled !== false) return keep;
+    // Qualifies on an EXPLICIT reconciliation failure (undefined means the
+    // chain has no recon and this lane has no arbitration signal) OR on the
+    // row merger's fused/mixed-read suspects — arithmetic can reconcile while
+    // names still carry row bleed (ios-56 gabaliukai), and the acceptance
+    // guard below already admits a reconciling candidate safely.
+    const suspects = (parsed.footer as { ocrSuspects?: number }).ocrSuspects ?? 0;
+    if (parsed.footer.reconciled !== false && suspects <= 0) return keep;
     const regions = parsed.products
         .map((p) => p.region)
         .filter((r): r is { yTop: number; yBottom: number } => !!r && r.yBottom > r.yTop);
@@ -198,12 +203,28 @@ export async function sectionReocrIfFlagged<P extends ParsedLike>(
                 `recon ${parsed.footer.reconDelta} → ${winner.footer.reconciled ? '✓' : winner.footer.reconDelta}, ` +
                 `products ${parsed.products.length}→${winner.products.length}`,
             );
+            devLog('sectionReocr.accepted', {
+                top, bottom, useUnion,
+                products: `${parsed.products.length}→${winner.products.length}`,
+                recon: winner.footer.reconciled ?? null,
+            });
             return { parsed: graftRicherFields(parsed, winner as P), lines: winnerLines, applied: true };
         }
         console.log(`[sectionReocr] rejected y${top}-${bottom} (recon ${parsed.footer.reconDelta} vs ${candFresh.footer.reconDelta})`);
+        devLog('sectionReocr.rejected', {
+            top, bottom,
+            origProducts: parsed.products.length,
+            freshProducts: candFresh.products.length,
+            unionProducts: candUnion.products.length,
+            origRecon: parsed.footer.reconciled ?? null,
+            freshRecon: candFresh.footer.reconciled ?? null,
+            freshDelta: candFresh.footer.reconDelta ?? null,
+            unionRecon: candUnion.footer.reconciled ?? null,
+        });
         return keep;
     } catch (e) {
         console.log('[sectionReocr] failed (kept original):', e);
+        devLog('sectionReocr.failed', { err: (e as Error)?.message ?? String(e) });
         return keep;
     }
 }

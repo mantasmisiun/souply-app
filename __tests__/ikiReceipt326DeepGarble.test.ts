@@ -53,7 +53,10 @@ describe('IKI receipt 326 — deep-garble scan reconciles exactly', () => {
         expect(kop.quantity).toBeCloseTo(1.25, 3);
         expect(kop.promoPrice).toBeCloseTo(0.98, 2);       // (1,74 − 0,51) ÷ 1,25 — matches r269's pin
         const pap = res.products.find((p: any) => /PAPRIKOS/.test(p.name));
-        expect(pap.promoPrice).toBeCloseTo(2.48, 2);       // its own shattered -0,25, not the pin
+        // its own shattered -0,25, not the pin. 2,49 = round2((0,86 − 0,25) ÷ 0,245):
+        // the '•' smudge-dot fold (r387/iOS) now recovers the true "0,245 kg" qty
+        // where the bullet used to break the kg read — the cent-exact per-kg promo.
+        expect(pap.promoPrice).toBeCloseTo(2.49, 2);
     });
 
     test('total 7,10 recovered from the VAT identity; receipt reconciles exactly', () => {

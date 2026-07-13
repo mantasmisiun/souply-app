@@ -57,7 +57,7 @@ export interface ParsedFooterLike {
     reconciled?: boolean | null;
 }
 
-export type ProductTruthState = 'unchecked' | 'match' | 'differ';
+export type ProductTruthState = 'unchecked' | 'match' | 'near' | 'differ';
 
 export interface ProductTruthComparison {
     state: ProductTruthState;
@@ -75,10 +75,14 @@ export interface TruthComparison {
     footer: 'none' | 'match' | 'differ';
     footerDiffs: string[];
     /** Roll-up for the batch list icon:
-     *  ok        — ≥1 assertion, all match, nothing missing;
+     *  ok        — ≥1 assertion, all match (incl. near), nothing missing;
      *  attention — any differ / missing / footer differ;
      *  partial   — assertions all match but some products unchecked;
-     *  none      — no assertions at all. */
+     *  none      — no assertions at all.
+     *  NEAR counts as acceptable: the two OCR engines garble names in
+     *  different, characteristic ways (iOS drops diacritics, Android swaps
+     *  m→n / O→0), so a strict name compare flags every cross-engine run.
+     *  Numeric fields stay STRICT — a near name with a price diff is differ. */
     summary: 'ok' | 'attention' | 'partial' | 'none';
 }
 
@@ -90,6 +94,31 @@ const fold = (s: string): string =>
  *  token comparison sees ZERO overlap and the same product mints a
  *  duplicate truth entry instead of replacing its old one. */
 const foldTight = (s: string): string => fold(s).replace(/ /g, '');
+
+/** Normalized char-level similarity of the folded, spaceless names —
+ *  1 − levenshtein/maxLen. ≥ NEAR_NAME_SIM ⇒ same product, different OCR
+ *  flavor ('near'); below ⇒ a real name difference ('differ'). */
+export const NEAR_NAME_SIM = 0.85;
+export const nameSimilarity = (a: string, b: string): number => {
+    const fa = foldTight(a);
+    const fb = foldTight(b);
+    if (fa === fb) return 1;
+    if (!fa.length || !fb.length) return 0;
+    const m = fa.length, n = fb.length;
+    let prev = new Array(n + 1).fill(0).map((_, j) => j);
+    for (let i = 1; i <= m; i++) {
+        const cur = [i];
+        for (let j = 1; j <= n; j++) {
+            cur[j] = Math.min(
+                prev[j] + 1,
+                cur[j - 1] + 1,
+                prev[j - 1] + (fa[i - 1] === fb[j - 1] ? 0 : 1),
+            );
+        }
+        prev = cur;
+    }
+    return 1 - prev[n] / Math.max(m, n);
+};
 
 const tokenSim = (a: string, b: string): number => {
     const fa = foldTight(a);
@@ -127,12 +156,18 @@ export const footerFromParsed = (f: ParsedFooterLike, checkedAt: string): ItemTr
     checkedAt,
 });
 
-function productDiffs(t: ItemTruthProduct, p: ParsedProductLike): string[] {
+function productDiffs(t: ItemTruthProduct, p: ParsedProductLike): { diffs: string[]; nameOnlyNear: boolean } {
     const diffs: string[] = [];
+    let nameNear = false;
     // Spacing/diacritic-insensitive: mid-word space injection varies run to
     // run on photos — flagging it every run is pure review fatigue. Real
-    // character garbles ("aisto garmin." vs "maisto gamin.") still flag.
-    if (foldTight(p.name ?? '') !== foldTight(t.name)) diffs.push(`name "${t.name}" → "${p.name ?? ''}"`);
+    // character garbles ("aisto garmin." vs "maisto gamin.") still flag —
+    // unless they're WITHIN the near-similarity band (cross-OCR-engine
+    // flavor), which tiers the pair as 'near' instead of 'differ'.
+    if (foldTight(p.name ?? '') !== foldTight(t.name)) {
+        nameNear = nameSimilarity(p.name ?? '', t.name) >= NEAR_NAME_SIM;
+        diffs.push(`name "${t.name}" → "${p.name ?? ''}"`);
+    }
     if (!numEq(t.price, p.price ?? 0)) diffs.push(`price ${t.price} → ${p.price ?? 0}`);
     if (!numEq(t.promoPrice, p.promoPrice ?? null)) diffs.push(`akcija ${t.promoPrice ?? '—'} → ${p.promoPrice ?? '—'}`);
     if (!numEq(t.quantity, p.quantity ?? 1)) diffs.push(`qty ${t.quantity} → ${p.quantity ?? 1}`);
@@ -140,7 +175,9 @@ function productDiffs(t: ItemTruthProduct, p: ParsedProductLike): string[] {
     if (!numEq(t.parsedAmount, p.parsedAmount ?? null, 0.001) || (t.parsedAmount != null && (p.parsedUnit ?? null) !== t.parsedUnit)) {
         diffs.push(`amount ${t.parsedAmount ?? '—'}${t.parsedUnit ?? ''} → ${p.parsedAmount ?? '—'}${p.parsedUnit ?? ''}`);
     }
-    return diffs;
+    // 'near' only when the NAME is the sole difference and it's within the
+    // similarity band — numeric fields are ground truth and stay strict.
+    return { diffs, nameOnlyNear: nameNear && diffs.length === 1 };
 }
 
 /**
@@ -163,7 +200,11 @@ export function compareItemTruth(
     const scored: { ti: number; pi: number; score: number }[] = [];
     truth.products.forEach((t, ti) => {
         products.forEach((p, pi) => {
-            const sim = tokenSim(t.name, p.name ?? '');
+            // Char-level similarity joins the token overlap: cross-engine
+            // garbles (O→0, m→n, mid-word spaces) zero out shared TOKENS for
+            // the same product ("Saldainiai OBUOLIUKAI" ↔ "Saldai niai
+            // 0BUOLIUKAI") and reported it LOST + a phantom unchecked twin.
+            const sim = Math.max(tokenSim(t.name, p.name ?? ''), nameSimilarity(t.name, p.name ?? ''));
             const priceOk = numEq(t.price, p.price ?? 0) ? 1 : 0;
             const qtyOk = numEq(t.quantity, p.quantity ?? 1) ? 0.5 : 0;
             const score = sim * 2 + priceOk + qtyOk;
@@ -181,8 +222,9 @@ export function compareItemTruth(
 
     const missing: ItemTruthProduct[] = truth.products.filter((_, ti) => !takenTruth.has(ti));
     for (const { ti, pi } of pairs) {
-        const diffs = productDiffs(truth.products[ti], products[pi]);
-        perProduct[pi] = { state: diffs.length ? 'differ' : 'match', truthIdx: ti, diffs };
+        const { diffs, nameOnlyNear } = productDiffs(truth.products[ti], products[pi]);
+        const state: ProductTruthState = diffs.length === 0 ? 'match' : nameOnlyNear ? 'near' : 'differ';
+        perProduct[pi] = { state, truthIdx: ti, diffs };
     }
 
     let footerState: TruthComparison['footer'] = 'none';
