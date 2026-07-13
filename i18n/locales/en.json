@@ -1373,7 +1373,17 @@
     "kitosLabel": "Other",
     "kitosShowMore": "Show more",
     "kitosShowLess": "Show less",
-    "topN": "Top {{n}}"
+    "topN": "Top {{n}}",
+    "pointsInfoTitle": "How do I earn points?",
+    "pointsInfoBullet1": "Every recognised product in an uploaded receipt gives 1 point.",
+    "pointsInfoBullet2": "Every card you swipe gives 1 point.",
+    "pointsInfoBullet3": "Want more cards? Tap “Improve recognition” on a receipt.",
+    "testUser": "Test user (dev ID)",
+    "testUserCurrent": "Active ID: {{id}}",
+    "testUserRandom": "random device ID",
+    "testUserRestartTitle": "Restart required",
+    "testUserRestartBody": "The user ID will switch to: {{id}}. The app will restart.",
+    "testUserRestart": "Restart"
   },
   "receiptPhoto": {
     "title": "Recognised data",

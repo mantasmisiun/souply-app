@@ -40,6 +40,7 @@ import {
 import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
 import { recordStoreVisit } from "../utils/locationStorage";
 import { clearReceiptDraft, saveReceiptDraft } from "../state/receiptDraft";
+import { pdfToImageUris } from "../utils/pdfToImages";
 import { useReceiptQueueStore } from "../state/receiptQueueStore";
 import { useProfileStore } from "../state/profileStore";
 import { REGIONS_VERSION } from "./regionsRehydrationService";
@@ -189,7 +190,9 @@ export function startScanSession(opts: StartScanOptions): number | null {
   };
   // Persist a draft so an OS kill mid-processing is recoverable from the
   // Analyze tab (previews never save anything server-side — out of scope).
-  if (!opts.preview) saveReceiptDraft(opts.imageUris).catch(() => {});
+  // PDF sources save theirs after conversion (the draft resume flow re-opens
+  // with page-image uris).
+  if (!opts.preview && opts.imageUris.length > 0) saveReceiptDraft(opts.imageUris).catch(() => {});
   runPipeline(sessionId, opts).catch((e) => {
     console.error("[scanSession] pipeline crashed:", e);
     void bailWithLog(sessionId, "ocr_error", { ocrPreview: e instanceof Error ? e.message : String(e) });
@@ -426,7 +429,31 @@ async function resolveChainStore(
 }
 
 async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<void> {
-  const { imageUris, fromPdf, linkMap, fallbackLinkId } = opts;
+  const { linkMap, fallbackLinkId } = opts;
+  let imageUris = opts.imageUris;
+  let fromPdf = opts.fromPdf;
+
+  // Step 0 — PDF → page images, as a background stage (was a blocking modal
+  // at every entry point). On failure the normal fail modal / live card shows.
+  if (opts.pdfUri && imageUris.length === 0) {
+    sessionSet(sessionId, { stage: "converting" });
+    try {
+      imageUris = await pdfToImageUris(opts.pdfUri);
+      if (imageUris.length === 0) throw new Error("no pages");
+    } catch (e) {
+      console.warn("[scanSession] pdf conversion failed:", e);
+      await bailWithLog(sessionId, "ocr_error", {
+        ocrPreview: `pdf conversion failed: ${e instanceof Error ? e.message : String(e)}`,
+      });
+      return;
+    }
+    if (!isCurrentSession(sessionId)) return;
+    fromPdf = true; // PDF pages get DOCUMENT-fidelity OCR (no photo downscale)
+    const newOpts = { ...opts, imageUris, fromPdf };
+    sessionSet(sessionId, { opts: newOpts, stage: "scanning" });
+    if (currentRun?.sessionId === sessionId) currentRun.opts = newOpts;
+    if (!opts.preview) saveReceiptDraft(imageUris).catch(() => {});
+  }
   // OCR line texts, hoisted for the bail helpers (assigned right after OCR).
   let ocrLineTexts: string[] = [];
 

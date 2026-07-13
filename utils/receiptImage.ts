@@ -193,6 +193,11 @@ export async function buildReceiptPageMeta(
   receiptId: string | number,
   imageWidth: number,
   imageHeight: number,
+  /** Receipt-strip X extent in parsed/OCR space (union of the receipt's band
+   *  regions). Without it the crop spans the FULL page width — on A4 e-receipt
+   *  pages (Maxima PDFs) that keeps the huge right whitespace and smooshes the
+   *  band text to the left. Ignored when absent/degenerate. */
+  regionXBounds?: { left: number; right: number } | null,
 ): Promise<{ pageMeta: PageMeta | null; error: string | null }> {
   const fail = (error: string) => {
     console.warn('[buildReceiptPageMeta]', { receiptId, error });
@@ -247,7 +252,11 @@ export async function buildReceiptPageMeta(
     const norm = await normalizeLoadedImage(localUri, hasDims ? imageWidth : 0, hasDims ? imageHeight : 0);
     const w = hasDims ? imageWidth : norm.width;
     const h = hasDims ? imageHeight : norm.height;
-    console.log('[buildReceiptPageMeta] ok', { receiptId, dims: `${w}x${h}`, uri: norm.uri });
+    const boundsOk =
+      regionXBounds != null &&
+      Number.isFinite(regionXBounds.left) && Number.isFinite(regionXBounds.right) &&
+      regionXBounds.left >= 0 && regionXBounds.right > regionXBounds.left && regionXBounds.right <= w;
+    console.log('[buildReceiptPageMeta] ok', { receiptId, dims: `${w}x${h}`, xBounds: boundsOk ? `${Math.round(regionXBounds!.left)}-${Math.round(regionXBounds!.right)}` : 'full', uri: norm.uri });
     return {
       pageMeta: {
         uri: norm.uri,
@@ -256,8 +265,8 @@ export async function buildReceiptPageMeta(
         frameScale: 1,
         yOffsetScaled: 0,
         pageMaxYScaled: h,
-        receiptXLeftScaled: 0,
-        receiptXRightScaled: w,
+        receiptXLeftScaled: boundsOk ? regionXBounds!.left : 0,
+        receiptXRightScaled: boundsOk ? regionXBounds!.right : w,
       },
       error: null,
     };

@@ -12,6 +12,9 @@ export type QueueStatus =
 export interface QueueItem {
   id: string;
   uris: string[];
+  /** True when uris[0] is a PDF still awaiting page conversion (done as the
+   *  item's first processing stage). */
+  isPdf?: boolean;
   /** Original filename for display in error/awaiting cards. */
   name?: string;
   status: QueueStatus;
@@ -36,7 +39,7 @@ interface ReceiptQueueState {
   initialized: boolean;
 
   initialize: () => Promise<void>;
-  addItems: (entries: { uris: string[]; name?: string }[]) => void;
+  addItems: (entries: { uris: string[]; name?: string; isPdf?: boolean }[]) => void;
   markProcessing: (id: string, progress?: string) => void;
   updateProgress: (
     id: string,
@@ -95,6 +98,7 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
     const newItems: QueueItem[] = entries.map((e) => ({
       id: genId(),
       uris: e.uris,
+      isPdf: e.isPdf,
       name: e.name,
       status: "pending",
       addedAt: Date.now(),

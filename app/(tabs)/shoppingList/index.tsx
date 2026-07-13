@@ -5,7 +5,9 @@ import {
     TouchableOpacity,
     StyleSheet,
     Alert,
+    BackHandler,
     Modal,
+    Platform,
     RefreshControl,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
@@ -30,10 +32,9 @@ import { formatStoreStreet } from '../../../utils/formatAddress';
 import { launchDocumentScanner } from '../../../utils/launchDocumentScanner';
 import { StoreChipBar } from '../../../components/StoreChipBar';
 import { CardActionBar, type CardAction } from '../../../components/CardActionBar';
+import { useTabBarOverride } from '../../../state/tabBarOverride';
 import { isAwaitingReceipt, groupReceiptProgress } from '../../../utils/awaitingReceipts';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '../../../utils/fetchWithTimeout';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface StoreChain {
@@ -302,7 +303,6 @@ export default function ShoppingListScreen() {
     // Receipt-upload sheet target: chainId→listId for the awaiting store(s)
     // of the tapped card (single = 1 entry, split group = N).
     const [uploadTarget, setUploadTarget] = useState<Record<number, number> | null>(null);
-    const [pdfConverting, setPdfConverting] = useState(false);
     // The user's receipts (for the "select from already uploaded" option).
     const [receipts, setReceipts] = useState<UserReceipt[]>([]);
     const [pickExistingTarget, setPickExistingTarget] = useState<Record<number, number> | null>(null);
@@ -335,6 +335,17 @@ export default function ShoppingListScreen() {
     useEffect(() => {
         if (selectionMode && selectedListIds.size === 0) setSelectionMode(false);
     }, [selectionMode, selectedListIds]);
+
+    // Android back (button or swipe gesture) during selection = CANCEL the
+    // selection, never leave the screen/app.
+    useEffect(() => {
+        if (!selectionMode) return;
+        const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+            exitSelection();
+            return true;
+        });
+        return () => sub.remove();
+    }, [selectionMode, exitSelection]);
     const router = useRouter();
 
     const loadSplitGroups = useCallback(async (currentLists: ShoppingList[]) => {
@@ -443,6 +454,54 @@ export default function ShoppingListScreen() {
         }
     }, [fetchLists]);
 
+
+    // Multi-select actions (shared by the Android tab-bar morph and the iOS
+    // inline bar): complete every selected ACTIVE list, delete the selection.
+    const selectionActions = useMemo<CardAction[]>(() => {
+        const ids = Array.from(selectedListIds);
+        const hasActiveStatus = lists.some(l => ids.includes(l.id) && l.status === 'active');
+        const actions: CardAction[] = [];
+        if (hasActiveStatus) {
+            actions.push({
+                icon: 'checkmark-circle-outline',
+                label: t('shoppingListTab.complete'),
+                onPress: () => {
+                    lists.forEach(l => { if (ids.includes(l.id) && l.status === 'active') completeList(l.id); });
+                    exitSelection();
+                },
+            });
+        }
+        actions.push({
+            icon: 'trash-outline',
+            label: t('shoppingListTab.delete'),
+            destructive: true,
+            onPress: () => {
+                ids.forEach(id => deleteList(id));
+                exitSelection();
+            },
+        });
+        return actions;
+         
+    }, [selectedListIds, lists, completeList, deleteList, exitSelection, t]);
+
+    // ANDROID: morph the floating pill tab bar into the selection action bar
+    // (the old inline bar rendered BEHIND the floating pill). Cancel is the
+    // trailing item; cleared on exit/unmount so the tabs are never stranded.
+    const setTabBarOverride = useTabBarOverride(s => s.setOverride);
+    const clearTabBarOverride = useTabBarOverride(s => s.clearOverride);
+    useEffect(() => {
+        if (Platform.OS === 'ios') return;
+        if (!(selectionMode && selectedListIds.size > 0)) {
+            clearTabBarOverride();
+            return;
+        }
+        setTabBarOverride([
+            ...selectionActions,
+            { icon: 'close-circle-outline', label: t('common.cancel'), onPress: exitSelection },
+        ]);
+        return () => clearTabBarOverride();
+    }, [selectionMode, selectedListIds.size, selectionActions, setTabBarOverride, clearTabBarOverride, exitSelection, t]);
+
     // ── Receipt upload (post-completion "needs receipt" flow) ──────────────────
     // The target is a chainId→listId map; receipt-process auto-selects the
     // store row by the receipt's detected chain (no store-selection prompt).
@@ -474,37 +533,11 @@ export default function ShoppingListScreen() {
             return;
         }
 
-        setPdfConverting(true);
-        try {
-            const pdfBase64 = await FileSystem.readAsStringAsync(asset.uri, {
-                encoding: FileSystem.EncodingType.Base64,
-            });
-            const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/pdf-to-image`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pdfBase64 }),
-                timeoutMs: TIMEOUT_HEAVY_MS,
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const { images } = await res.json();
-            if (!Array.isArray(images) || images.length === 0) throw new Error('no pages');
-            const ts = Date.now();
-            const paths: string[] = [];
-            for (let i = 0; i < images.length; i++) {
-                const path = `${FileSystem.cacheDirectory}receipt-pdf-${ts}-${i}.png`;
-                await FileSystem.writeAsStringAsync(path, images[i], {
-                    encoding: FileSystem.EncodingType.Base64,
-                });
-                paths.push(path);
-            }
-            const urisParam = paths.map(encodeURIComponent).join(',');
-            router.push(`/receipt-process?uris=${urisParam}&listMap=${listMapStr}` as any);
-        } catch (e) {
-            Alert.alert(t('shoppingListTab.errors.generic'), t('receipts.uploadFail.body'));
-        } finally {
-            setPdfConverting(false);
-        }
-    }, [router, t]);
+        // PDF: hand the raw file to the scan session — page conversion runs as
+        // its first background stage (loader shows "Converting PDF…"), no
+        // blocking modal here.
+        router.push(`/receipt-process?pdfUri=${encodeURIComponent(asset.uri)}&listMap=${listMapStr}` as any);
+    }, [router]);
 
     // ── FAB / chain picker ────────────────────────────────────────────────────
     const [fabMenuOpen, setFabMenuOpen] = useState(false);
@@ -844,31 +877,12 @@ export default function ShoppingListScreen() {
                 </TouchableOpacity>
             </Modal>
 
-            {selectionMode && selectedListIds.size > 0 && (() => {
-                const ids = Array.from(selectedListIds);
-                const hasActiveStatus = lists.some(l => ids.includes(l.id) && l.status === 'active');
-                const actions: CardAction[] = [];
-                if (hasActiveStatus) {
-                    actions.push({
-                        icon: 'checkmark-circle-outline',
-                        label: t('shoppingListTab.complete'),
-                        onPress: () => {
-                            lists.forEach(l => { if (ids.includes(l.id) && l.status === 'active') completeList(l.id); });
-                            exitSelection();
-                        },
-                    });
-                }
-                actions.push({
-                    icon: 'trash-outline',
-                    label: t('shoppingListTab.delete'),
-                    destructive: true,
-                    onPress: () => {
-                        ids.forEach(id => deleteList(id));
-                        exitSelection();
-                    },
-                });
-                return <CardActionBar mode="inline" actions={actions} onDismiss={exitSelection} />;
-            })()}
+            {/* iOS keeps the inline overlay bar (native tabs can't morph); on
+                Android the floating pill tab bar itself becomes the action bar —
+                see the tab-bar override effect above the return. */}
+            {Platform.OS === 'ios' && selectionMode && selectedListIds.size > 0 && (
+                <CardActionBar mode="inline" actions={selectionActions} onDismiss={exitSelection} />
+            )}
 
             <Modal visible={chainPickerOpen} transparent animationType="slide" onRequestClose={() => setChainPickerOpen(false)}>
                 <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => !creatingChainId && setChainPickerOpen(false)}>
@@ -971,14 +985,6 @@ export default function ShoppingListScreen() {
             </Modal>
 
             {/* PDF→image conversion in progress (matches the Analyze tab). */}
-            <Modal visible={pdfConverting} transparent animationType="fade">
-                <View style={styles.convertingBackdrop}>
-                    <View style={styles.convertingCard}>
-                        <MaterialProgress size="large" color={colors.primary} />
-                        <Text style={styles.convertingText}>{t('receipts.menu.pdfConverting')}</Text>
-                    </View>
-                </View>
-            </Modal>
         </View>
     );
 }

@@ -307,7 +307,7 @@ export default function ReceiptCategoryScreen() {
         </TouchableOpacity>
     );
 
-    if (loading) return <MaterialProgress style={styles.centered} size="large" color={colors.primary} />;
+    if (loading) return <View style={styles.centered}><MaterialProgress size="large" color={colors.primary} /></View>;
 
     return (
         <>
@@ -366,7 +366,7 @@ export default function ReceiptCategoryScreen() {
 
                 <View style={{ flex: 1 }}>
                     {loadingProducts ? (
-                        <MaterialProgress style={styles.centered} size="large" color={colors.primary} />
+                        <View style={styles.centered}><MaterialProgress size="large" color={colors.primary} /></View>
                     ) : (
                         <FlatList<GridItem>
                             key="category-grid"

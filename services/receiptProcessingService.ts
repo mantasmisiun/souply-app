@@ -41,6 +41,7 @@ import {
 } from "@shared/parsers/rimiParser";
 import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
 import { REGIONS_VERSION } from "./regionsRehydrationService";
+import { pdfToImageUris } from "../utils/pdfToImages";
 import { Platform } from "react-native";
 
 // iOS MLKit splits rows into 2-4 near-same-y boxes; the Maxima+Lidl parsers carry an
@@ -635,8 +636,18 @@ export async function processOneReceipt(
   imageUris: string[],
   signal: AbortSignal,
   onProgress?: (step: string, done?: number, total?: number) => void,
+  opts?: { isPdf?: boolean },
 ): Promise<ProcessingResult> {
   try {
+    // PDF sources: page conversion is the item's FIRST stage (was a blocking
+    // modal before enqueueing). Conversion errors route like any other step —
+    // network-like failures pause the item, the rest mark it failed.
+    let pages = imageUris;
+    if (opts?.isPdf) {
+      onProgress?.(i18n.t("receipts.menu.pdfConverting"));
+      pages = await pdfToImageUris(imageUris[0]);
+      if (pages.length === 0) throw new ProcessingError("ocr_error", "PDF be puslapių");
+    }
     onProgress?.(i18n.t("receiptQueue.scanning"));
     const {
       allLines,
@@ -645,7 +656,9 @@ export async function processOneReceipt(
       firstPageUri,
       firstPageWidth,
       firstPageHeight,
-    } = await ocrAllPages(imageUris);
+      // PDF pages get DOCUMENT-fidelity OCR (no photo downscale — that pushed
+      // thin price digits under ML Kit's glyph floor), same as the live scan.
+    } = await ocrAllPages(pages, "auto", opts?.isPdf ? { document: true } : undefined);
     const lineTexts = mergedLines.map((l) => l.text);
 
     if (lineTexts.filter((t) => t.trim().length > 0).length < 3) {

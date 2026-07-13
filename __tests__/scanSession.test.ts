@@ -35,6 +35,7 @@ jest.mock("../config/user", () => ({ getUserId: jest.fn(async () => "u1") }));
 
 const opts = (uris: string[]): StartScanOptions => ({
   imageUris: uris,
+  pdfUri: null,
   fromPdf: false,
   preview: false,
   linkMap: {},
@@ -163,14 +164,25 @@ describe("terminal handling (Analyze live card contract)", () => {
       completion: { kind: "saved", receiptId: 7, pendingSwipes: 2, resumedPhotoPresent: false },
     });
     expect(isSessionLive()).toBe(true);
-    expect(attachableSessionId(["a.jpg"])).toBe(sid);
-    expect(attachableSessionId(["other.jpg"])).toBeNull();
+    expect(attachableSessionId({ imageUris: ["a.jpg"] })).toBe(sid);
+    expect(attachableSessionId({ imageUris: ["other.jpg"] })).toBeNull();
     consumeSession(sid);
     expect(isSessionLive()).toBe(false);
-    expect(attachableSessionId(["a.jpg"])).toBeNull();
+    expect(attachableSessionId({ imageUris: ["a.jpg"] })).toBeNull();
     resetSession(sid);
     expect(state().phase).toBe("idle");
     expect(state().completion).toBeNull();
+  });
+});
+
+describe("pdf source identity", () => {
+  it("a PDF session stays attachable after conversion swaps its imageUris", () => {
+    const o = { ...opts([]), pdfUri: "file:///r.pdf" };
+    const sid = beginSession(o)!;
+    // conversion finished — pipeline publishes updated opts with page uris
+    sessionSet(sid, { opts: { ...o, imageUris: ["p1.png", "p2.png"], fromPdf: true } });
+    expect(attachableSessionId({ pdfUri: "file:///r.pdf", imageUris: [] })).toBe(sid);
+    expect(attachableSessionId({ imageUris: ["p1.png", "p2.png"] })).toBeNull(); // pages ≠ source
   });
 });
 

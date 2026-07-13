@@ -1350,7 +1350,17 @@
     "kitosLabel": "Kitos",
     "kitosShowMore": "Žr. daugiau",
     "kitosShowLess": "Žr. mažiau",
-    "topN": "Top {{n}}"
+    "topN": "Top {{n}}",
+    "pointsInfoTitle": "Kaip gauti taškų?",
+    "pointsInfoBullet1": "Kiekviena atpažinta prekė įkeltame kvite duoda 1 tašką.",
+    "pointsInfoBullet2": "Kiekviena perbraukta kortelė duoda 1 tašką.",
+    "pointsInfoBullet3": "Norite daugiau kortelių? Kvite paspauskite „Pagerinti atpažinimą“.",
+    "testUser": "Testinis vartotojas (dev ID)",
+    "testUserCurrent": "Aktyvus ID: {{id}}",
+    "testUserRandom": "atsitiktinis įrenginio ID",
+    "testUserRestartTitle": "Reikia perkrauti",
+    "testUserRestartBody": "Vartotojo ID bus pakeistas į: {{id}}. Programa bus perkrauta.",
+    "testUserRestart": "Perkrauti"
   },
   "receiptPhoto": {
     "title": "Atpažinti duomenys",

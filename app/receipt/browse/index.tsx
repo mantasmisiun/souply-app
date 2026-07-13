@@ -93,7 +93,7 @@ export default function ReceiptBrowseIndex() {
         }
     };
 
-    if (loading) return <MaterialProgress style={styles.centered} size="large" color={colors.primary} />;
+    if (loading) return <View style={styles.centered}><MaterialProgress size="large" color={colors.primary} /></View>;
 
     return (
         <>
