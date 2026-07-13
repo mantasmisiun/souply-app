@@ -35,7 +35,7 @@ export type ScanInputRequest =
   | { kind: "chainGate"; detectedChainId: number; expectedChainIds: number[] }
   | { kind: "store"; chainId: number; chainName: string; prefill: string | null };
 
-export type ScanStage = "scanning" | "matching" | "sending" | "uploading";
+export type ScanStage = "converting" | "scanning" | "matching" | "sending" | "uploading";
 
 /** Everything the screen needs to render the detail after processing. */
 export interface ScanParseResult {
@@ -72,6 +72,9 @@ export type AsyncStatus = "idle" | "pending" | "done" | "error";
 
 export interface StartScanOptions {
   imageUris: string[];
+  /** PDF source still awaiting conversion — the pipeline's step 0 converts it
+   *  to page images (stage 'converting') and updates `imageUris`. */
+  pdfUri: string | null;
   fromPdf: boolean;
   preview: boolean;
   /** chainId→listId map for the list-upload flow ({} when free scan). */
@@ -156,7 +159,7 @@ function isSessionActive(s: ScanSessionState): boolean {
 export function beginSession(opts: StartScanOptions): number | null {
   const s = useScanSession.getState();
   const active = isSessionActive(s);
-  if (active && sameUris(s.opts?.imageUris, opts.imageUris)) return s.sessionId; // re-attach
+  if (active && s.opts && sessionSourceKey(s.opts) === sessionSourceKey(opts)) return s.sessionId; // re-attach
   if (active) return null;
   // Cancel a dangling input resolver from a replaced session (it would leak the await).
   if (inputResolver) {
@@ -174,11 +177,20 @@ export function sameUris(a: string[] | undefined, b: string[] | undefined): bool
   return a.every((u, i) => u === b[i]);
 }
 
-/** Find the session to attach to for these entry uris (live or unconsumed-terminal). */
-export function attachableSessionId(imageUris: string[]): number | null {
+/**
+ * Stable identity of a scan's SOURCE. A PDF session's imageUris change when
+ * conversion finishes, so the pdf path (not the pages) is the key — the
+ * screen matches sessions by this, before and after conversion.
+ */
+export function sessionSourceKey(src: { pdfUri?: string | null; imageUris: string[] }): string {
+  return src.pdfUri ?? src.imageUris.join("|");
+}
+
+/** Find the session to attach to for this entry source (live or unconsumed-terminal). */
+export function attachableSessionId(source: { pdfUri?: string | null; imageUris: string[] }): number | null {
   const s = useScanSession.getState();
-  if (!isSessionLive(s)) return null;
-  return sameUris(s.opts?.imageUris, imageUris) ? s.sessionId : null;
+  if (!isSessionLive(s) || !s.opts) return null;
+  return sessionSourceKey(s.opts) === sessionSourceKey(source) ? s.sessionId : null;
 }
 
 /** sessionId-guarded setState — a replaced session's late writes are no-ops. */

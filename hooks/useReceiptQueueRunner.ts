@@ -78,6 +78,7 @@ export function useReceiptQueueRunner(): void {
         useReceiptQueueStore
           .getState()
           .updateProgress(next.id, step, done, total),
+      { isPdf: next.isPdf === true },
     )
       .then((result) => {
         useReceiptQueueStore.getState().markDone(next.id, result.receiptId);

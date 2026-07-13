@@ -6,7 +6,6 @@ import { useEffect } from 'react';
 import { Linking, View } from 'react-native';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import * as FileSystem from 'expo-file-system/legacy';
 
 import { useTheme, useResolvedScheme } from '../constants/theme';
 import { GlassIconButton } from '../components/GlassIconButton';
@@ -19,11 +18,10 @@ import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { UsernameGate } from '../components/UsernameGate';
 import UpdateGateModal from '../components/UpdateGateModal';
 import { useAppUpdates } from '../hooks/useAppUpdates';
-import { devicePdfAvailable, convertPdfOnDevice } from '../utils/receiptPdf';
+import { looksLikePdf, normalizeToLocalUri } from '../utils/pdfToImages';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
-import { API_BASE_URL } from '../config/api';
 import { useReceiptQueueRunner } from '../hooks/useReceiptQueueRunner';
 import '../i18n';
 import { useTranslation } from 'react-i18next';
@@ -64,63 +62,9 @@ const queryPersister = createAsyncStoragePersister({
   throttleTime: 1000,
 });
 
-/**
- * Copy a content:// or file:// URI into the app cache and return the
- * resulting file:// path.
- */
-async function normalizeToLocalUri(uri: string, ext = '.tmp'): Promise<string> {
-  const dest = `${FileSystem.cacheDirectory}share_input_${Date.now()}${ext}`;
-  await FileSystem.copyAsync({ from: uri, to: dest });
-  return dest;
-}
-
-/**
- * Convert a PDF file:// path to PNG temp files. ON-DEVICE first (native
- * souply-receipt-pdf module: lossless wrapper extraction + enhancement, PDFKit
- * render fallback) — the raw PDF carries unmasked PII, so it should not leave
- * the phone, and this also works offline. The server /api/receipts/pdf-to-image
- * endpoint remains the fallback for Android and dev clients predating the
- * native build. Returns file:// URIs for each page.
- */
-async function pdfToImageUris(pdfPath: string): Promise<string[]> {
-  const localPath = await normalizeToLocalUri(pdfPath, '.pdf');
-  if (devicePdfAvailable()) {
-    try {
-      const { pages, method } = await convertPdfOnDevice(localPath);
-      console.log(`[ShareHandler] pdf converted on-device (${method}, ${pages.length} page(s))`);
-      // Move out of the temp dir — downstream keeps these URIs through OCR,
-      // upload and the ensemble second pass; tmp can be purged by the OS.
-      const uris: string[] = [];
-      for (let i = 0; i < pages.length; i++) {
-        const dest = `${FileSystem.cacheDirectory}share_pdf_page_${Date.now()}_${i}.png`;
-        await FileSystem.moveAsync({ from: pages[i], to: dest });
-        uris.push(dest);
-      }
-      return uris;
-    } catch (e) {
-      console.log('[ShareHandler] on-device pdf convert failed → server fallback:', e);
-    }
-  }
-  const base64 = await FileSystem.readAsStringAsync(localPath, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
-  const res = await fetch(`${API_BASE_URL}/api/receipts/pdf-to-image`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pdfBase64: base64 }),
-  });
-  if (!res.ok) throw new Error(`pdf-to-image ${res.status}`);
-  const { images } = await res.json() as { images: string[] };
-  const uris: string[] = [];
-  for (let i = 0; i < images.length; i++) {
-    const dest = `${FileSystem.cacheDirectory}share_pdf_page_${Date.now()}_${i}.png`;
-    await FileSystem.writeAsStringAsync(dest, images[i], {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    uris.push(dest);
-  }
-  return uris;
-}
+// PDF/page-image helpers moved to utils/pdfToImages.ts — conversion now runs
+// as a background stage inside the scan session / receipt queue instead of
+// blocking here before navigation.
 
 /**
  * Handles files arriving from two iOS entry points and one Android entry point:
@@ -135,26 +79,25 @@ function ShareHandler() {
 
   const navigateWithFiles = async (files: { path: string; mimeType: string }[]) => {
     try {
+      // A shared PDF navigates IMMEDIATELY with its (cache-normalized) path —
+      // the scan session converts it to pages as its first background stage,
+      // so the loader shows right away instead of the app sitting frozen on
+      // the share sheet. Only copy to cache here (share-intent URIs can
+      // expire once the intent is handled).
+      const pdf = files.find((f) => looksLikePdf(f.path, f.mimeType));
+      if (pdf) {
+        const localPdf = await normalizeToLocalUri(pdf.path, '.pdf');
+        router.push({ pathname: '/receipt-process', params: { pdfUri: localPdf } } as any);
+        return;
+      }
       const allUris: string[] = [];
-      let anyPdf = false;
       for (const file of files) {
-        const isPdf = file.mimeType === 'application/pdf' ||
-          file.path.toLowerCase().endsWith('.pdf');
-        if (isPdf) {
-          anyPdf = true;
-          const pages = await pdfToImageUris(file.path);
-          allUris.push(...pages);
-        } else {
-          allUris.push(await normalizeToLocalUri(file.path, '.jpg'));
-        }
+        allUris.push(await normalizeToLocalUri(file.path, '.jpg'));
       }
       if (allUris.length === 0) return;
       const params: Record<string, string> = allUris.length === 1
         ? { uri: allUris[0] }
         : { uris: allUris.map(encodeURIComponent).join(',') };
-      // PDF-rendered pages get DOCUMENT-fidelity OCR (no photo downscale —
-      // that pushed thin price digits under ML Kit's glyph floor).
-      if (anyPdf) params.fromPdf = '1';
       router.push({ pathname: '/receipt-process', params } as any);
     } catch (e) {
       console.error('[ShareHandler] failed to process shared file:', e);

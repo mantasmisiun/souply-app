@@ -41,6 +41,7 @@ import { ScreenHeading } from "../../../components/ScreenHeading";
 import { useCollapsingHeader, CollapsingHeader } from "../../../components/CollapsingHeader";
 import { chainBrandName, chainBrandColor, chainIdByName } from "../../../utils/chainBrandName";
 import { launchDocumentScanner } from "../../../utils/launchDocumentScanner";
+import { looksLikePdf } from "../../../utils/pdfToImages";
 import { ChainLogoChip } from "../../../components/ChainLogoChip";
 import { SkeletonBox } from "../../../components/SkeletonBox";
 import { PendingSwipesBanner } from "../../../components/PendingSwipesBanner";
@@ -52,7 +53,7 @@ import {
     unclaimResumePrompt,
 } from "../../../state/receiptDraft";
 import { useScanSession, isSessionLive } from "../../../state/scanSession";
-import { fetchWithTimeout, TIMEOUT_HEAVY_MS, TIMEOUT_STANDARD_MS } from "../../../utils/fetchWithTimeout";
+import { fetchWithTimeout, TIMEOUT_STANDARD_MS } from "../../../utils/fetchWithTimeout";
 import { formatDate } from "../../../utils/formatCurrency";
 import { useNetworkStatus } from "../../../state/networkStatus";
 import { useLevelStore } from "../../../state/levelStore";
@@ -179,7 +180,6 @@ export default function ReceiptsScreen() {
   const isOnline = useNetworkStatus((s) => s.isOnline);
   const [uploadMenuOpen, setUploadMenuOpen] = useState(false);
   const [previewOnly, setPreviewOnly] = useState(false);
-  const [pdfConverting, setPdfConverting] = useState(false);
   // DEV-ONLY: long-press a receipt for a small action menu (Re-OCR + hard-delete).
   const [deleteTarget, setDeleteTarget] = useState<Receipt | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -220,54 +220,13 @@ export default function ReceiptsScreen() {
     });
     if (picked.canceled || !picked.assets?.length) return;
 
-    const hasPdf = picked.assets.some(a =>
-      (a.mimeType === 'application/pdf') ||
-      (a.name?.toLowerCase().endsWith('.pdf') ?? false)
-    );
-    if (hasPdf) setPdfConverting(true);
-
-    const entries: { uris: string[]; name?: string }[] = [];
-    for (const asset of picked.assets) {
-      const mimeType = asset.mimeType ?? '';
-      const isPdf = mimeType === 'application/pdf' || (asset.name?.toLowerCase().endsWith('.pdf') ?? false);
-      if (isPdf) {
-        try {
-          const pdfBase64 = await FileSystem.readAsStringAsync(asset.uri, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
-          const res = await fetchWithTimeout(
-            `${API_BASE_URL}/api/receipts/pdf-to-image`,
-            {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ pdfBase64 }),
-              timeoutMs: TIMEOUT_HEAVY_MS,
-            },
-          );
-          if (!res.ok) {
-            console.warn(`[batch] PDF conversion HTTP ${res.status} for ${asset.name}`);
-            continue;
-          }
-          const { images } = await res.json();
-          if (!Array.isArray(images) || images.length === 0) continue;
-          const timestamp = Date.now();
-          const paths: string[] = [];
-          for (let i = 0; i < images.length; i++) {
-            const path = `${FileSystem.cacheDirectory}batch-pdf-${timestamp}-${i}.png`;
-            await FileSystem.writeAsStringAsync(path, images[i], {
-              encoding: FileSystem.EncodingType.Base64,
-            });
-            paths.push(path);
-          }
-          entries.push({ uris: paths, name: asset.name ?? undefined });
-        } catch (e) {
-          console.warn("[batch] PDF conversion failed:", e);
-        }
-      } else {
-        entries.push({ uris: [asset.uri], name: asset.name ?? undefined });
-      }
-    }
-    if (hasPdf) setPdfConverting(false);
+    // PDFs enqueue AS-IS — page conversion runs as the queue item's first
+    // processing stage (its card shows "Converting PDF…"), no blocking modal.
+    const entries = picked.assets.map((asset) => ({
+      uris: [asset.uri],
+      name: asset.name ?? undefined,
+      isPdf: looksLikePdf(asset.uri, asset.mimeType, asset.name),
+    }));
     if (entries.length === 0) {
       Alert.alert(t('receipts.uploadFail.title'), t('receipts.uploadFail.body'));
       return;
@@ -960,18 +919,6 @@ export default function ReceiptsScreen() {
         <Ionicons name="add" size={iconSize.xl} color={colors.onPrimary} />
       </TouchableOpacity>
 
-      <Modal
-        visible={pdfConverting}
-        transparent
-        animationType="fade"
-      >
-        <View style={styles.menuBackdrop}>
-          <View style={[styles.menuCard, { alignItems: "center", gap: 12 }]}>
-            <MaterialProgress size="large" color={colors.primary} />
-            <Text style={styles.menuTitle}>{t('receipts.menu.pdfConverting')}</Text>
-          </View>
-        </View>
-      </Modal>
 
       {/* DEV-ONLY: long-press delete confirmation. Gated on __DEV__ so it only
           exists in dev/Metro bundles and is absent from release/prod builds. */}

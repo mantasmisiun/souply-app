@@ -84,7 +84,7 @@ import {
     consumeSession,
     respondSessionInput,
     attachableSessionId,
-    sameUris,
+    sessionSourceKey,
     useScanSession,
 } from "../state/scanSession";
 import {
@@ -353,9 +353,12 @@ function formatAmountLabel(p: ProductLine): string {
 
 export default function ProcessReceiptScreen() {
   const { t } = useTranslation();
-  const { uri, uris: urisParam, receiptId: receiptIdParam, preview: previewParam, shoppingListId: shoppingListIdParam, expectedChainId: expectedChainIdParam, listMap: listMapParam, reocrReceiptId: reocrReceiptIdParam, fromPdf: fromPdfParam } = useLocalSearchParams<{
+  const { uri, uris: urisParam, pdfUri: pdfUriParam, receiptId: receiptIdParam, preview: previewParam, shoppingListId: shoppingListIdParam, expectedChainId: expectedChainIdParam, listMap: listMapParam, reocrReceiptId: reocrReceiptIdParam, fromPdf: fromPdfParam } = useLocalSearchParams<{
     uri?: string;
     uris?: string;
+    /** Raw PDF path — the scan session converts it to page images as its
+     *  first background stage (no blocking conversion before navigating). */
+    pdfUri?: string;
     receiptId?: string;
     preview?: string;
     /** DEV re-OCR: this is a fresh-scan run of an EXISTING receipt's stored photo.
@@ -410,6 +413,9 @@ export default function ProcessReceiptScreen() {
     if (uri) return [decodeURIComponent(uri)];
     return [];
   }, [uri, urisParam]);
+  // PDF source (converted by the session's step 0) — part of the scan
+  // source identity alongside imageUriList.
+  const pdfUri = pdfUriParam ? decodeURIComponent(pdfUriParam) : null;
   // Preview mode: OCR + parsing populate the UI, but nothing is POSTed to
   // the API. No receiptId ever set, no MinIO upload, no comparison fetch.
   // Used for iterating on parser accuracy without cluttering the database.
@@ -435,6 +441,7 @@ export default function ProcessReceiptScreen() {
   const sUploadStatus = useScanSession((s) => s.uploadStatus);
   const sUploadErr = useScanSession((s) => s.uploadErr);
   const sImageFilePath = useScanSession((s) => s.imageFilePath);
+  const sStage = useScanSession((s) => s.stage);
   // Mandatory swipes are hosted IN-PLACE as a phase of this screen (was the
   // /swipe/queue route bounce + swipeDone round-trip). `swiping` flips the whole
   // screen to <SwipeQueue>; `postSwipeActionRef` holds the continuation to run
@@ -1186,7 +1193,7 @@ export default function ProcessReceiptScreen() {
     hasProcessedRef.current = false;
     comparisonKeyRef.current = "";
     shouldRefreshComparisonRef.current = false;
-  }, [uri, isExistingMode, setComparison]);
+  }, [uri, pdfUri, isExistingMode, setComparison]);
 
   // Kick off OCR when uri is provided
   useEffect(() => {
@@ -1200,22 +1207,23 @@ export default function ProcessReceiptScreen() {
       return;
     }
 
-    if (imageUriList.length > 0) {
+    if (imageUriList.length > 0 || pdfUri) {
       if (hasProcessedRef.current) return; // StrictMode mounts effects twice in dev
       hasProcessedRef.current = true;
-      setImageUri(imageUriList[0]); // first page used for region previews
+      if (imageUriList.length > 0) setImageUri(imageUriList[0]); // first page used for region previews
       // A second scan can reuse this screen instance (fail → "Try again"
       // replaces to the same route with a new uri) — re-raise the loader the
       // fail/completion handlers dropped, or the whole OCR would run behind
       // an empty detail tree.
       setLoading(true);
-      // Attach to the live background session for these images if one exists
+      // Attach to the live background session for this source if one exists
       // (re-entry via the Analyze live card / back-navigation); otherwise
       // start one. The session persists the draft + runs the full pipeline
       // OUTSIDE this screen, so navigating away no longer kills the scan.
-      if (attachableSessionId(imageUriList) === null) {
+      if (attachableSessionId({ pdfUri, imageUris: imageUriList }) === null) {
         const entryParams: Record<string, string> = {};
-        if (urisParam) entryParams.uris = urisParam;
+        if (pdfUriParam) entryParams.pdfUri = pdfUriParam;
+        else if (urisParam) entryParams.uris = urisParam;
         else if (uri) entryParams.uri = uri;
         if (previewParam) entryParams.preview = previewParam;
         if (shoppingListIdParam) entryParams.shoppingListId = shoppingListIdParam;
@@ -1225,7 +1233,8 @@ export default function ProcessReceiptScreen() {
         if (fromPdfParam) entryParams.fromPdf = fromPdfParam;
         const started = startScanSession({
           imageUris: imageUriList,
-          fromPdf: fromPdfParam === '1',
+          pdfUri,
+          fromPdf: fromPdfParam === '1' || pdfUri != null,
           preview: isPreviewMode,
           linkMap,
           fallbackLinkId,
@@ -1242,10 +1251,10 @@ export default function ProcessReceiptScreen() {
         }
       }
     }
-  }, [imageUriList, isExistingMode, existingReceiptId, isPreviewMode]);
+  }, [imageUriList, pdfUri, isExistingMode, existingReceiptId, isPreviewMode]);
 
   // ── Scan-session subscription (fresh-scan mode only) ────────────────────────
-  const isSessionMode = !isExistingMode && imageUriList.length > 0;
+  const isSessionMode = !isExistingMode && (imageUriList.length > 0 || pdfUri != null);
   // The store is a singleton that outlives screens, so every subscription
   // below must also check the session BELONGS to this screen: a fresh mount's
   // first effect pass still sees the PREVIOUS scan's terminal state (the
@@ -1254,8 +1263,11 @@ export default function ProcessReceiptScreen() {
   // A's duplicate alert / fail modal / parse hydration.
   const sOpts = useScanSession((s) => s.opts);
   const sConsumed = useScanSession((s) => s.consumed);
+  // Matched by SOURCE key (the pdf path, or the page uris) — a PDF session's
+  // imageUris change once conversion finishes, the source key doesn't.
   const sessionIsMine =
-    isSessionMode && sameUris(sOpts?.imageUris, imageUriList);
+    isSessionMode && sOpts != null &&
+    sessionSourceKey(sOpts) === sessionSourceKey({ pdfUri, imageUris: imageUriList });
 
   // Mirror the session's POST/upload state into the local status vars the
   // detail render reads (error cards, the sending/uploading overlay).
@@ -2118,11 +2130,18 @@ export default function ProcessReceiptScreen() {
     // loader. The headline reflects the CURRENT action (reading vs matching); the sub-step
     // carries the live match counter when matching.
     const matching = sessionIsMine && !!(sMatchProgress && sMatchProgress.total > 0);
+    const converting = sessionIsMine && sStage === 'converting';
     return (
       <View style={styles.loadingContainer}>
         <ProcessingLoader
           stage={matching ? "matching" : "scanning"}
-          subStep={matching ? t('receiptProcess.matchProgress', { done: sMatchProgress!.done, total: sMatchProgress!.total }) : null}
+          subStep={
+            matching
+              ? t('receiptProcess.matchProgress', { done: sMatchProgress!.done, total: sMatchProgress!.total })
+              : converting
+              ? t('receipts.menu.pdfConverting')
+              : null
+          }
         />
       </View>
     );

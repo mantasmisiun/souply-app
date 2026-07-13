@@ -35,8 +35,6 @@ import { CardActionBar, type CardAction } from '../../../components/CardActionBa
 import { useTabBarOverride } from '../../../state/tabBarOverride';
 import { isAwaitingReceipt, groupReceiptProgress } from '../../../utils/awaitingReceipts';
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system/legacy';
-import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '../../../utils/fetchWithTimeout';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 interface StoreChain {
@@ -305,7 +303,6 @@ export default function ShoppingListScreen() {
     // Receipt-upload sheet target: chainId→listId for the awaiting store(s)
     // of the tapped card (single = 1 entry, split group = N).
     const [uploadTarget, setUploadTarget] = useState<Record<number, number> | null>(null);
-    const [pdfConverting, setPdfConverting] = useState(false);
     // The user's receipts (for the "select from already uploaded" option).
     const [receipts, setReceipts] = useState<UserReceipt[]>([]);
     const [pickExistingTarget, setPickExistingTarget] = useState<Record<number, number> | null>(null);
@@ -536,37 +533,11 @@ export default function ShoppingListScreen() {
             return;
         }
 
-        setPdfConverting(true);
-        try {
-            const pdfBase64 = await FileSystem.readAsStringAsync(asset.uri, {
-                encoding: FileSystem.EncodingType.Base64,
-            });
-            const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/pdf-to-image`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ pdfBase64 }),
-                timeoutMs: TIMEOUT_HEAVY_MS,
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const { images } = await res.json();
-            if (!Array.isArray(images) || images.length === 0) throw new Error('no pages');
-            const ts = Date.now();
-            const paths: string[] = [];
-            for (let i = 0; i < images.length; i++) {
-                const path = `${FileSystem.cacheDirectory}receipt-pdf-${ts}-${i}.png`;
-                await FileSystem.writeAsStringAsync(path, images[i], {
-                    encoding: FileSystem.EncodingType.Base64,
-                });
-                paths.push(path);
-            }
-            const urisParam = paths.map(encodeURIComponent).join(',');
-            router.push(`/receipt-process?uris=${urisParam}&listMap=${listMapStr}` as any);
-        } catch (e) {
-            Alert.alert(t('shoppingListTab.errors.generic'), t('receipts.uploadFail.body'));
-        } finally {
-            setPdfConverting(false);
-        }
-    }, [router, t]);
+        // PDF: hand the raw file to the scan session — page conversion runs as
+        // its first background stage (loader shows "Converting PDF…"), no
+        // blocking modal here.
+        router.push(`/receipt-process?pdfUri=${encodeURIComponent(asset.uri)}&listMap=${listMapStr}` as any);
+    }, [router]);
 
     // ── FAB / chain picker ────────────────────────────────────────────────────
     const [fabMenuOpen, setFabMenuOpen] = useState(false);
@@ -1014,14 +985,6 @@ export default function ShoppingListScreen() {
             </Modal>
 
             {/* PDF→image conversion in progress (matches the Analyze tab). */}
-            <Modal visible={pdfConverting} transparent animationType="fade">
-                <View style={styles.convertingBackdrop}>
-                    <View style={styles.convertingCard}>
-                        <MaterialProgress size="large" color={colors.primary} />
-                        <Text style={styles.convertingText}>{t('receipts.menu.pdfConverting')}</Text>
-                    </View>
-                </View>
-            </Modal>
         </View>
     );
 }
