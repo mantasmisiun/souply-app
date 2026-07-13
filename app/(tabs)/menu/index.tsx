@@ -1,4 +1,4 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, Alert, Modal, Pressable } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, Alert, Modal, Pressable, Switch, DevSettings } from 'react-native';
 import Animated, {
     Easing,
     FadeIn,
@@ -32,6 +32,7 @@ import { chainBrandColor, chainIdByName } from '../../../utils/chainBrandName';
 import { ChainLogoChip } from '../../../components/ChainLogoChip';
 import * as Haptics from 'expo-haptics';
 import Constants from 'expo-constants';
+import { getUserId, getUserIdMode, setUserIdMode, canSwitchUserId, FIXED_DEV_USER_ID, type UserIdMode } from '../../../config/user';
 
 // True when this app was built with `APP_VARIANT=dev` (EAS `ios-dev`/
 // `development` profile). `__DEV__` alone isn't enough: the EAS internal-
@@ -230,6 +231,40 @@ export default function ProfilisScreen() {
     const level = profile?.level ?? 1;
     // "How do I earn points?" explainer for the level card's ? button.
     const [pointsInfoOpen, setPointsInfoOpen] = useState(false);
+
+    // Dev/staging test-identity switch: fixed dev UUID ↔ persisted random UUID.
+    // The resolved id is memoized + baked into every store, so applying the
+    // switch restarts the app (confirmed via the prompt).
+    const [idMode, setIdMode] = useState<UserIdMode | null>(null);
+    const [activeUserId, setActiveUserId] = useState<string>('');
+    useEffect(() => {
+        if (!canSwitchUserId) return;
+        getUserIdMode().then(setIdMode);
+        getUserId().then(setActiveUserId);
+    }, []);
+    const onToggleUserId = (useFixed: boolean) => {
+        Alert.alert(
+            t('profilis.testUserRestartTitle'),
+            t('profilis.testUserRestartBody', {
+                id: useFixed ? FIXED_DEV_USER_ID : t('profilis.testUserRandom'),
+            }),
+            [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('profilis.testUserRestart'),
+                    onPress: async () => {
+                        await setUserIdMode(useFixed ? 'fixed' : 'random');
+                        try {
+                            const Updates = await import('expo-updates');
+                            await Updates.reloadAsync();
+                        } catch {
+                            try { DevSettings.reload(); } catch { router.replace('/' as any); }
+                        }
+                    },
+                },
+            ],
+        );
+    };
 
     // Shared month axis for the per-month donuts (Stores + Categories): the
     // monthlySpending series (earliest→current, zero-filled) so the user can
@@ -733,11 +768,32 @@ export default function ProfilisScreen() {
             </View>
 
             {/* Dev tools — visible in Metro dev mode AND in the EAS DEV variant.
-                EAS-built internal-distribution bundles minify with __DEV__=false. */}
-            {IS_DEV_BUILD && (
+                EAS-built internal-distribution bundles minify with __DEV__=false.
+                The test-identity switch additionally shows on STAGING builds
+                (canSwitchUserId) — never in prod. */}
+            {(IS_DEV_BUILD || canSwitchUserId) && (
                 <View style={{ marginTop: spacing.xl }}>
                     <Text style={styles.sectionTitle}>{t('profilis.devTools')}</Text>
-                    {devItems.map((item) => (
+                    {canSwitchUserId && idMode != null && (
+                        <View style={styles.row}>
+                            <Ionicons name="person-circle-outline" size={iconSize.lg} color={colors.textSecondary} />
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.rowText}>{t('profilis.testUser')}</Text>
+                                {!!activeUserId && (
+                                    <Text style={styles.testUserSub} numberOfLines={1}>
+                                        {t('profilis.testUserCurrent', { id: activeUserId })}
+                                    </Text>
+                                )}
+                            </View>
+                            <Switch
+                                value={idMode === 'fixed'}
+                                onValueChange={onToggleUserId}
+                                trackColor={{ true: colors.primary, false: colors.borderSubtle }}
+                                thumbColor={colors.cardBackground}
+                            />
+                        </View>
+                    )}
+                    {IS_DEV_BUILD && devItems.map((item) => (
                         <TouchableOpacity
                             key={item.route}
                             style={styles.row}
@@ -790,6 +846,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     levelEmoji: { fontSize: 40, lineHeight: 48 },
     levelHelpBtn: { position: 'absolute', top: spacing.md, right: spacing.md, zIndex: 1 },
+    testUserSub: { ...typography.caption, color: c.textMuted, marginTop: 1 },
     infoOverlay: {
         flex: 1,
         backgroundColor: c.overlayBackdrop,
