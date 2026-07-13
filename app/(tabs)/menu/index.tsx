@@ -1,4 +1,4 @@
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Dimensions, Alert, Modal, Pressable } from 'react-native';
 import Animated, {
     Easing,
     FadeIn,
@@ -228,6 +228,8 @@ export default function ProfilisScreen() {
 
     const progressPercent = profile ? Math.round(profile.progressFraction * 100) : 0;
     const level = profile?.level ?? 1;
+    // "How do I earn points?" explainer for the level card's ? button.
+    const [pointsInfoOpen, setPointsInfoOpen] = useState(false);
 
     // Shared month axis for the per-month donuts (Stores + Categories): the
     // monthlySpending series (earliest→current, zero-filled) so the user can
@@ -530,11 +532,19 @@ export default function ProfilisScreen() {
                     </View>
                 ) : (
                     <>
+                        <TouchableOpacity
+                            style={styles.levelHelpBtn}
+                            onPress={() => setPointsInfoOpen(true)}
+                            hitSlop={10}
+                            accessibilityLabel={t('profilis.pointsInfoTitle')}
+                        >
+                            <Ionicons name="help-circle-outline" size={22} color={colors.textMuted} />
+                        </TouchableOpacity>
                         <View style={styles.iconCircle}>
                             <Text style={styles.levelEmoji}>{getLevelData(level).emoji}</Text>
                         </View>
-                        <Text style={styles.levelLabel}>{t('profilis.levelLabel', { level })}</Text>
                         <Text style={styles.levelName}>{getLevelName(level, t)}</Text>
+                        <Text style={styles.levelLabel}>{t('profilis.levelLabel', { level })}</Text>
                         <Text style={styles.points}>{t('profilis.points', { count: profile?.points ?? 0 })}</Text>
 
                         <View style={styles.progressTrack}>
@@ -546,6 +556,24 @@ export default function ProfilisScreen() {
                     </>
                 )}
             </View>
+
+            {/* Points explainer — how points are earned, in plain terms. */}
+            <Modal visible={pointsInfoOpen} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setPointsInfoOpen(false)}>
+                <Pressable style={styles.infoOverlay} onPress={() => setPointsInfoOpen(false)}>
+                    <Pressable style={styles.infoCard} onPress={() => {}}>
+                        <Text style={styles.infoTitle}>{t('profilis.pointsInfoTitle')}</Text>
+                        {(['🧾', '🃏', '➕'] as const).map((icon, i) => (
+                            <View key={i} style={styles.infoBulletRow}>
+                                <View style={styles.infoBulletLead}><Text style={styles.infoBulletIcon}>{icon}</Text></View>
+                                <Text style={styles.infoBulletText}>{t(`profilis.pointsInfoBullet${i + 1}`)}</Text>
+                            </View>
+                        ))}
+                        <TouchableOpacity style={styles.infoButton} onPress={() => setPointsInfoOpen(false)} activeOpacity={0.85}>
+                            <Text style={styles.infoButtonText}>{t('common.gotIt')}</Text>
+                        </TouchableOpacity>
+                    </Pressable>
+                </Pressable>
+            </Modal>
 
             {/* Savings card — current month only, with a change-vs-last-month
                 chip. Only shown when this month has a non-zero figure. */}
@@ -761,6 +789,35 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         marginBottom: spacing.md,
     },
     levelEmoji: { fontSize: 40, lineHeight: 48 },
+    levelHelpBtn: { position: 'absolute', top: spacing.md, right: spacing.md, zIndex: 1 },
+    infoOverlay: {
+        flex: 1,
+        backgroundColor: c.overlayBackdrop,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 24,
+    },
+    infoCard: {
+        backgroundColor: c.cardBackground,
+        borderRadius: radius.xl,
+        padding: 24,
+        width: '100%',
+        maxWidth: 360,
+        ...elevation.level3,
+    },
+    infoTitle: { fontSize: 17, fontWeight: '700', color: c.textPrimary, textAlign: 'center', marginBottom: 16 },
+    infoBulletRow: { flexDirection: 'row', gap: 10, marginBottom: 12, alignItems: 'flex-start' },
+    infoBulletLead: { minWidth: 36, alignItems: 'center', paddingTop: 1 },
+    infoBulletIcon: { fontSize: 17, lineHeight: 21 },
+    infoBulletText: { flex: 1, fontSize: 14, lineHeight: 21, color: c.textPrimary },
+    infoButton: {
+        marginTop: 8,
+        backgroundColor: c.primary,
+        borderRadius: radius.pill,
+        paddingVertical: 12,
+        alignItems: 'center',
+    },
+    infoButtonText: { color: c.onPrimary, fontSize: 15, fontWeight: '600' },
     levelLabel: { ...typography.label, color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
     levelName: { ...typography.priceLarge, fontWeight: '700', color: c.textPrimary, marginTop: 2, marginBottom: spacing.xs },
     points: { ...typography.bodySmall, color: c.textSecondary, marginBottom: spacing.lg },

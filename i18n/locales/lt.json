@@ -1350,7 +1350,11 @@
     "kitosLabel": "Kitos",
     "kitosShowMore": "Žr. daugiau",
     "kitosShowLess": "Žr. mažiau",
-    "topN": "Top {{n}}"
+    "topN": "Top {{n}}",
+    "pointsInfoTitle": "Kaip gauti taškų?",
+    "pointsInfoBullet1": "Kiekviena atpažinta prekė įkeltame kvite duoda 1 tašką.",
+    "pointsInfoBullet2": "Kiekviena perbraukta kortelė duoda 1 tašką.",
+    "pointsInfoBullet3": "Norite daugiau kortelių? Kvite paspauskite „Pagerinti atpažinimą“."
   },
   "receiptPhoto": {
     "title": "Atpažinti duomenys",
