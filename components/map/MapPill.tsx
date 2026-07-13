@@ -33,6 +33,11 @@ export interface MapPillSpec {
   /** 1 entry → price pill; 2 entries → address pill (street, number/flat). */
   lines: string[];
   variant: MapPillVariant;
+  /** COMBO context (price pills only): the split partners' chains (1 for a
+   *  2-store combo, 2 for a 3-store combo). Rendered as badges stacked BEHIND
+   *  the pill's own logo, each offset further right — "this store, combined
+   *  with those". Empty/absent → single logo. */
+  partnerChainIds?: number[];
 }
 
 // ── Off-screen renderer: lays a pill out at natural size + snapshots it ──────
@@ -110,9 +115,25 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
       onLayout={onLayout}
     >
       <View style={[styles.pillInner, twoRow ? styles.pillInnerTwoRow : styles.pillInnerOneRow, ready && (twoRow ? styles.pillInnerRadiusTwoRow : styles.pillInnerRadiusOneRow), fillStyle]}>
-        {badge != null && (
-          <Image source={badge} style={twoRow ? styles.badgeTwoRow : styles.badgeOneRow} onLoad={() => setBadgeLoaded(true)} onError={() => setBadgeLoaded(true)} />
-        )}
+        {badge != null && (() => {
+          // COMBO logo stack: own badge on top-left; each split partner's badge
+          // behind it, offset a further 14px right (2-store → 1 partner,
+          // 3-store → 2). Render deepest partner first so z-order = stack order.
+          const partners = !twoRow
+            ? (spec.partnerChainIds ?? []).map((id) => chainBadgeImage(id)).filter((b): b is NonNullable<typeof b> => b != null)
+            : [];
+          if (partners.length === 0) {
+            return <Image source={badge} style={twoRow ? styles.badgeTwoRow : styles.badgeOneRow} onLoad={() => setBadgeLoaded(true)} onError={() => setBadgeLoaded(true)} />;
+          }
+          return (
+            <View style={[styles.badgeStackOneRow, { width: 28 + 14 * partners.length }]}>
+              {[...partners].reverse().map((src, i) => (
+                <Image key={i} source={src} style={[styles.badgeOneRow, { position: 'absolute', top: 0, left: 14 * (partners.length - i) }]} />
+              ))}
+              <Image source={badge} style={[styles.badgeOneRow, styles.badgePrimary]} onLoad={() => setBadgeLoaded(true)} onError={() => setBadgeLoaded(true)} />
+            </View>
+          );
+        })()}
         {twoRow ? (
           <View style={styles.textColTwoRow}>
             <Text style={[styles.streetText, { color: primaryColor }]} numberOfLines={1} allowFontScaling={false}>
@@ -144,6 +165,9 @@ export function useBakedPills(specs: MapPillSpec[]): {
   uriFor: (key: string) => string | undefined;
   /** Baked image's dp size — for the iOS CHILD-image marker path. */
   sizeFor: (key: string) => { uri: string; w: number; h: number } | undefined;
+  /** The baked-image map itself (stable identity; changes only when a bake
+   *  lands) — memoize derived arrays on this. */
+  images: Record<string, { uri: string; w: number; h: number }>;
   /** Keys whose pill has baked, in COMPLETION order. Render markers in this order so the
    *  on-map list only ever grows at the end (append-only) — no mid-list insert (the iOS
    *  AIRMap crash) and no badge→pill in-place swap (the "rectangle"). */
@@ -181,8 +205,10 @@ export function useBakedPills(specs: MapPillSpec[]): {
     </View>
   );
   // Object key order is insertion order, and onShot inserts on capture completion → this is
-  // the bake-completion order.
-  return { uriFor: (key) => uris[key]?.uri, sizeFor: (key: string) => uris[key], bakedKeys: Object.keys(uris), bakery };
+  // the bake-completion order. `images` is the state object itself — a STABLE
+  // identity that only changes when a bake lands, so callers can memoize
+  // derived arrays on it (uriFor/sizeFor closures are recreated every render).
+  return { uriFor: (key) => uris[key]?.uri, sizeFor: (key: string) => uris[key], images: uris, bakedKeys: Object.keys(uris), bakery };
 }
 
 const BAKE_CONCURRENCY = 4;
@@ -346,11 +372,21 @@ function ClusterShot({ spec, onShot, onFail }: { spec: MapClusterSpec; onShot: (
   }, []);
   useEffect(() => {
     if (!ready) return;
-    const node = ref.current;
-    if (!node) return;
-    captureRef(node, { format: 'png', result: 'tmpfile', quality: 1 })
-      .then((uri) => onShot(spec.key, uri))
-      .catch(() => onFail(spec.key));
+    // Double-RAF before capturing (same as PillShot): `ready` applies the
+    // borderRadius in this commit, but Android may not have DRAWN it yet when
+    // the effect runs — capturing immediately raced the draw and snapshotted
+    // SQUARE bubbles (then cached them forever).
+    let cancelled = false;
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        if (cancelled || !ref.current) return;
+        captureRef(ref.current, { format: 'png', result: 'tmpfile', quality: 1 })
+          .then((uri) => onShot(spec.key, uri))
+          .catch(() => onFail(spec.key));
+      });
+    });
+    return () => { cancelled = true; cancelAnimationFrame(raf1); cancelAnimationFrame(raf2); };
   }, [ready, spec.key, onShot, onFail]);
   useEffect(() => {
     if (ready) return;
@@ -458,6 +494,11 @@ const makeStyles = (c: AppTheme) =>
 
     badgeOneRow: { width: 28, height: 28, borderRadius: 14 },
     badgeTwoRow: { width: 30, height: 30, borderRadius: 15 },
+    // Combo stack: own badge at left ON TOP of the partners', each peeking a
+    // further 14px right (half a badge — enough to recognise the chain).
+    // Width is set inline (28 + 14 × partner count).
+    badgeStackOneRow: { height: 28 },
+    badgePrimary: { position: 'absolute', left: 0, top: 0 },
 
     textColTwoRow: { justifyContent: 'center' },
     valueText: { fontSize: 13, fontWeight: '800' },

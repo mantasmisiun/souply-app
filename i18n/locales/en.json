@@ -18,7 +18,9 @@
     "presetHome": "Home",
     "presetWork": "Work",
     "presetCustom": "Other",
-    "add": "+ Add"
+    "add": "+ Add",
+    "select": "Select",
+    "swap": "Swap direction"
   },
   "tabs": {
     "receipts": "Analyze",
@@ -1001,7 +1003,8 @@
     "shareConnectedSub": "Another user joined the list.",
     "shareCreateForShare": "Create a new one if you want to share.",
     "shareTitle": "Share list",
-    "shareSubtitle": "Let the other user scan the QR code.",
+    "shareSubtitle": "You'll edit the list and check off items together.",
+    "shareHelpBody": "The other person:\n• opens the app and the \"List\" tab\n• taps + and the QR button\n• scans this code (a regular camera won't read it)\n\nThe list becomes shared — you both edit and check off items.",
     "shareClose": "Close"
   },
   "swipe": {

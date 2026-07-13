@@ -24,7 +24,7 @@ import LocationPromptModal from '../../../components/LocationPromptModal';
 import { scoreAllCombinations, type ScoredCombo } from '../../../utils/splitBasketScore';
 import { type StoreResult, fetchStorePrices } from '../../../utils/basketPricing';
 import { getStoreDirectory } from '../../../utils/storeDirectory';
-import { type StoreLite } from '../../../utils/candidatePool';
+import { buildCandidatePool, type StoreLite } from '../../../utils/candidatePool';
 import { orderStopsNearestFirst, orderStopsAlongRoute, buildGoogleMapsRouteUrl } from '../../../utils/multiStopRoute';
 import { getPresets, getLocationSettings, saveLocationSettings } from '../../../utils/locationStorage';
 import StoreResultsMap, { type MapPin } from '../../../components/results/StoreResultsMap';
@@ -201,15 +201,35 @@ export default function BasketResultsScreen() {
         if (!isPull) setLoading(true);
         setSelectedStoreId(null);
         try {
+            // SAME contract as the basket screen's calc: honour the location
+            // settings — candidate pool from the settings, and the calculate
+            // origin = the settings-resolved centre (place/bus), falling back
+            // to the resolved coords (current/route modes). Previously this
+            // recalc posted raw GPS with NO pool, silently reverting a
+            // place-mode basket to closest-stores-around-me.
+            const [pool, settings] = await Promise.all([
+                buildCandidatePool({ lat: coords.lat, lng: coords.lng }),
+                getLocationSettings(),
+            ]);
+            const origin = pool.searchCenter ?? coords;
+            const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
+            if (pool.storeIds.length > 0) body.storeIds = pool.storeIds;
             const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ lat: coords.lat, lng: coords.lng }),
+                body: JSON.stringify(body),
             });
             const newResults = await res.json();
-            await AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults));
+            await Promise.all([
+                AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults)),
+                AsyncStorage.setItem(`basket_calc_meta_${id}`, JSON.stringify({
+                    storeCount: settings.storeCount,
+                    searchCenter: pool.searchCenter,
+                    settings,
+                })),
+            ]);
             await persistCoords(coords);
-            setUserCoords({ lat: coords.lat, lng: coords.lng });
+            setUserCoords({ lat: origin.lat, lng: origin.lng });
             setResults(newResults);
             setSelectedOptionKey(null);
             setLazyResults([]); // re-priced basket → old lazy prices are stale
@@ -318,13 +338,17 @@ export default function BasketResultsScreen() {
     // basket total, or the best in-radius split it's part of (then the pin shows
     // the combo's price). Plus the globally cheapest option's stores = the
     // recommended set (one store if a single wins, 2-3 if a split wins).
-    const { pinPriceByStore, recommendedStoreIds, recommendedStores } = useMemo(() => {
+    const { pinPriceByStore, pinComboByStore, recommendedStoreIds, recommendedStores } = useMemo(() => {
         const richById = new Map<number, StoreResult>();
         for (const r of results) richById.set(r.storeId, r);
         for (const r of lazyResults) if (!richById.has(r.storeId)) richById.set(r.storeId, r);
 
         const priceByStore = new Map<number, number>();
         for (const [, r] of richById) priceByStore.set(r.storeId, r.total);
+        // storeId → the combo that provided its shown price (null = a single
+        // total won). Drives the pill's partner badge: the price is a split
+        // total, so show WHO it splits with.
+        const comboByStore = new Map<number, ScoredCombo>();
 
         // Global best starts as the recommended single store; a cheaper in-radius
         // split takes over.
@@ -335,7 +359,10 @@ export default function BasketResultsScreen() {
             if (c.stores.length <= 1 || c.extraDistanceKm > TRIP_RADIUS_KM) continue;
             for (const sid of c.storeIds) {
                 const cur = priceByStore.get(sid);
-                if (cur == null || c.splitTotal < cur) priceByStore.set(sid, c.splitTotal);
+                if (cur == null || c.splitTotal < cur) {
+                    priceByStore.set(sid, c.splitTotal);
+                    comboByStore.set(sid, c);
+                }
             }
             if (!best || c.splitTotal < best.price) {
                 const stores = c.storeIds.map(id => richById.get(id)).filter((s): s is StoreResult => !!s);
@@ -344,10 +371,33 @@ export default function BasketResultsScreen() {
         }
         return {
             pinPriceByStore: priceByStore,
+            pinComboByStore: comboByStore,
             recommendedStoreIds: new Set(best?.ids ?? []),
             recommendedStores: best?.stores ?? [],
         };
     }, [results, lazyResults, combos]);
+
+    // Per-store SHARE of the selected split: Σ of the assigned items' line
+    // totals at that store — mirrors splitBasketScore's splitTotal sum exactly,
+    // so the members' shares add up to the option total shown before the tap.
+    const selectedShareByStore = useMemo(() => {
+        const shares = new Map<number, number>();
+        const combo = selectedOption?.combo;
+        if (!combo) return shares;
+        const itemsByStore = new Map<number, Map<number, number>>(); // storeId → productId → totalPrice
+        for (const s of selectedOption!.stores) {
+            const m = new Map<number, number>();
+            for (const it of s.items) if (!it.isMissing && it.totalPrice != null) m.set(it.productId, it.totalPrice);
+            itemsByStore.set(s.storeId, m);
+        }
+        for (const [pidStr, sid] of Object.entries(combo.itemAssignments)) {
+            const line = itemsByStore.get(sid)?.get(Number(pidStr));
+            if (line != null) shares.set(sid, (shares.get(sid) ?? 0) + line);
+        }
+        // Round to cents so the pills show clean figures.
+        for (const [sid, v] of shares) shares.set(sid, Math.round(v * 100) / 100);
+        return shares;
+    }, [selectedOption]);
 
     // Stores shown as pills = the priced set, plus the recommended option's
     // stores and any member of the selected option (so a recommended/chosen
@@ -364,15 +414,36 @@ export default function BasketResultsScreen() {
     const pins: MapPin[] = useMemo(() =>
         pinStores
             .filter(s => s.latitude != null && s.longitude != null)
-            .map(s => ({
-                storeId: s.storeId, chainId: s.chainId, chainName: s.chainName,
-                miniLogoUrl: s.chainMiniLogoUrl ?? s.chainLogoUrl ?? null,
-                latitude: s.latitude as number, longitude: s.longitude as number,
-                euro: pinPriceByStore.get(s.storeId) ?? s.total, // cheapest option for this store
-                active: activeIds.has(s.storeId),
-                recommended: recommendedStoreIds.has(s.storeId), // all stores of the best option
-            })),
-        [pinStores, activeIds, pinPriceByStore, recommendedStoreIds]);
+            .map(s => {
+                const active = activeIds.has(s.storeId);
+                // UNSELECTED: the cheapest option's price (a split shows the combo
+                // TOTAL + the partner's badge). SELECTED member: the pin's OWN
+                // figure — its share of the split (or its single total) — and the
+                // partner badge hides (the drawn route already shows the pairing).
+                let euro = pinPriceByStore.get(s.storeId) ?? s.total;
+                let partnerChainIds: number[] = [];
+                if (active && selectedOption) {
+                    euro = selectedOption.combo
+                        ? (selectedShareByStore.get(s.storeId) ?? euro)
+                        : (selectedOption.stores.find(st => st.storeId === s.storeId)?.total ?? euro);
+                } else {
+                    const combo = pinComboByStore.get(s.storeId);
+                    // ALL partners: 2-store combo → 1 badge, 3-store → 2 stacked.
+                    partnerChainIds = combo
+                        ? combo.stores.filter(st => st.storeId !== s.storeId).map(st => st.chainId)
+                        : [];
+                }
+                return {
+                    storeId: s.storeId, chainId: s.chainId, chainName: s.chainName,
+                    miniLogoUrl: s.chainMiniLogoUrl ?? s.chainLogoUrl ?? null,
+                    latitude: s.latitude as number, longitude: s.longitude as number,
+                    euro,
+                    active,
+                    recommended: recommendedStoreIds.has(s.storeId), // all stores of the best option
+                    partnerChainIds,
+                };
+            }),
+        [pinStores, activeIds, pinPriceByStore, pinComboByStore, selectedShareByStore, selectedOption, recommendedStoreIds]);
 
     // The recommended option's store coordinates — the map frames ALL of them on
     // load (fit for a split, center for a single) so a combo partner is never

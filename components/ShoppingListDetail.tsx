@@ -221,6 +221,9 @@ export function ShoppingListDetail({
     const [shareToken, setShareToken] = useState<string | null>(null);
     const [shareStatus, setShareStatus] = useState<'pending' | 'claimed' | 'expired' | 'error'>('pending');
     const [shareLoading, setShareLoading] = useState(false);
+    // "?" toggle in the share sheet — expands the detailed how-it-works text.
+    const [shareHelpOpen, setShareHelpOpen] = useState(false);
+    useEffect(() => { if (!shareOpen) setShareHelpOpen(false); }, [shareOpen]);
 
     const shownCouponsRef = useRef<Set<string>>(new Set());
     const [couponQueue, setCouponQueue] = useState<string[]>([]);
@@ -932,8 +935,27 @@ export function ShoppingListDetail({
                             </>
                         ) : (
                             <>
-                                <Text style={styles.shareTitle}>{t('shoppingListDetail.shareTitle')}</Text>
+                                <View style={styles.shareTitleRow}>
+                                    <Text style={styles.shareTitle}>{t('shoppingListDetail.shareTitle')}</Text>
+                                    <TouchableOpacity
+                                        onPress={() => setShareHelpOpen(o => !o)}
+                                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                        accessibilityLabel="?"
+                                        style={{ marginBottom: 6 }}
+                                    >
+                                        <Ionicons
+                                            name="help-circle-outline"
+                                            size={20}
+                                            color={shareHelpOpen ? colors.primary : colors.textMuted}
+                                        />
+                                    </TouchableOpacity>
+                                </View>
                                 <Text style={styles.shareSubtitle}>{t('shoppingListDetail.shareSubtitle')}</Text>
+                                {shareHelpOpen && (
+                                    <View style={styles.shareHelpBox}>
+                                        <Text style={styles.shareHelpText}>{t('shoppingListDetail.shareHelpBody')}</Text>
+                                    </View>
+                                )}
                                 <View style={styles.shareQrWrap}>
                                     {shareLoading || !shareToken ? (
                                         <MaterialProgress size="large" color={colors.primary} />
@@ -1108,7 +1130,19 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         ...elevation.level3,
     },
     shareTitle: { ...typography.subheading, color: c.textPrimary, marginBottom: 6, textAlign: 'center' },
+    // Title + the "?" help toggle side by side (the icon rides the title's
+    // 6px bottom margin via its own offset).
+    shareTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
     shareSubtitle: { ...typography.label, fontWeight: '400', color: c.textSecondary, marginBottom: spacing.lg, textAlign: 'center' },
+    shareHelpBox: {
+        backgroundColor: c.surfaceMuted,
+        borderRadius: radius.md,
+        paddingVertical: spacing.sm,
+        paddingHorizontal: spacing.md,
+        marginTop: -spacing.sm,
+        marginBottom: spacing.lg,
+    },
+    shareHelpText: { ...typography.caption, color: c.textSecondary, lineHeight: 17 },
     shareQrWrap: {
         marginBottom: spacing.lg,
         minWidth: 244, minHeight: 244, alignItems: 'center', justifyContent: 'center',

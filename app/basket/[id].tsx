@@ -8,6 +8,7 @@ import {
     TextInput,
     Modal,
     Platform,
+    Dimensions,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { SkeletonBox } from '../../components/SkeletonBox';
@@ -28,7 +29,8 @@ import ProductLineCard from '../../components/ProductLineCard';
 import { useBasketState } from '../../state/basketState';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import LocationPromptModal from '../../components/LocationPromptModal';
-import LocationSettingsModal from '../../components/LocationSettingsModal';
+import LocationSettingsPanel from '../../components/LocationSettingsPanel';
+import { GlassStageSheet, SHEET_HANDLE_H, type GlassStageSheetRef } from '../../components/GlassStageSheet';
 import * as Haptics from 'expo-haptics';
 import { ScalePressable } from '../../components/ScalePressable';
 import { formatDate } from '../../utils/formatCurrency';
@@ -132,11 +134,14 @@ export default function BasketDetailScreen() {
     // user hasn't previously cached an address. On resolve, we continue
     // the calc flow with the new coordinates.
     const [locationPromptVisible, setLocationPromptVisible] = useState(false);
-    const [locationSettingsVisible, setLocationSettingsVisible] = useState(false);
-    // Set when we leave the settings sheet to add a preset on the map; the
-    // focus effect re-opens the sheet on return so the setup flow continues
-    // (the sheet reloads presets on open, so the new address is already there).
-    const reopenSettingsRef = useRef(false);
+    // Bottom bar-sheet (GlassStageSheet): stage 0 = the floating action bar,
+    // stage 1 = the expanded settings panel. The settings squircle toggles it;
+    // dragging the pill does the same. Bar/panel heights are measured by the
+    // sheet and drive the snap points.
+    const settingsSheetRef = useRef<GlassStageSheetRef>(null);
+    const sheetStageRef = useRef(0);
+    const [barH, setBarH] = useState(74);
+    const [panelH, setPanelH] = useState(0);
     // Save-as-template flow: bookmark icon in the nav bar opens a name
     // prompt → POST /api/basket-templates/from-basket/:id → toast.
     // Save-as-template: the bookmark opens the shared identity sheet
@@ -273,12 +278,9 @@ export default function BasketDetailScreen() {
         fetchBasket();
         setSettingsRefreshKey(k => k + 1);
         getLocationSettings().then(setActiveSettings);
-        // Returning from the preset map (opened from the settings sheet) →
-        // re-open the sheet so the user keeps configuring where they left off.
-        if (reopenSettingsRef.current) {
-            reopenSettingsRef.current = false;
-            setLocationSettingsVisible(true);
-        }
+        // Returning from the preset map: the sheet stayed mounted (and
+        // expanded) through the push — the refreshKey bump above reloads the
+        // presets, so the new address is already in the panel.
         // Hydrate the calc-time settings snapshot for the
         // "settings changed" branch. Missing key → leave null and the
         // button falls back to "Rodyti parduotuves".
@@ -447,7 +449,16 @@ export default function BasketDetailScreen() {
                 getLocationSettings(),
             ]);
 
-            const body: Record<string, any> = { lat: coords.lat, lng: coords.lng };
+            // The calculate origin must be the SETTINGS-RESOLVED centre (the
+            // chosen place/bus centre), not the device position: the server
+            // derives every store's `distance` from these coords, and the
+            // combo scorer optimises travel from them. Posting raw GPS in
+            // place mode skewed recommendations toward the user's CURRENT
+            // location (candidates around the place, distances from the GPS).
+            // Route mode has no single centre (searchCenter null) → resolved
+            // coords remain the fallback origin.
+            const origin = pool.searchCenter ?? coords;
+            const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
             if (pool.storeIds.length > 0) body.storeIds = pool.storeIds;
 
             const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
@@ -493,8 +504,31 @@ export default function BasketDetailScreen() {
      *   2. GPS permission → device location
      *   3. address modal fallback (or Vilnius centre from inside the modal)
      */
+    // Route mode with either endpoint missing can't be priced meaningfully —
+    // the find button disables and the settings squircle flags it with "!"
+    // (picking the other endpoint's value in a route dropdown vacates it, so
+    // this state is reachable in normal use, not just half-done setup).
+    const routeIncomplete = !!activeSettings
+        && activeSettings.mode === 'route'
+        && (!activeSettings.routeFrom || !activeSettings.routeTo);
+
+    // Bar-sheet snap points: collapsed = pill + action bar; expanded = the
+    // settings panel, content-sized and capped so the list stays visible
+    // behind the float. Read-only baskets get a fixed bar (no expansion).
+    const sheetExpandable = basket?.status !== 'inProgress' && basket?.status !== 'completed';
+    const sheetSnaps = useMemo(() => {
+        const bar = SHEET_HANDLE_H + barH;
+        if (!sheetExpandable || panelH <= 0) return [bar];
+        const expanded = Math.min(bar + panelH, Dimensions.get('window').height * 0.62);
+        return expanded > bar + 40 ? [bar, expanded] : [bar];
+    }, [barH, panelH, sheetExpandable]);
+    const toggleSettingsSheet = () => {
+        settingsSheetRef.current?.snapTo(sheetStageRef.current > 0 ? 0 : 1);
+    };
+
     const handleCalculate = async () => {
         if (calcInFlight.current || calcing) return;
+        if (routeIncomplete) { settingsSheetRef.current?.snapTo(1); return; }
         calcInFlight.current = true;
         setResolvingLocation(true);
         try {
@@ -688,7 +722,7 @@ export default function BasketDetailScreen() {
                     style={{ flex: 1 }}
                     data={items}
                     keyExtractor={(item: any) => item.id.toString()}
-                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12 }]}
+                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: sheetSnaps[0] + 28 }]}
                     ListHeaderComponent={
                         isEditable ? (
                             <TouchableOpacity
@@ -749,14 +783,24 @@ export default function BasketDetailScreen() {
                 />
 
                 {calcError && (
-                    <View style={styles.errorBanner}>
+                    <View style={[styles.errorBanner, { marginBottom: sheetSnaps[0] + 16 }]}>
                         <Ionicons name="alert-circle" size={16} color={colors.error} />
                         <Text style={styles.errorBannerText}>{calcError}</Text>
                     </View>
                 )}
 
                 {items.length > 0 && (
-                    <View style={[styles.bottomBar, bottomInset > 0 && { paddingBottom: 12 + bottomInset }]}>
+                    <GlassStageSheet
+                        ref={settingsSheetRef}
+                        snaps={sheetSnaps}
+                        colors={colors}
+                        bottomInset={bottomInset}
+                        onStageChange={(st) => { sheetStageRef.current = st; }}
+                        onBarHeight={setBarH}
+                        onContentHeight={setPanelH}
+                        contentContainerStyle={styles.sheetPanelContent}
+                        bar={
+                    <View style={styles.barRow}>
                         {basket?.status === 'inProgress' || basket?.status === 'completed' ? (
                             // Read-only states: basket is locked because the
                             // user is actively shopping (inProgress) or the
@@ -784,7 +828,7 @@ export default function BasketDetailScreen() {
                                         activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
                                             && styles.settingsSquircleActive,
                                     ]}
-                                    onPress={() => setLocationSettingsVisible(true)}
+                                    onPress={toggleSettingsSheet}
                                     disabled={busy}
                                     scaleTo={0.92}
                                 >
@@ -801,9 +845,11 @@ export default function BasketDetailScreen() {
                                                 : colors.textSecondary
                                         }
                                     />
-                                    {activeSettings && activeSettings.storeCount > 1 && (
-                                        <View style={styles.settingsBadge}>
-                                            <Text style={styles.settingsBadgeText}>{activeSettings.storeCount}</Text>
+                                    {activeSettings && (routeIncomplete || activeSettings.storeCount > 1) && (
+                                        <View style={[styles.settingsBadge, routeIncomplete && styles.settingsBadgeAlert]}>
+                                            <Text style={styles.settingsBadgeText}>
+                                                {routeIncomplete ? '!' : activeSettings.storeCount}
+                                            </Text>
                                         </View>
                                     )}
                                 </ScalePressable>
@@ -825,9 +871,7 @@ export default function BasketDetailScreen() {
                                         activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
                                             && styles.settingsSquircleActive,
                                     ]}
-                                    onPress={() => {
-                                        setLocationSettingsVisible(true);
-                                    }}
+                                    onPress={toggleSettingsSheet}
                                     disabled={busy}
                                     scaleTo={0.92}
                                 >
@@ -844,17 +888,19 @@ export default function BasketDetailScreen() {
                                                 : colors.textSecondary
                                         }
                                     />
-                                    {activeSettings && activeSettings.storeCount > 1 && (
-                                        <View style={styles.settingsBadge}>
-                                            <Text style={styles.settingsBadgeText}>{activeSettings.storeCount}</Text>
+                                    {activeSettings && (routeIncomplete || activeSettings.storeCount > 1) && (
+                                        <View style={[styles.settingsBadge, routeIncomplete && styles.settingsBadgeAlert]}>
+                                            <Text style={styles.settingsBadgeText}>
+                                                {routeIncomplete ? '!' : activeSettings.storeCount}
+                                            </Text>
                                         </View>
                                     )}
                                 </ScalePressable>
                                 <ScalePressable
-                                    style={[styles.showResultsButton, busy && styles.buttonCalcing]}
+                                    style={[styles.showResultsButton, busy && styles.buttonCalcing, routeIncomplete && styles.buttonDisabled]}
                                     onPress={handleCalculate}
-                                    disabled={busy}
-                                    scaleTo={busy ? 1 : 0.95}
+                                    disabled={busy || routeIncomplete}
+                                    scaleTo={busy || routeIncomplete ? 1 : 0.95}
                                 >
                                     {busy ? (
                                         <>
@@ -873,6 +919,22 @@ export default function BasketDetailScreen() {
                             </>
                         )}
                     </View>
+                        }
+                    >
+                        <LocationSettingsPanel
+                            refreshKey={settingsRefreshKey}
+                            onChanged={setActiveSettings}
+                            onCollapse={() => settingsSheetRef.current?.snapTo(0)}
+                            onOpenPresetMap={(key, label, existing) => {
+                                // The sheet stays mounted (and expanded) through
+                                // the push; the focus effect's refreshKey bump
+                                // reloads presets on return.
+                                router.push(
+                                    `/preset/${key}/map?label=${encodeURIComponent(label)}${existing ? `&lat=${existing.lat}&lng=${existing.lng}` : ''}` as any,
+                                );
+                            }}
+                        />
+                    </GlassStageSheet>
                 )}
 
                 {calcing && (
@@ -929,24 +991,6 @@ export default function BasketDetailScreen() {
                 onCancel={() => setLocationPromptVisible(false)}
             />
 
-            <LocationSettingsModal
-                visible={locationSettingsVisible}
-                onClose={() => {
-                    setLocationSettingsVisible(false);
-                    getLocationSettings().then(setActiveSettings);
-                }}
-                refreshKey={settingsRefreshKey}
-                onOpenPresetMap={(key, label, existing) => {
-                    // Dismiss the sheet first so the pushed map isn't covered by
-                    // it; mark for re-open so the focus effect restores the sheet
-                    // (with the new address) when we navigate back.
-                    reopenSettingsRef.current = true;
-                    setLocationSettingsVisible(false);
-                    router.push(
-                        `/preset/${key}/map?label=${encodeURIComponent(label)}${existing ? `&lat=${existing.lat}&lng=${existing.lng}` : ''}` as any,
-                    );
-                }}
-            />
 
             <Toast ref={toastRef} />
         </>
@@ -1001,14 +1045,17 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         fontSize: 13,
         color: c.error,
     },
-    bottomBar: {
+    // Action row inside the floating glass bar-sheet (the sheet owns the
+    // surface, pill and radii — this is just the row layout).
+    barRow: {
         flexDirection: 'row',
-        padding: 12,
-        backgroundColor: c.cardBackground,
-        borderTopLeftRadius: radius.lg,
-        borderTopRightRadius: radius.lg,
-        ...elevation.level3,
         gap: 10,
+        paddingHorizontal: 12,
+        paddingBottom: 12,
+    },
+    sheetPanelContent: {
+        paddingHorizontal: 16,
+        paddingBottom: 8,
     },
     showResultsButton: {
         flex: 1,
@@ -1051,6 +1098,13 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         fontSize: 10,
         fontWeight: '700',
         color: c.onPrimary,
+    },
+    // "!" — route mode with a missing endpoint (find is disabled until fixed).
+    settingsBadgeAlert: {
+        backgroundColor: c.error,
+    },
+    buttonDisabled: {
+        opacity: 0.45,
     },
     secondaryButton: {
         backgroundColor: c.cardBackground,

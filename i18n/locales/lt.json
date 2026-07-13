@@ -18,7 +18,9 @@
     "presetHome": "Namai",
     "presetWork": "Darbas",
     "presetCustom": "Kita",
-    "add": "+ Pridėti"
+    "add": "+ Pridėti",
+    "select": "Pasirinkti",
+    "swap": "Sukeisti kryptį"
   },
   "tabs": {
     "receipts": "Analizė",
@@ -975,7 +977,8 @@
     "shareConnectedSub": "Kitas vartotojas prisijungė prie sąrašo.",
     "shareCreateForShare": "Sukurkite naują, jei norite pasidalinti.",
     "shareTitle": "Dalintis sąrašu",
-    "shareSubtitle": "Tegul kitas vartotojas nuskaito QR kodą.",
+    "shareSubtitle": "Kartu redaguosite sąrašą ir žymėsite prekes.",
+    "shareHelpBody": "Kitas žmogus:\n• atsidaro programėlę ir skiltį „Sąrašas“\n• paspaudžia + ir QR mygtuką\n• nuskenuoja šį kodą (įprasta kamera jo nenuskaitys)\n\nSąrašas taps bendras – abu redaguosite ir žymėsite prekes.",
     "shareClose": "Uždaryti"
   },
   "swipe": {

@@ -8,9 +8,9 @@ import {
     Dimensions,
     Platform,
 } from "react-native";
-import { Gesture, GestureDetector, ScrollView, State } from 'react-native-gesture-handler';
 import { MaterialProgress } from '@/components/MaterialProgress';
-import Animated, { SlideInDown, SlideOutDown, useAnimatedStyle, useDerivedValue, useSharedValue, withTiming, withSpring, runOnJS } from 'react-native-reanimated';
+import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
+import { GlassStageSheet, SHEET_HANDLE_H, type GlassStageSheetRef } from '../GlassStageSheet';
 import { Ionicons } from '@expo/vector-icons';
 import { spacing, radius, typography, iconSize, avatarSize, type AppTheme } from '../../constants/theme';
 import { type SheetOption } from '../../utils/splitOptions';
@@ -19,14 +19,13 @@ import { chainBrandName } from '../../utils/chainBrandName';
 import { formatEuro } from '../../utils/formatCurrency';
 import { useTranslation } from 'react-i18next';
 import { LiquidGlass } from '../LiquidGlass';
-import { concentricRadius, displayCornerRadius } from '../../utils/displayCorners';
+import { concentricRadius } from '../../utils/displayCorners';
 
 // SheetOption lives in utils/splitOptions (pure + unit-tested). Re-export so
 // existing imports from this component keep working.
 export type { SheetOption };
 
 const SCREEN_H = Dimensions.get('window').height;
-const SCREEN_W = Dimensions.get('window').width;
 const PEEK_GAP = 26;   // sliver of the next card shown when collapsed
 
 /** "1.4 km" / "850 m" — distance display, switching to metres under 1 km. Units
@@ -46,15 +45,19 @@ function ChainLogo({ chainId, chainName, size }: {
 }
 
 /** A selectable combo (or baseline single) row with a radio, in the multi sheet. */
-function OptionCard({ option, selected, styles, colors, onPress, onLayout }: {
+// MEMOIZED with a stable onSelect(key) interface: every stage settle re-renders
+// MultiSheet on the JS thread right as the release spring runs on the UI thread
+// — without memo all cards re-rendered each time (an inline onPress closure per
+// card defeated any bail-out). Now only the cards whose `selected` flips render.
+const OptionCard = React.memo(function OptionCard({ option, selected, styles, colors, onSelect, onLayout }: {
     option: SheetOption; selected: boolean; styles: Styles; colors: AppTheme;
-    onPress: () => void; onLayout?: (h: number) => void;
+    onSelect: (key: string) => void; onLayout?: (h: number) => void;
 }) {
     const { t } = useTranslation();
     const multi = option.stores.length > 1;
     return (
         <Pressable
-            onPress={onPress}
+            onPress={() => onSelect(option.key)}
             onLayout={onLayout ? e => onLayout(e.nativeEvent.layout.height) : undefined}
             style={[styles.card, selected && styles.cardSelected]}
         >
@@ -127,7 +130,7 @@ function OptionCard({ option, selected, styles, colors, onPress, onLayout }: {
             </View>
         </Pressable>
     );
-}
+});
 
 type Props = {
     options: SheetOption[];
@@ -239,36 +242,29 @@ function SingleSheet({ options, onNavigate, onCreateList, creatingList, colors, 
     );
 }
 
-const HANDLE_H = 30;        // drag affordance height
+const HANDLE_H = 30;        // drag affordance height (styles.handleArea — SingleSheet)
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
-/* ── Multi-option: draggable 3-stage sheet; action bar always pinned. ────── */
+/* ── Multi-option: draggable 3-stage sheet on the shared GlassStageSheet. ──
+   All stage machinery (worklet drag, glass frame, transform-only slide, the
+   stage-3 edge dock) lives in components/GlassStageSheet — this is just the
+   results-specific content: snap-point math, the option cards and the action
+   bar. */
 function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, creatingList, colors, bottomInset, onHeightChange }: Props) {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [firstCardH, setFirstCardH] = useState(120);
     const [contentH, setContentH] = useState(0);
     const [actionsH, setActionsH] = useState(90);
-    const [stage, setStage] = useState(1); // open at peek; 0 = the collapsed bar
-    // Bumped on each user snap so the settle effect animates even to the SAME
-    // stage (a small drag that releases back).
-    const [settleTick, setSettleTick] = useState(0);
+    const sheetRef = useRef<GlassStageSheetRef>(null);
 
-    // Snap points (Find-My-style detents), ascending sheet heights: BAR (fully
-    // collapsed — just the grabber pill + the floating action bar), peek (top
-    // card + a sliver), an optional MIDDLE stage (scroll the list while the map
-    // stays visible so tapping a result shows on the map), and full (whole
-    // list, capped). The action bar is a fixed sibling counted in every
-    // height → never clipped.
+    // Snap points (Find-My-style detents), ascending: BAR (grabber pill + the
+    // floating action bar), PEEK (top card + a sliver), an optional MID stage
+    // (scroll the list while the map stays visible), and FULL — always the
+    // near-top detent; the shared sheet docks it edge-to-edge (dockAtLast).
     const snaps = useMemo(() => {
-        const bar = HANDLE_H + actionsH;
-        // FULL (the docked stage 3) is ALWAYS the near-top detent — independent
-        // of content height, like Find My. Short lists just leave slack below;
-        // the dock morph belongs to the approach to the TOP of the screen, not
-        // to "content fits" (which used to dock the sheet at mid-screen).
+        const bar = SHEET_HANDLE_H + actionsH;
         const full = SCREEN_H * 0.85;
         const peek = Math.min(bar + firstCardH + PEEK_GAP, full);
-        // MID = the floating "see the options" stage: whole list when it's
-        // short, else a fixed comfortable height with the map still visible.
         const mid = clamp(Math.min(bar + contentH, bar + SCREEN_H * 0.42), peek, full);
         const pts = [bar];
         if (peek > bar + 40) pts.push(peek);
@@ -277,388 +273,67 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
         return pts;
     }, [firstCardH, contentH, actionsH]);
 
-    const safeStage = Math.min(stage, snaps.length - 1);
+    // New store's options → back to peek.
+    useEffect(() => { sheetRef.current?.snapTo(1); }, [options]);
 
-    const height = useSharedValue(snaps[0]);
-    // Declared BEFORE every worklet that captures it (a later `const` is still
-    // in its temporal dead zone at worklet creation → undefined → crash).
-    const snapsSV = useSharedValue<number[]>(snaps);
-    useEffect(() => { snapsSV.value = snaps; }, [snaps, snapsSV]);
-    const dragging = useRef(false);
-    // UI-thread mirror of `dragging` for the dock-progress worklet (see dockP).
-    const draggingSV = useSharedValue(false);
-    const snapsRef = useRef(snaps); snapsRef.current = snaps;
-    const stageRef = useRef(safeStage); stageRef.current = safeStage;
-    // Slide-in is driven by this shared value (NOT reanimated's `entering`
-    // layout animation). A layout animation + an animated `height` on the same
-    // node fight on Fabric — the entering snapshot pins the height, so the
-    // measured peek never applies until you tap. Owning both the slide and the
-    // height in ONE animated style avoids that entirely.
-    const slideY = useSharedValue(SCREEN_H * 0.85);
-
-    // ── Stage-3 DOCK progress ────────────────────────────────────────────────
-    // Finger DOWN → the height-derived progress (tracks the drag, reverses
-    // with it). Released → stagePSV, a timing toward the committed stage that
-    // the gesture SEEDS from the finger's final progress, so the handoff is
-    // continuous in both directions. (An earlier max(height, stage) blend
-    // flashed on downward release: stagePSV was still 1 from stage 3 at the
-    // instant the finger lifted, snapping the morph back to docked for a beat.)
-    const stagePSV = useSharedValue(0);
-    useEffect(() => {
-        const atLast = snaps.length > 1 && safeStage === snaps.length - 1;
-        stagePSV.value = withTiming(atLast ? 1 : 0, { duration: 240 });
-        // settleTick: a CANCELLED drag leaves stagePSV seeded mid-way with no
-        // stage change — this re-fire eases it back to the committed stage.
-    }, [safeStage, snaps.length, settleTick, stagePSV]);
-    const dockP = useDerivedValue(() => {
-        const sn = snapsSV.value;
-        const last = sn[sn.length - 1];
-        const prev = sn.length > 1 ? sn[sn.length - 2] : last;
-        const range = Math.max(1, last - prev);
-        const hp = Math.min(1, Math.max(0, (height.value - prev) / range));
-        let p = draggingSV.value ? hp : stagePSV.value;
-        if (p > 0.995) p = 1;
-        return p;
-    });
-    const bottomOffset = spacing.sm;
-
-    // TRANSFORM-ONLY animation (the definitive de-stutter): the sheet's parts
-    // never change SIZE while dragging — the BODY (glass + handle + list, all
-    // fixed at the tallest snap) slides down inside a fixed clipping viewport
-    // as the sheet collapses, and the BAR is a separate fixed glass panel the
-    // body disappears behind. translateY is a pure transform: no Yoga layout,
-    // no blur resize, nothing measured — every frame is just a matrix update.
-    //
-    // The stage-3 DOCK is transform-only too, so it can track the finger with
-    // no per-frame Yoga passes: the root is laid out EDGE-TO-EDGE (docked
-    // geometry) and scaled DOWN in x to the floating width; an inner wrapper
-    // counter-scales by 1/s so the content renders at identity (never
-    // stretched, text stays crisp). Both scales share the same centre, so
-    // content never moves — only the clip box (the sheet's visible edges)
-    // expands/contracts with the drag. The float's bottom gap is a translateY.
-    const outerStyle = useAnimatedStyle(() => {
-        const p = dockP.value;
-        const s = (SCREEN_W - 2 * spacing.sm * (1 - p)) / SCREEN_W;
-        return {
-            transform: [
-                { translateY: slideY.value - bottomOffset * (1 - p) },
-                { scaleX: s },
-            ],
-        };
-    });
-    const counterScaleStyle = useAnimatedStyle(() => {
-        const p = dockP.value;
-        const s = (SCREEN_W - 2 * spacing.sm * (1 - p)) / SCREEN_W;
-        return { transform: [{ scaleX: 1 / s }] };
-    });
-    // delta = how far the (fixed-size) glass panel + list slide DOWN as the
-    // sheet collapses. One shared worklet drives both transforms.
-    const bodyStyle = useAnimatedStyle(() => {
-        const sn = snapsSV.value;
-        return { transform: [{ translateY: sn[sn.length - 1] - height.value }] };
-    });
-    useEffect(() => { slideY.value = withTiming(0, { duration: 260 }); }, [slideY]);
-
-    // ANIMATE to the current stage on a user action (snap / tap / collapse) —
-    // tracked by safeStage + a settle tick so even a same-stage release snaps
-    // back. Reads snaps via ref, so a measurement-only change does NOT re-fire
-    // here (re-animating toward a settling `full` is what made it "drag on").
-    useEffect(() => {
-        if (dragging.current) return;
-        // A worklet-driven release is already springing to this stage — don't
-        // restart the animation (that discards the flick momentum).
-        if (uiSettled.current) { uiSettled.current = false; return; }
-        const s = snapsRef.current;
-        height.value = withTiming(s[Math.min(stageRef.current, s.length - 1)], { duration: 220 });
-    }, [safeStage, settleTick, height]);
-
-    // SETTLE INSTANTLY when measurements change the snap heights (first card /
-    // actions / content height land a frame after mount). Instant → fixes the
-    // "opens clipped, tap to fix" case without animating toward a moving target.
-    useEffect(() => {
-        if (dragging.current) return;
-        height.value = snaps[Math.min(stageRef.current, snaps.length - 1)];
-    }, [snaps, height]);
-
-    // New store's options → back to peek (the animate effect runs it).
-    useEffect(() => { setStage(1); }, [options]);
-
-    // Report the settled stage height so the map can frame content above us —
-    // plus the float gap below the sheet (bottomOffset, defined with the dock
-    // block above: it matches the SIDE margins for equal breathing room).
-    useEffect(() => { onHeightChange?.(snaps[safeStage] + bottomOffset); }, [safeStage, snaps, onHeightChange, bottomOffset]);
-
-    // ── SHEET-WIDE drag: one RNGH pan gesture, worklet-driven ──
-    // PanResponder ran every move event over the JS bridge — with the map
-    // hammering the JS thread the sheet visibly stuttered. Gesture.Pan's
-    // callbacks are WORKLETS: touch → height.value entirely on the UI thread,
-    // so the sheet tracks the finger pixel-for-pixel regardless of JS load
-    // (the same architecture as gorhom/bottom-sheet).
-    //
-    // Manual activation replicates the old claim rules: vertical-dominant
-    // movement only (taps + horizontal swipes pass through to cards/buttons);
-    // below full any vertical drag moves the SHEET; at full an upward drag
-    // scrolls the list and a downward drag moves the sheet only when the list
-    // is already at its top. Mutual exclusion with the (RNGH) ScrollView is
-    // automatic once the pan activates.
-    const scrollY = useSharedValue(0);
-    const startHSV = useSharedValue(0);
-    const grabX = useSharedValue(0);
-    const grabY = useSharedValue(0);
-    const setDragging = (v: boolean) => { dragging.current = v; };
-    const uiSettled = useRef(false);
-    const settleFromUI = (idx: number) => {
-        if (idx >= 0) { uiSettled.current = true; setStage(idx); }
-        else setSettleTick(t => t + 1); // cancelled drag → animate back to the current stage
-    };
-    const scrollRef = useRef<any>(null);
-    const sheetGesture = useMemo(() => Gesture.Pan()
-        .manualActivation(true)
-        .simultaneousWithExternalGesture(scrollRef)
-        .onBegin((e) => {
-            'worklet';
-            grabX.value = e.absoluteX;
-            grabY.value = e.absoluteY;
-        })
-        .onTouchesMove((e, sm) => {
-            'worklet';
-            // ONLY an activation decision — once the pan is ACTIVE it must never
-            // be re-judged: failing here mid-drag (sheet reaches full while the
-            // finger keeps moving up) KILLED the gesture, so reversing direction
-            // without lifting the finger did nothing until a fresh touch.
-            if (e.state === State.ACTIVE) return;
-            const t = e.allTouches[0];
-            if (!t) return;
-            const dy = t.absoluteY - grabY.value;
-            const dx = t.absoluteX - grabX.value;
-            if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.5) { sm.fail(); return; }
-            if (Math.abs(dy) < 4) return;                     // not a drag yet → taps stay taps
-            if (Math.abs(dy) <= Math.abs(dx) * 1.5) return;   // not vertical-dominant yet
-            const sn = snapsSV.value;
-            const atFull = height.value >= sn[sn.length - 1] - 2;
-            if (!atFull || (dy > 0 && scrollY.value <= 1)) sm.activate();
-            else sm.fail();                                    // at full, the list owns it
-        })
-        .onStart((e) => {
-            'worklet';
-            // Anchor at the ACTIVATION point so the sheet follows the finger
-            // exactly from the moment it grabs (no pre-activation jump).
-            startHSV.value = height.value + e.translationY;
-            draggingSV.value = true;
-            runOnJS(setDragging)(true);
-        })
-        .onUpdate((e) => {
-            'worklet';
-            const sn = snapsSV.value;
-            const lo = sn[0], hi = sn[sn.length - 1];
-            // Clamp between the bar and full — dragging down never closes the
-            // sheet (tapping the map deselects; that's the only dismiss).
-            // RE-ANCHOR whenever the clamp engages: otherwise the overshoot
-            // distance is swallowed and a direction reversal (swipe up past
-            // full, then drag down WITHOUT releasing) doesn't move the sheet
-            // until the finger has retraced the entire overshoot.
-            let h = startHSV.value - e.translationY;
-            if (h > hi) { startHSV.value = hi + e.translationY; h = hi; }
-            else if (h < lo) { startHSV.value = lo + e.translationY; h = lo; }
-            height.value = h;
-        })
-        .onEnd((e) => {
-            'worklet';
-            // Snap to the nearest detent, nudged one stage by a flick.
-            const sn = snapsSV.value;
-            const h = height.value;
-            let idx = 0, best = 1e9;
-            for (let i = 0; i < sn.length; i++) { const d = Math.abs(sn[i] - h); if (d < best) { best = d; idx = i; } }
-            if (e.velocityY < -500 && idx < sn.length - 1) idx++;
-            else if (e.velocityY > 500 && idx > 0) idx--;
-            // Spring seeded with the finger's velocity (height moves opposite to
-            // translationY) → the release feels like a continuation of the drag,
-            // not a restart. overshootClamping: detents are hard edges.
-            height.value = withSpring(sn[idx], {
-                velocity: -e.velocityY, damping: 30, stiffness: 280, mass: 0.8, overshootClamping: true,
-            });
-            // Seed the dock progress from the finger's FINAL position, then
-            // ease to the landing stage — the finger→timing handoff stays
-            // continuous (no snap back to the old stage's morph state).
-            const last = sn[sn.length - 1];
-            const prev = sn.length > 1 ? sn[sn.length - 2] : last;
-            const hp = Math.min(1, Math.max(0, (h - prev) / Math.max(1, last - prev)));
-            stagePSV.value = hp;
-            stagePSV.value = withTiming(idx === sn.length - 1 ? 1 : 0, { duration: 240 });
-            draggingSV.value = false;
-            runOnJS(setDragging)(false);
-            runOnJS(settleFromUI)(idx);
-        })
-        .onFinalize((_e, success) => {
-            'worklet';
-            if (success) return;
-            // Cancelled drag: seed from wherever the morph is; the settleTick
-            // re-fire of the stagePSV effect eases it back to the committed stage.
-            const sn = snapsSV.value;
-            const last = sn[sn.length - 1];
-            const prev = sn.length > 1 ? sn[sn.length - 2] : last;
-            stagePSV.value = Math.min(1, Math.max(0, (height.value - prev) / Math.max(1, last - prev)));
-            draggingSV.value = false;
-            runOnJS(setDragging)(false);
-            runOnJS(settleFromUI)(-1);
-        })
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    , [height]);
-
-    // Geometry (all static per measurement — transform-only, see above):
-    // root = fixed clip box (rounded, concentric) · glass PANEL = one material
-    // for the WHOLE sheet incl. the bar area, sliding down as it collapses ·
-    // list in a root-fixed viewport that ends at the bar's top · buttons = a
-    // TRANSPARENT overlay pinned to the root's bottom, always over the same
-    // panel glass (single material — no body/bar seam line).
-    const maxSnap = snaps[snaps.length - 1];
-    const listH = Math.max(0, maxSnap - HANDLE_H - actionsH);
-    const cornerR = concentricRadius(bottomInset, spacing.sm);
-
-    // ── Stage-3 DOCKING styles (the scaleX geometry lives up top) ───────────
-    // Everything here is draw-only (radii, opacity) or transform — the whole
-    // dock morph tracks the finger with zero per-frame layout. All geometry
-    // (edges via scaleX, bottom gap via translateY, corner radii here) rides
-    // the SAME dockP progress, so every edge docks by the same rules.
-    //
-    // CONCENTRIC bottom corners: as the sheet's corner travels to the screen's
-    // own (rounded) corner, its radius GROWS from cornerR (= displayR − inset)
-    // to the display's radius — the perceived roundness stays CONSTANT the
-    // whole way (shrinking to 0 made the corners visibly sharpen mid-drag).
-    const displayR = displayCornerRadius(bottomInset);
-    const dockCornersStyle = useAnimatedStyle(() => {
-        const p = dockP.value;
-        const r = cornerR + (displayR - cornerR) * p;
-        return {
-            borderBottomLeftRadius: r,
-            borderBottomRightRadius: r,
-        };
-    });
-    const solidBgStyle = useAnimatedStyle(() => ({ opacity: dockP.value }));
     return (
-        <GestureDetector gesture={sheetGesture}>
-        {/* box-none everywhere structural: the skeleton is ALWAYS maxSnap tall —
-            only the (translated) panel and the button bar may take touches, so a
-            collapsed sheet never steals pans meant for the map. */}
-        <Animated.View
-            style={[styles.sheetRoot, { height: maxSnap, borderRadius: cornerR }, outerStyle, dockCornersStyle]}
-            pointerEvents="box-none"
-        >
-            {/* PANEL (glass + handle) — a DIRECT root child, NOT counter-scaled:
-                it renders under the same scaleX as the root's clip, so its top
-                corner arcs stay inside the visible edges and curve EXACTLY like
-                the root-clipped bottom corners. (Inside the counter-wrapper it
-                rendered wider than the clip — the top radii landed outside the
-                sheet and the visible top corners went square.) Nothing in it is
-                text-critical; the ~4% x-compression at float is imperceptible. */}
-            <Animated.View
-                style={[styles.panel, {
-                    height: maxSnap,
-                    borderTopLeftRadius: cornerR, borderTopRightRadius: cornerR,
-                }, bodyStyle]}
-            >
-                {/* forceFallback: the native Liquid Glass draws a specular RIM
-                    at its edges — on the sheet it reads as an edge decoration.
-                    The blur material is rimless. */}
-                <LiquidGlass fallback="blur" forceFallback style={styles.bodyGlass} />
-                {/* Solid backdrop that fades in as the sheet docks at full. */}
-                <Animated.View
-                    pointerEvents="none"
-                    style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.pageBackground }, solidBgStyle]}
-                />
-                <View style={styles.handleArea}>
-                    <View style={styles.handle} />
-                </View>
-            </Animated.View>
-
-            {/* Counter-scale wrapper: undoes the root's scaleX so the TEXT
-                content (list + buttons) renders at identity — never stretched. */}
-            <Animated.View style={[StyleSheet.absoluteFillObject, counterScaleStyle]} pointerEvents="box-none">
-            {/* List viewport: root-fixed, ends at the bar's top edge; the list
-                inside rides the same delta transform as the panel. */}
-            <View style={[styles.listViewport, { height: Math.max(0, maxSnap - actionsH) }]} pointerEvents="box-none">
-                <Animated.View style={bodyStyle}>
-                    <ScrollView
-                        ref={scrollRef}
-                        style={[styles.list, { height: listH, marginTop: HANDLE_H }]}
-                        contentContainerStyle={styles.listContent}
-                        showsVerticalScrollIndicator={safeStage === snaps.length - 1}
-                        scrollEnabled={safeStage === snaps.length - 1}
-                        bounces={false}
-                        overScrollMode="never"
-                        onScroll={e => { scrollY.value = e.nativeEvent.contentOffset.y; }}
-                        scrollEventThrottle={16}
-                        onContentSizeChange={(_, h) => setContentH(h)}
-                    >
-                        {options.map((opt, i) => (
-                            <OptionCard
-                                key={opt.key}
-                                option={opt}
-                                selected={selectedKey === opt.key}
-                                styles={styles}
-                                colors={colors}
-                                onPress={() => onSelect(opt.key)}
-                                onLayout={i === 0 ? setFirstCardH : undefined}
-                            />
-                        ))}
-                    </ScrollView>
-                </Animated.View>
-            </View>
-
-            {/* Buttons: transparent overlay on the sliding panel's glass. */}
-            <View style={styles.barOverlay} onLayout={e => setActionsH(e.nativeEvent.layout.height)}>
+        <GlassStageSheet
+            ref={sheetRef}
+            snaps={snaps}
+            initialStage={1}
+            colors={colors}
+            bottomInset={bottomInset}
+            dockAtLast
+            exitSlide
+            onHeightChange={onHeightChange}
+            onBarHeight={setActionsH}
+            onContentHeight={setContentH}
+            contentContainerStyle={styles.listContent}
+            bar={
                 <Actions styles={styles} colors={colors} creatingList={creatingList}
                     onNavigate={onNavigate} onCreateList={onCreateList} bottomInset={bottomInset} />
-            </View>
-            </Animated.View>
-        </Animated.View>
-        </GestureDetector>
+            }
+        >
+            {options.map((opt, i) => (
+                <OptionCard
+                    key={opt.key}
+                    option={opt}
+                    selected={selectedKey === opt.key}
+                    styles={styles}
+                    colors={colors}
+                    onSelect={onSelect}
+                    onLayout={i === 0 ? setFirstCardH : undefined}
+                />
+            ))}
+        </GlassStageSheet>
     );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    // FLOATING GLASS PANEL (Find-My-style). LAID OUT edge-to-edge (the DOCKED
-    // geometry); the floating look — side margins + the gap above the home
-    // indicator — comes from the root's scaleX + translateY transforms (see
-    // outerStyle), so the dock morph is transform-only and never relayouts.
-    sheetRoot: {
-        position: 'absolute', left: 0, right: 0, bottom: 0,
-        overflow: 'hidden', // rounds the visible bottom cut of the sliding panel
-    },
     // Single-store sheet (auto-height, not animated) keeps the one-piece panel.
     sheet: {
         position: 'absolute', left: spacing.sm, right: spacing.sm, bottom: 0,
         borderRadius: radius.xl,
         shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.18, shadowRadius: 12,
     },
-    // The ONE glass panel (whole sheet incl. the bar area) — slides via
-    // transform; the root's clip rounds the corners. NO border: the hairline
-    // "decoration" clipped visibly against the rounded corners and left a
-    // see-through strip at the docked edges — the glass edge alone is enough.
-    panel: {
-        position: 'absolute', top: 0, left: 0, right: 0, overflow: 'hidden',
-        backgroundColor: Platform.OS === 'android' ? c.cardBackground + 'F2' : 'transparent',
-    },
-    bodyGlass: StyleSheet.absoluteFillObject,
-    // Root-fixed clip for the list — ends at the bar's top edge. Inset by the
-    // float margin so content sits at its floating position at EVERY stage
-    // (the root is laid out at the docked width; content must not shift).
-    listViewport: { position: 'absolute', top: 0, left: spacing.sm, right: spacing.sm, overflow: 'hidden' },
-    barOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0, paddingHorizontal: spacing.sm },
     sheetGlass: {
         flex: 1, borderRadius: radius.xl, overflow: 'hidden',
-        borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)',
+        // Painted hairline ONLY for the Android blur fallback (needs edge
+        // definition). iOS native glass carries its own system edge treatment —
+        // a border on top diverges from the default material look.
+        ...(Platform.OS === 'android'
+            ? { borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)' as const }
+            : null),
         // Android: expo-blur renders a translucent wash, not a real blur — give it
         // a tinted body (and elevation, which needs a background to draw) so the
         // sheet keeps contrast over the map. iOS glass strips this automatically.
         backgroundColor: Platform.OS === 'android' ? c.cardBackground + 'F2' : 'transparent',
         elevation: 16,
     },
-    // Generous drag target; the visible pill sits centred within it.
+    // Top breathing room under the rounded corners (SingleSheet only — the
+    // draggable sheet's pill lives in GlassStageSheet).
     handleArea: { height: HANDLE_H, alignItems: 'center', justifyContent: 'center' },
-    handle: { width: 44, height: 5, borderRadius: radius.pill, backgroundColor: c.border },
 
-    list: { flexGrow: 0 },
     listContent: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs, paddingBottom: spacing.sm },
 
     // ── Single-store card ──

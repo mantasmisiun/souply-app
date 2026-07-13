@@ -286,16 +286,24 @@ const makeStyles = (c: AppTheme) =>
         // See-through glass title chip next to the back chevron — hugs its text
         // (alignSelf so it doesn't stretch to the row height, no flex so it doesn't
         // stretch to the row width).
+        // Painted hairlines ONLY on the Android blur fallback (needs edge
+        // definition). iOS native glass carries the SYSTEM edge treatment and
+        // follows the user's Liquid Glass appearance setting (Clear/Tinted) —
+        // a border painted on top diverges from the default material look.
         titleChip: {
             alignSelf: 'center', overflow: 'hidden', borderRadius: radius.pill,
-            borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)',
+            ...(Platform.OS === 'android'
+                ? { borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)' as const }
+                : null),
             paddingHorizontal: spacing.lg, height: 40, justifyContent: 'center',
         },
         titleChipText: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
         // Glass search field floating below the title row.
         glassSearchWrap: {
             overflow: 'hidden', borderRadius: radius.lg, height: 48,
-            borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)',
+            ...(Platform.OS === 'android'
+                ? { borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)' as const }
+                : null),
         },
         glassSearchInner: {
             flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
