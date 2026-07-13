@@ -23,6 +23,12 @@ jobs:
           repository: mantasmisiun/souply-shared
           path: shared
           token: ${{ secrets.SHARED_REPO_TOKEN }}
+          # Pair shared with the SAME environment branch as this run:
+          # PRs (promotions) build against the TARGET branch's shared
+          # (base_ref = staging/main); pushes use the pushed branch.
+          # Without this the checkout used souply-shared's DEFAULT branch
+          # (main) — months-stale parsers under brand-new app code.
+          ref: ${{ github.base_ref || github.ref_name }}
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
