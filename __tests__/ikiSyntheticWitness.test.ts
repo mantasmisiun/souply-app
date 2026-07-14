@@ -40,3 +40,34 @@ describe('IKI synthetic-id dedup witness', () => {
         expect(res.footer.receiptNos.filter((n: string) => n.endsWith('-iki-receipt')).length).toBe(1);
     });
 });
+
+// GARBLED-KEYWORD captures (staging r189: Vision read "Kvito Nr." as "<vito Nr."
+// and the VMI "Kvito numeris" as "Kvitn numer is" — BOTH printed forms of the id
+// were on the photo, yet neither was captured, so the receipt saved synthetic-only
+// and duplicate detection had nothing to overlap with).
+describe('IKI garbled receipt-id keyword tolerance', () => {
+    const mutate = (from: RegExp, replace: (s: string) => string) =>
+        loadLines('fixtures_ikiReceipt309.json').map((l) => {
+            if (!from.test(l.text)) return l;
+            return {
+                ...l,
+                text: replace(l.text),
+                words: (l as any).words?.map((w: any) => ({ ...w, text: replace(w.text) })),
+            } as IkiLine;
+        });
+
+    const clean: any = parseIkiReceipt(loadLines('fixtures_ikiReceipt309.json'));
+
+    test('"<vito Nr." (K→< rot) still captures the printed canonical', () => {
+        const res: any = parseIkiReceipt(mutate(/Kvito\s+Nr/i, (s) => s.replace(/Kvito/gi, '<vito')));
+        expect(res.footer.receiptNo).toBe(clean.footer.receiptNo);
+        expect(res.footer.receiptNo).not.toContain('-iki-receipt');
+    });
+
+    test('"Kvitn numer is" (o→n + split "numeris") still captures the VMI sequence', () => {
+        const res: any = parseIkiReceipt(mutate(/Kvito\s+numer/i, (s) => s.replace(/Kvito(\s+numer)/gi, 'Kvitn$1')));
+        // The VMI sequence keeps feeding receiptNos (as a witness) despite the garble.
+        expect(res.footer.receiptNos.length).toBeGreaterThanOrEqual(clean.footer.receiptNos.length);
+        expect(res.footer.receiptNo).toBe(clean.footer.receiptNo);
+    });
+});
