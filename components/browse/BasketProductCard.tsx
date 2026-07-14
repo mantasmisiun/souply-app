@@ -168,19 +168,20 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     addButtonText: { color: c.onPrimary, fontSize: 13, fontWeight: '600' },
     // Half-pill: rounded on the left, flat on the right, flush with the
-    // card's right edge (right: 0 escapes the card's 12px padding). Sits
-    // over the bottom of the image block (12 padding + 130 image − height).
+    // card's right edge (right: 0 escapes the card's 12px padding). Top
+    // aligns its centre with the chain-logo strip on the left (strip sits
+    // at card top 12+6 with a 17px pill → centre 26.5; 26.5 − 24/2 ≈ 14).
     unitBadge: {
         position: 'absolute',
         right: 0,
-        top: 12 + 130 - 24 - 6,
+        top: 14,
         height: 24,
         flexDirection: 'row',
         alignItems: 'center',
         gap: 4,
         paddingLeft: 4,
         paddingRight: 8,
-        backgroundColor: c.cardBackground,
+        backgroundColor: c.primary,
         borderTopLeftRadius: 12,
         borderBottomLeftRadius: 12,
         ...elevation.level2,
@@ -193,8 +194,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderRadius: 8.5,
         alignItems: 'center',
         justifyContent: 'center',
+        borderWidth: 1,
+        borderColor: c.onPrimary,
     },
     unitBadgeLogo: { width: 12, height: 12, borderRadius: 6 },
     unitBadgeLogoFallback: { fontSize: 8, fontWeight: '700', color: '#fff' },
-    unitBadgeText: { fontSize: 11, fontWeight: '700', color: c.textPrimary },
+    unitBadgeText: { fontSize: 11, fontWeight: '700', color: c.onPrimary },
 });
