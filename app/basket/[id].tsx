@@ -56,6 +56,10 @@ interface BasketItem {
     productName: string;
     categoryName?: string;
     isWeighable: boolean;
+    /** Product-level canonical unit (kg / l / vnt …) — a measured FLUID
+     *  quantity must label as l, not the old hardcoded kg (Rokiškio pienas
+     *  0,5 l rendered "0,5 kg"). */
+    canonicalUnit?: string | null;
     imageUrls?: (string | null | undefined)[] | string | null;
 }
 
@@ -747,6 +751,9 @@ export default function BasketDetailScreen() {
                         // auto-revert to draft. draft = freely editable.
                         const readOnly = basket?.status === 'inProgress' || basket?.status === 'completed';
                         const weighable = isWeighableItem(item);
+                        // Measured items label by the product's CANONICAL unit —
+                        // fluids are litres, not the old hardcoded kg.
+                        const measuredUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
                         const step = weighable ? 0.1 : 1;
                         const inputValueDefault = weighable
                             ? Number(item.quantity).toFixed(1).replace('.', ',')
@@ -756,9 +763,9 @@ export default function BasketDetailScreen() {
                                 name={item.productName}
                                 imageUrls={item.imageUrls}
                                 readOnly={readOnly}
-                                readOnlyQtyText={`${item.quantity}${weighable ? ' kg' : ' vnt.'}`}
+                                readOnlyQtyText={`${item.quantity}${weighable ? ` ${measuredUnit}` : ' vnt.'}`}
                                 quantityText={quantityInputs[item.id] ?? inputValueDefault}
-                                unit={weighable ? 'kg' : 'vnt.'}
+                                unit={weighable ? measuredUnit : 'vnt.'}
                                 weighable={weighable}
                                 onChangeQuantity={(v) => {
                                     if (!weighable && (v.includes('.') || v.includes(','))) return;
