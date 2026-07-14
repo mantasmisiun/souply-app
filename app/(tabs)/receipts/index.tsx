@@ -12,6 +12,7 @@ import type { FilterOption } from "../../../components/FilterDropdownModal";
 import { useCallback,
     useEffect,
     useMemo,
+    useRef,
     useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
@@ -22,6 +23,7 @@ import {
     Alert,
     FlatList,
     Modal,
+    Platform,
     Pressable,
     RefreshControl,
     ScrollView,
@@ -198,9 +200,24 @@ export default function ReceiptsScreen() {
     launchDocumentScanner(router, { preview: previewOnly });
   };
 
-  const onPickFile = async () => {
-    setUploadMenuOpen(false);
-    await new Promise(resolve => setTimeout(resolve, 300));
+  // iOS: presenting the document picker while the upload-menu Modal is still
+  // animating out fails SILENTLY (UIKit refuses a present-during-dismiss) —
+  // the reported "tap upload, nothing happens". Defer the action to the
+  // Modal's onDismiss (fires when the animation completes; iOS-only event).
+  // Android keeps the straight 300ms delay — onDismiss doesn't fire there.
+  const pendingMenuActionRef = useRef<(() => void) | null>(null);
+  const closeUploadMenuThen = (action: () => void) => {
+    if (Platform.OS === 'ios') {
+      pendingMenuActionRef.current = action;
+      setUploadMenuOpen(false);
+    } else {
+      setUploadMenuOpen(false);
+      setTimeout(action, 300);
+    }
+  };
+
+  const onPickFile = () => closeUploadMenuThen(pickFiles);
+  const pickFiles = async () => {
     const picked = await DocumentPicker.getDocumentAsync({
       type: ["image/*", "application/pdf"],
       copyToCacheDirectory: true,
@@ -959,6 +976,11 @@ export default function ReceiptsScreen() {
         transparent
         animationType="fade"
         onRequestClose={() => setUploadMenuOpen(false)}
+        onDismiss={() => {
+          const action = pendingMenuActionRef.current;
+          pendingMenuActionRef.current = null;
+          action?.();
+        }}
       >
         <Pressable style={styles.menuBackdrop} onPress={() => setUploadMenuOpen(false)}>
           <Pressable style={styles.menuCard} onPress={(e) => e.stopPropagation()}>
