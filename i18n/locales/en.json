@@ -587,6 +587,7 @@
   "browse": {
     "addToBasket": "Add",
     "title": "Browse",
+    "backToExit": "Swipe back again to exit",
     "discountsCardTitle": "Discounts",
     "discountsTitle": "Discounts",
     "discountsSub": "Discounted items from all stores",
