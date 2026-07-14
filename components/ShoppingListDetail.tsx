@@ -175,6 +175,10 @@ interface Props {
      *  on every items change) — drives the parent's chip badges, the silent
      *  advance to the next store, and the all-stores-done completion prompt. */
     onItemsProgress?: (listId: number, checkedCount: number, itemCount: number) => void;
+    /** Multi-store: reports whether the search/add input is focused. The parent
+     *  MUST NOT swap the active list (key remount) while true — remounting
+     *  destroys the focused TextInput and Android drops the keyboard. */
+    onSearchActiveChange?: (active: boolean) => void;
     /** Title row override — multi-store passes the joined chain short names
      *  (e.g. "Maxima · Rimi"). Single store derives it from the list. */
     headerTitle?: string;
@@ -215,6 +219,7 @@ export function ShoppingListDetail({
     expectedCount,
     isPartOfBasket = false,
     onItemsProgress,
+    onSearchActiveChange,
     headerTitle,
     headerSubtitle,
     pinnedHeader,
@@ -840,6 +845,8 @@ export function ShoppingListDetail({
                                     onChangeText={(text) => { setQuickAddText(text); handleSearch(text); }}
                                     placeholder={t('shoppingListDetail.searchPlaceholder')}
                                     placeholderTextColor={colors.textMuted}
+                                    onFocus={() => onSearchActiveChange?.(true)}
+                                    onBlur={() => onSearchActiveChange?.(false)}
                                     onSubmitEditing={() => {
                                         const name = quickAddText.trim();
                                         if (!name) return;

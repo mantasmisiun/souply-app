@@ -119,6 +119,12 @@ export default function UnifiedShoppingListScreen() {
     );
 
     // Live per-list progress from the mounted detail (load + every toggle).
+    // True while the child's search/add input is focused (see the advance effect).
+    const searchActiveRef = useRef(false);
+    const handleSearchActiveChange = useCallback((active: boolean) => {
+        searchActiveRef.current = active;
+    }, []);
+
     const handleItemsProgress = useCallback((listId: number, checkedCount: number, itemCount: number) => {
         setListSummaries(prev => {
             const cur = prev.get(listId);
@@ -137,6 +143,12 @@ export default function UnifiedShoppingListScreen() {
     // completion only when EVERY store is fully checked.
     useEffect(() => {
         if (!isMulti || entries.length === 0) return;
+        // HOLD while the child's search input is focused: setActiveListId
+        // remounts the keyed detail, destroying the focused TextInput —
+        // Android closes the IME session ("keyboard hides while typing",
+        // ImeTracker: HIDE_SOFT_INPUT_CLOSE_CURRENT_SESSION fromUser=false).
+        // The next summaries tick (3s sync) re-runs this after blur.
+        if (searchActiveRef.current) return;
         const active = listSummaries.get(activeListId);
         const allDone = entries.every(e => fullyChecked(listSummaries.get(e.listId)));
         if (allDone) {
@@ -189,6 +201,7 @@ export default function UnifiedShoppingListScreen() {
                 expectedCount={expectedCount ? parseInt(expectedCount) : undefined}
                 isPartOfBasket={isMulti}
                 onItemsProgress={isMulti ? handleItemsProgress : undefined}
+                onSearchActiveChange={isMulti ? handleSearchActiveChange : undefined}
                 headerTitle={storeNames}
                 headerSubtitle={storeAddresses}
                 pinnedHeader={isMulti ? (
