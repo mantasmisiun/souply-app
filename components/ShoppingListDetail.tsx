@@ -259,6 +259,9 @@ export function ShoppingListDetail({
 
     const [searchResults, setSearchResults] = useState<any[]>([]);
     const [visibleCount, setVisibleCount] = useState(0);
+    // DIAGNOSTIC (keyboard-hide hunt): tracks showSearchResults across renders.
+    // MUST live above the loading early-return (rules of hooks).
+    const prevShowResultsRef = useRef(false);
     const [menuVisible, setMenuVisible] = useState(false);
 
     const [quantityModal, setQuantityModal] = useState<{
@@ -605,6 +608,7 @@ export function ShoppingListDetail({
         try {
             const res = await fetch(`${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(query)}&chainId=${list.chainId}`);
             const data = await res.json();
+            console.log(`[SLD] results land n=${Array.isArray(data) ? data.length : -1}`);
             setSearchResults(Array.isArray(data) ? data.slice(0, 12) : []);
         } catch {}
     };
@@ -700,6 +704,10 @@ export function ShoppingListDetail({
     // ── Main render ───────────────────────────────────────────────────────────
 
     const showSearchResults = list?.status === 'active' && quickAddText.length >= 2;
+    if (prevShowResultsRef.current !== showSearchResults) {
+        prevShowResultsRef.current = showSearchResults;
+        console.log(`[SLD] showResults flip -> ${showSearchResults}`);
+    }
 
     return (
         <>
