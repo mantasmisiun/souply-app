@@ -1273,7 +1273,8 @@
     "uploadReceiptBody": "Nufotografuokite arba įkelkite šios parduotuvės kvitą.",
     "uploadTakePhoto": "Fotografuoti",
     "uploadSelectExisting": "Pasirinkti iš įkeltų",
-    "selectExistingTitle": "Pasirinkite kvitą"
+    "selectExistingTitle": "Pasirinkite kvitą",
+    "selectExistingEmpty": "Nėra tinkamų kvitų pasirinktai dienai"
   },
   "creatorAuth": {
     "title": "Kūrėjo prisijungimas",

@@ -39,9 +39,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { glassHeaderOptions } from "../../../constants/navHeader";
 import { ScreenHeading } from "../../../components/ScreenHeading";
 import { useCollapsingHeader, CollapsingHeader } from "../../../components/CollapsingHeader";
-import { chainBrandName, chainBrandColor, chainIdByName } from "../../../utils/chainBrandName";
+import { chainBrandName, chainIdByName } from "../../../utils/chainBrandName";
 import { launchDocumentScanner } from "../../../utils/launchDocumentScanner";
 import { looksLikePdf } from "../../../utils/pdfToImages";
+import { buildReceiptDotMap, parseLooseDate, sameDay } from "../../../utils/receiptDots";
 import { ChainLogoChip } from "../../../components/ChainLogoChip";
 import { SkeletonBox } from "../../../components/SkeletonBox";
 import { PendingSwipesBanner } from "../../../components/PendingSwipesBanner";
@@ -98,16 +99,6 @@ const safeJsonParse = (raw: string): any => {
 };
 
 // ── Receipt DATE (the date printed on the receipt, not the upload time) ──
-// Parse a loose "YYYY-MM-DD" / "YYYY.MM.DD" / "YYYY/M/D" (optionally with a
-// time tail) into a local Date; null when unparseable.
-const parseYMD = (str: string | null | undefined): Date | null => {
-  if (!str) return null;
-  const m = String(str).match(/(\d{4})[-./](\d{1,2})[-./](\d{1,2})/);
-  if (m) return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
-  const d = new Date(str);
-  return Number.isNaN(d.getTime()) ? null : d;
-};
-
 // The receipt's own footer date (parsed blob) takes priority over the stored
 // receiptDate column — same source the card shows.
 const receiptFooterDateStr = (r: Receipt): string | null => {
@@ -119,10 +110,7 @@ const receiptFooterDateStr = (r: Receipt): string | null => {
 };
 
 const receiptDateObj = (r: Receipt): Date | null =>
-  parseYMD(receiptFooterDateStr(r) ?? r.receiptDate);
-
-const sameDay = (a: Date, b: Date) =>
-  a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  parseLooseDate(receiptFooterDateStr(r) ?? r.receiptDate);
 
 function queueStatusLabel(item: QueueItem, t: TFunction): string {
   if (item.status === "pending") return t('receipts.status.pending');
@@ -510,23 +498,10 @@ export default function ReceiptsScreen() {
 
   // Calendar marks: "YYYY-MM-DD" → chain dot colours (deduped per chain, so a
   // day with two Rimi receipts shows one red dot; Rimi + IKI shows red + green).
-  const receiptDots = useMemo(() => {
-    const m = new Map<string, string[]>();
-    const seen = new Map<string, Set<string>>();
-    for (const r of receipts) {
-      const d = receiptDateObj(r);
-      if (!d || !r.chainName) continue;
-      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-      const chains = seen.get(key) ?? new Set<string>();
-      if (chains.has(r.chainName)) continue;
-      chains.add(r.chainName);
-      seen.set(key, chains);
-      const arr = m.get(key) ?? [];
-      arr.push(chainBrandColor(r.chainName));
-      m.set(key, arr);
-    }
-    return m;
-  }, [receipts]);
+  const receiptDots = useMemo(
+    () => buildReceiptDotMap(receipts.map((r) => ({ date: receiptDateObj(r), chainName: r.chainName }))),
+    [receipts],
+  );
 
   // Drop any selected chains that vanish from the loaded receipts.
   useEffect(() => {

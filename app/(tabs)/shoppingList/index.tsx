@@ -305,7 +305,6 @@ export default function ShoppingListScreen() {
     const [uploadTarget, setUploadTarget] = useState<Record<number, number> | null>(null);
     // The user's receipts (for the "select from already uploaded" option).
     const [receipts, setReceipts] = useState<UserReceipt[]>([]);
-    const [pickExistingTarget, setPickExistingTarget] = useState<Record<number, number> | null>(null);
     // The fully-receipted "Completed" archive is collapsed by default.
     const [completedCollapsed, setCompletedCollapsed] = useState(true);
 
@@ -413,22 +412,6 @@ export default function ShoppingListScreen() {
             chains.includes(chainIdByName(r.chainName) ?? -1),
         );
     }, [receipts]);
-
-    // Link a picked receipt to the target's store row that matches its chain.
-    const linkExistingReceipt = useCallback(async (map: Record<number, number>, receiptId: number, chainName: string) => {
-        setPickExistingTarget(null);
-        const listId = map[chainIdByName(chainName) ?? -1];
-        if (!listId) return;
-        try {
-            await fetch(`${API_BASE_URL}/api/shopping-lists/${listId}/link-receipt`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ receiptId }),
-            });
-        } catch { /* best-effort */ }
-        fetchLists();
-        fetchReceipts();
-    }, [fetchLists, fetchReceipts]);
 
     // ── Delete / complete list ────────────────────────────────────────────────
 
@@ -961,7 +944,7 @@ export default function ShoppingListScreen() {
                                     onPress={() => {
                                         const m = uploadTarget;
                                         setUploadTarget(null);
-                                        setPickExistingTarget(m);
+                                        if (m) router.push(`/receipt-picker?map=${encodeURIComponent(mapToParam(m))}` as any);
                                     }}
                                 >
                                     <Ionicons name="albums-outline" size={iconSize.lg} color={colors.primary} />
@@ -973,33 +956,6 @@ export default function ShoppingListScreen() {
                 </TouchableOpacity>
             </Modal>
 
-            {/* "Already uploaded" picker — assign an existing unlinked receipt. */}
-            <Modal
-                visible={pickExistingTarget !== null}
-                transparent
-                animationType="slide"
-                onRequestClose={() => setPickExistingTarget(null)}
-            >
-                <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setPickExistingTarget(null)}>
-                    <View style={styles.uploadSheet}>
-                        <Text style={styles.sheetTitle}>{t('shoppingListTab.selectExistingTitle')}</Text>
-                        {unlinkedReceiptsForMap(pickExistingTarget).map(r => (
-                            <TouchableOpacity
-                                key={r.id}
-                                style={styles.existingRow}
-                                onPress={() => { if (pickExistingTarget) linkExistingReceipt(pickExistingTarget, r.id, r.chainName); }}
-                            >
-                                <ChainLogoChip chainId={chainIdByName(r.chainName) ?? 0} name={r.chainName} size={avatarSize.md} />
-                                <View style={{ flex: 1 }}>
-                                    <Text style={styles.existingChain} numberOfLines={1}>{chainBrandName(r.chainName)}</Text>
-                                    {r.receiptDate ? <Text style={styles.existingDate}>{formatDate(r.receiptDate)}</Text> : null}
-                                </View>
-                                <Ionicons name="chevron-forward" size={iconSize.sm} color={colors.textMuted} />
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-                </TouchableOpacity>
-            </Modal>
 
             {/* PDF→image conversion in progress (matches the Analyze tab). */}
         </View>

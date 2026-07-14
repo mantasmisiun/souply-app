@@ -1298,7 +1298,8 @@
     "uploadReceiptBody": "Take a photo or upload this store's receipt.",
     "uploadTakePhoto": "Take photo",
     "uploadSelectExisting": "Select from uploaded",
-    "selectExistingTitle": "Choose a receipt"
+    "selectExistingTitle": "Choose a receipt",
+    "selectExistingEmpty": "No matching receipts for the selected day"
   },
   "creatorAuth": {
     "title": "Creator login",
