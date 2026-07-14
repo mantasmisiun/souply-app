@@ -195,6 +195,12 @@ export default function ReceiptsScreen() {
   // de-skew). Covers normal-length receipts.
   const onPickCamera = () => {
     setUploadMenuOpen(false);
+    if (!isOnline) {
+      // The interactive scan needs the server (matching + save) — the offline
+      // story for camera captures is the next-round queue routing.
+      setTimeout(() => Alert.alert(t('receipts.offline.title'), t('receipts.offline.body')), 350);
+      return;
+    }
     // The dismiss-before-present delay now lives inside launchDocumentScanner,
     // so every scan entry point (here, shopping list, fail-gate retry) is guarded.
     launchDocumentScanner(router, { preview: previewOnly });
@@ -595,6 +601,18 @@ export default function ReceiptsScreen() {
             </View>
           ))}
         </View>
+        {/* The FAB must exist even while loading — offline the fetch waits out
+            its timeout and this skeleton is all the user sees; without the FAB
+            there was no way to enqueue an upload at all. The upload-menu Modal
+            only renders in the main branch, so this FAB opens the FILE picker
+            directly (no modal → no dismiss race; camera is offline-blocked
+            anyway and the skeleton is brief when online). */}
+        <TouchableOpacity
+          style={[styles.fab, { bottom: tabBarHeight + 16 }]}
+          onPress={() => { void pickFiles(); }}
+        >
+          <Ionicons name="add" size={iconSize.xl} color={colors.onPrimary} />
+        </TouchableOpacity>
       </View>
     );
   }
@@ -899,14 +917,11 @@ export default function ReceiptsScreen() {
         }}
       />
       <TouchableOpacity
-        style={[styles.fab, { bottom: tabBarHeight + 16 }, !isOnline && { opacity: 0.4 }]}
-        onPress={() => {
-          if (!isOnline) {
-            Alert.alert(t('receipts.offline.title'), t('receipts.offline.body'));
-            return;
-          }
-          setUploadMenuOpen(true);
-        }}
+        style={[styles.fab, { bottom: tabBarHeight + 16 }]}
+        // Offline is NOT a blocker: file uploads enqueue into the persistent
+        // queue and sync when connectivity returns (awaiting-network state).
+        // Only the CAMERA path warns offline — see onPickCamera.
+        onPress={() => setUploadMenuOpen(true)}
       >
         <Ionicons name="add" size={iconSize.xl} color={colors.onPrimary} />
       </TouchableOpacity>
