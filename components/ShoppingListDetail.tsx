@@ -711,36 +711,43 @@ export function ShoppingListDetail({
 
     return (
         <>
-            <CollapsingHeader
-                controller={header}
-                back
-                right={
-                    list?.status === 'active' ? (
-                        <GlassIconButton icon="share-social-outline" color={colors.textPrimary} onPress={openShare} />
-                    ) : list?.status === 'completed' ? (
-                        <GlassIconButton icon="ellipsis-vertical" color={colors.textMuted} onPress={() => setMenuVisible(true)} />
-                    ) : undefined
-                }
-                collapsing={
-                    <ScreenHeading
-                        title={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
-                        subtitle={headerSubtitle ?? (formatStoreStreet(list?.address) || list?.storeName || undefined)}
-                    />
-                }
-                pinned={
-                    <>
-                        {pinnedHeader}
-                        <View style={styles.progressContainer}>
-                            <View style={styles.progressBar}>
-                                <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+            {/* KEYBOARD-HIDE FIX: the container's style NEVER changes. Flipping
+                zIndex/elevation on this ancestor of the focused TextInput closed
+                the Android IME session on the 2nd keystroke (ImeTracker:
+                HIDE_SOFT_INPUT_CLOSE_CURRENT_SESSION ~80ms after the flip). The
+                header lives INSIDE the container now, and the search overlay
+                out-stacks it with a CONSTANT zIndex — only the overlay's
+                opacity/pointerEvents toggle, which is IME-safe (proven by trace). */}
+            <View style={styles.container}>
+    <CollapsingHeader
+                    controller={header}
+                    back
+                    right={
+                        list?.status === 'active' ? (
+                            <GlassIconButton icon="share-social-outline" color={colors.textPrimary} onPress={openShare} />
+                        ) : list?.status === 'completed' ? (
+                            <GlassIconButton icon="ellipsis-vertical" color={colors.textMuted} onPress={() => setMenuVisible(true)} />
+                        ) : undefined
+                    }
+                    collapsing={
+                        <ScreenHeading
+                            title={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
+                            subtitle={headerSubtitle ?? (formatStoreStreet(list?.address) || list?.storeName || undefined)}
+                        />
+                    }
+                    pinned={
+                        <>
+                            {pinnedHeader}
+                            <View style={styles.progressContainer}>
+                                <View style={styles.progressBar}>
+                                    <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+                                </View>
+                                <Text style={styles.progressText}>{t('shoppingListDetail.progress', { checked: checkedCount, total: totalCount })}</Text>
                             </View>
-                            <Text style={styles.progressText}>{t('shoppingListDetail.progress', { checked: checkedCount, total: totalCount })}</Text>
-                        </View>
-                    </>
-                }
-            />
+                        </>
+                    }
+                />
 
-            <View style={[styles.container, showSearchResults && styles.containerSearching]}>
                     {/* ALWAYS MOUNTED (opacity toggle): the toast unmounting on the
                         3s expiry re-render removed a native sibling above the focused
                         search input — delete an item, start typing, keyboard dies. */}
@@ -794,13 +801,11 @@ export function ShoppingListDetail({
                     {/* Bottom bar group — KeyboardStickyView lifts it above the
                         keyboard reliably (manual padding under-lifts in Android
                         edge-to-edge). */}
-                    {/* Search results — a FULL-SCREEN overlay (was a small floating
-                        card whose rows scrolled under the CollapsingHeader overlay and
-                        became untappable where they overlapped it; containerSearching
-                        lifts this above the header). ALWAYS MOUNTED, toggled via
-                        opacity/pointerEvents: conditionally mounting it re-shuffled the
-                        native child order under the focused TextInput and Android blew
-                        the keyboard away on the second keystroke. */}
+                    {/* Search results — a FULL-SCREEN overlay with a CONSTANT
+                        zIndex above the (now-sibling) CollapsingHeader. ALWAYS
+                        MOUNTED, toggled ONLY via opacity/pointerEvents: mounting
+                        it conditionally OR flipping zIndex on an ancestor of the
+                        focused TextInput kills the Android IME session. */}
                     {(
                         <View
                             pointerEvents={showSearchResults ? 'auto' : 'none'}
@@ -847,6 +852,9 @@ export function ShoppingListDetail({
                         </View>
                     )}
 
+                    {/* Constant zIndex: the input bar stays above the results
+                        overlay (zIndex 15). Static wrapper — never changes. */}
+                    <View pointerEvents="box-none" style={{ zIndex: 16, elevation: 16 }}>
                     <KeyboardStickyView>
 
                     {/* Floating search / add bar — glass on iOS, solid on Android,
@@ -904,6 +912,7 @@ export function ShoppingListDetail({
                         </View>
                     )}
                     </KeyboardStickyView>
+                    </View>
 
                     <ContextMenu
                         visible={menuVisible}
@@ -1298,12 +1307,14 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
 
     // ── Quantity presets ──────────────────────────────────────────────────────
     packFixedText: { ...typography.bodySmall, color: c.textSecondary, marginBottom: spacing.sm },
-    // While searching, the whole container out-stacks the CollapsingHeader
-    // overlay (zIndex 10) so results are visible AND tappable to the top.
-    containerSearching: { zIndex: 20, elevation: 20 },
+    // The overlay out-stacks the CollapsingHeader (zIndex 10, now a SIBLING
+    // inside the container) with a CONSTANT zIndex so results are visible and
+    // tappable to the top. Never toggle zIndex/elevation here or on any
+    // ancestor of the search input — that closes the Android IME session.
     searchOverlay: {
         position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
         backgroundColor: c.pageBackground,
+        zIndex: 15, elevation: 15,
     },
     presetsRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg, flexWrap: 'wrap' },
     presetBtn: {
