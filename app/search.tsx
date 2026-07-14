@@ -1,6 +1,7 @@
 import {
     Ionicons } from "@expo/vector-icons";
 import { Stack,
+    useFocusEffect,
     useLocalSearchParams,
     useRouter } from "expo-router";
 import { GlassIconButton } from "../components/GlassIconButton";
@@ -32,7 +33,7 @@ import { ProductImage } from "../components/ProductImage";
 import CreateStoreProductModal, {
   CreatedStoreProductPayload,
 } from "../components/receipt/CreateStoreProductModal";
-import { useTheme, type AppTheme } from "../constants/theme";
+import { useTheme, radius, elevation, type AppTheme } from "../constants/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AmountPickerModal from '../components/AmountPickerModal';
 import { resolveCanonicalStep, resolveDisplayUnit } from '../utils/canonicalStep';
@@ -149,6 +150,30 @@ export default function SearchScreen() {
     ).trim();
     const [createModalVisible, setCreateModalVisible] = useState(false);
     const [amountModal, setAmountModal] = useState<{ visible: boolean; product: ProductRow | null; editQty?: number | null }>({ visible: false, product: null });
+    const [basketItemCount, setBasketItemCount] = useState(0);
+
+    // BROWSE PARITY: hydrate quantities from the draft basket on every focus.
+    // Without this, products already in the basket rendered the "Add" CTA here,
+    // and re-adding 409'd ("already in basket") into a SILENT rollback — the
+    // "can't add milk at all" report. Also drives the bottom basket bar count.
+    useFocusEffect(useCallback(() => {
+        const currentDraftId = useBasketState.getState().draftBasketId;
+        if (currentDraftId) {
+            fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`)
+                .then(r => r.json())
+                .then(items => {
+                    if (!Array.isArray(items)) return;
+                    const quantities: { [productId: number]: number } = {};
+                    items.forEach((item: any) => { quantities[item.productId] = parseFloat(item.quantity); });
+                    setBasketQuantities(quantities);
+                    setBasketItemCount(items.filter((i: any) => parseFloat(i.quantity) > 0).length);
+                })
+                .catch(() => {});
+        } else {
+            setBasketQuantities({});
+            setBasketItemCount(0);
+        }
+    }, []));
 
     // Absolute quantity set for an already-added product — used by the amount
     // picker's edit-reopen (tap the quantity on a card). Same server sync as
@@ -164,6 +189,7 @@ export default function SearchScreen() {
             if (!basketItem) return;
             if (newQty <= 0) {
                 await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
+                setBasketItemCount(prev => Math.max(0, prev - 1));
                 return;
             }
             await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
@@ -612,6 +638,7 @@ const quantity = basketQuantities[item.id] ?? 0;
                     if (newQty <= 0) {
                         if (basketItem) {
                         await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
+                        setBasketItemCount(prev => Math.max(0, prev - 1));
                         }
                         return;
                     }
@@ -660,7 +687,12 @@ const quantity = basketQuantities[item.id] ?? 0;
                         }
                         setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
                         addProductToBasket(item.id, draftBasketId, setDraftBasketId, qty).then(result => {
-                            if (!result.success) setBasketQuantities(prev => { const next = { ...prev }; delete next[item.id]; return next; });
+                            if (!result.success) {
+                                setBasketQuantities(prev => { const next = { ...prev }; delete next[item.id]; return next; });
+                                Alert.alert(t('browse.addToBasket'), result.message);
+                            } else {
+                                setBasketItemCount(prev => prev + 1);
+                            }
                         });
                     }}
                     onDec={() => {
@@ -689,6 +721,23 @@ const quantity = basketQuantities[item.id] ?? 0;
           />
         )}
       </View>
+      {/* Bottom basket bar — browse parity: live item count + jump to basket. */}
+      {!isTemplateMode && basketItemCount > 0 && draftBasketId && (
+          <View style={[styles.basketBar, { paddingBottom: Math.max(12, insets.bottom) }]}>
+              <View style={styles.basketBarLeft}>
+                  <Ionicons name="cart" size={20} color={colors.primary} />
+                  <Text style={styles.basketBarCount}>{t('items.count', { count: basketItemCount })}</Text>
+              </View>
+              <TouchableOpacity
+                  style={styles.basketBarButton}
+                  activeOpacity={0.85}
+                  onPress={() => router.push(`/basket/${draftBasketId}` as any)}
+              >
+                  <Text style={styles.basketBarButtonText}>{t('browse.basketShortcut')}</Text>
+                  <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
+              </TouchableOpacity>
+          </View>
+      )}
       <AmountPickerModal
         visible={amountModal.visible}
         productName={amountModal.product?.name ?? ''}
@@ -725,7 +774,12 @@ const quantity = basketQuantities[item.id] ?? 0;
           }
           setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
           const result = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, amount);
-          if (!result.success) setBasketQuantities(prev => { const next = { ...prev }; delete next[product.id]; return next; });
+          if (!result.success) {
+              setBasketQuantities(prev => { const next = { ...prev }; delete next[product.id]; return next; });
+              Alert.alert(t('browse.addToBasket'), result.message);
+          } else {
+              setBasketItemCount(prev => prev + 1);
+          }
         }}
       />
       {isTemplateMode && templateIdNum != null && (
@@ -759,6 +813,29 @@ const quantity = basketQuantities[item.id] ?? 0;
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
+    basketBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingTop: 12,
+        backgroundColor: c.cardBackground,
+        borderTopLeftRadius: radius.lg,
+        borderTopRightRadius: radius.lg,
+        ...elevation.level3,
+        gap: 12,
+    },
+    basketBarLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+    basketBarCount: { fontSize: 14, fontWeight: '600', color: c.primary },
+    basketBarButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: c.primary,
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: radius.pill,
+    },
+    basketBarButtonText: { fontSize: 14, fontWeight: '700', color: c.onPrimary },
   container: { flex: 1, backgroundColor: c.pageBackground },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   searchInput: { fontSize: 16, flex: 1, color: c.textPrimary },
