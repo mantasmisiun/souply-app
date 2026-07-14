@@ -166,7 +166,10 @@ export default function UnifiedShoppingListScreen() {
         if (fullyChecked(active) && !advancedRef.current.has(activeListId)) {
             advancedRef.current.add(activeListId);
             const next = entries.find(e => e.listId !== activeListId && !fullyChecked(listSummaries.get(e.listId)));
-            if (next) setActiveListId(next.listId);
+            if (next) {
+                console.log(`[SLD] silent advance ${activeListId} -> ${next.listId}`);
+                setActiveListId(next.listId);
+            }
         }
          
     }, [listSummaries, activeListId, entries, isMulti, basketId]);

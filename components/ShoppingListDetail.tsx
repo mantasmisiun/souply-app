@@ -289,6 +289,15 @@ export function ShoppingListDetail({
     const [completionModal, setCompletionModal] = useState(false);
     const [kbHeight, setKbHeight] = useState(0);
 
+    // DIAGNOSTIC (staging keyboard-hide hunt): pin whether the detail remounts
+    // or the input merely blurs when the keyboard dies. Read via
+    // `adb logcat | grep -E "ReactNativeJS|ImeTracker"`.
+    useEffect(() => {
+        console.log(`[SLD] mount list=${id}`);
+        return () => console.log(`[SLD] unmount list=${id}`);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, []);
+
     useEffect(() => {
         const show = Keyboard.addListener(
             Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
@@ -296,7 +305,7 @@ export function ShoppingListDetail({
         );
         const hide = Keyboard.addListener(
             Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-            () => setKbHeight(0),
+            () => { console.log('[SLD] keyboardDidHide'); setKbHeight(0); },
         );
         return () => { show.remove(); hide.remove(); };
     }, []);
@@ -845,8 +854,8 @@ export function ShoppingListDetail({
                                     onChangeText={(text) => { setQuickAddText(text); handleSearch(text); }}
                                     placeholder={t('shoppingListDetail.searchPlaceholder')}
                                     placeholderTextColor={colors.textMuted}
-                                    onFocus={() => onSearchActiveChange?.(true)}
-                                    onBlur={() => onSearchActiveChange?.(false)}
+                                    onFocus={() => { console.log('[SLD] search focus'); onSearchActiveChange?.(true); }}
+                                    onBlur={() => { console.log('[SLD] search blur'); onSearchActiveChange?.(false); }}
                                     onSubmitEditing={() => {
                                         const name = quickAddText.trim();
                                         if (!name) return;
