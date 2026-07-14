@@ -846,14 +846,18 @@ export function ShoppingListDetail({
                                     }}
                                     returnKeyType="done"
                                 />
-                                {quickAddText.length > 0 && (
-                                    <TouchableOpacity
-                                        onPress={() => { setQuickAddText(''); setSearchQuery(''); setSearchResults([]); }}
-                                        hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
-                                    >
-                                        <Ionicons name="close-circle" size={iconSize.md} color={colors.textMuted} />
-                                    </TouchableOpacity>
-                                )}
+                                {/* ALWAYS MOUNTED (opacity toggle): conditionally mounting
+                                    this button inserted a native sibling next to the focused
+                                    TextInput on the FIRST keystroke ('' → 'x') and Android
+                                    dropped the keyboard — same trap as the results overlay. */}
+                                <TouchableOpacity
+                                    onPress={() => { setQuickAddText(''); setSearchQuery(''); setSearchResults([]); }}
+                                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                                    disabled={quickAddText.length === 0}
+                                    style={{ opacity: quickAddText.length > 0 ? 1 : 0 }}
+                                >
+                                    <Ionicons name="close-circle" size={iconSize.md} color={colors.textMuted} />
+                                </TouchableOpacity>
                                 <TouchableOpacity
                                     style={styles.addBarBtn}
                                     onPress={() => {
