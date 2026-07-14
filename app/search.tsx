@@ -36,6 +36,7 @@ import CreateStoreProductModal, {
 import { useTheme, radius, elevation, type AppTheme } from "../constants/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AmountPickerModal from '../components/AmountPickerModal';
+import { Toast, type ToastHandle } from '../components/Toast';
 import { resolveCanonicalStep, resolveDisplayUnit } from '../utils/canonicalStep';
 
 // Pick the first URL from the API's imageUrls (string | array | null) for
@@ -151,29 +152,36 @@ export default function SearchScreen() {
     const [createModalVisible, setCreateModalVisible] = useState(false);
     const [amountModal, setAmountModal] = useState<{ visible: boolean; product: ProductRow | null; editQty?: number | null }>({ visible: false, product: null });
     const [basketItemCount, setBasketItemCount] = useState(0);
+    const toastRef = useRef<ToastHandle>(null);
 
     // BROWSE PARITY: hydrate quantities from the draft basket on every focus.
     // Without this, products already in the basket rendered the "Add" CTA here,
     // and re-adding 409'd ("already in basket") into a SILENT rollback — the
     // "can't add milk at all" report. Also drives the bottom basket bar count.
-    useFocusEffect(useCallback(() => {
-        const currentDraftId = useBasketState.getState().draftBasketId;
-        if (currentDraftId) {
-            fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`)
-                .then(r => r.json())
-                .then(items => {
-                    if (!Array.isArray(items)) return;
-                    const quantities: { [productId: number]: number } = {};
-                    items.forEach((item: any) => { quantities[item.productId] = parseFloat(item.quantity); });
-                    setBasketQuantities(quantities);
-                    setBasketItemCount(items.filter((i: any) => parseFloat(i.quantity) > 0).length);
-                })
-                .catch(() => {});
-        } else {
-            setBasketQuantities({});
-            setBasketItemCount(0);
-        }
-    }, []));
+    // initDraftBasket first: after a JS reload (OTA restart) the zustand store
+    // is empty even though a server-side draft exists — recover it like browse
+    // does, otherwise every in-basket product renders "Add" and re-adding 409s.
+    const hydrateBasket = useCallback(async () => {
+        try {
+            if (!useBasketState.getState().draftBasketId) {
+                await useBasketState.getState().initDraftBasket();
+            }
+            const currentDraftId = useBasketState.getState().draftBasketId;
+            if (!currentDraftId) {
+                setBasketQuantities({});
+                setBasketItemCount(0);
+                return;
+            }
+            const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
+            const items = await res.json();
+            if (!Array.isArray(items)) return;
+            const quantities: { [productId: number]: number } = {};
+            items.forEach((item: any) => { quantities[item.productId] = parseFloat(item.quantity); });
+            setBasketQuantities(quantities);
+            setBasketItemCount(items.filter((i: any) => parseFloat(i.quantity) > 0).length);
+        } catch {}
+    }, []);
+    useFocusEffect(useCallback(() => { void hydrateBasket(); }, [hydrateBasket]));
 
     // Absolute quantity set for an already-added product — used by the amount
     // picker's edit-reopen (tap the quantity on a card). Same server sync as
@@ -688,10 +696,13 @@ const quantity = basketQuantities[item.id] ?? 0;
                         setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
                         addProductToBasket(item.id, draftBasketId, setDraftBasketId, qty).then(result => {
                             if (!result.success) {
-                                setBasketQuantities(prev => { const next = { ...prev }; delete next[item.id]; return next; });
-                                Alert.alert(t('browse.addToBasket'), result.message);
+                                // Adopt server truth instead of rolling back to "Add" —
+                                // a 409 means the product IS in the basket; show its real qty.
+                                void hydrateBasket();
+                                toastRef.current?.show(result.message);
                             } else {
                                 setBasketItemCount(prev => prev + 1);
+                                toastRef.current?.show(t('browse.addedToast'));
                             }
                         });
                     }}
@@ -775,11 +786,13 @@ const quantity = basketQuantities[item.id] ?? 0;
           setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
           const result = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, amount);
           if (!result.success) {
-              setBasketQuantities(prev => { const next = { ...prev }; delete next[product.id]; return next; });
-              Alert.alert(t('browse.addToBasket'), result.message);
+              void hydrateBasket();
+              toastRef.current?.show(result.message);
           } else {
               setBasketItemCount(prev => prev + 1);
+              toastRef.current?.show(t('browse.addedToast'));
           }
+
         }}
       />
       {isTemplateMode && templateIdNum != null && (
@@ -808,6 +821,7 @@ const quantity = basketQuantities[item.id] ?? 0;
           closeAfterReceiptPick();
         }}
       />
+      <Toast ref={toastRef} />
     </>
   );
 }
