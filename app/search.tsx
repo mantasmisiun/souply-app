@@ -26,7 +26,7 @@ import { MaterialProgress } from '@/components/MaterialProgress';
 import { API_BASE_URL } from "../config/api";
 import { useReceiptPickerState , useBasketState } from "../state/basketState";
 import { addProductToBasket } from '../utils/basketUtils';
-import BasketProductCard from '../components/browse/BasketProductCard';
+import BasketProductCard, { type UnitPriceBadge } from '../components/browse/BasketProductCard';
 import { TemplateReturnBanner } from '../components/template/TemplateReturnBanner';
 import { useTemplateAddState } from '../state/templateAddState';
 import { ProductImage } from "../components/ProductImage";
@@ -74,6 +74,7 @@ interface ProductRow {
   canonicalStep?: number | null;
   canonicalFamily?: 'fluid' | 'count' | null;
   hasWeighable?: number | boolean;
+  badge?: UnitPriceBadge | null;
 }
 
 interface StoreProductRow {
@@ -674,6 +675,7 @@ const quantity = basketQuantities[item.id] ?? 0;
                     name={item.name}
                     imageUrls={item.imageUrls}
                     chainLogos={item.chainLogos}
+                    badge={item.badge}
                     amountText={amountText}
                     quantity={cardQty}
                     addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
