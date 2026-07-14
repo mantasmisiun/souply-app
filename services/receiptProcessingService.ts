@@ -1,8 +1,6 @@
 import { parseProductName } from "@shared/parsers/productNameParser";
 import { detectCardMaskBands, redactReceiptText, type MaskBand } from "@shared/parsers/cardMaskDetection";
 import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
-import { requestStoreResolution, pickAddressFromRawText } from "../utils/storeResolution";
-import { router } from "expo-router";
 import i18n from "../i18n";
 import { ocrReceiptPages } from "../utils/receiptOcrPipeline";
 import { API_BASE_URL } from "../config/api";
@@ -436,19 +434,6 @@ function redactQueueParsedData(parsedData: object, maskBands: MaskBand[]): objec
 
 // ── Chain processors ──────────────────────────────────────────────────────────
 
-/**
- * The store address didn't auto-match — surface the map store-resolution screen
- * (chain known, store not) and await the user's pick. This service is headless,
- * so it uses expo-router's imperative `router`. null = user backed out.
- */
-async function promptStoreResolution(chainId: number, chainName: string, address: string | null, rawText?: string | null) {
-  const prefill = address || pickAddressFromRawText(rawText);
-  console.log(`[storeResolution] (queue) ${chainName} prefill=${JSON.stringify(prefill)}`);
-  const pending = requestStoreResolution(chainId, chainName, prefill);
-  router.push("/receipt/store-resolution" as any);
-  return await pending;
-}
-
 async function processRimi(
   allLines: LineWithFrame[],
   signal: AbortSignal,
@@ -456,11 +441,12 @@ async function processRimi(
 ): Promise<object> {
   const chainId = 2;
   const parsed = parseRimiReceipt(allLines);
-  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
-  if (!store) {
-    const chosen = await promptStoreResolution(chainId, "RIMI", parsed.header.storeAddress || null, parsed.header.rawText);
-    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
-  }
+  // Headless pipeline: NO interactive store-resolution here. The old prompt
+  // pushed /receipt/store-resolution — a route DELETED in the scan-session
+  // refactor — leaving a forever-dangling await that wedged the entire queue
+  // at "Recognising" (and surfaced a not-found screen). An unmatched store now
+  // fails the item visibly; the interactive scan flow has the map modal.
+  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "RIMI", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Rimi parduotuvė neatpažinta");
@@ -481,11 +467,12 @@ async function processMaxima(
 ): Promise<object> {
   const chainId = 1;
   const parsed = parseMaximaReceipt(allLines, PARSER_OPTS);
-  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
-  if (!store) {
-    const chosen = await promptStoreResolution(chainId, "MAXIMA", parsed.header.storeAddress || null, parsed.header.rawText);
-    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
-  }
+  // Headless pipeline: NO interactive store-resolution here. The old prompt
+  // pushed /receipt/store-resolution — a route DELETED in the scan-session
+  // refactor — leaving a forever-dangling await that wedged the entire queue
+  // at "Recognising" (and surfaced a not-found screen). An unmatched store now
+  // fails the item visibly; the interactive scan flow has the map modal.
+  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "MAXIMA", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Maxima parduotuvė neatpažinta");
@@ -519,11 +506,12 @@ async function processNorfa(
 ): Promise<object> {
   const chainId = 4;
   const parsed = parseNorfaReceipt(allLines);
-  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
-  if (!store) {
-    const chosen = await promptStoreResolution(chainId, "NORFA", parsed.header.storeAddress || null, parsed.header.rawText);
-    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
-  }
+  // Headless pipeline: NO interactive store-resolution here. The old prompt
+  // pushed /receipt/store-resolution — a route DELETED in the scan-session
+  // refactor — leaving a forever-dangling await that wedged the entire queue
+  // at "Recognising" (and surfaced a not-found screen). An unmatched store now
+  // fails the item visibly; the interactive scan flow has the map modal.
+  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "NORFA", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Norfa parduotuvė neatpažinta");
@@ -557,11 +545,12 @@ async function processLidl(
 ): Promise<object> {
   const chainId = 5;
   const parsed = parseLidlReceipt(allLines, PARSER_OPTS);
-  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
-  if (!store) {
-    const chosen = await promptStoreResolution(chainId, "LIDL", parsed.header.storeAddress || null, parsed.header.rawText);
-    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
-  }
+  // Headless pipeline: NO interactive store-resolution here. The old prompt
+  // pushed /receipt/store-resolution — a route DELETED in the scan-session
+  // refactor — leaving a forever-dangling await that wedged the entire queue
+  // at "Recognising" (and surfaced a not-found screen). An unmatched store now
+  // fails the item visibly; the interactive scan flow has the map modal.
+  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "LIDL", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "Lidl parduotuvė neatpažinta");
@@ -599,11 +588,12 @@ async function processIki(
 ): Promise<object> {
   const chainId = 3;
   const parsed = parseIkiReceipt(mergedLines);
-  let store = await matchStore(chainId, parsed.header.storeAddress, signal);
-  if (!store) {
-    const chosen = await promptStoreResolution(chainId, "IKI", parsed.header.storeAddress || null, parsed.header.rawText);
-    if (chosen) store = { storeId: chosen.storeId, storeName: chosen.storeName, storeAddressMatched: chosen.storeAddress, matchConfidence: 1 };
-  }
+  // Headless pipeline: NO interactive store-resolution here. The old prompt
+  // pushed /receipt/store-resolution — a route DELETED in the scan-session
+  // refactor — leaving a forever-dangling await that wedged the entire queue
+  // at "Recognising" (and surfaced a not-found screen). An unmatched store now
+  // fails the item visibly; the interactive scan flow has the map modal.
+  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
   if (!store) {
     await logFail("store_unrecognized", { detectedChainName: "IKI", extractedStoreAddress: parsed.header.storeAddress || null });
     throw new ProcessingError("store_unrecognized", "IKI parduotuvė neatpažinta");
