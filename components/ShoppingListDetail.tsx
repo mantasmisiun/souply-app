@@ -9,6 +9,7 @@ import {
     Modal,
     KeyboardAvoidingView,
     Keyboard,
+    ScrollView,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
@@ -174,7 +175,26 @@ interface Props {
 }
 
 const PIECE_PRESETS = ['1', '2', '3', '5', '10'];
-const WEIGHT_PRESETS = ['0.1', '0.2', '0.5', '1'];
+
+/** One same-chain pack size for a packed product (350 g / 1 l / 8 rit.). */
+interface PackOption {
+    spId: number;
+    label: string;
+    /** Size normalized to base units (g/ml/pieces) for ascending sort. */
+    baseAmount: number;
+    imageUrl: string | null;
+}
+
+// "350 g", "1 l" — sizes print in their natural unit (never 0.35 kg).
+const fmtPackSize = (amount: number, unit: string): string => {
+    if ((unit === 'g' || unit === 'ml') && amount >= 1000) {
+        return `${Number((amount / 1000).toFixed(3))} ${unit === 'g' ? 'kg' : 'l'}`;
+    }
+    return `${Number(amount.toFixed(3))} ${unit}`;
+};
+const packBaseAmount = (amount: number, unit: string): number =>
+    unit === 'kg' || unit === 'l' ? amount * 1000 : amount;
+const WEIGHT_PRESETS = ['0.2', '0.5', '1', '2', '5'];
 
 export function ShoppingListDetail({
     listId,
@@ -228,7 +248,11 @@ export function ShoppingListDetail({
         isWeighable: boolean;
         storeProductId: number | null;
         imageUrl: string | null;
+        /** Same-chain pack sizes for a packed product (deduped, ascending).
+         *  >1 → size chips in the modal; exactly 1 → fixed size subtitle. */
+        packOptions?: PackOption[];
     } | null>(null);
+    const [selectedPack, setSelectedPack] = useState<PackOption | null>(null);
     const [quantityInput, setQuantityInput] = useState('1');
     const [modalIsWeighable, setModalIsWeighable] = useState(false);
 
@@ -463,10 +487,59 @@ export function ShoppingListDetail({
         isWeighable: boolean,
         storeProductId: number | null = null,
         imageUrl: string | null = null,
+        packOptions?: PackOption[],
     ) => {
         setModalIsWeighable(isWeighable);
         setQuantityInput(isWeighable ? '0.5' : '1');
-        setQuantityModal({ productId, name, isWeighable, storeProductId, imageUrl });
+        setSelectedPack(packOptions && packOptions.length > 0 ? packOptions[0] : null);
+        setQuantityModal({ productId, name, isWeighable, storeProductId, imageUrl, packOptions });
+    };
+
+    /**
+     * Unit-aware search-result pick. Weighable (the picked SP or ANY same-chain
+     * sibling — mixed products use the weighable logic) → kg presets + free
+     * input. Packed → same-chain sibling sizes: >1 distinct → size chips +
+     * pack count; 1 → fixed "N × 350 g"; no size data → plain vnt count.
+     * Picking a size ANCHORS the list item to that SP so check-off, pricing
+     * and receipt matching agree on the pack.
+     */
+    const pickSearchResult = async (product: any) => {
+        const name = product.storeProductName;
+        const pickedWeighable = product.isWeighable === 1 || product.isWeighable === true;
+        if (pickedWeighable || !product.productId || !list?.chainId) {
+            promptQuantity(product.productId ?? null, name, pickedWeighable, product.id, product.imageUrl);
+            return;
+        }
+        let packOptions: PackOption[] = [];
+        let anyWeighable = false;
+        try {
+            const res = await fetch(`${API_BASE_URL}/api/store-products/product/${product.productId}`);
+            const sps = await res.json();
+            const sameChain = (Array.isArray(sps) ? sps : []).filter((sp: any) => sp.chainId === list.chainId);
+            anyWeighable = sameChain.some((sp: any) => sp.isWeighable === 1 || sp.isWeighable === true);
+            if (!anyWeighable) {
+                const seen = new Map<string, PackOption>();
+                for (const sp of sameChain) {
+                    const amt = Number(sp.amount);
+                    if (!Number.isFinite(amt) || amt <= 0 || !sp.unit) continue;
+                    const key = `${amt}|${sp.unit}`;
+                    if (!seen.has(key)) {
+                        seen.set(key, {
+                            spId: sp.id,
+                            label: fmtPackSize(amt, sp.unit),
+                            baseAmount: packBaseAmount(amt, sp.unit),
+                            imageUrl: sp.imageUrl ?? product.imageUrl ?? null,
+                        });
+                    }
+                }
+                packOptions = [...seen.values()].sort((a, b) => a.baseAmount - b.baseAmount);
+            }
+        } catch { /* sibling fetch is best-effort — fall back to the plain flow */ }
+        if (anyWeighable) {
+            promptQuantity(product.productId, name, true, product.id, product.imageUrl);
+            return;
+        }
+        promptQuantity(product.productId, name, false, product.id, product.imageUrl, packOptions.length > 0 ? packOptions : undefined);
     };
 
     const removeItem = (itemId: number) => {
@@ -504,7 +577,7 @@ export function ShoppingListDetail({
         try {
             const res = await fetch(`${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(query)}&chainId=${list.chainId}`);
             const data = await res.json();
-            setSearchResults(Array.isArray(data) ? data.slice(0, 5) : []);
+            setSearchResults(Array.isArray(data) ? data.slice(0, 12) : []);
         } catch {}
     };
 
@@ -631,7 +704,7 @@ export function ShoppingListDetail({
                 }
             />
 
-            <View style={styles.container}>
+            <View style={[styles.container, showSearchResults && styles.containerSearching]}>
                     {pendingDeleteRef.current && (
                         <View style={[styles.undoToastWrap, { top: header.paddingTop }]} pointerEvents="box-none">
                             <TouchableOpacity style={styles.undoToast} onPress={undoItemDelete} activeOpacity={0.85}>
@@ -681,49 +754,55 @@ export function ShoppingListDetail({
                     {/* Bottom bar group — KeyboardStickyView lifts it above the
                         keyboard reliably (manual padding under-lifts in Android
                         edge-to-edge). */}
-                    <KeyboardStickyView>
-                    {/* Floating search results — a glass card above the floating bar */}
+                    {/* Search results — a FULL-SCREEN overlay (was a small floating
+                        card whose rows scrolled under the CollapsingHeader overlay and
+                        became untappable where they overlapped it; containerSearching
+                        lifts this above the header). Scrollable to the very top; the
+                        floating search bar stays on top as a later sibling. */}
                     {showSearchResults && (
-                        <View style={styles.resultsWrap}>
-                            <View style={styles.resultsShadow}>
-                            <LiquidGlass style={styles.floatingResults} fallback="solid">
-                            {searchResults.map((product, index) => {
-                                const alreadyInList = items.some(i => i.productId === product.productId);
-                                return (
-                                    <TouchableOpacity
-                                        key={`${product.id}-${index}`}
-                                        style={styles.searchResultItem}
-                                        onPress={() => {
-                                            if (alreadyInList) {
-                                                Alert.alert(t('shoppingListDetail.alreadyInList'), t('shoppingListDetail.alreadyInListBody', { name: product.storeProductName }));
-                                                return;
-                                            }
-                                            promptQuantity(product.productId, product.storeProductName, product.isWeighable === 1 || product.isWeighable === true, product.id, product.imageUrl);
-                                            setQuickAddText('');
-                                            setSearchQuery('');
-                                            setSearchResults([]);
-                                        }}
-                                    >
-                                        {alreadyInList && <Ionicons name="checkmark-circle" size={iconSize.md} color={colors.primary} style={{ marginRight: spacing.sm }} />}
-                                        <Text style={styles.searchResultText}>{product.storeProductName}</Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                            <TouchableOpacity
-                                style={styles.customItemButton}
-                                onPress={() => {
-                                    const name = quickAddText.trim();
-                                    if (!name) return;
-                                    promptQuantity(null, name, false);
-                                }}
+                        <View style={[styles.searchOverlay, { paddingTop: insets.top + spacing.sm }]}>
+                            <ScrollView
+                                keyboardShouldPersistTaps="handled"
+                                contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 140 }}
                             >
-                                <Ionicons name="add-circle-outline" size={iconSize.md} color={colors.primary} />
-                                <Text style={styles.customItemText}>{t('shoppingListDetail.addCustom', { name: quickAddText })}</Text>
-                            </TouchableOpacity>
-                            </LiquidGlass>
-                            </View>
+                                {searchResults.map((product, index) => {
+                                    const alreadyInList = items.some(i => i.productId === product.productId);
+                                    return (
+                                        <TouchableOpacity
+                                            key={`${product.id}-${index}`}
+                                            style={styles.searchResultItem}
+                                            onPress={() => {
+                                                if (alreadyInList) {
+                                                    Alert.alert(t('shoppingListDetail.alreadyInList'), t('shoppingListDetail.alreadyInListBody', { name: product.storeProductName }));
+                                                    return;
+                                                }
+                                                void pickSearchResult(product);
+                                                setQuickAddText('');
+                                                setSearchQuery('');
+                                                setSearchResults([]);
+                                            }}
+                                        >
+                                            {alreadyInList && <Ionicons name="checkmark-circle" size={iconSize.md} color={colors.primary} style={{ marginRight: spacing.sm }} />}
+                                            <Text style={styles.searchResultText}>{product.storeProductName}</Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                                <TouchableOpacity
+                                    style={styles.customItemButton}
+                                    onPress={() => {
+                                        const name = quickAddText.trim();
+                                        if (!name) return;
+                                        promptQuantity(null, name, false);
+                                    }}
+                                >
+                                    <Ionicons name="add-circle-outline" size={iconSize.md} color={colors.primary} />
+                                    <Text style={styles.customItemText}>{t('shoppingListDetail.addCustom', { name: quickAddText })}</Text>
+                                </TouchableOpacity>
+                            </ScrollView>
                         </View>
                     )}
+
+                    <KeyboardStickyView>
 
                     {/* Floating search / add bar — glass on iOS, solid on Android,
                         detached above the safe area like the tab bar. */}
@@ -808,6 +887,32 @@ export function ShoppingListDetail({
                                 </TouchableOpacity>
                             )}
 
+                            {/* Same-chain pack sizes (packed products): >1 → chips,
+                                exactly 1 → fixed size subtitle. Picking anchors the SP. */}
+                            {quantityModal.packOptions && quantityModal.packOptions.length > 1 && (
+                                <>
+                                    <Text style={styles.modalLabel}>{t('shoppingListDetail.packSize')}</Text>
+                                    <View style={styles.presetsRow}>
+                                        {quantityModal.packOptions.map(opt => (
+                                            <TouchableOpacity
+                                                key={opt.spId}
+                                                style={[styles.presetBtn, selectedPack?.spId === opt.spId && styles.presetBtnActive]}
+                                                onPress={() => setSelectedPack(opt)}
+                                            >
+                                                <Text style={[styles.presetBtnText, selectedPack?.spId === opt.spId && styles.presetBtnTextActive]}>
+                                                    {opt.label}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </View>
+                                </>
+                            )}
+                            {quantityModal.packOptions && quantityModal.packOptions.length === 1 && (
+                                <Text style={styles.packFixedText}>
+                                    {quantityInput || '1'} × {quantityModal.packOptions[0].label}
+                                </Text>
+                            )}
+
                             {/* Quick quantity presets */}
                             <View style={styles.presetsRow}>
                                 {(modalIsWeighable ? WEIGHT_PRESETS : PIECE_PRESETS).map(v => (
@@ -854,7 +959,16 @@ export function ShoppingListDetail({
                                         }
                                         const modal = quantityModal;
                                         setQuantityModal(null);
-                                        addProduct(modal.productId, modal.name, qty, modalIsWeighable, modal.storeProductId, modal.imageUrl);
+                                        // A picked pack size anchors ITS SP (and image), so
+                                        // downstream check-off/pricing/receipt matching agree.
+                                        addProduct(
+                                            modal.productId,
+                                            modal.name,
+                                            qty,
+                                            modalIsWeighable,
+                                            selectedPack?.spId ?? modal.storeProductId,
+                                            selectedPack?.imageUrl ?? modal.imageUrl,
+                                        );
                                     }}
                                 >
                                     <Text style={styles.modalConfirmText}>{t('shoppingListDetail.modalAdd')}</Text>
@@ -1132,6 +1246,14 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     checkboxChecked: { backgroundColor: c.primary, borderColor: c.primary },
 
     // ── Quantity presets ──────────────────────────────────────────────────────
+    packFixedText: { ...typography.bodySmall, color: c.textSecondary, marginBottom: spacing.sm },
+    // While searching, the whole container out-stacks the CollapsingHeader
+    // overlay (zIndex 10) so results are visible AND tappable to the top.
+    containerSearching: { zIndex: 20, elevation: 20 },
+    searchOverlay: {
+        position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
+        backgroundColor: c.pageBackground,
+    },
     presetsRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.lg, flexWrap: 'wrap' },
     presetBtn: {
         paddingHorizontal: spacing.lg, paddingVertical: 7, borderRadius: radius.pill,

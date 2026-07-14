@@ -522,7 +522,11 @@
     "label": "Kiek jums reikia?",
     "hintWeighable": "Kiekis bus pasvertas parduotuvėje",
     "hintPackages": "Kiekis bus suapvalintas pagal pakuotės dydį",
-    "add": "Pridėti"
+    "add": "Pridėti",
+    "jokeTitle": "Cha cha, gražus skaičius!",
+    "jokeBody": "{{value}} {{unit}} — tai jau ne pirkinių sąrašas, o matematikos uždavinys. Tikrai tiek reikia?",
+    "jokeContinue": "Tęsti",
+    "jokeCancel": "Atšaukti"
   },
   "comparedBasketChoice": {
     "title": "Kur pridėti prekę?",
@@ -988,7 +992,8 @@
     "shareTitle": "Dalintis sąrašu",
     "shareSubtitle": "Kartu redaguosite sąrašą ir žymėsite prekes.",
     "shareHelpBody": "Kitas žmogus:\n• atsidaro programėlę ir skiltį „Sąrašas“\n• paspaudžia + ir QR mygtuką\n• nuskenuoja šį kodą (įprasta kamera jo nenuskaitys)\n\nSąrašas taps bendras – abu redaguosite ir žymėsite prekes.",
-    "shareClose": "Uždaryti"
+    "shareClose": "Uždaryti",
+    "packSize": "Pakuotė"
   },
   "swipe": {
     "errorQueue": "Nepavyko gauti eilės",

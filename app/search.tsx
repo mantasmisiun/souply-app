@@ -35,7 +35,7 @@ import CreateStoreProductModal, {
 import { useTheme, type AppTheme } from "../constants/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AmountPickerModal from '../components/AmountPickerModal';
-import { resolveCanonicalStep } from '../utils/canonicalStep';
+import { resolveCanonicalStep, resolveDisplayUnit } from '../utils/canonicalStep';
 
 // Pick the first URL from the API's imageUrls (string | array | null) for
 // places that only support a single imageUrl field (e.g. pendingPick).
@@ -148,7 +148,31 @@ export default function SearchScreen() {
         typeof params.ocrName === "string" ? params.ocrName : "",
     ).trim();
     const [createModalVisible, setCreateModalVisible] = useState(false);
-    const [amountModal, setAmountModal] = useState<{ visible: boolean; product: ProductRow | null }>({ visible: false, product: null });
+    const [amountModal, setAmountModal] = useState<{ visible: boolean; product: ProductRow | null; editQty?: number | null }>({ visible: false, product: null });
+
+    // Absolute quantity set for an already-added product — used by the amount
+    // picker's edit-reopen (tap the quantity on a card). Same server sync as
+    // the per-card syncQty stepper.
+    const setBasketQtyAbsolute = useCallback(async (productId: number, newQty: number) => {
+        setBasketQuantities(prev => ({ ...prev, [productId]: Math.max(0, newQty) }));
+        try {
+            const currentDraftId = useBasketState.getState().draftBasketId;
+            if (!currentDraftId) return;
+            const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
+            const items = await res.json();
+            const basketItem = items.find((i: any) => i.productId === productId);
+            if (!basketItem) return;
+            if (newQty <= 0) {
+                await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
+                return;
+            }
+            await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quantity: newQty }),
+            });
+        } catch {}
+    }, []);
     const [query, setQuery] = useState("");
     const [searching, setSearching] = useState(false);
     const [inputKey, setInputKey] = useState(0);
@@ -657,6 +681,8 @@ const quantity = basketQuantities[item.id] ?? 0;
                         }
                         syncQty(Number((quantity + 1).toFixed(1)));
                     }}
+                    onQuantityPress={() => setAmountModal({ visible: true, product: item, editQty: cardQty })}
+                    quantityUnit={resolveDisplayUnit(item)}
                     />
                 );
                 }}
@@ -673,10 +699,17 @@ const quantity = basketQuantities[item.id] ?? 0;
         maxAmount={amountModal.product?.maxAmount ?? 0}
         unit={amountModal.product?.unit ?? 'g'}
         isWeighable={!!amountModal.product?.hasWeighable}
+        initialAmount={amountModal.editQty ?? null}
         onCancel={() => setAmountModal({ visible: false, product: null })}
         onConfirm={async (amount) => {
           const product = amountModal.product!;
+          const isEdit = amountModal.editQty != null;
           setAmountModal({ visible: false, product: null });
+          if (!isTemplateMode && isEdit) {
+            // Edit-reopen: SET the amount on the existing basket row.
+            await setBasketQtyAbsolute(product.id, amount);
+            return;
+          }
           if (isTemplateMode && templateIdNum != null) {
             try {
               // Picker = set-absolute; override existing row rather than

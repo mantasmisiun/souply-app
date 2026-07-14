@@ -26,7 +26,7 @@ import { GlassIconButton } from '../../components/GlassIconButton';
 import { glassHeaderOptions } from '../../constants/navHeader';
 import { ScreenHeading } from '../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
-import { resolveCanonicalStep } from '../../utils/canonicalStep';
+import { resolveCanonicalStep, resolveDisplayUnit } from '../../utils/canonicalStep';
 
 interface Category {
     id: number;
@@ -104,6 +104,9 @@ export default function CategoryScreen() {
     const [amountModal, setAmountModal] = useState<{
         visible: boolean;
         product: Product | null;
+        /** Set when re-opened from a card's quantity tap — prefills the picker
+         *  and makes confirm SET the amount instead of adding a new item. */
+        editQty?: number | null;
     }>({ visible: false, product: null });
     useEffect(() => {
         // Wait for the display-mode preference to load before firing fetches;
@@ -581,9 +584,9 @@ export default function CategoryScreen() {
         }
     }, [setDraftBasketId]);
 
-    const onIncrement = useCallback((item: Product, qty: number) => {
-        const step = resolveCanonicalStep(item);
-        const newQty = Math.round((qty + step) / step) * step;
+    // Absolute set — shared by the +/- stepper and the picker's edit-reopen
+    // (tap the quantity on a card → picker prefilled → confirm SETS this).
+    const onSetQuantity = useCallback((item: Product, newQty: number) => {
         const bid = draftBasketIdRef.current;
         setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
         if (!bid) return;
@@ -592,6 +595,11 @@ export default function CategoryScreen() {
             if (basketItem) await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
         }).catch(() => {});
     }, []);
+
+    const onIncrement = useCallback((item: Product, qty: number) => {
+        const step = resolveCanonicalStep(item);
+        onSetQuantity(item, Math.round((qty + step) / step) * step);
+    }, [onSetQuantity]);
 
     const renderItem = useCallback(({ item }: { item: Product }) => {
         const mergedQty = (mergedIntoMe[item.id] ?? [])
@@ -636,6 +644,8 @@ export default function CategoryScreen() {
                     }
                     onIncrement(item, quantity);
                 }}
+                onQuantityPress={() => setAmountModal({ visible: true, product: item, editQty: cardQuantity })}
+                quantityUnit={resolveDisplayUnit(item)}
             />
         );
     }, [basketQuantities, mergedIntoMe, addingIds, onNavigate, onAdd, onDecrement, onIncrement, isTemplateMode, templateMap, templateSetQty, t]);
@@ -865,11 +875,18 @@ export default function CategoryScreen() {
                 maxAmount={amountModal.product?.maxAmount || 0}
                 unit={amountModal.product?.unit || 'g'}
                 isWeighable={!!amountModal.product?.hasWeighable}
+                initialAmount={amountModal.editQty ?? null}
                 onCancel={() => setAmountModal({ visible: false, product: null })}
                 onConfirm={async (amount) => {
                     const product = amountModal.product;
+                    const isEdit = amountModal.editQty != null;
                     setAmountModal({ visible: false, product: null });
                     if (!product) return;
+                    if (!isTemplateMode && isEdit) {
+                        // Edit-reopen: SET the amount on the existing row.
+                        onSetQuantity(product, amount);
+                        return;
+                    }
                     if (isTemplateMode) {
                         // In template mode the picker is the "set absolute
                         // quantity" surface — overrides any existing row
