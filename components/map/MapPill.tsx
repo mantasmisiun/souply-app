@@ -319,10 +319,13 @@ export function MapPillMarker({
         coordinate={coordinate}
         anchor={usePill ? anchorBaked : { x: 0.5, y: 0.5 }}
         opacity={dimmed ? 0.4 : 1}
-        // Briefly true after a uri swap OR a camera settle (refreshKey) — a
-        // permanently-false value left re-created annotation views blank on
-        // zoom (rasterised before the child Image painted).
-        tracksViewChanges={tracks}
+        // ALWAYS true on iOS: with false, AIRMap SNAPSHOTS the child view into
+        // an image, and Apple Maps' annotation-view recycling on zoom drops
+        // that snapshot → blank pill until a remount (the "pill disappears
+        // until I re-cluster" report — a brief re-track window on camera
+        // settle did NOT reliably overlap the recycling). True = the pill
+        // stays a live view, MapKit's native mode; cheap at our pill counts.
+        tracksViewChanges={true}
         zIndex={zIndex}
         onPress={__DEV__ && debugId
           ? () => { console.log(`[PILL ${debugId}] TAP`); onPress?.(); }
