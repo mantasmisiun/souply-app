@@ -1301,6 +1301,7 @@
     "receiptProgress": "Receipts {{have}}/{{total}}",
     "uploadReceiptTitle": "Add receipt",
     "uploadReceiptBody": "Take a photo or upload this store's receipt.",
+    "uploadViewList": "View the list",
     "uploadTakePhoto": "Take photo",
     "uploadSelectExisting": "Select from uploaded",
     "selectExistingTitle": "Choose a receipt",

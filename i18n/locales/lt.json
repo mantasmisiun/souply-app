@@ -1276,6 +1276,7 @@
     "receiptProgress": "Kvitai {{have}}/{{total}}",
     "uploadReceiptTitle": "Pridėti kvitą",
     "uploadReceiptBody": "Nufotografuokite arba įkelkite šios parduotuvės kvitą.",
+    "uploadViewList": "Peržiūrėti sąrašą",
     "uploadTakePhoto": "Fotografuoti",
     "uploadSelectExisting": "Pasirinkti iš įkeltų",
     "selectExistingTitle": "Pasirinkite kvitą",
