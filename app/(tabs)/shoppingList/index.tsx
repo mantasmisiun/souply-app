@@ -303,6 +303,10 @@ export default function ShoppingListScreen() {
     // Receipt-upload sheet target: chainId→listId for the awaiting store(s)
     // of the tapped card (single = 1 entry, split group = N).
     const [uploadTarget, setUploadTarget] = useState<Record<number, number> | null>(null);
+    // Route of the card that opened the upload sheet — powers the "view list"
+    // option so an awaiting-receipt list is still openable (checked items
+    // remain reviewable; the tap is not upload-only).
+    const [uploadViewRoute, setUploadViewRoute] = useState<string | null>(null);
     // The user's receipts (for the "select from already uploaded" option).
     const [receipts, setReceipts] = useState<UserReceipt[]>([]);
     // The fully-receipted "Completed" archive is collapsed by default.
@@ -729,8 +733,12 @@ export default function ShoppingListScreen() {
                                             onPress={() => {
                                                 if (selectionMode) { toggleSelectGroup(groupIds); return; }
                                                 const awaiting = group.lists.filter(isAwaitingReceipt);
-                                                if (awaiting.length > 0) { setUploadTarget(buildChainListMap(awaiting)); return; }
                                                 const firstId = group.entries[0]?.listId;
+                                                if (awaiting.length > 0) {
+                                                    setUploadViewRoute(firstId ? `/shopping-list/${firstId}?basketId=${group.basketId}` : null);
+                                                    setUploadTarget(buildChainListMap(awaiting));
+                                                    return;
+                                                }
                                                 if (firstId) router.push(`/shopping-list/${firstId}?basketId=${group.basketId}` as any);
                                             }}
                                             onLongPress={() => { setSelectionMode(true); toggleSelectGroup(groupIds); }}
@@ -747,7 +755,11 @@ export default function ShoppingListScreen() {
                                         item={item}
                                         onPress={id => {
                                             if (selectionMode) { toggleSelectList(item.id); return; }
-                                            if (isAwaitingReceipt(item)) { setUploadTarget(buildChainListMap([item])); return; }
+                                            if (isAwaitingReceipt(item)) {
+                                                setUploadViewRoute(`/shopping-list/${item.id}`);
+                                                setUploadTarget(buildChainListMap([item]));
+                                                return;
+                                            }
                                             router.push(`/shopping-list/${id}` as any);
                                         }}
                                         onLongPress={() => { setSelectionMode(true); toggleSelectList(item.id); }}
@@ -772,8 +784,12 @@ export default function ShoppingListScreen() {
                                             onPress={() => {
                                                 if (selectionMode) { toggleSelectGroup(groupIds); return; }
                                                 const awaiting = group.lists.filter(isAwaitingReceipt);
-                                                if (awaiting.length > 0) { setUploadTarget(buildChainListMap(awaiting)); return; }
                                                 const firstId = group.entries[0]?.listId;
+                                                if (awaiting.length > 0) {
+                                                    setUploadViewRoute(firstId ? `/shopping-list/${firstId}?basketId=${group.basketId}` : null);
+                                                    setUploadTarget(buildChainListMap(awaiting));
+                                                    return;
+                                                }
                                                 if (firstId) router.push(`/shopping-list/${firstId}?basketId=${group.basketId}` as any);
                                             }}
                                             onLongPress={() => { setSelectionMode(true); toggleSelectGroup(groupIds); }}
@@ -790,7 +806,11 @@ export default function ShoppingListScreen() {
                                         item={item}
                                         onPress={id => {
                                             if (selectionMode) { toggleSelectList(item.id); return; }
-                                            if (isAwaitingReceipt(item)) { setUploadTarget(buildChainListMap([item])); return; }
+                                            if (isAwaitingReceipt(item)) {
+                                                setUploadViewRoute(`/shopping-list/${item.id}`);
+                                                setUploadTarget(buildChainListMap([item]));
+                                                return;
+                                            }
                                             router.push(`/shopping-list/${id}` as any);
                                         }}
                                         onLongPress={() => { setSelectionMode(true); toggleSelectList(item.id); }}
@@ -944,6 +964,22 @@ export default function ShoppingListScreen() {
                     <View style={styles.uploadSheet}>
                         <Text style={styles.sheetTitle}>{t('shoppingListTab.uploadReceiptTitle')}</Text>
                         <Text style={styles.uploadSheetSub}>{t('shoppingListTab.uploadReceiptBody')}</Text>
+                        {uploadViewRoute && (
+                            <>
+                                <TouchableOpacity
+                                    style={styles.uploadOption}
+                                    onPress={() => {
+                                        const route = uploadViewRoute;
+                                        setUploadTarget(null);
+                                        router.push(route as any);
+                                    }}
+                                >
+                                    <Ionicons name="list-outline" size={iconSize.lg} color={colors.primary} />
+                                    <Text style={styles.uploadOptionText}>{t('shoppingListTab.uploadViewList')}</Text>
+                                </TouchableOpacity>
+                                <View style={styles.fabMenuDivider} />
+                            </>
+                        )}
                         <TouchableOpacity
                             style={styles.uploadOption}
                             onPress={() => { if (uploadTarget) takeReceiptPhoto(uploadTarget); }}
