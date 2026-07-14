@@ -759,6 +759,28 @@ export default function ProductDetailScreen() {
                             ? prices[prices.length - 1]
                             : null;
                         const amountStr = formatAmountStr(sp.amount, sp.unit, !!sp.isWeighable);
+                        // A promo is only a promo while it RUNS: past promoEnd the
+                        // strike-through + promo price would advertise a dead deal
+                        // (čiobreliai: expired 1,60 shown next to crossed-out 2,29).
+                        // No promoEnd (receipt-observed) = treated as active.
+                        const promoActive = latestPrice != null && latestPrice.promoPrice != null &&
+                            (latestPrice.promoEnd == null || new Date(latestPrice.promoEnd).getTime() >= Date.now());
+                        // Per-base-unit pricing (€/kg, €/l, €/vnt). Only for units we
+                        // can convert; SPs with no amount/unit keep the pack-price-only
+                        // display. baseAmount 1 (a 1 l bottle, weighable 1 kg) means
+                        // per-unit == pack price — render it ONCE with the /unit suffix.
+                        const UNIT_BASE: Record<string, { div: number; label: string }> = {
+                            g: { div: 1000, label: 'kg' }, kg: { div: 1, label: 'kg' },
+                            ml: { div: 1000, label: 'l' }, l: { div: 1, label: 'l' },
+                            vnt: { div: 1, label: 'vnt' },
+                        };
+                        const spAmountNum = parseFloat(String(sp.amount));
+                        const base = sp.unit ? UNIT_BASE[sp.unit] : undefined;
+                        const baseAmount = base && Number.isFinite(spAmountNum) && spAmountNum > 0
+                            ? spAmountNum / base.div
+                            : null;
+                        const perUnitLabel = base?.label ?? null;
+                        const showPackRowPrice = latestPrice != null && baseAmount != null && baseAmount !== 1;
 
                         return (
                             <View key={sp.id} style={styles.spCard}>
@@ -772,30 +794,42 @@ export default function ProductDetailScreen() {
 
                                     <View style={styles.spInfo}>
                                         <Text style={styles.spName} numberOfLines={2}>{sp.storeProductName}</Text>
-                                        {amountStr ? <Text style={styles.spAmount}>{amountStr}</Text> : null}
-                                        {latestPrice && (() => {
-                                            // A promo is only a promo while it RUNS: past promoEnd the
-                                            // strike-through + promo price would advertise a dead deal
-                                            // (čiobreliai: expired 1,60 shown next to crossed-out 2,29).
-                                            // No promoEnd (receipt-observed) = treated as active.
-                                            const promoActive = latestPrice.promoPrice != null &&
-                                                (latestPrice.promoEnd == null || new Date(latestPrice.promoEnd).getTime() >= Date.now());
-                                            return (
-                                                <View style={styles.priceRow}>
-                                                    <Text style={[
-                                                        styles.spPrice,
-                                                        promoActive && styles.spPriceStrike,
-                                                    ]}>
-                                                        {formatEuro(Number(latestPrice.price))}
-                                                    </Text>
-                                                    {promoActive && (
-                                                        <Text style={styles.spPromoPrice}>
-                                                            {formatEuro(Number(latestPrice.promoPrice))}
+                                        {(amountStr || showPackRowPrice) && (
+                                            <View style={styles.spAmountRow}>
+                                                {amountStr ? <Text style={styles.spAmount}>{amountStr}</Text> : null}
+                                                {showPackRowPrice && latestPrice && (
+                                                    <>
+                                                        <Text style={[styles.spPackPrice, promoActive && styles.spPackPriceStrike]}>
+                                                            {formatEuro(Number(latestPrice.price))}
                                                         </Text>
-                                                    )}
-                                                </View>
-                                            );
-                                        })()}
+                                                        {promoActive && (
+                                                            <Text style={styles.spPackPromoPrice}>
+                                                                {formatEuro(Number(latestPrice.promoPrice))}
+                                                            </Text>
+                                                        )}
+                                                    </>
+                                                )}
+                                            </View>
+                                        )}
+                                        {latestPrice && (
+                                            <View style={styles.priceRow}>
+                                                <Text style={[
+                                                    styles.spPrice,
+                                                    promoActive && styles.spPriceStrike,
+                                                ]}>
+                                                    {baseAmount != null
+                                                        ? `${formatEuro(Number(latestPrice.price) / baseAmount)}/${perUnitLabel}`
+                                                        : formatEuro(Number(latestPrice.price))}
+                                                </Text>
+                                                {promoActive && (
+                                                    <Text style={styles.spPromoPrice}>
+                                                        {baseAmount != null
+                                                            ? `${formatEuro(Number(latestPrice.promoPrice) / baseAmount)}/${perUnitLabel}`
+                                                            : formatEuro(Number(latestPrice.promoPrice))}
+                                                    </Text>
+                                                )}
+                                            </View>
+                                        )}
                                     </View>
                                 </View>
                                 <View style={styles.spRight}>
@@ -1006,7 +1040,30 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     spAmount: {
         fontSize: 12,
         color: c.textMuted,
+    },
+    // amount + pack price share one line ("500 ml  1,09 €"); the big price
+    // row below carries the per-unit value (€/kg, €/l, €/vnt).
+    spAmountRow: {
+        flexDirection: 'row',
+        flexWrap: 'wrap',
+        alignItems: 'center',
+        gap: 6,
         marginTop: 2,
+    },
+    spPackPrice: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: c.textSecondary,
+    },
+    spPackPriceStrike: {
+        textDecorationLine: 'line-through',
+        color: c.textMuted,
+        fontWeight: '400',
+    },
+    spPackPromoPrice: {
+        fontSize: 12,
+        fontWeight: '600',
+        color: c.primary,
     },
     priceRow: {
         flexDirection: 'row',
