@@ -719,14 +719,18 @@ export function ShoppingListDetail({
             />
 
             <View style={[styles.container, showSearchResults && styles.containerSearching]}>
-                    {pendingDeleteRef.current && (
-                        <View style={[styles.undoToastWrap, { top: header.paddingTop }]} pointerEvents="box-none">
-                            <TouchableOpacity style={styles.undoToast} onPress={undoItemDelete} activeOpacity={0.85}>
-                                <Ionicons name="arrow-undo" size={iconSize.xs} color={colors.onPrimary} />
-                                <Text style={styles.undoToastText}>{t('shoppingListDetail.deletedUndo')}</Text>
-                            </TouchableOpacity>
-                        </View>
-                    )}
+                    {/* ALWAYS MOUNTED (opacity toggle): the toast unmounting on the
+                        3s expiry re-render removed a native sibling above the focused
+                        search input — delete an item, start typing, keyboard dies. */}
+                    <View
+                        style={[styles.undoToastWrap, { top: header.paddingTop, opacity: pendingDeleteRef.current ? 1 : 0 }]}
+                        pointerEvents={pendingDeleteRef.current ? 'box-none' : 'none'}
+                    >
+                        <TouchableOpacity style={styles.undoToast} onPress={undoItemDelete} activeOpacity={0.85}>
+                            <Ionicons name="arrow-undo" size={iconSize.xs} color={colors.onPrimary} />
+                            <Text style={styles.undoToastText}>{t('shoppingListDetail.deletedUndo')}</Text>
+                        </TouchableOpacity>
+                    </View>
 
                     <Animated.ScrollView
                         {...header.scroll}
