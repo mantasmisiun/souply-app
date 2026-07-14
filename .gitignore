@@ -55,3 +55,6 @@ modules/*/ios/Pods/
 # before each EAS build so the upload includes the parser source. The
 # canonical edit point is /Project/shared/ at the monorepo root.
 /shared/
+
+# Local Android APK outputs (200MB+ each) — never committed.
+build-*.apk
