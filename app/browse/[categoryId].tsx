@@ -11,6 +11,7 @@ import { addProductToBasket } from '../../utils/basketUtils';
 import AmountPickerModal from '../../components/AmountPickerModal';
 import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../components/ComparedBasketChoiceModal';
 import BasketProductCard from '../../components/browse/BasketProductCard';
+import type { UnitPriceBadge } from '../../components/browse/BasketProductCard';
 import CategoryBubbles from '../../components/browse/CategoryBubbles';
 import { TemplateReturnBanner } from '../../components/template/TemplateReturnBanner';
 import { useTemplateAddState } from '../../state/templateAddState';
@@ -48,6 +49,8 @@ interface Product {
     canonicalUnit: string | null;
     canonicalStep: number | null;
     canonicalFamily: 'fluid' | 'count' | null;
+    /** Cheapest-per-unit badge populated server-side (productBadge.ts). */
+    badge?: UnitPriceBadge | null;
 }
 
 
@@ -622,6 +625,7 @@ export default function CategoryScreen() {
                 name={item.name}
                 imageUrls={item.imageUrls}
                 chainLogos={mergedChainLogos(item)}
+                badge={item.badge}
                 amountText={amountText}
                 quantity={cardQuantity}
                 isAdding={addingIds.has(item.id)}
