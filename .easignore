@@ -53,6 +53,7 @@ app-example
 
 # Local build outputs — huge, never needed on the EAS worker. (.easignore
 # REPLACES .gitignore for uploads, so these must be listed here too.)
+builds/
 *.apk
 *.aab
 *.ipa

@@ -56,5 +56,8 @@ modules/*/ios/Pods/
 # canonical edit point is /Project/shared/ at the monorepo root.
 /shared/
 
-# Local Android APK outputs (200MB+ each) — never committed.
+# Local build artifacts (200MB+ each) — never committed. Scripted local
+# builds land in builds/ under a stable name (overwritten per build); the
+# loose pattern still catches artifacts from a bare `eas build --local`.
+builds/
 build-*.apk

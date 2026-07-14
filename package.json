@@ -18,7 +18,7 @@
     "build:dev:android": "node scripts/require-branch.js dev && npm run sync-shared && eas build --profile development -p android",
     "build:staging:ios": "node scripts/require-branch.js staging && npm run sync-shared && eas build --profile staging -p ios",
     "build:staging:android": "node scripts/require-branch.js staging && npm run sync-shared && eas build --profile staging -p android",
-    "build:staging:android:local": "node scripts/require-branch.js staging && npm run sync-shared && eas build --profile staging -p android --local",
+    "build:staging:android:local": "node scripts/require-branch.js staging && npm run sync-shared && mkdir -p builds && eas build --profile staging -p android --local --output builds/souply-staging.apk",
     "build:prod:ios": "node scripts/require-branch.js main && npm run sync-shared && eas build --profile production -p ios",
     "build:prod:android": "node scripts/require-branch.js main && npm run sync-shared && eas build --profile production -p android",
     "test": "jest",
