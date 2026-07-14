@@ -41,6 +41,7 @@ import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
 import { recordStoreVisit } from "../utils/locationStorage";
 import { clearReceiptDraft, saveReceiptDraft } from "../state/receiptDraft";
 import { pdfToImageUris } from "../utils/pdfToImages";
+import { mapLimit } from "../utils/concurrency";
 import { useReceiptQueueStore } from "../state/receiptQueueStore";
 import { useProfileStore } from "../state/profileStore";
 import { REGIONS_VERSION } from "./regionsRehydrationService";
@@ -363,7 +364,9 @@ async function matchChainProducts<P extends {
   const AUTO_APPLY_THRESHOLD = RECOGNITION.match.autoApplyThreshold;
   sessionSet(sessionId, { matchProgress: { done: 0, total: items.length }, stage: "matching" });
 
-  const matchPromises = items.map(async (p) => {
+  // Concurrency-capped: an uncapped fan-out monopolised the per-host socket
+  // pool and starved every other screen's fetch — see utils/concurrency.ts.
+  const lines = await mapLimit(items, 4, async (p) => {
     const stripped = parseProductName(p.name);
     const { matchName, amount, sizeUnit, skipMatch } = resolveSize(p, {
       strippedName: stripped.strippedName,
@@ -398,7 +401,6 @@ async function matchChainProducts<P extends {
     } as ProductLine;
   });
 
-  const lines = await Promise.all(matchPromises);
   sessionSet(sessionId, { matchProgress: null });
   return lines;
 }
@@ -701,6 +703,7 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
         date: parsed.footer.date,
         time: parsed.footer.time,
         receiptNo: parsed.footer.receiptNo,
+        receiptNos: parsed.footer.receiptNos,
         totalSavings: parsed.footer.totalSavings,
         comboDiscount: null,
         rawText: parsed.footer.rawText,
@@ -805,6 +808,7 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
         date: parsed.footer.date,
         time: parsed.footer.time,
         receiptNo: parsed.footer.receiptNo,
+        receiptNos: parsed.footer.receiptNos,
         totalSavings: parsed.footer.totalSavings,
         comboDiscount: parsed.footer.comboDiscount ?? null,
         rawText: parsed.footer.rawText,

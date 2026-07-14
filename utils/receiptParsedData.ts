@@ -152,6 +152,12 @@ export interface FooterData {
   date: string;
   time: string;
   receiptNo: string;
+  /** Every distinct identifier the footer printed, canonical first, PLUS the
+   *  deterministic date+time+total synthetic witness (IKI). The server's
+   *  overlap dedup (getReceiptByAnyReceiptNoAndUser) reads this — without it
+   *  a scan that lost the printed number and one that captured it share no
+   *  identifier and the duplicate sails through. */
+  receiptNos?: string[];
   totalSavings: number | null;
   /** Receipt-level combo/set-deal discount (IKI bare "RINKINYS -1,90") — POSITIVE
    *  magnitude off the paid total, owned by no single product. Rendered as an

@@ -42,6 +42,7 @@ import {
 import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
 import { REGIONS_VERSION } from "./regionsRehydrationService";
 import { pdfToImageUris } from "../utils/pdfToImages";
+import { mapLimit } from "../utils/concurrency";
 import { Platform } from "react-native";
 
 // iOS MLKit splits rows into 2-4 near-same-y boxes; the Maxima+Lidl parsers carry an
@@ -238,7 +239,8 @@ async function matchProducts(
   onProgress?: (done: number, total: number) => void,
 ): Promise<MatchedProduct[]> {
   let done = 0;
-  const promises = rawProducts.map(async (p) => {
+  // Concurrency-capped — see utils/concurrency.ts (socket-pool starvation).
+  return mapLimit(rawProducts, 4, async (p) => {
     const { strippedName, amount: nameAmount, unit: nameUnit } = parseProductName(
       p.name,
       p.isWeighable ?? undefined,
@@ -310,8 +312,6 @@ async function matchProducts(
       region: p.region,
     } as MatchedProduct;
   });
-
-  return Promise.all(promises);
 }
 
 async function logFail(
@@ -398,13 +398,13 @@ function buildHeader(
 }
 
 function buildFooter(
-  f: { total: number | null; date: string; time: string; receiptNo: string; totalSavings: number | null; comboDiscount?: number | null; rawText: string; region: Region; lineRegions: LabeledRegion[] },
+  f: { total: number | null; date: string; time: string; receiptNo: string; receiptNos?: string[]; totalSavings: number | null; comboDiscount?: number | null; rawText: string; region: Region; lineRegions: LabeledRegion[] },
 ) {
   // rawText + region dropped from the persisted footer — byte-identical duplicates of
   // header.rawText/region, which stays the single source of truth. comboDiscount (IKI
   // bare-RINKINYS set deal) MUST pass through this whitelist — the server subtracts it
   // from savings + the visited-store comparison basket.
-  return { total: f.total, date: f.date, time: f.time, receiptNo: f.receiptNo, totalSavings: f.totalSavings, comboDiscount: f.comboDiscount ?? null, lineRegions: f.lineRegions };
+  return { total: f.total, date: f.date, time: f.time, receiptNo: f.receiptNo, receiptNos: f.receiptNos, totalSavings: f.totalSavings, comboDiscount: f.comboDiscount ?? null, lineRegions: f.lineRegions };
 }
 
 /**
