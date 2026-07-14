@@ -196,10 +196,13 @@ interface PackOption {
     imageUrl: string | null;
 }
 
-// "350 g", "1 l" — sizes print in their natural unit (never 0.35 kg).
+// "350 g", "1 l" — sizes print in their natural unit (never 0.35 kg, never 0.5 l).
 const fmtPackSize = (amount: number, unit: string): string => {
     if ((unit === 'g' || unit === 'ml') && amount >= 1000) {
         return `${Number((amount / 1000).toFixed(3))} ${unit === 'g' ? 'kg' : 'l'}`;
+    }
+    if ((unit === 'kg' || unit === 'l') && amount > 0 && amount < 1) {
+        return `${Number((amount * 1000).toFixed(1))} ${unit === 'kg' ? 'g' : 'ml'}`;
     }
     return `${Number(amount.toFixed(3))} ${unit}`;
 };
