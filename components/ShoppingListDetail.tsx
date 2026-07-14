@@ -155,13 +155,14 @@ interface Props {
     listId: number;
     /** Passed from the basket creation flow to know how many items to wait for */
     expectedCount?: number;
-    /** True in multi-store mode: header/chips come from the parent, and the
-     *  all-items-checked completion confirm hands continuation to `onCompleted`. */
+    /** True in multi-store mode: header/chips come from the parent; the
+     *  completion confirm is the PARENT's (whole-trip) — this list only
+     *  reports its live progress via `onItemsProgress`. */
     isPartOfBasket?: boolean;
-    /** Multi-store: called after this store's list is confirmed completed.
-     *  Return true when the parent handled continuation (switched to the next
-     *  store's list); false → default behaviour (leave the screen). */
-    onCompleted?: () => boolean;
+    /** Multi-store: live checked/total counts for this list (fired on load and
+     *  on every items change) — drives the parent's chip badges, the silent
+     *  advance to the next store, and the all-stores-done completion prompt. */
+    onItemsProgress?: (listId: number, checkedCount: number, itemCount: number) => void;
     /** Title row override — multi-store passes the joined chain short names
      *  (e.g. "Maxima · Rimi"). Single store derives it from the list. */
     headerTitle?: string;
@@ -179,7 +180,7 @@ export function ShoppingListDetail({
     listId,
     expectedCount,
     isPartOfBasket = false,
-    onCompleted,
+    onItemsProgress,
     headerTitle,
     headerSubtitle,
     pinnedHeader,
@@ -197,6 +198,14 @@ export function ShoppingListDetail({
 
     const [list, setList] = useState<ShoppingList | null>(null);
     const [items, setItems] = useState<ShoppingListItem[]>([]);
+    // Multi-store: stream this list's live progress to the parent (load +
+    // every add/remove/toggle) so its chip badges and the whole-trip
+    // completion check never go stale.
+    useEffect(() => {
+        if (!isPartOfBasket) return;
+        onItemsProgress?.(listId, items.filter(i => i.isChecked).length, items.length);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [items, isPartOfBasket, listId]);
     const [loading, setLoading] = useState(true);
     const [quickAddText, setQuickAddText] = useState('');
     const [searchQuery, setSearchQuery] = useState('');
@@ -435,10 +444,11 @@ export function ShoppingListDetail({
             }
         }
 
-        // Split-basket sub-lists prompt too (previously suppressed via
-        // !isPartOfBasket — a two-store trip never got the finish confirm);
-        // on confirm the parent switches to the next unfinished store.
-        if (newChecked && updatedItems.length > 0 && updatedItems.every(i => i.isChecked)) {
+        // Single-store lists prompt here; split-basket sub-lists DON'T — the
+        // parent owns the whole-trip completion (prompted only when EVERY
+        // store's items are checked) and gets this list's progress via
+        // onItemsProgress.
+        if (!isPartOfBasket && newChecked && updatedItems.length > 0 && updatedItems.every(i => i.isChecked)) {
             const key = `sl_prompted_${id}`;
             const already = await AsyncStorage.getItem(key);
             if (already === '1') return;
@@ -900,10 +910,6 @@ export function ShoppingListDetail({
                                         headers: { 'Content-Type': 'application/json' },
                                         body: JSON.stringify({ status: 'completed' }),
                                     });
-                                    // Multi-store: the parent switches to the next
-                                    // unfinished store's list; only leave when this
-                                    // was the last (or a single-store list).
-                                    if (onCompleted?.()) return;
                                     router.back();
                                 }}
                             >

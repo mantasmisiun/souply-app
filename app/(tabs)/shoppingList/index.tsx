@@ -305,7 +305,6 @@ export default function ShoppingListScreen() {
     const [uploadTarget, setUploadTarget] = useState<Record<number, number> | null>(null);
     // The user's receipts (for the "select from already uploaded" option).
     const [receipts, setReceipts] = useState<UserReceipt[]>([]);
-    const [pickExistingTarget, setPickExistingTarget] = useState<Record<number, number> | null>(null);
     // The fully-receipted "Completed" archive is collapsed by default.
     const [completedCollapsed, setCompletedCollapsed] = useState(true);
 
@@ -413,22 +412,6 @@ export default function ShoppingListScreen() {
             chains.includes(chainIdByName(r.chainName) ?? -1),
         );
     }, [receipts]);
-
-    // Link a picked receipt to the target's store row that matches its chain.
-    const linkExistingReceipt = useCallback(async (map: Record<number, number>, receiptId: number, chainName: string) => {
-        setPickExistingTarget(null);
-        const listId = map[chainIdByName(chainName) ?? -1];
-        if (!listId) return;
-        try {
-            await fetch(`${API_BASE_URL}/api/shopping-lists/${listId}/link-receipt`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ receiptId }),
-            });
-        } catch { /* best-effort */ }
-        fetchLists();
-        fetchReceipts();
-    }, [fetchLists, fetchReceipts]);
 
     // ── Delete / complete list ────────────────────────────────────────────────
 
@@ -597,9 +580,26 @@ export default function ShoppingListScreen() {
 
     // ── Derived data ──────────────────────────────────────────────────────────
 
+    // Re-derive each group's lists from the LIVE `lists` state on every render.
+    // loadSplitGroups captures list-object SNAPSHOTS at fetch time, so an
+    // optimistic status change (long-press → Complete, delete) never reached
+    // the group cards until the next refetch — the reported "marked completed,
+    // nothing changed" bug.
+    const liveGroups = useMemo<SplitGroup[]>(
+        () => splitGroups
+            .map(g => ({
+                ...g,
+                lists: g.entries
+                    .map(e => lists.find(l => l.id === e.listId))
+                    .filter((l): l is ShoppingList => l !== undefined),
+            }))
+            .filter(g => g.lists.length > 0),
+        [splitGroups, lists],
+    );
+
     const splitListIds = useMemo(
-        () => new Set(splitGroups.flatMap(g => g.entries.map(e => e.listId))),
-        [splitGroups],
+        () => new Set(liveGroups.flatMap(g => g.entries.map(e => e.listId))),
+        [liveGroups],
     );
     const singleLists = useMemo(
         () => lists.filter(l => !splitListIds.has(l.id)),
@@ -609,19 +609,19 @@ export default function ShoppingListScreen() {
     const allChains = useMemo(() => {
         const map = new Map<string, string | null>();
         singleLists.forEach(l => { if (!map.has(l.chainName)) map.set(l.chainName, l.logoUrl); });
-        splitGroups.forEach(g => g.entries.forEach(e => { if (!map.has(e.chainName)) map.set(e.chainName, e.chainLogoUrl); }));
+        liveGroups.forEach(g => g.entries.forEach(e => { if (!map.has(e.chainName)) map.set(e.chainName, e.chainLogoUrl); }));
         return Array.from(map.entries()).map(([name, logoUrl]) => ({
             id: name,
             label: chainBrandName(name),
             logoUrl: logoUrl ? getMiniLogoUrl(name, logoUrl) : null,
         }));
-    }, [singleLists, splitGroups]);
+    }, [singleLists, liveGroups]);
 
     const filteredSingle = singleLists.filter(l => {
         if (chainFilter && l.chainName !== chainFilter) return false;
         return true;
     });
-    const filteredGroups = splitGroups.filter(g => {
+    const filteredGroups = liveGroups.filter(g => {
         if (chainFilter && !g.entries.some(e => e.chainName === chainFilter)) return false;
         return true;
     });
@@ -639,7 +639,7 @@ export default function ShoppingListScreen() {
     const missingGroups = completedGroups.filter(g => g.lists.some(isAwaitingReceipt));
     const doneGroups = completedGroups.filter(g => !g.lists.some(isAwaitingReceipt));
 
-    const hasAny = lists.length > 0 || splitGroups.length > 0;
+    const hasAny = lists.length > 0 || liveGroups.length > 0;
     const hasActive = activeSingle.length > 0 || activeGroups.length > 0;
     const hasMissing = missingSingle.length > 0 || missingGroups.length > 0;
     const hasDone = doneSingle.length > 0 || doneGroups.length > 0;
@@ -944,7 +944,7 @@ export default function ShoppingListScreen() {
                                     onPress={() => {
                                         const m = uploadTarget;
                                         setUploadTarget(null);
-                                        setPickExistingTarget(m);
+                                        if (m) router.push(`/receipt-picker?map=${encodeURIComponent(mapToParam(m))}` as any);
                                     }}
                                 >
                                     <Ionicons name="albums-outline" size={iconSize.lg} color={colors.primary} />
@@ -956,33 +956,6 @@ export default function ShoppingListScreen() {
                 </TouchableOpacity>
             </Modal>
 
-            {/* "Already uploaded" picker — assign an existing unlinked receipt. */}
-            <Modal
-                visible={pickExistingTarget !== null}
-                transparent
-                animationType="slide"
-                onRequestClose={() => setPickExistingTarget(null)}
-            >
-                <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setPickExistingTarget(null)}>
-                    <View style={styles.uploadSheet}>
-                        <Text style={styles.sheetTitle}>{t('shoppingListTab.selectExistingTitle')}</Text>
-                        {unlinkedReceiptsForMap(pickExistingTarget).map(r => (
-                            <TouchableOpacity
-                                key={r.id}
-                                style={styles.existingRow}
-                                onPress={() => { if (pickExistingTarget) linkExistingReceipt(pickExistingTarget, r.id, r.chainName); }}
-                            >
-                                <ChainLogoChip chainId={chainIdByName(r.chainName) ?? 0} name={r.chainName} size={avatarSize.md} />
-                                <View style={{ flex: 1 }}>
-                                    <Text style={styles.existingChain} numberOfLines={1}>{chainBrandName(r.chainName)}</Text>
-                                    {r.receiptDate ? <Text style={styles.existingDate}>{formatDate(r.receiptDate)}</Text> : null}
-                                </View>
-                                <Ionicons name="chevron-forward" size={iconSize.sm} color={colors.textMuted} />
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-                </TouchableOpacity>
-            </Modal>
 
             {/* PDF→image conversion in progress (matches the Analyze tab). */}
         </View>

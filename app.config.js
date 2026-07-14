@@ -28,7 +28,7 @@ export default {
   expo: {
     name: APP_NAME,
     slug: 'souply',
-    version: '1.0.0',
+    version: '1.1.0',
     orientation: 'portrait',
     icon: ICON,
     scheme: ['souply', ...(GOOGLE_REDIRECT_SCHEME ? [GOOGLE_REDIRECT_SCHEME] : [])],
