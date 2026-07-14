@@ -25,6 +25,10 @@ type Props = {
     onAdd: () => void;
     onDec: () => void;
     onInc: () => void;
+    /** Tap on the quantity itself → re-open the amount picker prefilled. */
+    onQuantityPress?: () => void;
+    /** Canonical unit shown muted next to the number (kg / l / vnt). */
+    quantityUnit?: string | null;
 };
 
 function BasketProductCard({
@@ -39,6 +43,8 @@ function BasketProductCard({
     onAdd,
     onDec,
     onInc,
+    onQuantityPress,
+    quantityUnit,
 }: Props) {
     const colors = useTheme();
     const { t } = useTranslation();
@@ -84,6 +90,8 @@ function BasketProductCard({
                     quantity={quantity}
                     onDecrement={onDec}
                     onIncrement={onInc}
+                    onCenterPress={onQuantityPress}
+                    unit={quantityUnit}
                     style={{ width: '100%' }}
                 />
             )}

@@ -553,7 +553,11 @@
     "label": "How much do you need?",
     "hintWeighable": "Amount will be weighed at the store",
     "hintPackages": "Amount will be rounded to package size",
-    "add": "Add"
+    "add": "Add",
+    "jokeTitle": "Ha ha, nice number!",
+    "jokeBody": "{{value}} {{unit}} — looks less like a grocery list and more like a math problem. You sure?",
+    "jokeContinue": "Continue",
+    "jokeCancel": "Cancel"
   },
   "comparedBasketChoice": {
     "title": "Where to add the item?",
@@ -1014,7 +1018,8 @@
     "shareTitle": "Share list",
     "shareSubtitle": "You'll edit the list and check off items together.",
     "shareHelpBody": "The other person:\n• opens the app and the \"List\" tab\n• taps + and the QR button\n• scans this code (a regular camera won't read it)\n\nThe list becomes shared — you both edit and check off items.",
-    "shareClose": "Close"
+    "shareClose": "Close",
+    "packSize": "Pack size"
   },
   "swipe": {
     "errorQueue": "Couldn't fetch queue",
