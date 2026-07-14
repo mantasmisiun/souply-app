@@ -11,7 +11,7 @@ import {
     RefreshControl,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
@@ -497,8 +497,26 @@ export default function ShoppingListScreen() {
     // Upload a single receipt file — image OR PDF, same as the Analyze tab.
     // PDFs are converted to PNG pages server-side, then handed to
     // receipt-process as a comma-separated `uris` list (multi-page).
-    const pickReceiptFile = useCallback(async (map: Record<number, number>) => {
-        setUploadTarget(null);
+    // iOS: presenting the document picker while the upload sheet is still
+    // animating out fails SILENTLY (present-during-dismiss) — defer to the
+    // Modal's onDismiss there; Android gets a short delay (no onDismiss).
+    const pendingSheetActionRef = useRef<(() => void) | null>(null);
+    const closeUploadSheetThen = useCallback((action: () => void) => {
+        if (Platform.OS === 'ios') {
+            pendingSheetActionRef.current = action;
+            setUploadTarget(null);
+        } else {
+            setUploadTarget(null);
+            setTimeout(action, 300);
+        }
+    }, []);
+
+    const pickReceiptFile = useCallback((map: Record<number, number>) => {
+        closeUploadSheetThen(() => void pickReceiptFileNow(map));
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [closeUploadSheetThen]);
+
+    const pickReceiptFileNow = async (map: Record<number, number>) => {
         const listMapStr = encodeURIComponent(mapToParam(map));
         const picked = await DocumentPicker.getDocumentAsync({
             type: ['image/*', 'application/pdf'],
@@ -520,7 +538,7 @@ export default function ShoppingListScreen() {
         // its first background stage (loader shows "Converting PDF…"), no
         // blocking modal here.
         router.push(`/receipt-process?pdfUri=${encodeURIComponent(asset.uri)}&listMap=${listMapStr}` as any);
-    }, [router]);
+    };
 
     // ── FAB / chain picker ────────────────────────────────────────────────────
     const [fabMenuOpen, setFabMenuOpen] = useState(false);
@@ -916,6 +934,11 @@ export default function ShoppingListScreen() {
                 transparent
                 animationType="slide"
                 onRequestClose={() => setUploadTarget(null)}
+                onDismiss={() => {
+                    const action = pendingSheetActionRef.current;
+                    pendingSheetActionRef.current = null;
+                    action?.();
+                }}
             >
                 <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setUploadTarget(null)}>
                     <View style={styles.uploadSheet}>
