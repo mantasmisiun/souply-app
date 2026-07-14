@@ -87,12 +87,19 @@ export default function CreatorAuthScreen() {
             // returning users go straight back to Profilis.
             if (!res.user.username) {
                 setNeedUsername(true);
+                setPending(null);
+            } else if (Platform.OS === 'ios') {
+                // The native Apple/Google sheet may still be mid-dismissal when
+                // the token exchange resolves — a router.back() fired then gets
+                // SWALLOWED by UIKit (the "stayed on the login screen, but back
+                // showed me signed in" report). Defer the pop past the dismissal
+                // and KEEP the spinner so the wait doesn't read as a failure.
+                setTimeout(() => router.back(), 550);
             } else {
                 router.back();
             }
         } catch {
             Alert.alert(t('creatorAuth.title'), t('basketTab.errorGeneric'));
-        } finally {
             setPending(null);
         }
     }, [setSession, router, t]);

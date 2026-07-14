@@ -62,10 +62,17 @@ export function useReceiptQueueRunner(): void {
   function processNext(): void {
     if (!initialized) return;
     if (runningRef.current) return;
-    if (!onlineRef.current) return; // wait for connectivity
     const store = useReceiptQueueStore.getState();
     const next = store.items.find((i) => i.status === "pending");
     if (!next) return;
+    if (!onlineRef.current) {
+      // OFFLINE: park the item visibly as awaiting-network instead of leaving
+      // it "pending" (which reads as stalled). resumeAwaitingNetwork flips it
+      // back on the offline→online edge and processing starts then.
+      store.markAwaitingNetwork(next.id);
+      setTimeout(processNext, 0); // park any further pending items too
+      return;
+    }
 
     runningRef.current = true;
     abortRef.current = new AbortController();

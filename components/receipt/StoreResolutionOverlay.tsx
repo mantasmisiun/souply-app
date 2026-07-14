@@ -234,6 +234,10 @@ export function StoreResolutionOverlay() {
         () => clusters.map((c) => ({ key: c.id, count: c.count, big: c.count >= 20 })),
         [clusters],
     );
+    // Camera-settle key: bumping it re-tracks every marker briefly so iOS
+    // repaints annotation views AIRMap re-created during the zoom (they
+    // otherwise stay blank — the "pill disappears until I re-cluster" report).
+    const mapRefreshKey = `${region.latitude.toFixed(4)},${region.longitude.toFixed(4)},${region.latitudeDelta.toFixed(4)}`;
     const { uriFor: clusterUriFor, bakery: clusterBakery } = useBakedClusters(clusterSpecs);
 
     if (!req) return null;
@@ -275,6 +279,7 @@ export function StoreResolutionOverlay() {
                                 coordinate={{ latitude: c.latitude, longitude: c.longitude }}
                                 pillUri={clusterUriFor(c.id)}
                                 fallback={chainBadgeImage(req.chainId) ?? undefined}
+                                refreshKey={mapRefreshKey}
                                 zIndex={3}
                                 onPress={() => onClusterPress(c)}
                             />
@@ -288,6 +293,7 @@ export function StoreResolutionOverlay() {
                                 chainId={req.chainId}
                                 pillUri={uriFor(`${s.id}|n`)}
                                 pillSize={sizeFor(`${s.id}|n`)}
+                                refreshKey={mapRefreshKey}
                                 zIndex={2}
                                 onPress={() => setSelectedId(s.id)}
                             />
@@ -302,6 +308,7 @@ export function StoreResolutionOverlay() {
                                     chainId={req.chainId}
                                     pillUri={uri}
                                     pillSize={sizeFor(`${selectedStore.id}|s`)}
+                                    refreshKey={mapRefreshKey}
                                     zIndex={10}
                                     onPress={() => setSelectedId(selectedStore.id)}
                                 />

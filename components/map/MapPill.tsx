@@ -234,6 +234,7 @@ export function MapPillMarker({
   dimmed = false,
   zIndex = 1,
   anchorBaked = { x: 0.18, y: 0.5 },
+  refreshKey,
   onPress,
   debugId,
 }: {
@@ -249,6 +250,11 @@ export function MapPillMarker({
   /** Where the geographic point sits on the baked pill — defaults near the logo
    *  on the left (the badge-only fallback always centres). */
   anchorBaked?: { x: number; y: number };
+  /** Bump on every camera settle: iOS AIRMap (maps 1.20.1 interop) re-creates
+   *  annotation views on zoom, and with tracksViewChanges pinned false the
+   *  re-created view never re-rasterises → the pill goes BLANK until a
+   *  cluster/single remount. Changing this briefly re-tracks so it repaints. */
+  refreshKey?: string | number;
   onPress?: () => void;
   /** DEV diagnostics label (e.g. "797/c5") — enables the [PILL] pipeline logs. */
   debugId?: string;
@@ -264,7 +270,7 @@ export function MapPillMarker({
     setTracks(true);
     const t = setTimeout(() => setTracks(false), 600);
     return () => clearTimeout(t);
-  }, [pillUri]);
+  }, [pillUri, refreshKey]);
 
   // ── [PILL] pipeline diagnostics (DEV, when debugId set) ──────────────────
   // MOUNT/UNMOUNT proves whether React remounts the marker (it should NOT with
@@ -313,7 +319,10 @@ export function MapPillMarker({
         coordinate={coordinate}
         anchor={usePill ? anchorBaked : { x: 0.5, y: 0.5 }}
         opacity={dimmed ? 0.4 : 1}
-        tracksViewChanges={false}
+        // Briefly true after a uri swap OR a camera settle (refreshKey) — a
+        // permanently-false value left re-created annotation views blank on
+        // zoom (rasterised before the child Image painted).
+        tracksViewChanges={tracks}
         zIndex={zIndex}
         onPress={__DEV__ && debugId
           ? () => { console.log(`[PILL ${debugId}] TAP`); onPress?.(); }
@@ -430,7 +439,7 @@ export function useBakedClusters(specs: MapClusterSpec[]): {
   return { uriFor: (key) => uris[key], bakery };
 }
 
-export function MapClusterMarker({ coordinate, pillUri, fallback, zIndex = 1, onPress }: {
+export function MapClusterMarker({ coordinate, pillUri, fallback, zIndex = 1, refreshKey, onPress }: {
   coordinate: { latitude: number; longitude: number };
   pillUri?: string;
   /** Shown until the bake lands (e.g. the chain badge on a single-chain map). Without
@@ -440,6 +449,8 @@ export function MapClusterMarker({ coordinate, pillUri, fallback, zIndex = 1, on
    *  fallback mounts the marker ONCE and only swaps its image in place. */
   fallback?: number | ImageURISource;
   zIndex?: number;
+  /** See MapPillMarker.refreshKey — repaint after camera settles on iOS. */
+  refreshKey?: string | number;
   onPress?: () => void;
 }) {
   const source: number | ImageURISource | null = pillUri ? { uri: pillUri } : fallback ?? null;
@@ -450,7 +461,7 @@ export function MapClusterMarker({ coordinate, pillUri, fallback, zIndex = 1, on
     setTracks(true);
     const t = setTimeout(() => setTracks(false), 600);
     return () => clearTimeout(t);
-  }, [pillUri]);
+  }, [pillUri, refreshKey]);
   if (source == null) return null;
   return (
     <Marker

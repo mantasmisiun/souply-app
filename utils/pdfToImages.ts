@@ -8,11 +8,12 @@ import { convertPdfOnDevice, devicePdfAvailable } from "./receiptPdf";
  * Extracted from app/_layout.tsx's ShareHandler so conversion can run as a
  * background pipeline STAGE instead of a blocking modal.
  *
- * ON-DEVICE first (native souply-receipt-pdf module: lossless wrapper
- * extraction + enhancement, PDFKit render fallback) — the raw PDF carries
- * unmasked PII, so it should not leave the phone, and this also works
- * offline. The server /api/receipts/pdf-to-image endpoint remains the
- * fallback for Android and dev clients predating the native build.
+ * ON-DEVICE first on BOTH platforms (native souply-receipt-pdf module,
+ * iOS Swift + Android Kotlin twins: lossless wrapper extraction + enhancement,
+ * PDFKit/PdfRenderer raster fallback) — the raw PDF carries unmasked PII, so
+ * it should not leave the phone, and this also works offline. The server
+ * /api/receipts/pdf-to-image endpoint remains the fallback ONLY for binaries
+ * that predate the native module.
  */
 
 /**

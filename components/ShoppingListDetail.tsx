@@ -61,6 +61,8 @@ interface ShoppingListItem {
     imageUrls?: (string | null | undefined)[] | string | null;
     isWeighable: boolean;
     unit?: string;
+    /** Anchored SP's pack size (sp.amount, joined server-side). */
+    amount?: number | string | null;
     storeProductId?: number | null;
     requiresCoupon?: boolean;
     couponLabel?: string | null;
@@ -117,11 +119,20 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
                         {item.productName}
                     </Text>
                     <Text style={styles.itemQuantity}>
-                        {t('shoppingListDetail.quantityLabel')}: {item.storeProductId
-                            ? `${item.quantity} ${item.unit}`
-                            : isWeighableDisplay(item.isWeighable, item.quantity)
-                                ? (item.quantity < 10 ? `${item.quantity} kg` : `${item.quantity} g`)
-                                : `${item.quantity} ${t('shoppingListDetail.unitPieces')}`}
+                        {t('shoppingListDetail.quantityLabel')}: {(() => {
+                            // Weighable rows measure in kg/g regardless of anchor.
+                            if (isWeighableDisplay(item.isWeighable, item.quantity)) {
+                                return item.quantity < 10 ? `${item.quantity} kg` : `${item.quantity} g`;
+                            }
+                            // Anchored pack with a known size: "2 × 500 ml" — the
+                            // pack size was being dropped ("qty: 1 vnt" for a
+                            // 500 ml milk pick).
+                            const amt = Number(item.amount);
+                            if (item.storeProductId && Number.isFinite(amt) && amt > 0 && item.unit) {
+                                return `${item.quantity} × ${fmtPackSize(amt, item.unit)}`;
+                            }
+                            return `${item.quantity} ${t('shoppingListDetail.unitPieces')}`;
+                        })()}
                     </Text>
                     {item.requiresCoupon && item.couponLabel && !item.isChecked && (
                         <View style={styles.couponBadge}>
@@ -757,10 +768,15 @@ export function ShoppingListDetail({
                     {/* Search results — a FULL-SCREEN overlay (was a small floating
                         card whose rows scrolled under the CollapsingHeader overlay and
                         became untappable where they overlapped it; containerSearching
-                        lifts this above the header). Scrollable to the very top; the
-                        floating search bar stays on top as a later sibling. */}
-                    {showSearchResults && (
-                        <View style={[styles.searchOverlay, { paddingTop: insets.top + spacing.sm }]}>
+                        lifts this above the header). ALWAYS MOUNTED, toggled via
+                        opacity/pointerEvents: conditionally mounting it re-shuffled the
+                        native child order under the focused TextInput and Android blew
+                        the keyboard away on the second keystroke. */}
+                    {(
+                        <View
+                            pointerEvents={showSearchResults ? 'auto' : 'none'}
+                            style={[styles.searchOverlay, { paddingTop: insets.top + spacing.sm, opacity: showSearchResults ? 1 : 0 }]}
+                        >
                             <ScrollView
                                 keyboardShouldPersistTaps="handled"
                                 contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 140 }}

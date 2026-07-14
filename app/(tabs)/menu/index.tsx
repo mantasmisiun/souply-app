@@ -579,7 +579,10 @@ export default function ProfilisScreen() {
                             <Text style={styles.levelEmoji}>{getLevelData(level).emoji}</Text>
                         </View>
                         <Text style={styles.levelName}>{getLevelName(level, t)}</Text>
-                        <Text style={styles.levelLabel}>{t('profilis.levelLabel', { level })}</Text>
+                        {/* Uppercase in JS, not textTransform: Android measures the
+                            PRE-transform string when letterSpacing is set, then draws
+                            wider — "LYGIS 5" overflowed and wrapped onto two lines. */}
+                        <Text style={styles.levelLabel} numberOfLines={1}>{t('profilis.levelLabel', { level }).toUpperCase()}</Text>
                         <Text style={styles.points}>{t('profilis.points', { count: profile?.points ?? 0 })}</Text>
 
                         <View style={styles.progressTrack}>
@@ -875,7 +878,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         alignItems: 'center',
     },
     infoButtonText: { color: c.onPrimary, fontSize: 15, fontWeight: '600' },
-    levelLabel: { ...typography.label, color: c.textMuted, textTransform: 'uppercase', letterSpacing: 1 },
+    levelLabel: { ...typography.label, color: c.textMuted, letterSpacing: 1 },
     levelName: { ...typography.priceLarge, fontWeight: '700', color: c.textPrimary, marginTop: 2, marginBottom: spacing.xs },
     points: { ...typography.bodySmall, color: c.textSecondary, marginBottom: spacing.lg },
     progressTrack: {
