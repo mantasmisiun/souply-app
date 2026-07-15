@@ -406,41 +406,21 @@ export function StoreResolutionOverlay({ onCancel }: {
     // completed bakes (and mounted markers) are untouched.
     const pillSpecs = useMemo<MapPillSpec[]>(() => {
         if (!req) return [];
-        const sorted = [...allStores].sort((a, b) =>
-            ((a.latitude - region.latitude) ** 2 + (a.longitude - region.longitude) ** 2) -
-            ((b.latitude - region.latitude) ** 2 + (b.longitude - region.longitude) ** 2));
-        // SCOPED pink prebake — bake order: tapped pink → VISIBLE neutrals →
-        // VISIBLE pinks (capped 24) → everything else. Taps on what the user is
-        // looking at turn pink instantly once the area settles, off-screen
-        // neutrals just queue a moment later. (Prebaking ALL ~240 pinks was
-        // tried and rolled back: the 2× bake burst starved map init and made
-        // taps flaky while the bakery churned.)
-        const pillsZoom = region.longitudeDelta <= 0.085;
-        const latPad = region.latitudeDelta * 0.7;
-        const lngPad = region.longitudeDelta * 0.7;
-        const isVisible = (s: ChainStore) =>
-            Math.abs(s.latitude - region.latitude) <= latPad &&
-            Math.abs(s.longitude - region.longitude) <= lngPad;
-        const nSpec = (s: ChainStore): MapPillSpec =>
-            ({ key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral' });
-        const sSpec = (s: ChainStore): MapPillSpec =>
-            ({ key: `${s.id}|s`, chainId: req.chainId, lines: addrLines(s.address), variant: 'selected' });
-        const specs: MapPillSpec[] = [];
-        if (selectedStore) specs.push(sSpec(selectedStore));
-        if (pillsZoom) {
-            const visible = sorted.filter(isVisible);
-            const rest = sorted.filter((s) => !isVisible(s));
-            specs.push(...visible.map(nSpec));
-            for (const s of visible.slice(0, 24)) {
-                if (selectedStore && s.id === selectedStore.id) continue;
-                specs.push(sSpec(s));
-            }
-            specs.push(...rest.map(nSpec));
-        } else {
-            specs.push(...sorted.map(nSpec));
+        const specs: MapPillSpec[] = [...allStores]
+            .sort((a, b) =>
+                ((a.latitude - region.latitude) ** 2 + (a.longitude - region.longitude) ** 2) -
+                ((b.latitude - region.latitude) ** 2 + (b.longitude - region.longitude) ** 2))
+            .map((s) => ({ key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral' as const }));
+        if (selectedStore) {
+            // Selected bake goes FIRST so the pink swap lands ASAP after a tap.
+            // PINK IS BAKED ON DEMAND ONLY — prebaking was attempted twice
+            // (all stores, then viewport-scoped) and BOTH regressed tap
+            // reliability while the bakery churned; the ~300 ms first-tap
+            // delay is the accepted trade-off. Do not reintroduce prebaking.
+            specs.unshift({ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' });
         }
         return specs;
-    }, [allStores, selectedStore, req, region.latitude, region.longitude, region.latitudeDelta, region.longitudeDelta]);
+    }, [allStores, selectedStore, req, region.latitude, region.longitude]);
     const { sizeFor, bakery, bakedKeys } = useBakedPills(pillSpecs);
 
     // Neutral pills in BAKE-COMPLETION order — the on-map marker list only ever
