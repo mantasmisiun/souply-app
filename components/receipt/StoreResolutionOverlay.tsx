@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet } from 'react-native';
+import { View, StyleSheet, Platform } from 'react-native';
 import MapView, { type Region } from 'react-native-maps';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
@@ -463,6 +463,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                     <GlassIconButton
                         icon="chevron-back"
                         glass
+                        solid
                         onPress={() => { completeStoreResolution(null); onCancel?.(); }}
                         size={22}
                     />
@@ -496,24 +497,34 @@ export function StoreResolutionOverlay({ onCancel }: {
                             STABLE FOREVER — the set only grows, never reorders, never
                             remounts. All selection styling happens on the standalone
                             marker below, so these never churn. */}
-                        {mountedPills.map(({ store, bake }) => (
-                            <MapPillMarker
-                                key={`s-${store.id}`}
-                                coordinate={{ latitude: store.latitude, longitude: store.longitude }}
-                                chainId={req.chainId}
-                                pillUri={bake.uri}
-                                pillSize={bake}
-                                refreshKey={mapRefreshKey}
-                                zIndex={2}
-                                hidden={band !== 'pills' || store.id === selectedId}
-                                onPress={() => {
-                                    stampMarkerPress();
-                                    console.log(`[SRO] tap store=${store.id} prevSel=${selectedId}`);
-                                    setSelectedId(store.id);
-                                    setSelNonce((n) => n + 1);
-                                }}
-                            />
-                        ))}
+                        {mountedPills.map(({ store, bake }) => {
+                            // ANDROID: pink swaps IN PLACE on the store's own marker —
+                            // image-prop markers swap reliably (the re-track effect) and
+                            // there is no annotation-view reuse, so stacked selection
+                            // markers only created z-fights there. iOS keeps the
+                            // standalone-marker approach (its reuse quirks need it).
+                            const isSel = store.id === selectedId;
+                            const androidSel = Platform.OS === 'android' && isSel;
+                            const selBake = androidSel ? sizeFor(`${store.id}|s`) : undefined;
+                            return (
+                                <MapPillMarker
+                                    key={`s-${store.id}`}
+                                    coordinate={{ latitude: store.latitude, longitude: store.longitude }}
+                                    chainId={req.chainId}
+                                    pillUri={(selBake ?? bake).uri}
+                                    pillSize={selBake ?? bake}
+                                    refreshKey={mapRefreshKey}
+                                    zIndex={androidSel ? 10 : 2}
+                                    hidden={band !== 'pills' || (Platform.OS === 'ios' && isSel)}
+                                    onPress={() => {
+                                        stampMarkerPress();
+                                        console.log(`[SRO] tap store=${store.id} prevSel=${selectedId}`);
+                                        setSelectedId(store.id);
+                                        setSelNonce((n) => n + 1);
+                                    }}
+                                />
+                            );
+                        })}
                         {/* Count bubbles — BOTH fixed tiers permanently mounted; the zoom
                             band flips opacity only. Tapping zooms into the cell one band
                             deeper (pills for tier B, tier B for tier A). */}
@@ -541,7 +552,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                             draws it on top AND hit-tests it first (zIndex alone is lost
                             to annotation recycling). Falls back to the neutral bake so
                             it appears instantly; swaps to pink in place when ready. */}
-                        {selectedStore && (() => {
+                        {selectedStore && (Platform.OS === 'ios' || band !== 'pills') && (() => {
                             const bake = sizeFor(`${selectedStore.id}|s`) ?? sizeFor(`${selectedStore.id}|n`);
                             if (!bake) return null;
                             return (

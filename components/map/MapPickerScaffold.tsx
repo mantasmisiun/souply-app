@@ -165,8 +165,9 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
     // a glass cluster (back chevron + title chip + glass search) floats at the top and
     // the confirm pill floats at the bottom with no panel, only once a store is picked.
     if (props.glassChrome) {
+        const chromeFallback = Platform.OS === 'android' ? 'solid' : 'blur';
         const glassSearch = (
-            <LiquidGlass fallback="blur" style={styles.glassSearchWrap}>
+            <LiquidGlass fallback={chromeFallback} style={styles.glassSearchWrap}>
                 <View style={styles.glassSearchInner}>
                     <Ionicons name="search" size={20} color={colors.textSecondary} />
                     <TextInput
@@ -190,7 +191,7 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                     <View style={styles.glassTopRow} pointerEvents="box-none">
                         {props.headerLeft}
                         {(props.titleNode != null || props.title != null) && (
-                            <LiquidGlass fallback="blur" style={styles.titleChip}>
+                            <LiquidGlass fallback={chromeFallback} style={styles.titleChip}>
                                 {props.titleNode ?? (
                                     <Text style={styles.titleChipText} numberOfLines={1}>{props.title}</Text>
                                 )}
@@ -307,7 +308,7 @@ const makeStyles = (c: AppTheme) =>
         titleChip: {
             alignSelf: 'center', overflow: 'hidden', borderRadius: radius.pill,
             ...(Platform.OS === 'android'
-                ? { borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)' as const }
+                ? { backgroundColor: c.cardBackground, elevation: 3 }
                 : null),
             paddingHorizontal: spacing.lg, height: 40, justifyContent: 'center',
         },
@@ -316,7 +317,7 @@ const makeStyles = (c: AppTheme) =>
         glassSearchWrap: {
             overflow: 'hidden', borderRadius: radius.lg, height: 48,
             ...(Platform.OS === 'android'
-                ? { borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)' as const }
+                ? { backgroundColor: c.cardBackground, elevation: 3 }
                 : null),
         },
         glassSearchInner: {
