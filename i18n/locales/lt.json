@@ -1200,6 +1200,7 @@
     "failTryAgain": "Bandyti dar kartą",
     "failClose": "Uždaryti",
     "errorSave": "Nepavyko išsaugoti kvito",
+    "errorNetwork": "Nepavyko pasiekti serverio. Patikrink ryšį ir pabandyk dar kartą — kvitas nebuvo prarastas.",
     "errorUploadUrlFields": "upload-url atsakyme trūksta laukų",
     "errorUploadPhoto": "Nepavyko įkelti nuotraukos",
     "errorMaskFailed": "Nepavyko paslėpti kortelės duomenų, kvitas neįkeltas",
