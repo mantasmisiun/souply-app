@@ -2838,9 +2838,12 @@ export default function ProcessReceiptScreen() {
         visible={sessionIsMine && sInput?.kind === 'store'}
         animationType="slide"
         presentationStyle="fullScreen"
-        onRequestClose={() => completeStoreResolution(null)}
+        onRequestClose={() => { completeStoreResolution(null); router.replace("/(tabs)/receipts"); }}
       >
-        <StoreResolutionOverlay />
+        {/* Cancelling the map is giving up on THIS scan — go straight back to
+            the Analyze tab instead of stranding the user on the (now-empty)
+            processing screen that needs a second back. */}
+        <StoreResolutionOverlay onCancel={() => router.replace("/(tabs)/receipts")} />
       </Modal>
 
       {/* Manual date entry: receipt readable (receiptNo + time) but DATE unreadable. */}
