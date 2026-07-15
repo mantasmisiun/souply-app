@@ -38,6 +38,8 @@ export interface MapPickerScaffoldProps {
     onRegionChangeComplete?: (r: Region) => void;
     /** Continuous (per-frame) camera updates — throttle in the caller. */
     onRegionChange?: (r: Region) => void;
+    /** Tap on the map itself (NOT a marker) — e.g. clear the selection. */
+    onMapPress?: () => void;
     showsUserLocation?: boolean;
 
     /** While false, an opaque themed cover + spinner hides the raw white MapView
@@ -102,6 +104,7 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                     onMapReady={props.onMapReady}
                     onRegionChangeComplete={props.onRegionChangeComplete}
                     onRegionChange={props.onRegionChange}
+                onPress={props.onMapPress}
                     showsUserLocation={props.showsUserLocation ?? true}
                     customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
                     toolbarEnabled={false}
