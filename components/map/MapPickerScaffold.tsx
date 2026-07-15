@@ -107,6 +107,11 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                     onRegionChangeComplete={props.onRegionChangeComplete}
                     onRegionChange={props.onRegionChange}
                 onPress={props.onMapPress}
+                // Android default (true) pans the camera to ANY tapped marker —
+                // it fought the bubble drill-down zoom and made "empty" taps that
+                // hit an invisible marker recentre the map. All camera moves on
+                // these pickers are explicit animateToRegion calls.
+                moveOnMarkerPress={false}
                     showsUserLocation={props.showsUserLocation ?? true}
                     customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
                     toolbarEnabled={false}

@@ -343,6 +343,11 @@ export function MapPillMarker({
   });
 
   if (source == null) return null;
+  // ANDROID ONLY: a fully-faded hidden marker unmounts — Google Maps markers
+  // stay natively tappable at opacity 0 (they swallowed "empty" map taps and
+  // triggered the default marker-press camera move). Android add/remove is
+  // safe; iOS must keep markers mounted (annotation-drop surface).
+  if (Platform.OS === 'android' && hidden && fade === 0) return null;
 
   // iOS: CHILD-<Image> marker (the AIRMapMarker child-insert clamp is verified
   // in the built client — the crash log's signature moved past it). The pill is
@@ -504,6 +509,9 @@ export function MapClusterMarker({ coordinate, pillUri, fallback, hidden = false
 }) {
   const source: number | ImageURISource | null = pillUri ? { uri: pillUri } : fallback ?? null;
   const fade = useSteppedFade(hidden);
+  // See MapPillMarker: fully-hidden Android markers unmount so they can't
+  // swallow taps; iOS keeps them mounted (annotation-drop surface).
+  const androidUnmounted = Platform.OS === 'android' && hidden && fade === 0;
   // Re-track briefly on image change so the async-decoded count bubble actually
   // paints (same tracksViewChanges gotcha as MapPillMarker).
   const [tracks, setTracks] = useState(true);
@@ -512,7 +520,7 @@ export function MapClusterMarker({ coordinate, pillUri, fallback, hidden = false
     const t = setTimeout(() => setTracks(false), 600);
     return () => clearTimeout(t);
   }, [pillUri, refreshKey]);
-  if (source == null) return null;
+  if (source == null || androidUnmounted) return null;
   return (
     <Marker
       coordinate={coordinate}
