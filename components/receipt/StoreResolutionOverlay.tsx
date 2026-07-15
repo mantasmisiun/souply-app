@@ -404,14 +404,22 @@ export function StoreResolutionOverlay({ onCancel }: {
     // completed bakes (and mounted markers) are untouched.
     const pillSpecs = useMemo<MapPillSpec[]>(() => {
         if (!req) return [];
-        const specs: MapPillSpec[] = [...allStores]
-            .sort((a, b) =>
-                ((a.latitude - region.latitude) ** 2 + (a.longitude - region.longitude) ** 2) -
-                ((b.latitude - region.latitude) ** 2 + (b.longitude - region.longitude) ** 2))
-            .map((s) => ({ key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral' as const }));
+        const sorted = [...allStores].sort((a, b) =>
+            ((a.latitude - region.latitude) ** 2 + (a.longitude - region.longitude) ** 2) -
+            ((b.latitude - region.latitude) ** 2 + (b.longitude - region.longitude) ** 2));
+        const specs: MapPillSpec[] = [];
+        // A tapped store's pink jumps the whole queue.
         if (selectedStore) {
-            // Selected bake goes FIRST so the pink swap lands ASAP after a tap.
-            specs.unshift({ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' });
+            specs.push({ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' });
+        }
+        // Neutral pills first (nearest-first — the visible map fills in), then
+        // PRE-BAKE every store's pink variant in the background: baking it on
+        // demand made the first tap on a store take a view-shot's latency
+        // (~200-400 ms) to turn pink. Prebaked = the swap is instant.
+        for (const s of sorted) specs.push({ key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral' });
+        for (const s of sorted) {
+            if (selectedStore && s.id === selectedStore.id) continue;
+            specs.push({ key: `${s.id}|s`, chainId: req.chainId, lines: addrLines(s.address), variant: 'selected' });
         }
         return specs;
     }, [allStores, selectedStore, req, region.latitude, region.longitude]);
