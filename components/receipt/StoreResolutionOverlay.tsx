@@ -177,6 +177,17 @@ export function StoreResolutionOverlay({ onCancel }: {
                 ? prev
                 : r);
     }, []);
+    // Mid-drag region feed (throttled): without it the marker set is computed
+    // for the LAST SETTLED viewport only, so stores in the area being looked
+    // at appear only after the drag stops ("I need to drag around to make
+    // stores appear"). 400 ms keeps recomputes cheap.
+    const dragTickRef = useRef(0);
+    const handleRegionDrag = useCallback((r: Region) => {
+        const now = Date.now();
+        if (now - dragTickRef.current < 400) return;
+        dragTickRef.current = now;
+        handleRegionChange(r);
+    }, [handleRegionChange]);
 
     // Zoom one step into a tapped cluster (thirds the visible span, recentred).
     const onClusterPress = useCallback((c: Cluster) => {
@@ -204,6 +215,7 @@ export function StoreResolutionOverlay({ onCancel }: {
 
     const onConfirm = useCallback(() => {
         const s = stores.find((x) => x.id === selectedId);
+        console.log(`[SRO] confirm sel=${selectedId} found=${!!s}`);
         if (!s) return;
         completeStoreResolution({ storeId: s.id, storeName: s.name, storeAddress: s.address });
     }, [stores, selectedId]);
@@ -217,7 +229,13 @@ export function StoreResolutionOverlay({ onCancel }: {
         const points = stores
             .filter((s) => Number.isFinite(s.latitude) && Number.isFinite(s.longitude))
             .map((s) => ({ ...s, id: s.id, latitude: s.latitude, longitude: s.longitude }));
-        return clusterByGrid(points, region);
+        // 2× inflated viewport: one chain's stores are few (tens), so pre-mounting
+        // a viewport ring around the visible area is cheap and pans reveal pills
+        // that already exist instead of empty tiles waiting for a settle.
+        const padded = { ...region, latitudeDelta: region.latitudeDelta * 2, longitudeDelta: region.longitudeDelta * 2 };
+        const result = clusterByGrid(points, padded);
+        console.log(`[SRO] cluster @${region.latitude.toFixed(3)},${region.longitude.toFixed(3)} d=${region.longitudeDelta.toFixed(4)} -> clusters=${result.clusters.length} singles=[${result.singles.map((s) => s.id).join(',')}]`);
+        return result;
     }, [stores, region]);
 
     // Bake an ADDRESS PILL (logo + street + number) for each VISIBLE single, plus a
@@ -268,6 +286,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                 onMapReady={handleMapReady}
                 mapReady={mapReady}
                 onRegionChangeComplete={handleRegionChange}
+                onRegionChange={handleRegionDrag}
                 searchText={searchText}
                 onSearchTextChange={(v) => { setSearchText(v); setSearchError(null); }}
                 onSearch={onSearch}
@@ -307,14 +326,22 @@ export function StoreResolutionOverlay({ onCancel }: {
                             const selBake = isSel ? sizeFor(`${s.id}|s`) : undefined;
                             return (
                                 <MapPillMarker
-                                    key={`s-${s.id}`}
+                                    /* Selection changes the KEY on purpose: the remounted
+                                       marker is the NEWEST native annotation, which Apple
+                                       Maps both draws on top and hit-tests first — zIndex
+                                       alone is dropped on annotation recycling, which left
+                                       the pink pill buried under neighbours after a pan. */
+                                    key={`s-${s.id}-${isSel ? 'sel' : 'n'}`}
                                     coordinate={{ latitude: s.latitude, longitude: s.longitude }}
                                     chainId={req.chainId}
                                     pillUri={selBake ? selBake.uri : uriFor(`${s.id}|n`)}
                                     pillSize={selBake ?? sizeFor(`${s.id}|n`)}
                                     refreshKey={mapRefreshKey}
                                     zIndex={isSel ? 10 : 2}
-                                    onPress={() => setSelectedId(s.id)}
+                                    onPress={() => {
+                                        console.log(`[SRO] tap store=${s.id} prevSel=${selectedId}`);
+                                        setSelectedId(s.id);
+                                    }}
                                 />
                             );
                         })}
@@ -332,7 +359,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                                     pillSize={bake}
                                     refreshKey={mapRefreshKey}
                                     zIndex={10}
-                                    onPress={() => setSelectedId(selectedStore.id)}
+                                    onPress={() => console.log(`[SRO] tap standalone sel=${selectedStore.id}`)}
                                 />
                             );
                         })()}
