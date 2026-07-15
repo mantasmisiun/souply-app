@@ -234,6 +234,8 @@ export function StoreResolutionOverlay({ onCancel }: {
     //   else          → the address pills
     // Cells with a single store show that store's pill in the bubble bands too.
     const TIERS = { A: 0.35, B: 0.055 } as const;
+    interface TierBubble { key: string; latitude: number; longitude: number; count: number;
+        latMin: number; latMax: number; lngMin: number; lngMax: number }
     const tiers = useMemo(() => {
         const build = (cell: number, tier: string) => {
             const buckets = new Map<string, ChainStore[]>();
@@ -242,23 +244,45 @@ export function StoreResolutionOverlay({ onCancel }: {
                 const arr = buckets.get(key);
                 if (arr) arr.push(s); else buckets.set(key, [s]);
             }
-            const bubbles: { key: string; latitude: number; longitude: number; count: number }[] = [];
-            const lone = new Set<number>();
+            const bubbles: TierBubble[] = [];
+            // Lone-store cells render as small chain-logo DOTS in this band —
+            // full-width address pills at country zoom buried the map.
+            const dots: { key: string; store: ChainStore }[] = [];
             for (const [key, arr] of buckets) {
-                if (arr.length === 1) { lone.add(arr[0].id); continue; }
-                let la = 0, ln = 0;
-                for (const s of arr) { la += s.latitude; ln += s.longitude; }
-                bubbles.push({ key, latitude: la / arr.length, longitude: ln / arr.length, count: arr.length });
+                if (arr.length === 1) { dots.push({ key: `d${key}`, store: arr[0] }); continue; }
+                let la = 0, ln = 0, latMin = Infinity, latMax = -Infinity, lngMin = Infinity, lngMax = -Infinity;
+                for (const s of arr) {
+                    la += s.latitude; ln += s.longitude;
+                    latMin = Math.min(latMin, s.latitude); latMax = Math.max(latMax, s.latitude);
+                    lngMin = Math.min(lngMin, s.longitude); lngMax = Math.max(lngMax, s.longitude);
+                }
+                bubbles.push({ key, latitude: la / arr.length, longitude: ln / arr.length, count: arr.length,
+                    latMin, latMax, lngMin, lngMax });
             }
-            return { bubbles, lone };
+            return { bubbles, dots };
         };
         return { A: build(TIERS.A, 'A'), B: build(TIERS.B, 'B') };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [allStores]);
     const band: 'A' | 'B' | 'pills' =
         region.longitudeDelta > 0.6 ? 'A' : region.longitudeDelta > 0.05 ? 'B' : 'pills';
-    const pillVisible = (id: number): boolean =>
-        band === 'pills' ? true : band === 'B' ? tiers.B.lone.has(id) : tiers.A.lone.has(id);
+    // Fit a bubble's members with padding; tier-B taps land INSIDE the pills
+    // band so one tap always resolves the bubble into pills.
+    const zoomToBubble = (b: TierBubble, tier: 'A' | 'B') => {
+        const pad = 1.6;
+        const latDelta = Math.max((b.latMax - b.latMin) * pad, tier === 'A' ? 0.08 : 0.015);
+        const lngDelta = Math.max((b.lngMax - b.lngMin) * pad, tier === 'A' ? 0.08 : 0.015);
+        const target = {
+            latitude: (b.latMin + b.latMax) / 2,
+            longitude: (b.lngMin + b.lngMax) / 2,
+            latitudeDelta: tier === 'B' ? Math.min(latDelta, 0.045) : latDelta,
+            longitudeDelta: tier === 'B' ? Math.min(lngDelta, 0.045) : lngDelta,
+        };
+        // NO setRegion here: seeding it flipped the band (pills flashed) before
+        // the 350 ms camera animation arrived — the live region feed flips the
+        // band in sync with the camera instead.
+        mapRef.current?.animateToRegion(target, 350);
+    };
 
     // Bake priority = distance to the current map centre (nearest first), so
     // the pills the user is LOOKING AT appear within the first bake window.
@@ -352,7 +376,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                                 pillSize={bake}
                                 refreshKey={mapRefreshKey}
                                 zIndex={2}
-                                hidden={!pillVisible(store.id)}
+                                hidden={band !== 'pills'}
                                 onPress={() => {
                                     console.log(`[SRO] tap store=${store.id} prevSel=${selectedId}`);
                                     setSelectedId(store.id);
@@ -373,11 +397,29 @@ export function StoreResolutionOverlay({ onCancel }: {
                                     zIndex={3}
                                     hidden={band !== tier}
                                     onPress={() => {
-                                        console.log(`[SRO] tap bubble=${b.key}`);
-                                        const delta = tier === 'A' ? 0.3 : 0.03;
-                                        const target = { latitude: b.latitude, longitude: b.longitude, latitudeDelta: delta, longitudeDelta: delta };
-                                        mapRef.current?.animateToRegion(target, 350);
-                                        setRegion(target);
+                                        console.log(`[SRO] tap bubble=${b.key} n=${b.count}`);
+                                        zoomToBubble(b, tier);
+                                    }}
+                                />
+                            )))}
+                        {/* Lone-store DOTS (chain badge): compact stand-ins for single-
+                            store cells while a bubble band is active. Tap zooms to the
+                            store's pill. Permanently mounted, opacity-banded. */}
+                        {(['A', 'B'] as const).map((tier) =>
+                            tiers[tier].dots.map(({ key, store }) => (
+                                <MapClusterMarker
+                                    key={key}
+                                    coordinate={{ latitude: store.latitude, longitude: store.longitude }}
+                                    fallback={chainBadgeImage(req.chainId) ?? undefined}
+                                    refreshKey={mapRefreshKey}
+                                    zIndex={3}
+                                    hidden={band !== tier}
+                                    onPress={() => {
+                                        console.log(`[SRO] tap dot store=${store.id}`);
+                                        mapRef.current?.animateToRegion({
+                                            latitude: store.latitude, longitude: store.longitude,
+                                            latitudeDelta: 0.03, longitudeDelta: 0.03,
+                                        }, 350);
                                     }}
                                 />
                             )))}
