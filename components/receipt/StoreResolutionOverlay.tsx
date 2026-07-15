@@ -212,13 +212,15 @@ export function StoreResolutionOverlay({ onCancel }: {
         if (q.length < 3) { setSearchError(t('storeResolution.minChars')); return; }
         setSearching(true);
         setSearchError(null);
-        const r = await geocodeAddress(q);
+        // Bias to where the user is currently LOOKING — street names repeat
+        // across cities, and the map's own context is the best disambiguator.
+        const r = await geocodeAddress(q, { lat: region.latitude, lng: region.longitude });
         setSearching(false);
         if (!r) { setSearchError(t('storeResolution.addressNotFound')); return; }
         const target = { latitude: r.lat, longitude: r.lng, latitudeDelta: CLOSE_DELTA, longitudeDelta: CLOSE_DELTA };
         mapRef.current?.animateToRegion(target, 600);
         setRegion(target);
-    }, [searchText, t]);
+    }, [searchText, t, region.latitude, region.longitude]);
 
     // iOS fires the MapView's onPress for MARKER taps too — without this guard
     // the empty-tap deselect ran right after every pill tap and selection
@@ -407,22 +409,38 @@ export function StoreResolutionOverlay({ onCancel }: {
         const sorted = [...allStores].sort((a, b) =>
             ((a.latitude - region.latitude) ** 2 + (a.longitude - region.longitude) ** 2) -
             ((b.latitude - region.latitude) ** 2 + (b.longitude - region.longitude) ** 2));
+        // SCOPED pink prebake — bake order: tapped pink → VISIBLE neutrals →
+        // VISIBLE pinks (capped 24) → everything else. Taps on what the user is
+        // looking at turn pink instantly once the area settles, off-screen
+        // neutrals just queue a moment later. (Prebaking ALL ~240 pinks was
+        // tried and rolled back: the 2× bake burst starved map init and made
+        // taps flaky while the bakery churned.)
+        const pillsZoom = region.longitudeDelta <= 0.085;
+        const latPad = region.latitudeDelta * 0.7;
+        const lngPad = region.longitudeDelta * 0.7;
+        const isVisible = (s: ChainStore) =>
+            Math.abs(s.latitude - region.latitude) <= latPad &&
+            Math.abs(s.longitude - region.longitude) <= lngPad;
+        const nSpec = (s: ChainStore): MapPillSpec =>
+            ({ key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral' });
+        const sSpec = (s: ChainStore): MapPillSpec =>
+            ({ key: `${s.id}|s`, chainId: req.chainId, lines: addrLines(s.address), variant: 'selected' });
         const specs: MapPillSpec[] = [];
-        // A tapped store's pink jumps the whole queue.
-        if (selectedStore) {
-            specs.push({ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' });
-        }
-        // Neutral pills first (nearest-first — the visible map fills in), then
-        // PRE-BAKE every store's pink variant in the background: baking it on
-        // demand made the first tap on a store take a view-shot's latency
-        // (~200-400 ms) to turn pink. Prebaked = the swap is instant.
-        for (const s of sorted) specs.push({ key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral' });
-        for (const s of sorted) {
-            if (selectedStore && s.id === selectedStore.id) continue;
-            specs.push({ key: `${s.id}|s`, chainId: req.chainId, lines: addrLines(s.address), variant: 'selected' });
+        if (selectedStore) specs.push(sSpec(selectedStore));
+        if (pillsZoom) {
+            const visible = sorted.filter(isVisible);
+            const rest = sorted.filter((s) => !isVisible(s));
+            specs.push(...visible.map(nSpec));
+            for (const s of visible.slice(0, 24)) {
+                if (selectedStore && s.id === selectedStore.id) continue;
+                specs.push(sSpec(s));
+            }
+            specs.push(...rest.map(nSpec));
+        } else {
+            specs.push(...sorted.map(nSpec));
         }
         return specs;
-    }, [allStores, selectedStore, req, region.latitude, region.longitude]);
+    }, [allStores, selectedStore, req, region.latitude, region.longitude, region.latitudeDelta, region.longitudeDelta]);
     const { sizeFor, bakery, bakedKeys } = useBakedPills(pillSpecs);
 
     // Neutral pills in BAKE-COMPLETION order — the on-map marker list only ever
