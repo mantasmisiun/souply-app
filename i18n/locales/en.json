@@ -1225,6 +1225,7 @@
     "failTryAgain": "Try again",
     "failClose": "Close",
     "errorSave": "Couldn't save receipt",
+    "errorNetwork": "Could not reach the server. Check your connection and try again — the receipt was not lost.",
     "errorUploadUrlFields": "upload-url response is missing fields",
     "errorUploadPhoto": "Couldn't upload photo",
     "errorMaskFailed": "Couldn't hide card details — receipt not uploaded",

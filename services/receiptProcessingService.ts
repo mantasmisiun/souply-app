@@ -767,7 +767,13 @@ export function isNetworkLikeError(e: unknown): boolean {
     msg.includes("Network request failed") ||
     msg.includes("Failed to fetch") ||
     msg.includes("timeout") ||
-    msg.includes("ECONN")
+    msg.includes("ECONN") ||
+    // A non-JSON body where JSON was expected = an infrastructure error page
+    // (Cloudflare tunnel blip returns text/plain "error code: NNNN"; proxies
+    // return HTML). The SERVER never saw or failed the request — retryable,
+    // NOT a processing failure (prod FailedReceiptLog #26, 2026-07-15).
+    msg.includes("JSON Parse error") ||
+    msg.includes("Unexpected token")
   );
 }
 
