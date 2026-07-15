@@ -4,7 +4,7 @@ import {
     TouchableOpacity,
     StyleSheet,
 } from 'react-native';
-import { useMemo, useState, useEffect } from 'react';
+import { useMemo, useState, useEffect, useRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, radius, type AppTheme } from '../constants/theme';
 import { useTranslation } from 'react-i18next';
@@ -34,13 +34,11 @@ interface Props {
     refreshKey?: number;
     onOpenPresetMap: (key: PresetKey, label: string, existing: LocationPreset | null) => void;
     onChanged?: (next: LocationSettings) => void;
-    /** Collapse the hosting sheet (the ˅ button in the panel header). */
-    onCollapse?: () => void;
 }
 
 const PRESET_KEYS: PresetKey[] = ['home', 'work', 'custom'];
 
-export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onChanged, onCollapse }: Props) {
+export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onChanged }: Props) {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -67,13 +65,31 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
 
     // Which route dropdown is expanded.
     const [openMenu, setOpenMenu] = useState<'from' | 'to' | null>(null);
+    // Remembers WHY the user went to the preset map ("route from = home") so
+    // that confirming the new location auto-applies it — without this the user
+    // had to reopen the dropdown and pick the freshly-created preset AGAIN.
+    const pendingApplyRef = useRef<{ endpoint: 'from' | 'to' | 'specific'; key: PresetKey } | null>(null);
 
     useEffect(() => {
         setOpenMenu(null);
         Promise.all([getLocationSettings(), getPresets()]).then(([s, p]) => {
             setSettings(s);
             setPresets(p);
+            const pending = pendingApplyRef.current;
+            pendingApplyRef.current = null;
+            if (pending && p[pending.key]) {
+                // The awaited preset now exists — finish the original intent.
+                const patch: Partial<LocationSettings> =
+                    pending.endpoint === 'specific' ? { specificPreset: pending.key }
+                    : pending.endpoint === 'from' ? { routeFrom: pending.key }
+                    : { routeTo: pending.key };
+                const next = { ...s, ...patch };
+                setSettings(next);
+                onChanged?.(next);
+                void saveLocationSettings(patch);
+            }
         });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [refreshKey]);
 
     const update = async (patch: Partial<LocationSettings>) => {
@@ -112,6 +128,7 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
     const pickRouteOption = (endpoint: 'from' | 'to', key: PresetKey) => {
         setOpenMenu(null);
         if (!presets[key]) {
+            pendingApplyRef.current = { endpoint, key };
             onOpenPresetMap(key, presetLabels[key], null);
             return;
         }
@@ -138,11 +155,6 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
         <View>
             <View style={styles.header}>
                 <Text style={styles.title}>{t('locationSettings.title')}</Text>
-                {onCollapse && (
-                    <TouchableOpacity onPress={onCollapse} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-                        <Ionicons name="chevron-down" size={22} color={colors.textSecondary} />
-                    </TouchableOpacity>
-                )}
             </View>
 
             {/* ── Store count — always first ── */}
@@ -208,7 +220,10 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
                             preset={presets[key]}
                             selected={settings.specificPreset === key}
                             onSelect={() => handleSpecificPreset(key)}
-                            onAdd={() => onOpenPresetMap(key, presetLabels[key], null)}
+                            onAdd={() => {
+                                pendingApplyRef.current = { endpoint: 'specific', key };
+                                onOpenPresetMap(key, presetLabels[key], null);
+                            }}
                             onEdit={() => onOpenPresetMap(key, presetLabels[key], presets[key])}
                             colors={colors}
                             styles={styles}
