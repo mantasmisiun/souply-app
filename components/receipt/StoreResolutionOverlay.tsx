@@ -92,12 +92,21 @@ export function StoreResolutionOverlay({ onCancel }: {
     const [centered, setCentered] = useState(false);
     const centerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-    const initialRegion: Region = {
+    // Mount the native MapView only AFTER the host Modal's slide animation —
+    // GL init on the shared main thread made the sheet stutter on entry.
+    const [mountMap, setMountMap] = useState(false);
+    const mountMapRef = useRef(false);
+    useEffect(() => {
+        const t = setTimeout(() => { mountMapRef.current = true; setMountMap(true); }, 420);
+        return () => clearTimeout(t);
+    }, []);
+
+    const [initialRegion, setInitialRegion] = useState<Region>({
         latitude: VILNIUS_FALLBACK.lat,
         longitude: VILNIUS_FALLBACK.lng,
         latitudeDelta: DELTA,
         longitudeDelta: DELTA,
-    };
+    });
     // Current viewport drives the grid clustering — seeded from the initial fit,
     // updated when the camera settles. The react-native-maps insert-index clamp
     // (now in the rebuilt client) makes the mid-list marker inserts that
@@ -134,12 +143,18 @@ export function StoreResolutionOverlay({ onCancel }: {
             const delta = geocoded ? CLOSE_DELTA : DELTA;
             if (!cancelled) {
                 const target = { latitude: c.lat, longitude: c.lng, latitudeDelta: delta, longitudeDelta: delta };
-                mapRef.current?.animateToRegion(target, 600);
                 // Seed the region state DIRECTLY: iOS does not reliably fire
                 // onRegionChangeComplete for this pre-paint animation, and a
                 // stale (Vilnius) region made the first bakes prioritise the
                 // wrong area — "no pills until I drag a tiny bit".
                 setRegion(target);
+                if (mountMapRef.current) {
+                    mapRef.current?.animateToRegion(target, 600);
+                } else {
+                    // Map not mounted yet (deferred past the Modal slide) — mount
+                    // it directly at the target so there's no animation at all.
+                    setInitialRegion(target);
+                }
                 centerTimer.current = setTimeout(() => setCentered(true), 750);
             }
         })();
@@ -244,22 +259,47 @@ export function StoreResolutionOverlay({ onCancel }: {
                 const arr = buckets.get(key);
                 if (arr) arr.push(s); else buckets.set(key, [s]);
             }
-            const bubbles: TierBubble[] = [];
-            // Lone-store cells render as small chain-logo DOTS in this band —
-            // full-width address pills at country zoom buried the map.
-            const dots: { key: string; store: ChainStore }[] = [];
-            for (const [key, arr] of buckets) {
-                if (arr.length === 1) { dots.push({ key: `d${key}`, store: arr[0] }); continue; }
-                let la = 0, ln = 0, latMin = Infinity, latMax = -Infinity, lngMin = Infinity, lngMax = -Infinity;
-                for (const s of arr) {
-                    la += s.latitude; ln += s.longitude;
+            // MERGE PASS: a plain grid splits neighbours that straddle a cell
+            // boundary ("two logos side by side that never combined") — union
+            // any groups whose centroids are closer than ~a cell, greedily and
+            // deterministically (sorted keys), until stable.
+            type Group = { key: string; members: ChainStore[]; lat: number; lng: number };
+            const centroid = (members: ChainStore[]) => {
+                let la = 0, ln = 0;
+                for (const s of members) { la += s.latitude; ln += s.longitude; }
+                return { lat: la / members.length, lng: ln / members.length };
+            };
+            let groups: Group[] = [...buckets.entries()]
+                .sort(([a], [b]) => (a < b ? -1 : 1))
+                .map(([key, members]) => ({ key, members, ...centroid(members) }));
+            const NEAR = cell * 0.95;
+            for (let merged = true; merged;) {
+                merged = false;
+                outer: for (let i = 0; i < groups.length; i++) {
+                    for (let j = i + 1; j < groups.length; j++) {
+                        const a = groups[i], b = groups[j];
+                        if (Math.abs(a.lat - b.lat) < NEAR && Math.abs(a.lng - b.lng) < NEAR) {
+                            const members = [...a.members, ...b.members];
+                            groups[i] = { key: a.key < b.key ? a.key : b.key, members, ...centroid(members) };
+                            groups.splice(j, 1);
+                            merged = true;
+                            break outer;
+                        }
+                    }
+                }
+            }
+            // EVERY group renders as a count circle in this band — lone stores
+            // included ("1" in a circle), matching the bubble style.
+            const bubbles: TierBubble[] = groups.map((g) => {
+                let latMin = Infinity, latMax = -Infinity, lngMin = Infinity, lngMax = -Infinity;
+                for (const s of g.members) {
                     latMin = Math.min(latMin, s.latitude); latMax = Math.max(latMax, s.latitude);
                     lngMin = Math.min(lngMin, s.longitude); lngMax = Math.max(lngMax, s.longitude);
                 }
-                bubbles.push({ key, latitude: la / arr.length, longitude: ln / arr.length, count: arr.length,
-                    latMin, latMax, lngMin, lngMax });
-            }
-            return { bubbles, dots };
+                return { key: g.key, latitude: g.lat, longitude: g.lng, count: g.members.length,
+                    latMin, latMax, lngMin, lngMax };
+            });
+            return { bubbles };
         };
         return { A: build(TIERS.A, 'A'), B: build(TIERS.B, 'B') };
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -348,6 +388,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                 title={t('storeResolution.title')}
                 mapRef={mapRef}
                 initialRegion={initialRegion}
+                mountMap={mountMap}
                 onMapReady={handleMapReady}
                 mapReady={mapReady}
                 onRegionChangeComplete={handleRegionChange}
@@ -402,27 +443,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                                     }}
                                 />
                             )))}
-                        {/* Lone-store DOTS (chain badge): compact stand-ins for single-
-                            store cells while a bubble band is active. Tap zooms to the
-                            store's pill. Permanently mounted, opacity-banded. */}
-                        {(['A', 'B'] as const).map((tier) =>
-                            tiers[tier].dots.map(({ key, store }) => (
-                                <MapClusterMarker
-                                    key={key}
-                                    coordinate={{ latitude: store.latitude, longitude: store.longitude }}
-                                    fallback={chainBadgeImage(req.chainId) ?? undefined}
-                                    refreshKey={mapRefreshKey}
-                                    zIndex={3}
-                                    hidden={band !== tier}
-                                    onPress={() => {
-                                        console.log(`[SRO] tap dot store=${store.id}`);
-                                        mapRef.current?.animateToRegion({
-                                            latitude: store.latitude, longitude: store.longitude,
-                                            latitudeDelta: 0.03, longitudeDelta: 0.03,
-                                        }, 350);
-                                    }}
-                                />
-                            )))}
+
                         {/* Selected pill: ONE standalone marker, keyed by store id — a
                             selection change is the ONLY marker swap on this map, and the
                             fresh marker is the newest native annotation, so Apple Maps

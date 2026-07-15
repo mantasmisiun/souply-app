@@ -43,6 +43,10 @@ export interface MapPickerScaffoldProps {
     /** While false, an opaque themed cover + spinner hides the raw white MapView
      *  during native GL init. Undefined (callers that don't pass it) = no cover. */
     mapReady?: boolean;
+    /** False = don't mount the native MapView yet (the themed cover shows via
+     *  mapReady=false). Lets hosts defer GL init past a Modal slide animation,
+     *  which otherwise stutters on the shared main thread. */
+    mountMap?: boolean;
 
     searchText: string;
     onSearchTextChange: (v: string) => void;
@@ -90,24 +94,26 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
 
     const mapBlock = (
         <View style={styles.mapBlock}>
-            <MapView
-                ref={props.mapRef}
-                style={StyleSheet.absoluteFillObject}
-                initialRegion={props.initialRegion}
-                onMapReady={props.onMapReady}
-                onRegionChangeComplete={props.onRegionChangeComplete}
-                onRegionChange={props.onRegionChange}
-                showsUserLocation={props.showsUserLocation ?? true}
-                customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
-                toolbarEnabled={false}
-                // Typing in the search field leaves the keyboard up, covering the
-                // confirm pill; a native MapView never dismisses it on its own. Any
-                // touch on the map (tap OR the start of a drag) closes the keyboard —
-                // covers both scaffold users (location preset picker + store resolution).
-                onTouchStart={Keyboard.dismiss}
-            >
-                {props.mapChildren}
-            </MapView>
+            {props.mountMap !== false && (
+                <MapView
+                    ref={props.mapRef}
+                    style={StyleSheet.absoluteFillObject}
+                    initialRegion={props.initialRegion}
+                    onMapReady={props.onMapReady}
+                    onRegionChangeComplete={props.onRegionChangeComplete}
+                    onRegionChange={props.onRegionChange}
+                    showsUserLocation={props.showsUserLocation ?? true}
+                    customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
+                    toolbarEnabled={false}
+                    // Typing in the search field leaves the keyboard up, covering the
+                    // confirm pill; a native MapView never dismisses it on its own. Any
+                    // touch on the map (tap OR the start of a drag) closes the keyboard —
+                    // covers both scaffold users (location preset picker + store resolution).
+                    onTouchStart={Keyboard.dismiss}
+                >
+                    {props.mapChildren}
+                </MapView>
+            )}
             {props.overlay}
             {props.mapReady === false && (
                 <View style={[StyleSheet.absoluteFillObject, styles.mapCover]}>

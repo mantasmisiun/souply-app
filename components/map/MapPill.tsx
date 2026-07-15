@@ -226,6 +226,29 @@ const styles_bakeryHost = { position: 'absolute' as const, top: -10000, left: 0,
  * variant/price change → a new key → a fresh image; the badge→baked transition is
  * handled reactively by the `image` prop without a remount.
  */
+/** Quick stepped fade for the band-visibility flips (combine/separate): map
+ *  markers can't run RN Animated, so opacity steps over ~180 ms instead —
+ *  4 property updates per marker, only on band crossings. */
+function useSteppedFade(hidden: boolean): number {
+  const [v, setV] = useState(hidden ? 0 : 1);
+  const vRef = useRef(v);
+  vRef.current = v;
+  useEffect(() => {
+    const target = hidden ? 0 : 1;
+    if (vRef.current === target) return;
+    const from = vRef.current;
+    const steps = 4;
+    let i = 0;
+    const iv = setInterval(() => {
+      i++;
+      setV(i >= steps ? target : from + (target - from) * (i / steps));
+      if (i >= steps) clearInterval(iv);
+    }, 45);
+    return () => clearInterval(iv);
+  }, [hidden]);
+  return v;
+}
+
 export function MapPillMarker({
   coordinate,
   chainId,
@@ -267,6 +290,7 @@ export function MapPillMarker({
   const baked: ImageSourcePropType | null = pillUri ? { uri: pillUri } : null;
   const badge = chainBadgeImage(chainId);
   const source: ImageSourcePropType | null = baked ?? (badge != null ? badge : null);
+  const fade = useSteppedFade(hidden);
   // Android-only: re-track briefly when the shown image changes so Google Maps
   // re-rasterises the swapped image (tracksViewChanges is honoured there and
   // ignored by Apple Maps). Settling back to false keeps the static map cheap.
@@ -323,7 +347,7 @@ export function MapPillMarker({
       <Marker
         coordinate={coordinate}
         anchor={usePill ? anchorBaked : { x: 0.5, y: 0.5 }}
-        opacity={hidden ? 0 : dimmed ? 0.4 : 1}
+        opacity={fade * (dimmed ? 0.4 : 1)}
         // ALWAYS true on iOS: with false, AIRMap SNAPSHOTS the child view into
         // an image, and Apple Maps' annotation-view recycling on zoom drops
         // that snapshot → blank pill until a remount (the "pill disappears
@@ -355,7 +379,7 @@ export function MapPillMarker({
       coordinate={coordinate}
       anchor={baked ? anchorBaked : { x: 0.5, y: 0.5 }}
       image={source}
-      opacity={hidden ? 0 : dimmed ? 0.4 : 1}
+      opacity={fade * (dimmed ? 0.4 : 1)}
       tracksViewChanges={tracks}
       zIndex={zIndex}
       onPress={hidden ? undefined : onPress}
@@ -464,6 +488,7 @@ export function MapClusterMarker({ coordinate, pillUri, fallback, hidden = false
   onPress?: () => void;
 }) {
   const source: number | ImageURISource | null = pillUri ? { uri: pillUri } : fallback ?? null;
+  const fade = useSteppedFade(hidden);
   // Re-track briefly on image change so the async-decoded count bubble actually
   // paints (same tracksViewChanges gotcha as MapPillMarker).
   const [tracks, setTracks] = useState(true);
@@ -478,7 +503,7 @@ export function MapClusterMarker({ coordinate, pillUri, fallback, hidden = false
       coordinate={coordinate}
       anchor={{ x: 0.5, y: 0.5 }}
       image={source}
-      opacity={hidden ? 0 : 1}
+      opacity={fade}
       tracksViewChanges={tracks}
       zIndex={zIndex}
       onPress={hidden ? undefined : onPress}
