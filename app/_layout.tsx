@@ -3,7 +3,7 @@ import { Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { useEffect } from 'react';
-import { Linking, View } from 'react-native';
+import { InteractionManager, Linking, Platform, View } from 'react-native';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
@@ -77,6 +77,21 @@ function ShareHandler() {
   const router = useRouter();
   const { hasShareIntent, shareIntent, resetShareIntent } = useShareIntentContext();
 
+  /** Push a route AFTER the first layout settles. iOS ONLY quirk: a share-
+   *  extension launch pushes /receipt-process while the NATIVE tab bar
+   *  (UITabBarController) is doing its first layout — the bar keeps a stale
+   *  frame BELOW the screen and stays there after popping back. A sub-half-
+   *  second defer is imperceptible next to the share-sheet handoff itself. */
+  const pushSettled = (route: { pathname: string; params: Record<string, string> }) => {
+    if (Platform.OS === 'ios') {
+      InteractionManager.runAfterInteractions(() => {
+        setTimeout(() => router.push(route as any), 400);
+      });
+    } else {
+      router.push(route as any);
+    }
+  };
+
   const navigateWithFiles = async (files: { path: string; mimeType: string }[]) => {
     try {
       // A shared PDF navigates IMMEDIATELY with its (cache-normalized) path —
@@ -87,7 +102,7 @@ function ShareHandler() {
       const pdf = files.find((f) => looksLikePdf(f.path, f.mimeType));
       if (pdf) {
         const localPdf = await normalizeToLocalUri(pdf.path, '.pdf');
-        router.push({ pathname: '/receipt-process', params: { pdfUri: localPdf } } as any);
+        pushSettled({ pathname: '/receipt-process', params: { pdfUri: localPdf } });
         return;
       }
       const allUris: string[] = [];
@@ -98,7 +113,7 @@ function ShareHandler() {
       const params: Record<string, string> = allUris.length === 1
         ? { uri: allUris[0] }
         : { uris: allUris.map(encodeURIComponent).join(',') };
-      router.push({ pathname: '/receipt-process', params } as any);
+      pushSettled({ pathname: '/receipt-process', params });
     } catch (e) {
       console.error('[ShareHandler] failed to process shared file:', e);
     }
