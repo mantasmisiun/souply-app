@@ -1,11 +1,13 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import { Platform } from 'react-native';
 import { API_BASE_URL } from '../config/api';
-import { ocrImageTiled, type OcrLine } from '../utils/mlkitOcr';
+import { ocrReceiptPages, type LineWithFrame } from '../utils/receiptOcrPipeline';
 import { isRimiReceipt, parseRimiReceipt } from '../shared/parsers/rimiParser';
 import { isMaximaReceipt, parseMaximaReceipt } from '../shared/parsers/maximaParser';
 import { isIkiReceipt, parseIkiReceipt } from '../shared/parsers/ikiParser';
 import { isNorfaReceipt, parseNorfaReceipt } from '../shared/parsers/norfaParser';
 import { isLidlReceipt, parseLidlReceipt } from '../shared/parsers/lidlParser';
+import { detectChainByVatCode } from '../shared/parsers/chainVatFallback';
 
 /**
  * Light-weight OCR + parser dispatch for the account-recovery flow.
@@ -27,7 +29,8 @@ import { isLidlReceipt, parseLidlReceipt } from '../shared/parsers/lidlParser';
  */
 
 export interface RecoveryReceiptExtract {
-    receiptNo: string;
+    receiptNo: string;          // canonical id (= receiptNos[0]); shown on the slot card
+    receiptNos?: string[];      // every identifier the receipt printed (sent for the server tiebreaker)
     date: string;   // YYYY-MM-DD
     total: number;
     /** Resolved chain id (1=Maxima, 2=Rimi, 3=Iki, 4=Norfa, 5=Lidl).
@@ -67,104 +70,39 @@ async function pdfToImageUris(pdfUri: string): Promise<string[]> {
     return uris;
 }
 
-interface LineWithFrame extends OcrLine {}
-
 /**
- * OCR every page, concatenate lines with y-offsets so multi-page
- * receipts (e-receipt PDFs spanning ≥2 pages) parse as one logical
- * document. Same shape as the receipt-process pipeline so the parsers
- * see input identical to the upload flow.
+ * Run chain detection on the merged line texts and dispatch to the matching
+ * parser. This MIRRORS the Analyze-queue dispatch in
+ * `receiptProcessingService.processOneReceipt` EXACTLY — same detection order,
+ * the same VAT-code fallback, and the same allLines-vs-mergedLines split per
+ * chain — so the recovery total can't drift from the stored upload total.
+ * Returns the three recovery fields when extraction is clean; null otherwise.
  */
-async function ocrAllPages(pageUris: string[]): Promise<LineWithFrame[]> {
-    const allLines: LineWithFrame[] = [];
-    let yOffset = 0;
-    for (const uri of pageUris) {
-        const page = await ocrImageTiled(uri);
-        let pageMaxY = 0;
-        for (const line of page.lines) {
-            allLines.push({
-                text: line.text,
-                yTop: line.yTop + yOffset,
-                yBottom: line.yBottom + yOffset,
-                xLeft: line.xLeft,
-                xRight: line.xRight,
-            });
-            pageMaxY = Math.max(pageMaxY, line.yBottom + yOffset);
-        }
-        // +50 px buffer keeps the last line of page N safely separated
-        // from the first line of page N+1 during downstream merging.
-        yOffset = pageMaxY + 50;
-    }
-    allLines.sort((a, b) => a.yTop - b.yTop);
-    return allLines;
-}
+function detectAndParse(
+    allLines: LineWithFrame[],
+    mergedLines: LineWithFrame[],
+): RecoveryReceiptExtract | null {
+    const lineTexts = mergedLines.map(l => l.text);
 
-/**
- * Run chain detection on the merged line texts and dispatch to the
- * matching parser. Returns the three recovery fields when extraction
- * is clean; null when any field is missing.
- */
-function detectAndParse(allLines: LineWithFrame[]): RecoveryReceiptExtract | null {
-    // Iki's parser internally re-merges lines by y; the other four
-    // expect raw lines. The receipt-process pipeline maintains a
-    // separately-merged `mergedLines` for Iki — for recovery we feed
-    // both shapes when needed and rely on chain detection to pick the
-    // right path.
-    const merged = mergeAdjacentLines(allLines);
-    const lineTexts = merged.map(l => l.text);
+    const chainId =
+        isRimiReceipt(lineTexts) ? 2 :
+        isMaximaReceipt(lineTexts) ? 1 :
+        isNorfaReceipt(lineTexts) ? 4 :
+        isLidlReceipt(lineTexts) ? 5 :
+        isIkiReceipt(lineTexts) ? 3 :
+        (detectChainByVatCode(lineTexts)?.chainId ?? null);
 
-    if (isRimiReceipt(lineTexts)) {
-        const f = parseRimiReceipt(allLines).footer;
-        return packFields(f, 2, 'Rimi');
-    }
-    if (isMaximaReceipt(lineTexts)) {
-        const f = parseMaximaReceipt(allLines).footer;
-        return packFields(f, 1, 'Maxima');
-    }
-    if (isNorfaReceipt(lineTexts)) {
-        const f = parseNorfaReceipt(allLines).footer;
-        return packFields(f, 4, 'Norfa');
-    }
-    if (isLidlReceipt(lineTexts)) {
-        const f = parseLidlReceipt(allLines).footer;
-        return packFields(f, 5, 'Lidl');
-    }
-    if (isIkiReceipt(lineTexts)) {
-        const f = parseIkiReceipt(merged).footer;
-        return packFields(f, 3, 'Iki');
-    }
+    // iOS MLKit splits rows into near-same-y fragments; the Maxima+Lidl parsers carry
+    // the merger behind this flag — the SAME flag every interactive parse site passes.
+    // Without it an iOS recovery re-parse produces a different total/receiptNo than the
+    // stored upload and the recovery match key silently misses.
+    const PARSER_OPTS = { iosOcr: Platform.OS === 'ios' };
+    if (chainId === 2) return packFields(parseRimiReceipt(allLines).footer, 2, 'Rimi');
+    if (chainId === 1) return packFields(parseMaximaReceipt(allLines, PARSER_OPTS).footer, 1, 'Maxima');
+    if (chainId === 4) return packFields(parseNorfaReceipt(allLines).footer, 4, 'Norfa');
+    if (chainId === 5) return packFields(parseLidlReceipt(allLines, PARSER_OPTS).footer, 5, 'Lidl');
+    if (chainId === 3) return packFields(parseIkiReceipt(mergedLines).footer, 3, 'Iki');
     return null;
-}
-
-/**
- * Same "merge adjacent y-equal lines" pass receipt-process.tsx runs
- * inline. Kept here so the recovery flow doesn't depend on that file.
- */
-function mergeAdjacentLines(allLines: LineWithFrame[]): LineWithFrame[] {
-    const merged: LineWithFrame[] = [];
-    const PRICE_RE = /^\d+[.,]\s?\d{2}\s*[AB]\s*$/;
-    const ROW_THRESHOLD = 30;
-    for (const line of allLines) {
-        if (merged.length > 0) {
-            const last = merged[merged.length - 1];
-            if (Math.abs(line.yTop - last.yTop) < ROW_THRESHOLD) {
-                if (PRICE_RE.test(line.text)) {
-                    merged.push({ ...line });
-                } else if (PRICE_RE.test(last.text)) {
-                    merged.splice(merged.length - 1, 0, { ...line });
-                } else {
-                    last.text = last.text + ' ' + line.text;
-                    last.yTop = Math.min(last.yTop, line.yTop);
-                    last.yBottom = Math.max(last.yBottom, line.yBottom);
-                    last.xLeft = Math.min(last.xLeft, line.xLeft);
-                    last.xRight = Math.max(last.xRight, line.xRight);
-                }
-                continue;
-            }
-        }
-        merged.push({ ...line });
-    }
-    return merged;
 }
 
 /**
@@ -174,11 +112,16 @@ function mergeAdjacentLines(allLines: LineWithFrame[]): LineWithFrame[] {
  * another file.
  */
 function packFields(
-    footer: { total: number | null; date: string; receiptNo: string },
+    footer: { total: number | null; date: string; receiptNo: string; receiptNos?: string[] },
     chainId: 1 | 2 | 3 | 4 | 5,
     chainName: RecoveryReceiptExtract['chainName'],
 ): RecoveryReceiptExtract | null {
-    const receiptNo = (footer.receiptNo ?? '').trim();
+    // The "needs a receipt number" requirement is satisfied by ANY identifier — a receipt that
+    // printed only a "Kvitas" (Kvito Nr. OCR-dropped) is still usable for recovery.
+    const receiptNos = (Array.isArray(footer.receiptNos) ? footer.receiptNos : [])
+        .filter((v): v is string => typeof v === 'string' && v.trim().length > 0)
+        .map((v) => v.trim());
+    const receiptNo = (footer.receiptNo ?? '').trim() || receiptNos[0] || '';
     if (!receiptNo) return null;
 
     // Parsers emit date as YYYY-MM-DD on success, '' on failure.
@@ -188,7 +131,7 @@ function packFields(
     const total = footer.total;
     if (typeof total !== 'number' || !Number.isFinite(total) || total <= 0) return null;
 
-    return { receiptNo, date, total, chainHint: chainId, chainName };
+    return { receiptNo, receiptNos: receiptNos.length ? receiptNos : undefined, date, total, chainHint: chainId, chainName };
 }
 
 /**
@@ -205,12 +148,12 @@ export async function extractRecoveryFieldsFromFile(
         const pageUris = isPdf ? await pdfToImageUris(fileUri) : [fileUri];
         if (pageUris.length === 0) return null;
 
-        const allLines = await ocrAllPages(pageUris);
-        if (allLines.filter(l => l.text.trim().length > 0).length < 3) {
+        const { allLines, mergedLines } = await ocrReceiptPages(pageUris);
+        if (mergedLines.filter(l => l.text.trim().length > 0).length < 3) {
             return null;
         }
 
-        return detectAndParse(allLines);
+        return detectAndParse(allLines, mergedLines);
     } catch (e) {
         console.warn('[recoveryOcr] extraction failed:', (e as Error)?.message);
         return null;

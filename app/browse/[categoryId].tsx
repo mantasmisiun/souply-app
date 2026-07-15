@@ -11,10 +11,11 @@ import { addProductToBasket } from '../../utils/basketUtils';
 import AmountPickerModal from '../../components/AmountPickerModal';
 import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../components/ComparedBasketChoiceModal';
 import BasketProductCard from '../../components/browse/BasketProductCard';
+import type { UnitPriceBadge } from '../../components/browse/BasketProductCard';
 import CategoryBubbles from '../../components/browse/CategoryBubbles';
 import { TemplateReturnBanner } from '../../components/template/TemplateReturnBanner';
 import { useTemplateAddState } from '../../state/templateAddState';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import { getUserId } from '../../config/user';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -26,7 +27,7 @@ import { GlassIconButton } from '../../components/GlassIconButton';
 import { glassHeaderOptions } from '../../constants/navHeader';
 import { ScreenHeading } from '../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
-import { resolveCanonicalStep } from '../../utils/canonicalStep';
+import { resolveCanonicalStep, resolveDisplayUnit } from '../../utils/canonicalStep';
 
 interface Category {
     id: number;
@@ -48,6 +49,8 @@ interface Product {
     canonicalUnit: string | null;
     canonicalStep: number | null;
     canonicalFamily: 'fluid' | 'count' | null;
+    /** Cheapest-per-unit badge populated server-side (productBadge.ts). */
+    badge?: UnitPriceBadge | null;
 }
 
 
@@ -104,6 +107,9 @@ export default function CategoryScreen() {
     const [amountModal, setAmountModal] = useState<{
         visible: boolean;
         product: Product | null;
+        /** Set when re-opened from a card's quantity tap — prefills the picker
+         *  and makes confirm SET the amount instead of adding a new item. */
+        editQty?: number | null;
     }>({ visible: false, product: null });
     useEffect(() => {
         // Wait for the display-mode preference to load before firing fetches;
@@ -581,9 +587,9 @@ export default function CategoryScreen() {
         }
     }, [setDraftBasketId]);
 
-    const onIncrement = useCallback((item: Product, qty: number) => {
-        const step = resolveCanonicalStep(item);
-        const newQty = Math.round((qty + step) / step) * step;
+    // Absolute set — shared by the +/- stepper and the picker's edit-reopen
+    // (tap the quantity on a card → picker prefilled → confirm SETS this).
+    const onSetQuantity = useCallback((item: Product, newQty: number) => {
         const bid = draftBasketIdRef.current;
         setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
         if (!bid) return;
@@ -592,6 +598,11 @@ export default function CategoryScreen() {
             if (basketItem) await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
         }).catch(() => {});
     }, []);
+
+    const onIncrement = useCallback((item: Product, qty: number) => {
+        const step = resolveCanonicalStep(item);
+        onSetQuantity(item, Math.round((qty + step) / step) * step);
+    }, [onSetQuantity]);
 
     const renderItem = useCallback(({ item }: { item: Product }) => {
         const mergedQty = (mergedIntoMe[item.id] ?? [])
@@ -614,6 +625,7 @@ export default function CategoryScreen() {
                 name={item.name}
                 imageUrls={item.imageUrls}
                 chainLogos={mergedChainLogos(item)}
+                badge={item.badge}
                 amountText={amountText}
                 quantity={cardQuantity}
                 isAdding={addingIds.has(item.id)}
@@ -636,6 +648,8 @@ export default function CategoryScreen() {
                     }
                     onIncrement(item, quantity);
                 }}
+                onQuantityPress={() => setAmountModal({ visible: true, product: item, editQty: cardQuantity })}
+                quantityUnit={resolveDisplayUnit(item)}
             />
         );
     }, [basketQuantities, mergedIntoMe, addingIds, onNavigate, onAdd, onDecrement, onIncrement, isTemplateMode, templateMap, templateSetQty, t]);
@@ -663,11 +677,11 @@ export default function CategoryScreen() {
                 {Array.from({ length: 3 }).map((_, row) => (
                     <View key={row} style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
                         {[0, 1].map(col => (
-                            <View key={col} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: 12, padding: 12, alignItems: 'center', gap: 8 }}>
-                                <SkeletonBox height={130} borderRadius={8} />
+                            <View key={col} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: 12, alignItems: 'center', gap: 8 }}>
+                                <SkeletonBox height={130} borderRadius={radius.md} />
                                 <SkeletonBox width={100} height={13} borderRadius={6} />
                                 <SkeletonBox width={60} height={11} borderRadius={5} />
-                                <SkeletonBox height={34} borderRadius={10} />
+                                <SkeletonBox height={34} borderRadius={radius.pill} />
                             </View>
                         ))}
                     </View>
@@ -701,7 +715,7 @@ export default function CategoryScreen() {
                                 value={mode === 'base'}
                                 onValueChange={handleModeSwitchRequest}
                                 trackColor={{ false: colors.border, true: colors.primary }}
-                                thumbColor={colors.cardBackground}
+                                thumbColor={colors.onPrimary}
                                 disabled={converting}
                             />
                         </View>
@@ -722,11 +736,11 @@ export default function CategoryScreen() {
                             {Array.from({ length: 3 }).map((_, row) => (
                                 <View key={row} style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
                                     {[0, 1].map(col => (
-                                        <View key={col} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: 12, padding: 12, alignItems: 'center', gap: 8 }}>
-                                            <SkeletonBox height={130} borderRadius={8} style={{ alignSelf: 'stretch' }} />
+                                        <View key={col} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: 12, alignItems: 'center', gap: 8 }}>
+                                            <SkeletonBox height={130} borderRadius={radius.md} style={{ alignSelf: 'stretch' }} />
                                             <SkeletonBox width={100} height={13} borderRadius={6} />
                                             <SkeletonBox width={60} height={11} borderRadius={5} />
-                                            <SkeletonBox height={34} borderRadius={10} style={{ alignSelf: 'stretch' }} />
+                                            <SkeletonBox height={34} borderRadius={radius.pill} style={{ alignSelf: 'stretch' }} />
                                         </View>
                                     ))}
                                 </View>
@@ -865,11 +879,18 @@ export default function CategoryScreen() {
                 maxAmount={amountModal.product?.maxAmount || 0}
                 unit={amountModal.product?.unit || 'g'}
                 isWeighable={!!amountModal.product?.hasWeighable}
+                initialAmount={amountModal.editQty ?? null}
                 onCancel={() => setAmountModal({ visible: false, product: null })}
                 onConfirm={async (amount) => {
                     const product = amountModal.product;
+                    const isEdit = amountModal.editQty != null;
                     setAmountModal({ visible: false, product: null });
                     if (!product) return;
+                    if (!isTemplateMode && isEdit) {
+                        // Edit-reopen: SET the amount on the existing row.
+                        onSetQuantity(product, amount);
+                        return;
+                    }
                     if (isTemplateMode) {
                         // In template mode the picker is the "set absolute
                         // quantity" surface — overrides any existing row
@@ -920,7 +941,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     helpCard: {
         backgroundColor: c.cardBackground,
-        borderRadius: 14,
+        borderRadius: radius.lg,
         padding: 20,
         gap: 12,
         width: '100%',
@@ -947,7 +968,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         marginTop: 4,
         paddingHorizontal: 16,
         paddingVertical: 8,
-        borderRadius: 10,
+        borderRadius: radius.pill,
         backgroundColor: c.primary,
         minWidth: 84,
         alignItems: 'center',
@@ -986,9 +1007,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         gap: 8,
     },
     bubble: {
-        paddingHorizontal: 14,
-        paddingVertical: 7,
-        borderRadius: 20,
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: radius.pill,
         borderWidth: 1,
         borderColor: c.border,
         backgroundColor: c.cardBackground,
@@ -996,6 +1017,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     bubbleActive: {
         backgroundColor: c.primary,
         borderColor: c.primary,
+        ...elevation.level1,
     },
     bubbleText: {
         fontSize: 13,
@@ -1022,7 +1044,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         gap: 12,
     },
     productIcon: {
-        width: 36, height: 36, borderRadius: 8,
+        width: 36, height: 36, borderRadius: radius.md,
         backgroundColor: c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
     },
@@ -1032,8 +1054,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingHorizontal: 16,
         paddingTop: 12,
         backgroundColor: c.cardBackground,
-        borderTopWidth: 1,
-        borderTopColor: c.border,
+        borderTopLeftRadius: radius.lg,
+        borderTopRightRadius: radius.lg,
+        ...elevation.level3,
         gap: 12,
     },
     basketBarLeft: {
@@ -1054,7 +1077,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.primary,
         paddingVertical: 10,
         paddingHorizontal: 16,
-        borderRadius: 10,
+        borderRadius: radius.pill,
     },
     basketBarButtonText: {
         fontSize: 14,

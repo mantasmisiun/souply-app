@@ -28,6 +28,12 @@ import { useSettingsStore } from '../../state/settingsStore';
 export interface BreakdownProduct {
     /** Whether the product was confidently matched to a StoreProduct. */
     matchConfirmed: boolean;
+    /** Line-level category of the CURRENT primary match (server-set at save + on
+     *  every demotion). Preferred over altMatches[0] — which is a borrowed candidate,
+     *  not necessarily the linked SP — so a swiped-'different' line re-buckets
+     *  correctly. Absent on legacy receipts → falls back to altMatches[0] below. */
+    categoryName?: string | null;
+    categoryL2Name?: string | null;
     /** Server returns categoryName (leaf) and categoryL2Name (the L2
      *  ancestor) on altMatches[0] when matched. L2 is the display
      *  source of truth; leaf is the fallback for not-yet-rehydrated
@@ -78,12 +84,35 @@ const BUCKET_COLOURS = [
     '#D4A55C', // honey
 ];
 
-function bucketColour(key: string, theme: AppTheme): string {
-    if (key === UNRECOGNISED_KEY) return theme.warning;
-    if (key === OTHER_KEY) return theme.textMuted;
+export function bucketHash(key: string): number {
     let h = 0;
     for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) >>> 0;
-    return BUCKET_COLOURS[h % BUCKET_COLOURS.length];
+    return h % BUCKET_COLOURS.length;
+}
+
+/**
+ * Assign every bucket a DISTINCT palette colour. The hash slot is only the
+ * PREFERENCE (cross-receipt familiarity: a category tends to keep its hue);
+ * when two categories hash to the same slot ("Daržovės ir grybai" and
+ * "Grietinė, grietinėlė" both landed on lilac) the later one probes forward
+ * to the next free slot — deterministic in bucket order, and with TOP_N=4
+ * buckets against an 8-colour palette a free slot always exists. Sentinel
+ * buckets keep their fixed semantic colours and never consume palette slots.
+ */
+export function assignBucketColours(buckets: Bucket[], theme: AppTheme): Map<string, string> {
+    const out = new Map<string, string>();
+    const taken = new Set<number>();
+    for (const b of buckets) {
+        if (b.key === UNRECOGNISED_KEY) { out.set(b.key, theme.warning); continue; }
+        if (b.key === OTHER_KEY) { out.set(b.key, theme.textMuted); continue; }
+        let slot = bucketHash(b.key);
+        for (let i = 0; i < BUCKET_COLOURS.length && taken.has(slot); i++) {
+            slot = (slot + 1) % BUCKET_COLOURS.length;
+        }
+        taken.add(slot);
+        out.set(b.key, BUCKET_COLOURS[slot]);
+    }
+    return out;
 }
 
 /**
@@ -116,8 +145,13 @@ function buildBuckets(products: BreakdownProduct[]): {
         // leaf categoryName so receipts that haven't been rehydrated
         // server-side still produce a usable breakdown (just at finer
         // granularity until the next hydration pass writes L2 back).
+        // Prefer the LINE-LEVEL category (the current primary match, kept correct
+        // across swipe demotions). Fall back to altMatches[0] only for legacy receipts
+        // that predate the line-level field.
         const top = p.altMatches?.[0];
-        const name = top?.categoryL2Name?.trim() || top?.categoryName?.trim();
+        const name =
+            p.categoryL2Name?.trim() || p.categoryName?.trim() ||
+            top?.categoryL2Name?.trim() || top?.categoryName?.trim();
         // Three signals collapse into the unrecognised bucket so it
         // surfaces as one row at the end of the list, never as a
         // ranked top category:
@@ -128,7 +162,7 @@ function buildBuckets(products: BreakdownProduct[]): {
         //      = the hidden catch-all the cross-chain bootstrap dumps products
         //      into when no real category fits). Same semantic as #1 — "we
         //      don't actually know what this is".
-        if (!name || name.toLowerCase() === 'nepriskirta') {
+        if (!name || name.toLowerCase() === 'nepriskirta' || name.toLowerCase() === 'uncategorised') {
             unrecognisedTotal += lineTotal;
             continue;
         }
@@ -211,6 +245,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
     };
 
     const { buckets, grandTotal } = useMemo(() => buildBuckets(products), [products]);
+    const bucketColours = useMemo(() => assignBucketColours(buckets, colors), [buckets, colors]);
 
     // Don't render at all when there's nothing meaningful — keeps the
     // screen quiet for empty/invalid receipts.
@@ -232,7 +267,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
                                 styles.stackedBarSegment,
                                 {
                                     width: `${pct}%`,
-                                    backgroundColor: bucketColour(b.key, colors),
+                                    backgroundColor: bucketColours.get(b.key),
                                     // 1 px gap between segments via white border-right;
                                     // dropped on the last segment so the bar feels
                                     // visually closed on the right edge.
@@ -280,7 +315,7 @@ export default function ReceiptCategoryBreakdown({ products, receiptId }: Props)
                                 <View
                                     style={[
                                         styles.rowDot,
-                                        { backgroundColor: bucketColour(b.key, colors) },
+                                        { backgroundColor: bucketColours.get(b.key) },
                                     ]}
                                 />
                             )}

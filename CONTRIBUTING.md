@@ -22,7 +22,7 @@ npx expo run:android     # local dev build (regular branding, talks to your LAN 
 | Variant | Name | Package | API | Channel |
 |---|---|---|---|---|
 | `dev` | Souply (DEV) | `…app.dev` | LAN | dev |
-| `staging` | Souply (staging) | `…app.staging` | api.souply.manofoto | staging |
+| `staging` | Souply (staging) | `…app.staging` | souply-api.manofoto | staging |
 | (unset) | Souply | `lt.souply.app` | api.souply.lt | production |
 ```bash
 eas build --platform android --profile android-staging   # or android-dev / production

@@ -17,12 +17,15 @@ import { useTheme } from '../constants/theme';
 export function ScreenHeading({
     title,
     subtitle,
+    trailing,
     topInset,
     bleed,
 }: {
     title: string;
     /** Optional second line — a plain string or custom JSX (e.g. a breadcrumb). */
     subtitle?: ReactNode;
+    /** Optional node on the right of the TITLE line (e.g. an info button). */
+    trailing?: ReactNode;
     /** Status-bar inset to reserve when this heading sits at the very top with
      *  no native bar above it (e.g. loading states of bar-less screens). */
     topInset?: number;
@@ -43,9 +46,18 @@ export function ScreenHeading({
                 topInset ? { paddingTop: topInset + 6 } : null,
             ]}
         >
-            <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={2}>
-                {title}
-            </Text>
+            {trailing != null ? (
+                <View style={styles.titleRow}>
+                    <Text style={[styles.title, styles.titleFlex, { color: colors.textPrimary }]} numberOfLines={2}>
+                        {title}
+                    </Text>
+                    {trailing}
+                </View>
+            ) : (
+                <Text style={[styles.title, { color: colors.textPrimary }]} numberOfLines={2}>
+                    {title}
+                </Text>
+            )}
             {subtitle != null
                 ? typeof subtitle === 'string'
                     ? (
@@ -62,6 +74,8 @@ export function ScreenHeading({
 const styles = StyleSheet.create({
     wrap: { paddingHorizontal: 16, paddingTop: 6, paddingBottom: 12 },
     title: { fontSize: 22, fontWeight: '700' },
+    titleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+    titleFlex: { flex: 1 },
     subtitle: { fontSize: 12, marginTop: 3 },
     subtitleWrap: { marginTop: 3 },
 });

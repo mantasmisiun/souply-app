@@ -1,8 +1,20 @@
-import { Ionicons } from '@expo/vector-icons';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Stack, useRouter } from 'expo-router';
-import { useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, StyleSheet, Text, TouchableOpacity, View, Alert } from 'react-native';
+import {
+    Ionicons } from '@expo/vector-icons';
+import { CameraView,
+    useCameraPermissions } from 'expo-camera';
+import { Stack,
+    useRouter } from 'expo-router';
+import { useMemo,
+    useRef,
+    useState } from 'react';
+import { ActivityIndicator,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+    Alert,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
@@ -96,7 +108,7 @@ export default function ScanShoppingListScreen() {
             </CameraView>
             {claiming && (
                 <View style={styles.claimingOverlay}>
-                    <ActivityIndicator size="large" color={colors.onPrimary} />
+                    <MaterialProgress size="large" color={colors.onPrimary} />
                 </View>
             )}
         </View>

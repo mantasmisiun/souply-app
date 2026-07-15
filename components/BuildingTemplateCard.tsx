@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef } from 'react';
 import { View, Text, StyleSheet, Animated } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, radius, type AppTheme } from '../constants/theme';
 
 /**
  * Placeholder card shown while the default template is being built — a pulsing
@@ -52,11 +52,11 @@ export function BuildingTemplateCard() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     card: {
         flexDirection: 'row', alignItems: 'center', gap: 12,
-        backgroundColor: c.cardBackground, borderRadius: 12, padding: 14, marginBottom: 10,
+        backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: 14, marginBottom: 10,
         borderWidth: 1, borderColor: c.primary, borderStyle: 'dashed',
     },
     iconWrap: {
-        width: 40, height: 40, borderRadius: 10,
+        width: 40, height: 40, borderRadius: radius.md,
         backgroundColor: (c as any).primaryMuted ?? c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
     },

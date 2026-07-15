@@ -8,13 +8,16 @@ const DEFAULT_DSN =
 
 const dsn = process.env.EXPO_PUBLIC_SENTRY_DSN ?? DEFAULT_DSN;
 
-// Initialise once at module load. `enabled:false` in local dev (Metro /
-// __DEV__) so we don't ship our own debugging errors to Sentry; staging +
-// prod builds report tagged by APP_ENV. Error Monitoring only — no
-// performance tracing (free-tier quota).
+// Initialise once at module load. Gate on __DEV__ (dev-mode JS = a Metro session),
+// NOT the app variant: the old `APP_ENV !== 'dev'` gate silenced the ENTIRE dev
+// variant, so native crashes on installed dev clients left no trace anywhere (the
+// 2026-07-04 AIRMap map crash had to be pulled off the device as an .ips file).
+// Metro-connected debugging stays silent; any release-mode bundle — staging, prod,
+// or a PUBLISHED dev-channel update running in the dev client — reports, tagged by
+// APP_ENV. Error Monitoring only — no performance tracing (free-tier quota).
 Sentry.init({
     dsn,
-    enabled: APP_ENV !== 'dev',
+    enabled: !__DEV__,
     environment: APP_ENV,
     tracesSampleRate: 0,
 });

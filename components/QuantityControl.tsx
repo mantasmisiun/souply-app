@@ -2,7 +2,7 @@ import React, { useMemo } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, type ViewStyle } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, radius, type AppTheme } from '../constants/theme';
 
 interface Props {
     quantity: number;
@@ -12,10 +12,13 @@ interface Props {
     unit?: string | null;
     /** 'large' renders a taller control suited for bottom bars. Default: 'default'. */
     size?: 'default' | 'large';
+    /** Makes the centre (number + unit) tappable — used to re-open the amount
+     *  picker instead of stepping +/- many times. */
+    onCenterPress?: () => void;
     style?: ViewStyle;
 }
 
-export function QuantityControl({ quantity, onDecrement, onIncrement, unit, size = 'default', style }: Props) {
+export function QuantityControl({ quantity, onDecrement, onIncrement, unit, size = 'default', onCenterPress, style }: Props) {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const lg = size === 'large';
@@ -29,10 +32,15 @@ export function QuantityControl({ quantity, onDecrement, onIncrement, unit, size
             >
                 <Ionicons name="remove" size={lg ? 22 : 16} color={colors.primary} />
             </TouchableOpacity>
-            <View style={styles.qtyCenter}>
+            <TouchableOpacity
+                style={styles.qtyCenter}
+                disabled={!onCenterPress}
+                onPress={onCenterPress}
+                hitSlop={{ top: 8, bottom: 8 }}
+            >
                 <Text style={[styles.qtyText, lg && styles.qtyTextLg]}>{formatted}</Text>
                 {unit ? <Text style={[styles.qtyUnit, lg && styles.qtyUnitLg]}>{unit}</Text> : null}
-            </View>
+            </TouchableOpacity>
             <TouchableOpacity
                 style={[styles.qtyButton, lg && styles.qtyButtonLg]}
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onIncrement(); }}
@@ -50,14 +58,14 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'space-between',
         borderWidth: 1,
         borderColor: c.primary,
-        borderRadius: 8,
+        borderRadius: radius.pill,
         paddingVertical: 6,
         paddingHorizontal: 10,
     },
     quantityControlLg: {
         paddingVertical: 13,
         paddingHorizontal: 16,
-        borderRadius: 12,
+        borderRadius: radius.pill,
         borderWidth: 1.5,
     },
     qtyButton: {
@@ -85,7 +93,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     qtyUnit: {
         fontSize: 12,
         fontWeight: '500',
-        color: c.primary,
+        color: c.textMuted,
     },
     qtyUnitLg: {
         fontSize: 16,

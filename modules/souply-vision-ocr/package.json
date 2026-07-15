@@ -1,0 +1,6 @@
+{
+  "name": "souply-vision-ocr",
+  "version": "0.1.0",
+  "description": "iOS-only Apple Vision (VNRecognizeTextRequest) OCR returning per-word boxes + corner points, matching the ML Kit text-recognition result shape",
+  "main": "index.ts"
+}

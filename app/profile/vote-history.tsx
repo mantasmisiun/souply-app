@@ -1,7 +1,15 @@
 import {
-    View, Text, StyleSheet, FlatList, ScrollView, TouchableOpacity,
-    Modal, ActivityIndicator, Pressable, TextInput,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    FlatList,
+    ScrollView,
+    TouchableOpacity,
+    Modal,
+    Pressable,
+    TextInput,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import Animated from 'react-native-reanimated';
@@ -208,7 +216,7 @@ export default function VoteHistoryScreen() {
     };
 
     const listFooter = loadingMore ? (
-        <ActivityIndicator color={colors.primary} style={{ marginVertical: 16 }} />
+        <MaterialProgress color={colors.primary} style={{ marginVertical: 16 }} />
     ) : null;
 
     return (
@@ -263,7 +271,7 @@ export default function VoteHistoryScreen() {
             />
 
             {loading ? (
-                <ActivityIndicator color={colors.primary} style={{ marginTop: header.paddingTop + 48 }} />
+                <MaterialProgress color={colors.primary} style={{ marginTop: header.paddingTop + 48 }} />
             ) : votes.length === 0 ? (
                 <View style={[styles.empty, { paddingTop: header.paddingTop }]}>
                     <Ionicons name="layers-outline" size={48} color={colors.textMuted} />
@@ -324,7 +332,7 @@ export default function VoteHistoryScreen() {
                         )}
 
                         {saving ? (
-                            <ActivityIndicator color={colors.primary} style={{ marginVertical: 24 }} />
+                            <MaterialProgress color={colors.primary} style={{ marginVertical: 24 }} />
                         ) : (
                             <View style={styles.optionList}>
                                 {(['identical', 'similar', 'different'] as VoteValue[]).map(v => {

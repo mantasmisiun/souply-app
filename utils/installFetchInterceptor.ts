@@ -1,5 +1,7 @@
 import i18n from '../i18n';
 import { API_BASE_URL } from '../config/api';
+import { getActiveSessionToken } from '../config/session';
+import { CLIENT_PLATFORM, CLIENT_VERSION, useVersionGate } from '../state/versionGate';
 
 /**
  * One-shot patch of `globalThis.fetch` to inject `Accept-Language` on
@@ -39,7 +41,36 @@ export function installFetchInterceptor(): void {
                 if (!headers.has('Accept-Language')) {
                     headers.set('Accept-Language', i18n.language || 'lt');
                 }
-                return original(input, { ...init, headers });
+                // Session bearer for the now-authenticated per-user routes (receipts,
+                // swipe votes). Verified token wins, else the anonymous token. Never
+                // overwrite an Authorization the caller set explicitly (e.g. authedFetch).
+                if (!headers.has('authorization') && !headers.has('Authorization')) {
+                    const token = getActiveSessionToken();
+                    if (token) headers.set('Authorization', `Bearer ${token}`);
+                }
+                // Client version signal for the server-side gate (X-Client-*). The server
+                // 426s a build below the hard floor or flags a soft nudge via header.
+                if (CLIENT_VERSION && !headers.has('X-Client-Version')) {
+                    headers.set('X-Client-Platform', CLIENT_PLATFORM);
+                    headers.set('X-Client-Version', CLIENT_VERSION);
+                }
+                // Inspect the response for the gate signals WITHOUT consuming the body the
+                // caller will read (clone for the 426 body). Fail-safe: any error here is
+                // swallowed so gate-detection can never break a real request.
+                return original(input, { ...init, headers }).then((res: Response) => {
+                    try {
+                        if (res.status === 426) {
+                            res.clone().json().then((b: any) => {
+                                useVersionGate.getState().triggerHard(b?.storeUrl ?? null, b?.message ?? null);
+                            }).catch(() => {
+                                useVersionGate.getState().triggerHard(null, null);
+                            });
+                        } else if (res.headers.get('X-Client-Update') === 'recommended') {
+                            useVersionGate.getState().triggerSoft(res.headers.get('X-Client-Store-Url'), null);
+                        }
+                    } catch { /* never break the request over gate detection */ }
+                    return res;
+                });
             }
         } catch {
             // Fall through to the unmodified call if anything goes

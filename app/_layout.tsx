@@ -5,7 +5,7 @@ import 'react-native-reanimated';
 import { useEffect } from 'react';
 import { Linking, View } from 'react-native';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
-import * as FileSystem from 'expo-file-system/legacy';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
 import { useTheme, useResolvedScheme } from '../constants/theme';
 import { GlassIconButton } from '../components/GlassIconButton';
@@ -13,12 +13,15 @@ import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
 import { EnvBadge } from '../components/EnvBadge';
+import { MaskRedactionHost } from '../components/MaskRedactionHost';
 import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { UsernameGate } from '../components/UsernameGate';
+import UpdateGateModal from '../components/UpdateGateModal';
+import { useAppUpdates } from '../hooks/useAppUpdates';
+import { looksLikePdf, normalizeToLocalUri } from '../utils/pdfToImages';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
-import { API_BASE_URL } from '../config/api';
 import { useReceiptQueueRunner } from '../hooks/useReceiptQueueRunner';
 import '../i18n';
 import { useTranslation } from 'react-i18next';
@@ -59,42 +62,9 @@ const queryPersister = createAsyncStoragePersister({
   throttleTime: 1000,
 });
 
-/**
- * Copy a content:// or file:// URI into the app cache and return the
- * resulting file:// path.
- */
-async function normalizeToLocalUri(uri: string, ext = '.tmp'): Promise<string> {
-  const dest = `${FileSystem.cacheDirectory}share_input_${Date.now()}${ext}`;
-  await FileSystem.copyAsync({ from: uri, to: dest });
-  return dest;
-}
-
-/**
- * Convert a PDF file:// path to PNG temp files via the server's
- * /api/receipts/pdf-to-image endpoint. Returns file:// URIs for each page.
- */
-async function pdfToImageUris(pdfPath: string): Promise<string[]> {
-  const localPath = await normalizeToLocalUri(pdfPath, '.pdf');
-  const base64 = await FileSystem.readAsStringAsync(localPath, {
-    encoding: FileSystem.EncodingType.Base64,
-  });
-  const res = await fetch(`${API_BASE_URL}/api/receipts/pdf-to-image`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pdfBase64: base64 }),
-  });
-  if (!res.ok) throw new Error(`pdf-to-image ${res.status}`);
-  const { images } = await res.json() as { images: string[] };
-  const uris: string[] = [];
-  for (let i = 0; i < images.length; i++) {
-    const dest = `${FileSystem.cacheDirectory}share_pdf_page_${Date.now()}_${i}.png`;
-    await FileSystem.writeAsStringAsync(dest, images[i], {
-      encoding: FileSystem.EncodingType.Base64,
-    });
-    uris.push(dest);
-  }
-  return uris;
-}
+// PDF/page-image helpers moved to utils/pdfToImages.ts — conversion now runs
+// as a background stage inside the scan session / receipt queue instead of
+// blocking here before navigation.
 
 /**
  * Handles files arriving from two iOS entry points and one Android entry point:
@@ -109,19 +79,23 @@ function ShareHandler() {
 
   const navigateWithFiles = async (files: { path: string; mimeType: string }[]) => {
     try {
+      // A shared PDF navigates IMMEDIATELY with its (cache-normalized) path —
+      // the scan session converts it to pages as its first background stage,
+      // so the loader shows right away instead of the app sitting frozen on
+      // the share sheet. Only copy to cache here (share-intent URIs can
+      // expire once the intent is handled).
+      const pdf = files.find((f) => looksLikePdf(f.path, f.mimeType));
+      if (pdf) {
+        const localPdf = await normalizeToLocalUri(pdf.path, '.pdf');
+        router.push({ pathname: '/receipt-process', params: { pdfUri: localPdf } } as any);
+        return;
+      }
       const allUris: string[] = [];
       for (const file of files) {
-        const isPdf = file.mimeType === 'application/pdf' ||
-          file.path.toLowerCase().endsWith('.pdf');
-        if (isPdf) {
-          const pages = await pdfToImageUris(file.path);
-          allUris.push(...pages);
-        } else {
-          allUris.push(await normalizeToLocalUri(file.path, '.jpg'));
-        }
+        allUris.push(await normalizeToLocalUri(file.path, '.jpg'));
       }
       if (allUris.length === 0) return;
-      const params = allUris.length === 1
+      const params: Record<string, string> = allUris.length === 1
         ? { uri: allUris[0] }
         : { uris: allUris.map(encodeURIComponent).join(',') };
       router.push({ pathname: '/receipt-process', params } as any);
@@ -184,6 +158,18 @@ function RootLayout() {
       .catch(e => console.warn('[auth] hydrate failed', e));
   }, []);
 
+  // Client version gate: ask the server on launch whether this build is too old for the
+  // current backend. A 'hard' result blocks with a store gate; the per-request 426 catcher
+  // (fetch interceptor) covers a floor flipped mid-session. Fail-open — never blocks offline.
+  useEffect(() => {
+    import('../state/versionGate').then(m => m.useVersionGate.getState().checkVersion())
+      .catch(() => { /* fail open */ });
+  }, []);
+
+  // Prod OTA update-on-resume (Phase 3): download warm-published EAS updates and apply them
+  // on a foreground return after a long background. Cold-start applies natively (splash).
+  useAppUpdates();
+
   // Hydrate admin-mode flag and, if the user last left the app in admin
   // mode, route into the admin section immediately. Cheap — the store
   // reads one AsyncStorage key. No-op when the user has never been an
@@ -217,6 +203,10 @@ function RootLayout() {
   };
 
   return (
+    // RNGH gestures (results sheet, swipe queue, admin split) need this at the
+    // APP root — a GestureDetector outside a GestureHandlerRootView throws.
+    // (Some screens used to carry their own root view; one at the top covers all.)
+    <GestureHandlerRootView style={{ flex: 1 }}>
     <KeyboardProvider>
     <PersistQueryClientProvider
       client={queryClient}
@@ -244,6 +234,7 @@ function RootLayout() {
       <OfflineBanner />
       <UsernameGate />
       <LevelUpModal />
+      <UpdateGateModal />
       <Stack
         screenOptions={{
           headerStyle: { backgroundColor: colors.pageBackground },
@@ -297,11 +288,9 @@ function RootLayout() {
             map instead). Declaring headerShown:false HERE (not just inline in
             the screen) is what actually keeps the header from reserving a
             top strip — relying on the screen's inline override alone left an
-            empty header bar pushing the map down (the "black bar at the top").
-            Mirrors receipt/capture, the other full-bleed screen. */}
+            empty header bar pushing the map down (the "black bar at the top"). */}
         <Stack.Screen name="basket/results/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="shopping-list/[id]" options={{ title: t('screens.shoppingList'), headerLeft: () => <ScreenBackButton /> }} />
-        <Stack.Screen name="receipt/capture" options={{ headerShown: false }} />
         <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess'), headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
         <Stack.Screen
@@ -333,6 +322,10 @@ function RootLayout() {
       {/* Top-layer overlay (last child = highest paint order) so it sits above
           the navigator without ever altering its frame. */}
       <EnvBadge />
+      {/* Always-mounted off-screen surface used to burn card-masking boxes
+          into receipt images before upload (the headless receipt queue has
+          no ViewShot of its own). Renders nothing until a redaction runs. */}
+      <MaskRedactionHost />
       <StatusBar style={colorScheme === 'dark' ? 'light' : 'dark'} />
       </View>
     </ThemeProvider>
@@ -340,6 +333,7 @@ function RootLayout() {
     </ShareIntentProvider>
     </PersistQueryClientProvider>
     </KeyboardProvider>
+    </GestureHandlerRootView>
   );
 }
 

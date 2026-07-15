@@ -1,5 +1,11 @@
 import React, { useEffect, useState } from 'react';
-import { View, Text, ActivityIndicator, TouchableOpacity, StyleSheet } from 'react-native';
+import {
+    View,
+    Text,
+    TouchableOpacity,
+    StyleSheet,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../../constants/theme';
@@ -55,7 +61,7 @@ export default function AdminClaimScreen() {
 
             {state === 'loading' && (
                 <>
-                    <ActivityIndicator size="large" color={colors.primary} />
+                    <MaterialProgress size="large" color={colors.primary} />
                     <Text style={[styles.body, { color: colors.textSecondary }]}>
                         Verifying invite…
                     </Text>

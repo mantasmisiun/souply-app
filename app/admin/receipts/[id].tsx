@@ -1,7 +1,15 @@
 import {
-    View, Text, StyleSheet, ScrollView, TouchableOpacity, ActivityIndicator,
-    Alert, Modal, TextInput, Image,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    ScrollView,
+    TouchableOpacity,
+    Alert,
+    Modal,
+    TextInput,
+    Image,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { KeyboardAvoidingView } from 'react-native-keyboard-controller';
 import { useLocalSearchParams, useNavigation } from 'expo-router';
@@ -342,7 +350,7 @@ export default function AdminReceiptDetail() {
     if (loading || !receipt) {
         return (
             <View style={styles.centered}>
-                <ActivityIndicator size="large" color={colors.primary} />
+                <MaterialProgress size="large" color={colors.primary} />
             </View>
         );
     }
@@ -488,7 +496,7 @@ export default function AdminReceiptDetail() {
 
             {actioning && (
                 <View style={styles.actioningOverlay}>
-                    <ActivityIndicator color={colors.onPrimary} />
+                    <MaterialProgress color={colors.onPrimary} />
                 </View>
             )}
 

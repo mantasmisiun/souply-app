@@ -1,18 +1,12 @@
-import {
-    View,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    StyleSheet,
-    ActivityIndicator,
-    Platform,
-} from 'react-native';
+import { View, Text, TextInput, TouchableOpacity, StyleSheet } from 'react-native';
 import MapView from 'react-native-maps';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
 import { useRef, useState, useMemo, useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme, type AppTheme } from '../../../constants/theme';
+import { useTheme, typography, radius, spacing, type AppTheme } from '../../../constants/theme';
+import { MapPickerScaffold } from '../../../components/map/MapPickerScaffold';
+import { GlassIconButton } from '../../../components/GlassIconButton';
 import { setPreset, type PresetKey } from '../../../utils/locationStorage';
 import { geocodeAddress, reverseGeocode } from '../../../utils/nominatim';
 import { tryGpsCoords, VILNIUS_FALLBACK } from '../../../utils/location';
@@ -48,6 +42,7 @@ export default function PresetMapScreen() {
     const [searching, setSearching] = useState(false);
     const [saving, setSaving] = useState(false);
     const [searchError, setSearchError] = useState<string | null>(null);
+    const [mapReady, setMapReady] = useState(false);
 
     const animateTo = (lat: number, lng: number) =>
         mapRef.current?.animateToRegion(
@@ -56,6 +51,7 @@ export default function PresetMapScreen() {
         );
 
     const handleMapReady = useCallback(async () => {
+        setMapReady(true);
         if (hasInitial) return;
         const gps = await tryGpsCoords();
         const target = gps ?? VILNIUS_FALLBACK;
@@ -68,7 +64,10 @@ export default function PresetMapScreen() {
         if (trimmed.length < 3) { setSearchError('Įveskite bent 3 simbolius'); return; }
         setSearching(true);
         setSearchError(null);
-        const result = await geocodeAddress(trimmed);
+        // Bias to where the map is currently looking — street names repeat
+        // across cities ("Vytauto g. 20"), nearest match beats Nominatim's
+        // biggest-city rank.
+        const result = await geocodeAddress(trimmed, centerCoords ?? undefined);
         setSearching(false);
         if (!result) { setSearchError('Adresas nerastas'); return; }
         setCenterCoords({ lat: result.lat, lng: result.lng });
@@ -101,9 +100,10 @@ export default function PresetMapScreen() {
         longitudeDelta: DELTA,
     };
 
-    // ── Editable title — same tap-to-edit pattern as basket [id].tsx ─────────
-    const headerTitle = editingName
-        ? () => (
+    // Tap-to-rename title, now living INSIDE the floating glass chip (same pattern
+    // as basket [id].tsx, restyled for the chip's fixed 40pt height).
+    const titleNode = editingName
+        ? (
             <TextInput
                 ref={nameInputRef}
                 defaultValue={name}
@@ -113,228 +113,76 @@ export default function PresetMapScreen() {
                 placeholder={presetLabel}
                 placeholderTextColor={colors.textMuted}
                 autoFocus
-                style={{
-                    fontSize: 17,
-                    fontWeight: '600',
-                    color: colors.textPrimary,
-                    minWidth: 160,
-                    paddingVertical: 2,
-                    borderBottomWidth: 1,
-                    borderBottomColor: colors.primary,
-                }}
+                style={styles.titleInput}
             />
         )
-        : () => (
+        : (
             <TouchableOpacity onPress={() => setEditingName(true)} activeOpacity={0.6}>
-                <Text style={{ fontSize: 17, fontWeight: '600', color: colors.textPrimary }} numberOfLines={1}>
-                    {name || presetLabel}
-                </Text>
+                <Text style={styles.titleText} numberOfLines={1}>{name || presetLabel}</Text>
             </TouchableOpacity>
         );
 
-    // ── Shared: interactive map with fixed center pin ─────────────────────────
-    const mapBlock = (
-        <View style={styles.mapBlock}>
-            <MapView
-                ref={mapRef}
-                style={StyleSheet.absoluteFillObject}
+    return (
+        <>
+            {/* Full-bleed glass-chrome map (same shell as the store-resolution screen):
+                no native header — the map runs edge to edge, the back chevron + title
+                chip + search float over it in liquid glass. */}
+            <Stack.Screen options={{ headerShown: false }} />
+            <MapPickerScaffold
+                glassChrome
+                headerLeft={
+                    <GlassIconButton icon="chevron-back" glass solid onPress={() => router.back()} size={22} />
+                }
+                titleNode={titleNode}
+                mapRef={mapRef}
                 initialRegion={initialRegion}
                 onMapReady={handleMapReady}
+                mapReady={mapReady}
                 onRegionChangeComplete={r => setCenterCoords({ lat: r.latitude, lng: r.longitude })}
-                showsUserLocation
-                toolbarEnabled={false}
+                searchText={searchText}
+                onSearchTextChange={v => { setSearchText(v); setSearchError(null); }}
+                onSearch={handleSearch}
+                searching={searching}
+                searchError={searchError}
+                searchPlaceholder="Ieškoti adreso..."
+                confirmLabel="Patvirtinti vietą"
+                confirmEnabled={!!centerCoords}
+                confirmAlwaysVisible
+                confirmLoading={saving}
+                onConfirm={handleConfirm}
+                overlay={
+                    <>
+                        <View style={styles.pinWrapper} pointerEvents="none">
+                            <Ionicons name="location" size={44} color={colors.primary} style={styles.pinIcon} />
+                            <View style={styles.pinShadow} />
+                        </View>
+                        {/* Drag hint floats above the confirm pill (the map is full-bleed
+                            now, so bottom:0 would put it under the button/home indicator). */}
+                        <View style={[styles.mapHintBar, { bottom: Math.max(bottomInset, 16) + 64 }]} pointerEvents="none">
+                            <Text style={styles.mapHint}>Vilkite žemėlapį, kad patikslintumėte vietą</Text>
+                        </View>
+                    </>
+                }
             />
-            <View style={styles.pinWrapper} pointerEvents="none">
-                <Ionicons name="location" size={44} color={colors.primary} style={styles.pinIcon} />
-                <View style={styles.pinShadow} />
-            </View>
-            <View style={styles.mapHintBar} pointerEvents="none">
-                <Text style={styles.mapHint}>Vilkite žemėlapį, kad patikslintumėte vietą</Text>
-            </View>
-        </View>
-    );
-
-    // ── Shared: search row ────────────────────────────────────────────────────
-    const searchRow = (inline: boolean) => {
-        const inner = (
-            <View style={[styles.searchInputWrap, !inline && styles.searchInputWrapShadow]}>
-                <TextInput
-                    style={styles.searchInput}
-                    value={searchText}
-                    onChangeText={v => { setSearchText(v); setSearchError(null); }}
-                    placeholder="Ieškoti adreso..."
-                    placeholderTextColor={colors.textMuted}
-                    returnKeyType="search"
-                    onSubmitEditing={handleSearch}
-                />
-                {searching ? (
-                    <ActivityIndicator size="small" color={colors.primary} style={styles.searchIconWrap} />
-                ) : (
-                    <TouchableOpacity onPress={handleSearch} style={styles.searchIconWrap}>
-                        <Ionicons name="search" size={18} color={colors.textSecondary} />
-                    </TouchableOpacity>
-                )}
-            </View>
-        );
-        // Floating (iOS): absolutely positioned overlay over the map
-        // Inline (Android): plain block inside androidForm, full-width
-        return inline
-            ? inner
-            : <View style={styles.searchRowFloating}>{inner}</View>;
-    };
-
-    // ── Shared: confirm panel ─────────────────────────────────────────────────
-    const confirmPanel = (
-        <View style={[styles.bottomPanel, { paddingBottom: Math.max(bottomInset, 16) }]}>
-            <TouchableOpacity
-                style={[styles.confirmBtn, (saving || !centerCoords) && styles.btnDisabled]}
-                onPress={handleConfirm}
-                disabled={saving || !centerCoords}
-            >
-                {saving
-                    ? <ActivityIndicator color={colors.onPrimary} />
-                    : <Text style={styles.confirmBtnText}>Patvirtinti vietą</Text>}
-            </TouchableOpacity>
-        </View>
-    );
-
-    // ── iOS: full-screen map, floating search bar ─────────────────────────────
-    if (Platform.OS === 'ios') {
-        return (
-            <View style={styles.root}>
-                <Stack.Screen options={{
-                    headerTitle,
-                    headerBackTitle: '',
-                    headerTintColor: colors.primary,
-                    headerStyle: { backgroundColor: colors.cardBackground },
-                    headerShadowVisible: false,
-                }} />
-                {mapBlock}
-                {searchRow(false)}
-                {searchError && (
-                    <View style={styles.errorBubble}>
-                        <Text style={styles.errorText}>{searchError}</Text>
-                    </View>
-                )}
-                {confirmPanel}
-            </View>
-        );
-    }
-
-    // ── Android: search form strip above map ──────────────────────────────────
-    return (
-        <View style={[styles.root, { backgroundColor: colors.pageBackground }]}>
-            <Stack.Screen options={{
-                headerTitle,
-                headerTintColor: colors.primary,
-                headerStyle: { backgroundColor: colors.cardBackground },
-                headerShadowVisible: false,
-            }} />
-            <View style={styles.androidForm}>
-                {searchRow(true)}
-                {searchError && <Text style={styles.errorTextInline}>{searchError}</Text>}
-            </View>
-            {mapBlock}
-            {confirmPanel}
-        </View>
+        </>
     );
 }
 
 const makeStyles = (c: AppTheme) =>
     StyleSheet.create({
-        root: { flex: 1 },
-
-        // ── Map block ────────────────────────────────────────────────────────
-        mapBlock: { flex: 1, overflow: 'hidden' },
-        pinWrapper: {
-            ...StyleSheet.absoluteFillObject,
-            alignItems: 'center',
-            justifyContent: 'center',
-        },
+        pinWrapper: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
         pinIcon: { marginTop: -22 },
-        pinShadow: {
-            width: 10,
-            height: 5,
-            borderRadius: 5,
-            backgroundColor: 'rgba(0,0,0,0.18)',
-            marginTop: -6,
-        },
+        pinShadow: { width: 10, height: 5, borderRadius: 5, backgroundColor: 'rgba(0,0,0,0.18)', marginTop: -6 },
         mapHintBar: {
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            paddingVertical: 6,
-            alignItems: 'center',
-            backgroundColor: 'rgba(0,0,0,0.22)',
+            position: 'absolute', alignSelf: 'center',
+            paddingVertical: 6, paddingHorizontal: spacing.lg,
+            borderRadius: radius.pill, backgroundColor: 'rgba(0,0,0,0.35)',
         },
         mapHint: { fontSize: 12, color: '#fff' },
-
-        // ── iOS floating search row ──────────────────────────────────────────
-        searchRowFloating: {
-            position: 'absolute',
-            top: 12,
-            left: 12,
-            right: 12,
-            flexDirection: 'row',
-            alignItems: 'center',
-            gap: 8,
-            zIndex: 10,
+        titleText: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
+        titleInput: {
+            ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary,
+            minWidth: 140, paddingVertical: 0,
+            borderBottomWidth: 1, borderBottomColor: c.primary,
         },
-        errorBubble: {
-            position: 'absolute',
-            top: 66,
-            left: 12,
-            right: 12,
-            backgroundColor: c.error,
-            borderRadius: 10,
-            paddingHorizontal: 14,
-            paddingVertical: 8,
-            zIndex: 11,
-        },
-        errorText: { fontSize: 13, color: '#fff', fontWeight: '500' },
-
-        androidForm: {
-            paddingHorizontal: 12,
-            paddingVertical: 10,
-            backgroundColor: c.cardBackground,
-            borderBottomWidth: StyleSheet.hairlineWidth,
-            borderBottomColor: c.border,
-        },
-        errorTextInline: { fontSize: 12, color: c.error, marginTop: 4 },
-
-        // ── Shared search input ──────────────────────────────────────────────
-        searchInputWrap: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            height: 44,
-            backgroundColor: c.cardBackground,
-            borderRadius: 12,
-            paddingHorizontal: 12,
-        },
-        searchInputWrapShadow: {
-            shadowColor: '#000',
-            shadowOffset: { width: 0, height: 2 },
-            shadowOpacity: 0.14,
-            shadowRadius: 6,
-            elevation: 4,
-        },
-        searchInput: { flex: 1, fontSize: 15, color: c.textPrimary },
-        searchIconWrap: { paddingLeft: 6 },
-        // ── Bottom confirm panel ─────────────────────────────────────────────
-        bottomPanel: {
-            backgroundColor: c.cardBackground,
-            borderTopWidth: StyleSheet.hairlineWidth,
-            borderTopColor: c.border,
-            paddingHorizontal: 16,
-            paddingTop: 12,
-        },
-        confirmBtn: {
-            backgroundColor: c.primary,
-            borderRadius: 14,
-            paddingVertical: 15,
-            alignItems: 'center',
-        },
-        btnDisabled: { opacity: 0.5 },
-        confirmBtnText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
     });

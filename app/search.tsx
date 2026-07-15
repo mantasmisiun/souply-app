@@ -1,7 +1,15 @@
-import { Ionicons } from "@expo/vector-icons";
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import {
+    Ionicons } from "@expo/vector-icons";
+import { Stack,
+    useFocusEffect,
+    useLocalSearchParams,
+    useRouter } from "expo-router";
 import { GlassIconButton } from "../components/GlassIconButton";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback,
+    useEffect,
+    useMemo,
+    useRef,
+    useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
     ActivityIndicator,
@@ -14,20 +22,22 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { API_BASE_URL } from "../config/api";
 import { useReceiptPickerState , useBasketState } from "../state/basketState";
 import { addProductToBasket } from '../utils/basketUtils';
-import BasketProductCard from '../components/browse/BasketProductCard';
+import BasketProductCard, { type UnitPriceBadge } from '../components/browse/BasketProductCard';
 import { TemplateReturnBanner } from '../components/template/TemplateReturnBanner';
 import { useTemplateAddState } from '../state/templateAddState';
 import { ProductImage } from "../components/ProductImage";
 import CreateStoreProductModal, {
   CreatedStoreProductPayload,
 } from "../components/receipt/CreateStoreProductModal";
-import { useTheme, type AppTheme } from "../constants/theme";
+import { useTheme, radius, elevation, type AppTheme } from "../constants/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import AmountPickerModal from '../components/AmountPickerModal';
-import { resolveCanonicalStep } from '../utils/canonicalStep';
+import { Toast, type ToastHandle } from '../components/Toast';
+import { resolveCanonicalStep, resolveDisplayUnit } from '../utils/canonicalStep';
 
 // Pick the first URL from the API's imageUrls (string | array | null) for
 // places that only support a single imageUrl field (e.g. pendingPick).
@@ -64,6 +74,7 @@ interface ProductRow {
   canonicalStep?: number | null;
   canonicalFamily?: 'fluid' | 'count' | null;
   hasWeighable?: number | boolean;
+  badge?: UnitPriceBadge | null;
 }
 
 interface StoreProductRow {
@@ -140,7 +151,63 @@ export default function SearchScreen() {
         typeof params.ocrName === "string" ? params.ocrName : "",
     ).trim();
     const [createModalVisible, setCreateModalVisible] = useState(false);
-    const [amountModal, setAmountModal] = useState<{ visible: boolean; product: ProductRow | null }>({ visible: false, product: null });
+    const [amountModal, setAmountModal] = useState<{ visible: boolean; product: ProductRow | null; editQty?: number | null }>({ visible: false, product: null });
+    const [basketItemCount, setBasketItemCount] = useState(0);
+    const toastRef = useRef<ToastHandle>(null);
+
+    // BROWSE PARITY: hydrate quantities from the draft basket on every focus.
+    // Without this, products already in the basket rendered the "Add" CTA here,
+    // and re-adding 409'd ("already in basket") into a SILENT rollback — the
+    // "can't add milk at all" report. Also drives the bottom basket bar count.
+    // initDraftBasket first: after a JS reload (OTA restart) the zustand store
+    // is empty even though a server-side draft exists — recover it like browse
+    // does, otherwise every in-basket product renders "Add" and re-adding 409s.
+    const hydrateBasket = useCallback(async () => {
+        try {
+            if (!useBasketState.getState().draftBasketId) {
+                await useBasketState.getState().initDraftBasket();
+            }
+            const currentDraftId = useBasketState.getState().draftBasketId;
+            if (!currentDraftId) {
+                setBasketQuantities({});
+                setBasketItemCount(0);
+                return;
+            }
+            const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
+            const items = await res.json();
+            if (!Array.isArray(items)) return;
+            const quantities: { [productId: number]: number } = {};
+            items.forEach((item: any) => { quantities[item.productId] = parseFloat(item.quantity); });
+            setBasketQuantities(quantities);
+            setBasketItemCount(items.filter((i: any) => parseFloat(i.quantity) > 0).length);
+        } catch {}
+    }, []);
+    useFocusEffect(useCallback(() => { void hydrateBasket(); }, [hydrateBasket]));
+
+    // Absolute quantity set for an already-added product — used by the amount
+    // picker's edit-reopen (tap the quantity on a card). Same server sync as
+    // the per-card syncQty stepper.
+    const setBasketQtyAbsolute = useCallback(async (productId: number, newQty: number) => {
+        setBasketQuantities(prev => ({ ...prev, [productId]: Math.max(0, newQty) }));
+        try {
+            const currentDraftId = useBasketState.getState().draftBasketId;
+            if (!currentDraftId) return;
+            const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
+            const items = await res.json();
+            const basketItem = items.find((i: any) => i.productId === productId);
+            if (!basketItem) return;
+            if (newQty <= 0) {
+                await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
+                setBasketItemCount(prev => Math.max(0, prev - 1));
+                return;
+            }
+            await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quantity: newQty }),
+            });
+        } catch {}
+    }, []);
     const [query, setQuery] = useState("");
     const [searching, setSearching] = useState(false);
     const [inputKey, setInputKey] = useState(0);
@@ -516,11 +583,12 @@ export default function SearchScreen() {
       )}
       <View style={styles.container}>
         {searching ? (
-          <ActivityIndicator
-            style={styles.centered}
-            size="large"
-            color={colors.primary}
-          />
+          // Centering must live on a WRAPPER: styles.centered on the spinner
+          // itself stretches the native view full-screen while the drawable
+          // renders at its own size in the top-left corner.
+          <View style={styles.centered}>
+            <MaterialProgress size="large" color={colors.primary} />
+          </View>
         ) : effectiveMode === "store-products" ? (
           <FlatList<StoreGridItem>
             key="store-products-search-grid"
@@ -579,6 +647,7 @@ const quantity = basketQuantities[item.id] ?? 0;
                     if (newQty <= 0) {
                         if (basketItem) {
                         await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
+                        setBasketItemCount(prev => Math.max(0, prev - 1));
                         }
                         return;
                     }
@@ -606,6 +675,7 @@ const quantity = basketQuantities[item.id] ?? 0;
                     name={item.name}
                     imageUrls={item.imageUrls}
                     chainLogos={item.chainLogos}
+                    badge={item.badge}
                     amountText={amountText}
                     quantity={cardQty}
                     addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
@@ -627,7 +697,15 @@ const quantity = basketQuantities[item.id] ?? 0;
                         }
                         setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
                         addProductToBasket(item.id, draftBasketId, setDraftBasketId, qty).then(result => {
-                            if (!result.success) setBasketQuantities(prev => { const next = { ...prev }; delete next[item.id]; return next; });
+                            if (!result.success) {
+                                // Adopt server truth instead of rolling back to "Add" —
+                                // a 409 means the product IS in the basket; show its real qty.
+                                void hydrateBasket();
+                                toastRef.current?.show(result.message);
+                            } else {
+                                setBasketItemCount(prev => prev + 1);
+                                toastRef.current?.show(t('browse.addedToast'));
+                            }
                         });
                     }}
                     onDec={() => {
@@ -648,12 +726,31 @@ const quantity = basketQuantities[item.id] ?? 0;
                         }
                         syncQty(Number((quantity + 1).toFixed(1)));
                     }}
+                    onQuantityPress={() => setAmountModal({ visible: true, product: item, editQty: cardQty })}
+                    quantityUnit={resolveDisplayUnit(item)}
                     />
                 );
                 }}
           />
         )}
       </View>
+      {/* Bottom basket bar — browse parity: live item count + jump to basket. */}
+      {!isTemplateMode && basketItemCount > 0 && draftBasketId && (
+          <View style={[styles.basketBar, { paddingBottom: Math.max(12, insets.bottom) }]}>
+              <View style={styles.basketBarLeft}>
+                  <Ionicons name="cart" size={20} color={colors.primary} />
+                  <Text style={styles.basketBarCount}>{t('items.count', { count: basketItemCount })}</Text>
+              </View>
+              <TouchableOpacity
+                  style={styles.basketBarButton}
+                  activeOpacity={0.85}
+                  onPress={() => router.push(`/basket/${draftBasketId}` as any)}
+              >
+                  <Text style={styles.basketBarButtonText}>{t('browse.basketShortcut')}</Text>
+                  <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
+              </TouchableOpacity>
+          </View>
+      )}
       <AmountPickerModal
         visible={amountModal.visible}
         productName={amountModal.product?.name ?? ''}
@@ -664,10 +761,17 @@ const quantity = basketQuantities[item.id] ?? 0;
         maxAmount={amountModal.product?.maxAmount ?? 0}
         unit={amountModal.product?.unit ?? 'g'}
         isWeighable={!!amountModal.product?.hasWeighable}
+        initialAmount={amountModal.editQty ?? null}
         onCancel={() => setAmountModal({ visible: false, product: null })}
         onConfirm={async (amount) => {
           const product = amountModal.product!;
+          const isEdit = amountModal.editQty != null;
           setAmountModal({ visible: false, product: null });
+          if (!isTemplateMode && isEdit) {
+            // Edit-reopen: SET the amount on the existing basket row.
+            await setBasketQtyAbsolute(product.id, amount);
+            return;
+          }
           if (isTemplateMode && templateIdNum != null) {
             try {
               // Picker = set-absolute; override existing row rather than
@@ -683,7 +787,14 @@ const quantity = basketQuantities[item.id] ?? 0;
           }
           setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
           const result = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, amount);
-          if (!result.success) setBasketQuantities(prev => { const next = { ...prev }; delete next[product.id]; return next; });
+          if (!result.success) {
+              void hydrateBasket();
+              toastRef.current?.show(result.message);
+          } else {
+              setBasketItemCount(prev => prev + 1);
+              toastRef.current?.show(t('browse.addedToast'));
+          }
+
         }}
       />
       {isTemplateMode && templateIdNum != null && (
@@ -712,11 +823,35 @@ const quantity = basketQuantities[item.id] ?? 0;
           closeAfterReceiptPick();
         }}
       />
+      <Toast ref={toastRef} />
     </>
   );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
+    basketBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingTop: 12,
+        backgroundColor: c.cardBackground,
+        borderTopLeftRadius: radius.lg,
+        borderTopRightRadius: radius.lg,
+        ...elevation.level3,
+        gap: 12,
+    },
+    basketBarLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+    basketBarCount: { fontSize: 14, fontWeight: '600', color: c.primary },
+    basketBarButton: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+        backgroundColor: c.primary,
+        paddingVertical: 10,
+        paddingHorizontal: 16,
+        borderRadius: radius.pill,
+    },
+    basketBarButtonText: { fontSize: 14, fontWeight: '700', color: c.onPrimary },
   container: { flex: 1, backgroundColor: c.pageBackground },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   searchInput: { fontSize: 16, flex: 1, color: c.textPrimary },

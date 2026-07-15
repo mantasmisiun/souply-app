@@ -6,7 +6,7 @@ import Constants from 'expo-constants';
  *
  *   dev      — Metro / `expo run` (local) OR the EAS `android-dev`/`ios-dev`
  *              variant (APP_VARIANT=dev)
- *   staging  — EAS `staging` variant (APP_VARIANT=staging) → api.souply.manofoto
+ *   staging  — EAS `staging` variant (APP_VARIANT=staging) → souply-api.manofoto
  *   prod     — everything else (release builds, no APP_VARIANT) → api.souply.lt
  */
 export type AppEnv = 'dev' | 'staging' | 'prod';

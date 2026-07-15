@@ -1,8 +1,16 @@
-import { View, ActivityIndicator, StyleSheet } from 'react-native';
-import { useLocalSearchParams, useFocusEffect } from 'expo-router';
-import { useState, useCallback, useMemo, useEffect } from 'react';
+import {
+    View,
+    Text,
+    Modal,
+    TouchableOpacity,
+    StyleSheet,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
+import { useLocalSearchParams, useFocusEffect, useRouter } from 'expo-router';
+import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useTheme } from '../../constants/theme';
+import { useTheme, spacing, radius, typography, elevation, type AppTheme } from '../../constants/theme';
 import { ShoppingListDetail } from '../../components/ShoppingListDetail';
 import { StoreChipBar } from '../../components/StoreChipBar';
 import { getMiniLogoUrl, chainBrandName } from '../../utils/chainBrandName';
@@ -26,10 +34,19 @@ export default function UnifiedShoppingListScreen() {
         expectedCount?: string;
     }>();
 
+    const router = useRouter();
+    const { t } = useTranslation();
     const [entries, setEntries] = useState<SplitListEntry[]>([]);
     const [entriesLoaded, setEntriesLoaded] = useState(!basketId);
     const [activeListId, setActiveListId] = useState(parseInt(id));
     const [listSummaries, setListSummaries] = useState<Map<number, { itemCount: number; checkedCount: number }>>(new Map());
+    // Whole-trip completion confirm (shown only when EVERY store's items are
+    // checked). One-shot per basket, persisted like the single-list prompt.
+    const [tripCompleteModal, setTripCompleteModal] = useState(false);
+    const tripPromptClaimedRef = useRef(false);
+    // Silent advance-to-next-store: once per list, so unticking/reticking an
+    // item can't bounce the user between stores.
+    const advancedRef = useRef<Set<number>>(new Set());
 
     // Load split basket entries from AsyncStorage (very fast local read)
     useEffect(() => {
@@ -101,14 +118,80 @@ export default function UnifiedShoppingListScreen() {
         [isMulti, entries]
     );
 
+    // Live per-list progress from the mounted detail (load + every toggle).
+    // True while the child's search/add input is focused (see the advance effect).
+    const searchActiveRef = useRef(false);
+    const handleSearchActiveChange = useCallback((active: boolean) => {
+        searchActiveRef.current = active;
+    }, []);
+
+    const handleItemsProgress = useCallback((listId: number, checkedCount: number, itemCount: number) => {
+        setListSummaries(prev => {
+            const cur = prev.get(listId);
+            if (cur && cur.checkedCount === checkedCount && cur.itemCount === itemCount) return prev;
+            const next = new Map(prev);
+            next.set(listId, { itemCount, checkedCount });
+            return next;
+        });
+    }, []);
+
+    const fullyChecked = (s?: { itemCount: number; checkedCount: number }) =>
+        s != null && s.itemCount > 0 && s.checkedCount >= s.itemCount;
+
+    // React to progress: advance to the next unfinished store when the ACTIVE
+    // one finishes (silent, once per list), and prompt the whole-trip
+    // completion only when EVERY store is fully checked.
+    useEffect(() => {
+        if (!isMulti || entries.length === 0) return;
+        // HOLD while the child's search input is focused: setActiveListId
+        // remounts the keyed detail, destroying the focused TextInput —
+        // Android closes the IME session ("keyboard hides while typing",
+        // ImeTracker: HIDE_SOFT_INPUT_CLOSE_CURRENT_SESSION fromUser=false).
+        // The next summaries tick (3s sync) re-runs this after blur.
+        if (searchActiveRef.current) return;
+        const active = listSummaries.get(activeListId);
+        const allDone = entries.every(e => fullyChecked(listSummaries.get(e.listId)));
+        if (allDone) {
+            if (tripPromptClaimedRef.current) return;
+            tripPromptClaimedRef.current = true;
+            (async () => {
+                const key = `sl_prompted_basket_${basketId}`;
+                const already = await AsyncStorage.getItem(key);
+                if (already === '1') return;
+                await AsyncStorage.setItem(key, '1');
+                setTripCompleteModal(true);
+            })();
+            return;
+        }
+        if (fullyChecked(active) && !advancedRef.current.has(activeListId)) {
+            advancedRef.current.add(activeListId);
+            const next = entries.find(e => e.listId !== activeListId && !fullyChecked(listSummaries.get(e.listId)));
+            if (next) setActiveListId(next.listId);
+        }
+         
+    }, [listSummaries, activeListId, entries, isMulti, basketId]);
+
     // Brief loading state only when basketId is provided and entries haven't loaded yet
     if (!entriesLoaded) {
         return (
             <View style={styles.centered}>
-                <ActivityIndicator color={colors.primary} />
+                <MaterialProgress color={colors.primary} />
             </View>
         );
     }
+
+    // Confirm: mark EVERY store's sub-list completed, then leave.
+    const completeWholeTrip = async () => {
+        setTripCompleteModal(false);
+        await Promise.all(entries.map(e =>
+            fetch(`${API_BASE_URL}/api/shopping-lists/${e.listId}/status`, {
+                method: 'PATCH',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: 'completed' }),
+            }).catch(() => {}),
+        ));
+        router.back();
+    };
 
     return (
         <View style={{ flex: 1 }}>
@@ -117,6 +200,8 @@ export default function UnifiedShoppingListScreen() {
                 listId={activeListId}
                 expectedCount={expectedCount ? parseInt(expectedCount) : undefined}
                 isPartOfBasket={isMulti}
+                onItemsProgress={isMulti ? handleItemsProgress : undefined}
+                onSearchActiveChange={isMulti ? handleSearchActiveChange : undefined}
                 headerTitle={storeNames}
                 headerSubtitle={storeAddresses}
                 pinnedHeader={isMulti ? (
@@ -127,10 +212,42 @@ export default function UnifiedShoppingListScreen() {
                     />
                 ) : undefined}
             />
+
+            {/* Whole-trip completion confirm — every store's items are checked. */}
+            <Modal visible={tripCompleteModal} transparent animationType="fade" onRequestClose={() => setTripCompleteModal(false)}>
+                <View style={mStyles(colors).overlay}>
+                    <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setTripCompleteModal(false)} />
+                    <View style={mStyles(colors).card}>
+                        <Text style={mStyles(colors).title}>{t('shoppingListDetail.completeTitle')}</Text>
+                        <Text style={mStyles(colors).body}>{t('shoppingListDetail.completeConfirm')}</Text>
+                        <View style={mStyles(colors).buttons}>
+                            <TouchableOpacity style={mStyles(colors).cancel} onPress={() => setTripCompleteModal(false)}>
+                                <Text style={mStyles(colors).cancelText}>{t('shoppingListDetail.completeNo')}</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={mStyles(colors).confirm} onPress={completeWholeTrip}>
+                                <Text style={mStyles(colors).confirmText}>{t('shoppingListDetail.completeYes')}</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
         </View>
     );
 }
 
 const styles = StyleSheet.create({
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+});
+
+// Trip-completion modal styles — mirrors ShoppingListDetail's completion modal.
+const mStyles = (c: AppTheme) => StyleSheet.create({
+    overlay: { flex: 1, backgroundColor: c.overlayBackdrop, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
+    card: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: spacing.xl, width: '100%', maxWidth: 360, ...elevation.level3 },
+    title: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary, marginBottom: spacing.sm },
+    body: { ...typography.bodySmall, color: c.textSecondary, marginBottom: spacing.xl },
+    buttons: { flexDirection: 'row', justifyContent: 'flex-end', gap: spacing.md },
+    cancel: { paddingVertical: spacing.sm, paddingHorizontal: spacing.lg },
+    cancelText: { ...typography.body, color: c.textSecondary },
+    confirm: { backgroundColor: c.primary, borderRadius: radius.pill, paddingVertical: spacing.sm, paddingHorizontal: spacing.lg },
+    confirmText: { ...typography.body, color: c.onPrimary, fontWeight: '600' },
 });

@@ -1,14 +1,26 @@
 import {
-    View, Text, FlatList, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator,
-    Alert, TextInput, RefreshControl, Switch, Modal, Pressable,
-} from 'react-native';
+    View,
+    Text,
+    FlatList,
+    ScrollView,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    TextInput,
+    RefreshControl,
+    Switch,
+    Modal,
+    Pressable,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
 import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
+import ProductLineCard from '../../components/ProductLineCard';
 import { TemplateCoverEditor } from '../../components/TemplateCoverEditor';
 import { coverEmoji } from '../../utils/templateCover';
 import { isWeighableDisplay } from '../../utils/weighable';
@@ -407,10 +419,19 @@ export default function TemplateDetailScreen() {
                                     value={template.autoUpdate === 1}
                                     onValueChange={toggleLearning}
                                     trackColor={{ false: colors.border, true: colors.primary }}
-                                    thumbColor={colors.cardBackground}
+                                    thumbColor={colors.onPrimary}
                                 />
                             </View>
-                        ) : null
+                        ) : (
+                            <TouchableOpacity
+                                style={styles.addItemBtn}
+                                onPress={() => router.push(`/template-add/${template.id}` as any)}
+                                activeOpacity={0.7}
+                            >
+                                <Ionicons name="add" size={18} color={colors.primary} />
+                                <Text style={styles.addItemBtnText}>{t('basketTab.templates.addItemTitle')}</Text>
+                            </TouchableOpacity>
+                        )
                     }
                     ListEmptyComponent={
                         <View style={styles.centered}>
@@ -431,101 +452,47 @@ export default function TemplateDetailScreen() {
                         const qty = qtyInputs[item.id] ?? fallbackQty;
                         const step = isWeighable ? 0.1 : 1;
                         return (
-                            <View style={styles.card}>
-                                <ProductImage
-                                    uris={item.imageUrls}
-                                    imageStyle={styles.productImage}
-                                    placeholderStyle={styles.productImagePlaceholder}
-                                    emojiStyle={styles.productImageEmoji}
-                                />
-                                <View style={styles.cardContent}>
-                                    <Text style={styles.itemName} numberOfLines={2}>{item.productName}</Text>
-                                    {isDefault ? (
-                                        <Text style={styles.readonlyQty}>
-                                            {fallbackQty} {isWeighable ? 'kg' : 'vnt.'}
-                                        </Text>
-                                    ) : (
-                                    <View style={styles.controls}>
-                                        <TouchableOpacity
-                                            style={styles.controlButton}
-                                            onPress={() => setQty(item.id, Number(item.quantity) - step)}
-                                        >
-                                            <Ionicons name="remove" size={18} color={colors.primary} />
-                                        </TouchableOpacity>
-                                        {/* Wrapper owns the visual border so the
-                                            Android system TextInput can't draw its
-                                            ~2 pt accent underline on top — that
-                                            underline isn't always killable via
-                                            `underlineColorAndroid` on the new
-                                            architecture / Fabric. */}
-                                        <View style={styles.quantityInputBox}>
-                                            <TextInput
-                                                style={styles.quantityInput}
-                                                value={qty}
-                                                onChangeText={v => {
-                                                    // Piece items: digits only.
-                                                    // Weighable: digits + one
-                                                    // decimal separator with ≤ 1
-                                                    // digit after it.
-                                                    if (isWeighable) {
-                                                        if (!/^[0-9]*[.,]?[0-9]?$/.test(v)) return;
-                                                    } else {
-                                                        if (/[^0-9]/.test(v)) return;
-                                                    }
-                                                    setQtyInputs(p => ({ ...p, [item.id]: v }));
-                                                }}
-                                                onEndEditing={e => {
-                                                    const txt = e.nativeEvent.text.replace(',', '.');
-                                                    const val = isWeighable ? parseFloat(txt) : parseInt(txt, 10);
-                                                    if (!val || val <= 0) removeItem(item.id);
-                                                    else setQty(item.id, val);
-                                                    setQtyInputs(p => { const c = { ...p }; delete c[item.id]; return c; });
-                                                }}
-                                                keyboardType={isWeighable ? 'decimal-pad' : 'number-pad'}
-                                                selectTextOnFocus
-                                                underlineColorAndroid="transparent"
-                                            />
-                                        </View>
-                                        <Text style={styles.unitLabel}>
-                                            {isWeighable ? 'kg' : 'vnt.'}
-                                        </Text>
-                                        <TouchableOpacity
-                                            style={styles.controlButton}
-                                            onPress={() => setQty(item.id, Number(item.quantity) + step)}
-                                        >
-                                            <Ionicons name="add" size={18} color={colors.primary} />
-                                        </TouchableOpacity>
-                                    </View>
-                                    )}
-                                </View>
-                                {!isDefault && (
-                                    <TouchableOpacity style={styles.removeButton} onPress={() => removeItem(item.id)}>
-                                        <Ionicons name="trash-outline" size={20} color={colors.error} />
-                                    </TouchableOpacity>
-                                )}
-                            </View>
+                            <ProductLineCard
+                                name={item.productName}
+                                imageUrls={item.imageUrls}
+                                readOnly={isDefault}
+                                readOnlyQtyText={`${fallbackQty} ${isWeighable ? 'kg' : 'vnt.'}`}
+                                quantityText={qty}
+                                unit={isWeighable ? 'kg' : 'vnt.'}
+                                weighable={isWeighable}
+                                onChangeQuantity={(v) => {
+                                    // Piece items: digits only. Weighable: digits +
+                                    // one decimal separator with <= 1 digit after it.
+                                    if (isWeighable) {
+                                        if (!/^[0-9]*[.,]?[0-9]?$/.test(v)) return;
+                                    } else {
+                                        if (/[^0-9]/.test(v)) return;
+                                    }
+                                    setQtyInputs(p => ({ ...p, [item.id]: v }));
+                                }}
+                                onCommitQuantity={(text) => {
+                                    const txt = text.replace(',', '.');
+                                    const val = isWeighable ? parseFloat(txt) : parseInt(txt, 10);
+                                    if (!val || val <= 0) removeItem(item.id);
+                                    else setQty(item.id, val);
+                                    setQtyInputs(p => { const c = { ...p }; delete c[item.id]; return c; });
+                                }}
+                                onDecrement={() => setQty(item.id, Number(item.quantity) - step)}
+                                onIncrement={() => setQty(item.id, Number(item.quantity) + step)}
+                                onRemove={() => removeItem(item.id)}
+                            />
                         );
                     }}
                 />
 
                 <View style={styles.footer}>
-                    {/* The auto template is read-only — no adding items. */}
-                    {!isDefault && (
-                        <TouchableOpacity
-                            style={styles.addItemBtn}
-                            onPress={() => router.push(`/template-add/${template.id}` as any)}
-                        >
-                            <Ionicons name="add" size={18} color={colors.primary} />
-                            <Text style={styles.addItemBtnText}>{t('basketTab.templates.addItemTitle')}</Text>
-                        </TouchableOpacity>
-                    )}
                     <TouchableOpacity
                         style={[styles.cta, (instantiating || template.items.length === 0) && styles.ctaDisabled]}
                         onPress={handleInstantiate}
                         disabled={instantiating || template.items.length === 0}
                     >
                         {instantiating
-                            ? <ActivityIndicator color={colors.onPrimary} />
+                            ? <MaterialProgress color={colors.onPrimary} />
                             : <Text style={styles.ctaText}>{t('basketTab.templates.instantiateCta')}</Text>}
                     </TouchableOpacity>
                 </View>
@@ -729,7 +696,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     metricLabel: { fontSize: 12, color: c.textSecondary, marginTop: 4, textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: '600' },
     statsCard: {
         backgroundColor: c.cardBackground, borderRadius: 16, padding: 18,
-        gap: 12, borderLeftWidth: 4, borderLeftColor: c.primary,
+        gap: 12, borderWidth: 4, borderColor: 'transparent', borderLeftColor: c.primary,
     },
     statsTitle: { fontSize: 18, fontWeight: '700', color: c.textPrimary },
     statsIntro: { fontSize: 14, color: c.textSecondary, lineHeight: 20 },
@@ -749,12 +716,13 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // ── Item card ─────────────────────────────────────────────────────────
     card: {
         flexDirection: 'row', alignItems: 'center',
-        backgroundColor: c.cardBackground, borderRadius: 12,
+        backgroundColor: c.cardBackground, borderRadius: radius.lg,
         padding: 12, marginBottom: 8, gap: 12,
+        ...elevation.level1,
     },
-    productImage: { width: 44, height: 44, borderRadius: 8 },
+    productImage: { width: 44, height: 44, borderRadius: radius.md },
     productImagePlaceholder: {
-        width: 44, height: 44, borderRadius: 8,
+        width: 44, height: 44, borderRadius: radius.md,
         backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center',
     },
     productImageEmoji: { fontSize: 24, opacity: 0.5 },
@@ -764,7 +732,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         flexDirection: 'row', alignItems: 'center', gap: 8,
     },
     controlButton: {
-        width: 28, height: 28, borderRadius: 6,
+        width: 28, height: 28, borderRadius: radius.md,
         alignItems: 'center', justifyContent: 'center',
         backgroundColor: c.primaryMuted,
     },
@@ -772,7 +740,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // is borderless so the Android system underline has nothing to draw
     // against and can't bleed through.
     quantityInputBox: {
-        minWidth: 48, borderWidth: 1, borderColor: c.border, borderRadius: 6,
+        minWidth: 48, borderWidth: 1, borderColor: c.border, borderRadius: radius.md,
         overflow: 'hidden', backgroundColor: c.cardBackground,
     },
     quantityInput: {
@@ -793,16 +761,18 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     footer: {
         padding: 12, gap: 8,
         backgroundColor: c.cardBackground,
-        borderTopWidth: 0.5, borderTopColor: c.border,
+        borderTopLeftRadius: radius.lg,
+        borderTopRightRadius: radius.lg,
+        ...elevation.level3,
     },
     addItemBtn: {
         flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        gap: 6, paddingVertical: 12, borderRadius: 10,
+        gap: 6, paddingVertical: 12, borderRadius: radius.lg, marginBottom: 12,
         borderWidth: 1, borderColor: c.primary, borderStyle: 'dashed',
     },
     addItemBtnText: { fontSize: 14, fontWeight: '600', color: c.primary },
     cta: {
-        paddingVertical: 14, borderRadius: 10,
+        paddingVertical: 14, borderRadius: radius.pill,
         backgroundColor: c.primary, alignItems: 'center',
     },
     ctaDisabled: { backgroundColor: c.border },

@@ -50,3 +50,17 @@ app-example
 # generated native folders
 /ios
 /android
+
+# Local build outputs — huge, never needed on the EAS worker. (.easignore
+# REPLACES .gitignore for uploads, so these must be listed here too.)
+builds/
+*.apk
+*.aab
+*.ipa
+
+# Synced test corpus — the app reaches it via the dev API server at runtime;
+# Metro only bundles shared/parsers + shared/*.ts. 64MB of dead upload weight.
+shared/receipts/
+
+# Store listing assets — not part of any build.
+documentation/

@@ -852,10 +852,36 @@ export interface QueueCounts {
     uncategorised: number;
     images: number;
     amounts: number;
+    failedReceipts: number;
 }
 
 export async function getQueueCounts(): Promise<QueueCounts> {
     const res = await adminFetch('/api/admin/queue/counts');
     if (!res.ok) throw new Error(`counts ${res.status}`);
     return res.json();
+}
+
+export interface FailedReceiptRow {
+    id: number;
+    userId: string | null;
+    failReason: string;
+    environment: string;
+    ocrLineCount: number | null;
+    ocrPreview: string | null;
+    detectedChainName: string | null;
+    extractedStoreAddress: string | null;
+    failedBucketPath: string | null;
+    shoppingListId: number | null;
+    parsedData: string | null;
+    status: string;
+    createdAt: string;
+}
+export async function getFailedReceipts(status: 'new' | 'resolved' = 'new'): Promise<FailedReceiptRow[]> {
+    const res = await adminFetch(`/api/admin/failed-receipts?status=${status}`);
+    if (!res.ok) throw new Error(`failed-receipts ${res.status}`);
+    return res.json();
+}
+export async function resolveFailedReceipt(id: number): Promise<void> {
+    const res = await adminFetch(`/api/admin/failed-receipts/${id}/resolve`, { method: 'POST' });
+    if (!res.ok) throw new Error(`resolve failed-receipt ${res.status}`);
 }

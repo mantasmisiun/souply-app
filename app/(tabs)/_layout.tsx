@@ -2,7 +2,7 @@ import { Tabs } from 'expo-router';
 import { NativeTabs, Icon, Label, Badge } from 'expo-router/unstable-native-tabs';
 import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
-import { Component, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Platform, View, Text, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
@@ -10,6 +10,9 @@ import { getUserId } from '../../config/user';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { useProfileStore } from '../../state/profileStore';
 import { HapticTab } from '../../components/haptic-tab';
+import { countAwaitingReceiptGroups } from '../../utils/awaitingReceipts';
+import { FloatingPillTabBar } from '../../components/FloatingPillTabBar';
+import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { devLog } from '../../utils/devLog';
 
 class NativeTabsBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { hasError: boolean }> {
@@ -59,14 +62,17 @@ export default function TabLayout() {
                 ? baskets.filter((b: any) => b.status !== 'completed').length
                 : 0
             );
-            setListCount(Array.isArray(lists)
+            // List badge = active list groups + completed groups still
+            // awaiting a receipt (both grouped by basket so a split counts once).
+            const activeGroups = Array.isArray(lists)
                 ? new Set(
                     lists
                         .filter((l: any) => l.status === 'active')
                         .map((l: any) => l.basketId != null ? `b-${l.basketId}` : `l-${l.id}`)
                 ).size
-                : 0
-            );
+                : 0;
+            const awaitingGroups = Array.isArray(lists) ? countAwaitingReceiptGroups(lists) : 0;
+            setListCount(activeGroups + awaitingGroups);
             setPendingSwipeCount(profile?.pendingSwipeCount ?? (profile?.pendingSwipes ? 1 : 0));
         } catch (error) {
             console.error('Failed to fetch counts:', error);
@@ -83,10 +89,14 @@ export default function TabLayout() {
         useProfileStore.getState().fetchProfile();
     }, []);
 
+    const renderTabBar = useCallback((props: BottomTabBarProps) => <FloatingPillTabBar {...props} />, []);
+
     const jsTabs = (
         <Tabs
+            tabBar={renderTabBar}
             screenOptions={{
                 tabBarButton: HapticTab,
+                freezeOnBlur: true,
                 tabBarActiveTintColor: colors.primary,
                 tabBarInactiveTintColor: colors.textSecondary,
                 tabBarStyle: {

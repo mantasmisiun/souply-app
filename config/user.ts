@@ -1,10 +1,18 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Crypto from 'expo-crypto';
 import { API_BASE_URL } from './api';
+import { APP_ENV } from './env';
 import { DEV_RANDOM_USER_UUID } from '../constants/flags';
+import {
+    loadPersistedAnonToken,
+    saveAnonSessionToken,
+    setAnonSessionTokenMem,
+    clearAnonSessionToken,
+} from './session';
 
 const USER_ID_KEY = 'userId';
 const USER_SYNCED_KEY = 'userSyncedToBackend';
+const ID_MODE_KEY = 'devUserIdMode';
 
 // In debug builds (npx expo run:android) the fixed dev user makes test data
 // easy to identify and wipe — unless DEV_RANDOM_USER_UUID is on, in which
@@ -34,10 +42,54 @@ const DEV_USER_ID = '00000000-0000-0000-0000-000000000000';
 
 let initPromise: Promise<string> | null = null;
 
+/**
+ * Dev/staging identity switch. Two modes:
+ *   'fixed'  — the well-known dev UUID (000…000): shared test data, easy to wipe.
+ *   'random' — the per-install persisted UUID (production behaviour). The random
+ *              id lives under USER_ID_KEY, so switching to 'fixed' and back keeps
+ *              the SAME random identity; only a reinstall regenerates it.
+ * Defaults preserve today's behaviour: dev builds → 'fixed' (unless
+ * DEV_RANDOM_USER_UUID), staging → 'random'. Prod has no switch, ever.
+ * Changing the mode requires an app restart (the resolved id is memoized and
+ * baked into every store/cache) — the Profile toggle handles that.
+ */
+export type UserIdMode = 'fixed' | 'random';
+
+export const canSwitchUserId = __DEV__ || APP_ENV === 'staging';
+
+const DEFAULT_ID_MODE: UserIdMode = __DEV__ && !DEV_RANDOM_USER_UUID ? 'fixed' : 'random';
+
+export async function getUserIdMode(): Promise<UserIdMode> {
+    if (!canSwitchUserId) return 'random';
+    const v = await AsyncStorage.getItem(ID_MODE_KEY);
+    return v === 'fixed' || v === 'random' ? v : DEFAULT_ID_MODE;
+}
+
+/**
+ * Persist the mode for the NEXT app start. The anon session token + synced
+ * flag belong to the OLD identity — clear both so the new identity re-POSTs
+ * /api/users and claims its own token on the post-restart first getUserId().
+ */
+export async function setUserIdMode(mode: UserIdMode): Promise<void> {
+    if (!canSwitchUserId) return;
+    await AsyncStorage.setItem(ID_MODE_KEY, mode);
+    await AsyncStorage.removeItem(USER_SYNCED_KEY);
+    await clearAnonSessionToken();
+    // Drop the memoized resolution so even a soft fallback (no full reload
+    // available) re-resolves the identity on the next getUserId().
+    initPromise = null;
+}
+
+/** The dev UUID, exported so the Profile switch can display it. */
+export const FIXED_DEV_USER_ID = DEV_USER_ID;
+
 async function initUserId(): Promise<string> {
-    if (__DEV__ && !DEV_RANDOM_USER_UUID) {
-        syncToBackendIfNeeded(DEV_USER_ID);
-        return DEV_USER_ID;
+    if (canSwitchUserId) {
+        const mode = await getUserIdMode();
+        if (mode === 'fixed') {
+            syncToBackendIfNeeded(DEV_USER_ID);
+            return DEV_USER_ID;
+        }
     }
     let userId = await AsyncStorage.getItem(USER_ID_KEY);
     if (!userId) {
@@ -49,8 +101,16 @@ async function initUserId(): Promise<string> {
 }
 
 async function syncToBackendIfNeeded(userId: string): Promise<void> {
+    // Load any persisted anonymous token into memory FIRST so the fetch interceptor can
+    // send it immediately (even before this POST completes / when offline).
+    const persisted = await loadPersistedAnonToken();
+    if (persisted) setAnonSessionTokenMem(persisted);
+
     const synced = await AsyncStorage.getItem(USER_SYNCED_KEY);
-    if (synced === '1') return;
+    // POST when not yet synced OR when we still have no session token (existing installs
+    // predate token issuance and must claim one). The endpoint is idempotent and returns
+    // { id, token } for anonymous users — that token authenticates every per-user route.
+    if (synced === '1' && persisted) return;
     try {
         const res = await fetch(`${API_BASE_URL}/api/users`, {
             method: 'POST',
@@ -59,6 +119,10 @@ async function syncToBackendIfNeeded(userId: string): Promise<void> {
         });
         if (res.ok) {
             await AsyncStorage.setItem(USER_SYNCED_KEY, '1');
+            const data = await res.json().catch(() => ({} as any));
+            if (data && typeof data.token === 'string' && data.token) {
+                await saveAnonSessionToken(data.token);
+            }
         }
     } catch {
         // Offline / server unreachable — leave the flag unset so the next
@@ -66,6 +130,34 @@ async function syncToBackendIfNeeded(userId: string): Promise<void> {
         // FK-dependent backend calls will fail until sync eventually lands.
     }
 }
+
+/**
+ * Force-reclaim the anonymous session token (POST /users → { token }), ignoring
+ * the synced flag. Self-heal for per-user routes that started 401-ing because the
+ * persisted token predates the auth hardening (or expired): callers retry once
+ * after this succeeds. Returns false for verified users (their token comes from
+ * the OAuth flow, POST /users deliberately mints none) and on network failure.
+ */
+export const reclaimAnonSessionToken = async (): Promise<boolean> => {
+    try {
+        const userId = await getUserId();
+        const res = await fetch(`${API_BASE_URL}/api/users`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: userId }),
+        });
+        if (!res.ok) return false;
+        const data = await res.json().catch(() => ({} as any));
+        if (data && typeof data.token === 'string' && data.token) {
+            setAnonSessionTokenMem(data.token);
+            await saveAnonSessionToken(data.token);
+            return true;
+        }
+        return false;
+    } catch {
+        return false;
+    }
+};
 
 export const getUserId = async (): Promise<string> => {
     if (!initPromise) {
@@ -91,6 +183,10 @@ export const getUserId = async (): Promise<string> => {
  */
 export const resetUserId = async (): Promise<void> => {
     await AsyncStorage.multiRemove([USER_ID_KEY, USER_SYNCED_KEY]);
+    // The anonymous token is bound to the OLD id (its JWT sub) — it must not survive into
+    // the next identity, or it would authenticate as the deleted user. The next getUserId()
+    // mints a fresh one for the new UUID.
+    await clearAnonSessionToken();
     // Drop the memoised promise so `getUserId()` re-runs `initUserId()`.
     initPromise = null;
 };
@@ -109,5 +205,9 @@ export const resetUserId = async (): Promise<void> => {
 export const setUserId = async (recoveredId: string): Promise<void> => {
     await AsyncStorage.setItem(USER_ID_KEY, recoveredId);
     await AsyncStorage.setItem(USER_SYNCED_KEY, '1');
+    // The previous anonymous token has the OLD sub — drop it so the next getUserId()
+    // re-mints a token for the recovered id (POST /api/users returns one for anonymous
+    // accounts; a verified recovered account uses its OAuth token instead).
+    await clearAnonSessionToken();
     initPromise = null;
 };

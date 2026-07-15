@@ -1,7 +1,14 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ActivityIndicator, ScrollView,
-    Image, TextInput, Alert,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    ScrollView,
+    Image,
+    TextInput,
+    Alert,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
@@ -261,7 +268,7 @@ export function UncategorisedQueue({ onEmpty }: Props) {
     if (loading) {
         return (
             <View style={styles.centered}>
-                <ActivityIndicator size="large" color={colors.primary} />
+                <MaterialProgress size="large" color={colors.primary} />
             </View>
         );
     }
@@ -356,7 +363,7 @@ export function UncategorisedQueue({ onEmpty }: Props) {
                         <View style={styles.cropSection}>
                             <Text style={styles.cropLabel}>{t('admin.uncategorised.sectionReceipt')}</Text>
                             {cropLoading && !cropUri
-                                ? <ActivityIndicator color={colors.primary} style={styles.cropLoader} />
+                                ? <MaterialProgress color={colors.primary} style={styles.cropLoader} />
                                 : cropUri
                                     ? <Image
                                           source={{ uri: cropUri }}
@@ -494,7 +501,7 @@ export function UncategorisedQueue({ onEmpty }: Props) {
                     disabled={!canConfirm}
                 >
                     {actioning
-                        ? <ActivityIndicator color={colors.onPrimary} />
+                        ? <MaterialProgress color={colors.onPrimary} />
                         : <Text style={styles.primaryBtnText}>{t('admin.uncategorised.confirm')}</Text>}
                 </TouchableOpacity>
             </View>
@@ -581,7 +588,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderWidth: 1, borderColor: c.borderSubtle,
         backgroundColor: c.pageBackground, gap: 8,
     },
-    sectionRequired: { borderColor: c.primary, borderLeftWidth: 4, backgroundColor: c.primary + '12' },
+    sectionRequired: { borderWidth: 4, borderColor: 'transparent', borderLeftColor: c.primary, backgroundColor: c.primary + '12' },
     sectionHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     sectionTitle: { fontSize: 12, fontWeight: '700', color: c.textSecondary, textTransform: 'uppercase' },
     sectionTitleRequired: { color: c.primary },

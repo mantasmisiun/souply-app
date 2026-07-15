@@ -1,4 +1,13 @@
-import { View, FlatList, ScrollView, TouchableOpacity, Text, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import {
+    View,
+    FlatList,
+    ScrollView,
+    TouchableOpacity,
+    Text,
+    StyleSheet,
+    Alert,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocalSearchParams, useRouter, Stack } from 'expo-router';
@@ -298,7 +307,7 @@ export default function ReceiptCategoryScreen() {
         </TouchableOpacity>
     );
 
-    if (loading) return <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />;
+    if (loading) return <View style={styles.centered}><MaterialProgress size="large" color={colors.primary} /></View>;
 
     return (
         <>
@@ -357,7 +366,7 @@ export default function ReceiptCategoryScreen() {
 
                 <View style={{ flex: 1 }}>
                     {loadingProducts ? (
-                        <ActivityIndicator style={styles.centered} size="large" color={colors.primary} />
+                        <View style={styles.centered}><MaterialProgress size="large" color={colors.primary} /></View>
                     ) : (
                         <FlatList<GridItem>
                             key="category-grid"

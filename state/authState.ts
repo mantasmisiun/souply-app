@@ -11,6 +11,7 @@ import * as SecureStore from 'expo-secure-store';
 import * as Updates from 'expo-updates';
 import { setUserId, getUserId } from '../config/user';
 import { API_BASE_URL } from '../config/api';
+import { setVerifiedSessionToken } from '../config/session';
 
 const TOKEN_KEY = 'souply_session_token';
 const USER_KEY = 'souply_verified_user';
@@ -53,6 +54,9 @@ export const useAuthState = create<AuthState>((set, get) => ({
                 SecureStore.getItemAsync(USER_KEY),
             ]);
             const user = userRaw ? JSON.parse(userRaw) as VerifiedUser : null;
+            // Feed the interceptor's active-token holder (verified token wins over anon).
+            // The DEV fake token isn't a real JWT — never send it as a Bearer.
+            setVerifiedSessionToken(token && token !== DEV_SESSION_TOKEN ? token : null);
             set({ token: token ?? null, user, hydrating: false });
 
             // Self-heal the account-id adoption bug. Older builds stored the
@@ -86,6 +90,16 @@ export const useAuthState = create<AuthState>((set, get) => ({
             // this device's anonymous id (the cause of "edits don't save" +
             // "couldn't load template" after signing into an existing account).
             if (user?.id) await setUserId(user.id);
+            // Verified token now authenticates every API call (wins over the anon token).
+            setVerifiedSessionToken(token && token !== DEV_SESSION_TOKEN ? token : null);
+            // The account just changed. The profile store still holds the
+            // previous (anonymous) account's profile/stats with a fresh
+            // timestamp, so its time-based staleness check won't refetch —
+            // leaving stats/level empty until a cold restart. Invalidate +
+            // refetch for the new id so they populate immediately on sign-in.
+            const { useProfileStore } = require('./profileStore');
+            useProfileStore.getState().invalidate();
+            void useProfileStore.getState().fetchProfile();
         } catch {}
         set({ token, user });
     },
@@ -111,6 +125,9 @@ export const useAuthState = create<AuthState>((set, get) => ({
             await SecureStore.deleteItemAsync(TOKEN_KEY);
             await SecureStore.deleteItemAsync(USER_KEY);
         } catch {}
+        // Fall back to the anonymous token for subsequent calls (getActiveSessionToken
+        // returns anon once the verified slot is cleared).
+        setVerifiedSessionToken(null);
         set({ token: null, user: null });
     },
 }));

@@ -1,0 +1,73 @@
+diff --git a/node_modules/react-native-maps/ios/AirMaps/AIRMap.m b/node_modules/react-native-maps/ios/AirMaps/AIRMap.m
+index 07a4638..73758db 100644
+--- a/node_modules/react-native-maps/ios/AirMaps/AIRMap.m
++++ b/node_modules/react-native-maps/ios/AirMaps/AIRMap.m
+@@ -106,6 +106,11 @@ const NSInteger AIRMapMaxZoomLevel = 20;
+ - (void)insertReactSubview:(id<RCTComponent>)subview atIndex:(NSInteger)atIndex {
+     // Our desired API is to pass up markers/overlays as children to the mapview component.
+     // This is where we intercept them and do the appropriate underlying mapview action.
++    // PATCH(souply): nil-guard. Under the Fabric interop layer a marker mount/remove
++    // storm can hand us a nil subview; the unchecked `[_reactSubviews insertObject:nil]`
++    // below throws NSInvalidArgumentException ("object cannot be nil") -> SIGABRT (crash
++    // log 2026-07-10, results map zoom/combo churn). Nothing to insert -> just bail.
++    if (subview == nil) { return; }
+     if ([subview isKindOfClass:[AIRMapMarker class]]) {
+         [self addAnnotation:(id <MKAnnotation>) subview];
+     } else if ([subview isKindOfClass:[AIRMapPolyline class]]) {
+@@ -135,7 +140,14 @@ const NSInteger AIRMapMaxZoomLevel = 20;
+             [self insertReactSubview:(UIView *)childSubviews[i] atIndex:atIndex];
+         }
+     }
+-    [_reactSubviews insertObject:(UIView *)subview atIndex:(NSUInteger) atIndex];
++    // PATCH(souply): clamp the index. Under the Fabric interop layer
++    // (RCTLegacyViewManagerInteropComponentView) rapid marker remove+insert
++    // batches can deliver an index beyond the current array bounds, and the
++    // unchecked insert throws NSRangeException -> SIGABRT (crash log
++    // 2026-07-04, store-resolution map). _reactSubviews is bookkeeping only —
++    // annotations/overlays are added to MKMapView above — so clamping is safe.
++    NSUInteger safeIndex = MIN((NSUInteger)MAX(atIndex, 0), _reactSubviews.count);
++    [_reactSubviews insertObject:(UIView *)subview atIndex:safeIndex];
+ }
+ #pragma clang diagnostic pop
+ 
+diff --git a/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m b/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
+index 8c17ac7..924c3f3 100644
+--- a/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
++++ b/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
+@@ -64,10 +64,19 @@ NSInteger const AIR_CALLOUT_OPEN_ZINDEX_BASELINE = 999;
+ }
+ 
+ - (void)insertReactSubview:(id<RCTComponent>)subview atIndex:(NSInteger)atIndex {
++    // PATCH(souply): nil-guard — the interop churn can hand us a nil subview,
++    // which throws "object cannot be nil" downstream (see AIRMap.m). Bail early.
++    if (subview == nil) { return; }
+     if ([subview isKindOfClass:[AIRMapCallout class]]) {
+         self.calloutView = (AIRMapCallout *)subview;
+     } else {
+-        [super insertReactSubview:(UIView *)subview atIndex:atIndex];
++        // PATCH(souply): clamp the index — same Fabric-interop out-of-bounds
++        // race as AIRMap.m (see patch there). Child-VIEW markers (price pills)
++        // exercise this path on every marker remount; an unchecked index
++        // throws NSRangeException -> SIGABRT (silent crash switching the
++        // 1/2-store option, 2026-07-05).
++        NSInteger safeIndex = MIN(MAX(atIndex, 0), (NSInteger)self.reactSubviews.count);
++        [super insertReactSubview:(UIView *)subview atIndex:safeIndex];
+     }
+ }
+ 
+@@ -336,8 +345,14 @@ NSInteger const AIR_CALLOUT_OPEN_ZINDEX_BASELINE = 999;
+         _reloadImageCancellationBlock();
+         _reloadImageCancellationBlock = nil;
+     }
++    // PATCH(souply): decode at NATURAL size (CGSizeZero skips the resize - see
++    // RCTImageLoader.mm). Passing self.bounds.size decodes the new image INTO the
++    // marker's CURRENT bounds, so upgrading a small badge marker to a wide pill
++    // image in place produced a pill at badge size ("super tiny" address pills,
++    // iOS store-resolution map 2026-07-04). MKAnnotationView sizes itself to the
++    // image, so the natural-size decode is what the bounds should follow, not lead.
+     _reloadImageCancellationBlock = [[_bridge moduleForName:@"ImageLoader"] loadImageWithURLRequest:[RCTConvert NSURLRequest:_imageSrc]
+-                                                                            size:self.bounds.size
++                                                                            size:CGSizeZero
+                                                                            scale:RCTScreenScale()
+                                                                          clipped:YES
+                                                                       resizeMode:RCTResizeModeCenter

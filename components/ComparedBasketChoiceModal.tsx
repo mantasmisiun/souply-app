@@ -2,7 +2,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Modal } from 'react-native';
 import { useMemo } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../constants/theme';
 import { formatDate } from '../utils/formatCurrency';
 
 export interface ComparedBasketChoice {
@@ -98,11 +98,12 @@ const makeStyles = (c: AppTheme) =>
         },
         card: {
             backgroundColor: c.cardBackground,
-            borderRadius: 16,
+            borderRadius: radius.xl,
             padding: 18,
             width: '100%',
             maxWidth: 420,
             gap: 8,
+            ...elevation.level3,
         },
         title: { fontSize: 17, fontWeight: '700', color: c.textPrimary },
         sub: { fontSize: 12, color: c.textSecondary, marginBottom: 4 },
@@ -112,7 +113,7 @@ const makeStyles = (c: AppTheme) =>
             gap: 12,
             paddingVertical: 12,
             paddingHorizontal: 10,
-            borderRadius: 10,
+            borderRadius: radius.md,
             borderWidth: 1,
             borderColor: c.border,
         },

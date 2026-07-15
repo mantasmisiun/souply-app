@@ -12,6 +12,7 @@ import type { MaximaProduct, ProductBand } from '@shared/parsers/maximaParser';
 import type { RimiProduct, RimiReceiptBand } from '@shared/parsers/rimiParser';
 import type { NorfaProduct, NorfaReceiptBand } from '@shared/parsers/norfaParser';
 import type { LidlProduct, LidlReceiptBand } from '@shared/parsers/lidlParser';
+import type { MaskBand } from '@shared/parsers/cardMaskDetection';
 
 /**
  * Any chain's product shape — they're structurally identical (same
@@ -39,12 +40,46 @@ export interface PageMeta {
     pixelWidth: number;
     /** Native pixel height of this page's PNG. */
     pixelHeight: number;
+    /** Receipt CONTENT x-bounds (price-column refined, see receiptXBounds) —
+     *  band crops use these to skip the PDF page's white margins. Absent on
+     *  old snapshots → full-width fallback. */
+    receiptXLeft?: number;
+    receiptXRight?: number;
     /**
      * y-offset added to lines from this page when concatenated into
      * the parser's single-y-space input. For single-page receipts
      * always 0. For multi-page, prevYOffset + prevPixelHeight + gap.
      */
     yOffsetInParserSpace: number;
+    /** OCR downscale factor (ReceiptOcrPageMeta.frameScale). */
+    frameScale?: number;
+    /** Max line yBottom on this page, page-local (ReceiptOcrPageMeta
+     *  .pageMaxYScaled) — the shared BandCropImage picks pages with it. */
+    pageMaxY?: number;
+}
+
+/**
+ * Region in parser/image pixel space — structurally the ReceiptRegion the
+ * Analyze screen feeds ReceiptPhotoView/BandCropImage (kind labels, skew
+ * corners, mid-column step). Stored verbatim from the parse so the dev
+ * detail screen renders bands/crops with the SAME components + inputs as
+ * the Analyze Kvitas/Prekės tabs.
+ */
+export interface SnapshotRegion {
+    yTop: number;
+    yBottom: number;
+    xLeft: number;
+    xRight: number;
+    kind?: string;
+    yLeftTop?: number;
+    yRightTop?: number;
+    yLeftBottom?: number;
+    yRightBottom?: number;
+    xMid?: number;
+    yMidTop?: number;
+    yMidBottom?: number;
+    yMidTopR?: number;
+    yMidBottomR?: number;
 }
 
 /**
@@ -78,6 +113,52 @@ export interface ReceiptSnapshot {
      * chains that don't have a typed-band parser.
      */
     taggedBands?: TaggedReceiptBand[];
+    /**
+     * Bank-card + loyalty-card redaction bands detected by
+     * `detectCardMaskBands`. Drawn as solid red/orange strips over the
+     * receipt image on the dev detail screen so masking-detection
+     * accuracy can be eyeballed on real receipts. Chain-agnostic —
+     * populated for every chain, independent of the V2 product bands.
+     */
+    maskBands?: MaskBand[];
+    /**
+     * FINAL parsed products (post-normalization, post-heals/grafts) — what
+     * actually ships. The item-truth checkmarks assert THESE values; the
+     * band list's own extract-level products are display-only.
+     */
+    products?: {
+        name: string;
+        price: number;
+        promoPrice: number | null;
+        quantity: number;
+        unit: string;
+        parsedAmount?: number | null;
+        parsedUnit?: string | null;
+    }[];
+    /**
+     * Footer fields of the FINAL parse — the item-truth footer checkmark on
+     * the detail screen asserts these (total/date/receiptNo/recon state).
+     */
+    footer?: {
+        total: number | null;
+        date: string | null;
+        receiptNo: string | null;
+        reconciled: boolean | null;
+        reconDelta: number | null;
+    };
+    /**
+     * The EXACT region sets the Analyze screen hands ReceiptPhotoView
+     * (header lineRegions∥region, product regions, footer lineRegions∥
+     * region, skipped) — chain-agnostic, straight from the FINAL parse.
+     * products[] is 1:1 with `products` above, so the detail screen's
+     * per-product BandCropImage crops the same band Analyze would.
+     */
+    regions?: {
+        header: SnapshotRegion[];
+        products: (SnapshotRegion | null)[];
+        footer: SnapshotRegion[];
+        skipped: SnapshotRegion[];
+    };
 }
 
 const snapshots = new Map<string, ReceiptSnapshot>();

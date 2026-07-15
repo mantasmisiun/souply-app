@@ -1,4 +1,4 @@
-import { Pressable, View, StyleSheet } from 'react-native';
+import { Platform, Pressable, View, StyleSheet } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../constants/theme';
 import { LiquidGlass } from './LiquidGlass';
@@ -19,6 +19,9 @@ interface Props {
      * off in headers avoids a double-glass artifact.
      */
     glass?: boolean;
+    /** Solid disc fallback where glass is unavailable (Android): use for chrome
+     *  floating over a MAP — a bare icon has no contrast against tiles. */
+    solid?: boolean;
 }
 
 /**
@@ -37,11 +40,16 @@ export function GlassIconButton({
     accessibilityLabel,
     disabled,
     glass,
+    solid,
 }: Props) {
     const colors = useTheme();
     const tint = disabled ? colors.textMuted : (color ?? colors.primary);
     const disc = size + 14;
     const iconEl = <Ionicons name={icon} size={size} color={tint} />;
+    // The glass pill is an iOS-only affordance (Liquid Glass / blur capsule).
+    // Android header buttons app-wide are bare icons — the blur fallback
+    // rendered as a dark-tinted circle there (visible in light mode).
+    const showGlass = glass && Platform.OS === 'ios';
 
     return (
         <Pressable
@@ -55,14 +63,20 @@ export function GlassIconButton({
                 marginHorizontal: 4,
             })}
         >
-            {glass ? (
+            {showGlass ? (
                 <LiquidGlass
                     style={[styles.disc, styles.glassDisc, { width: disc, height: disc, borderRadius: disc / 2 }]}
                 >
                     {iconEl}
                 </LiquidGlass>
             ) : (
-                <View style={[styles.disc, { width: disc, height: disc }]}>
+                <View
+                    style={[
+                        styles.disc,
+                        { width: disc, height: disc },
+                        solid && { backgroundColor: colors.cardBackground, borderRadius: disc / 2, elevation: 3 },
+                    ]}
+                >
                     {iconEl}
                 </View>
             )}

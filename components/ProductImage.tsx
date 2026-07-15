@@ -27,6 +27,10 @@ type Props = {
   emojiStyle?: StyleProp<TextStyle>;
   resizeMode?: LegacyResizeMode;
   emoji?: string;
+  /** Fired ONCE when this image has settled — either it loaded a real image
+   *  (ok=true) or every URL failed and the placeholder is shown (ok=false).
+   *  Lets a parent gate a loading state on the image actually being ready. */
+  onSettled?: (ok: boolean) => void;
 };
 
 const resizeModeToContentFit = (mode?: LegacyResizeMode): ImageContentFit => {
@@ -71,14 +75,33 @@ export function ProductImage({
   emojiStyle,
   resizeMode = "contain",
   emoji = "🫜",
+  onSettled,
 }: Props) {
   const list = useMemo(() => normalizeUris(uris), [uris]);
   const [idx, setIdx] = useState(0);
 
+  // Fire onSettled exactly once per `list`: on a real load or once the
+  // placeholder is shown (all URLs exhausted / no URLs).
+  const onSettledRef = useRef(onSettled);
+  onSettledRef.current = onSettled;
+  const settledRef = useRef(false);
+  const settle = (ok: boolean) => {
+    if (!settledRef.current) {
+      settledRef.current = true;
+      onSettledRef.current?.(ok);
+    }
+  };
+
   // Reset to the first URL whenever the input changes.
   useEffect(() => {
     setIdx(0);
+    settledRef.current = false;
   }, [list]);
+
+  // Placeholder reached (no URLs or all failed) → settle(false).
+  useEffect(() => {
+    if (idx >= list.length) settle(false);
+  }, [idx, list]);
 
   // Pre-verify the current URL with a HEAD request so we can spot CDN fallback
   // responses (e.g. Cloudinary's `x-cld-error` header on a valid 250x212 PNG
@@ -137,7 +160,9 @@ export function ProductImage({
         // Decoded but suspiciously tiny → treat as a placeholder/broken image.
         if (w > 0 && h > 0 && (w < 16 || h < 16)) {
           setIdx((i) => i + 1);
+          return;
         }
+        settle(true);
       }}
     />
   );

@@ -2,7 +2,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Modal, TextInput } from 'reac
 import { useMemo, useState, useEffect } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../constants/theme';
 
 interface AmountPickerModalProps {
     visible: boolean;
@@ -30,6 +30,9 @@ interface AmountPickerModalProps {
     unit: string;
     /** True when the product is sold by weight (bulk fruit/veg/meat). */
     isWeighable?: boolean;
+    /** Reopen/edit mode: prefill with the item's CURRENT amount instead of one
+     *  step (tapping the quantity on a card re-opens this picker). */
+    initialAmount?: number | null;
     /**
      * Called with the user's chosen amount in **canonical units** (kg, l,
      * or pack-content count). The server interprets this as the requested
@@ -42,6 +45,10 @@ interface AmountPickerModalProps {
     onCancel: () => void;
 }
 
+// Easter egg one-shot (per app session, mirrors the web picker's
+// sessionStorage flag): tease the 50+ kg/l amount once, then let it through.
+let bigAmountJokeShown = false;
+
 export default function AmountPickerModal({
     visible,
     productName,
@@ -52,6 +59,7 @@ export default function AmountPickerModal({
     maxAmount,
     unit,
     isWeighable = false,
+    initialAmount = null,
     onConfirm,
     onCancel,
 }: AmountPickerModalProps) {
@@ -85,15 +93,22 @@ export default function AmountPickerModal({
         return Number(n.toFixed(3)).toString();
     };
 
-    // Default start: one step. Reset whenever the picker opens for a new
+    // Default start: the item's current amount when re-opened from a card's
+    // quantity tap, else one step. Reset whenever the picker opens for a new
     // product so the previous user's choice doesn't leak.
-    const defaultAmount = step;
+    const defaultAmount = initialAmount != null && initialAmount > 0 ? initialAmount : step;
     const [inputText, setInputText] = useState(formatValue(defaultAmount));
+    // Web-parity easter egg: 50+ kg/l gets one "math problem?" tease before
+    // going through; a hard cap of 999 always applies.
+    const [jokeAmount, setJokeAmount] = useState<number | null>(null);
+    const isMassOrVolume = displayUnit === 'kg' || displayUnit === 'l';
+    const JOKE_THRESHOLD = 50;
+    const HARD_CAP = 999;
 
     useEffect(() => {
-        if (visible) setInputText(formatValue(defaultAmount));
+        if (visible) { setInputText(formatValue(defaultAmount)); setJokeAmount(null); }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [visible, productName, step]);
+    }, [visible, productName, step, initialAmount]);
 
     const parseInput = (): number => {
         const parsed = parseFloat(inputText.replace(',', '.'));
@@ -122,6 +137,31 @@ export default function AmountPickerModal({
             onRequestClose={onCancel}
         >
             <View style={styles.overlay}>
+                {jokeAmount != null ? (
+                    /* 50+ kg/l easter egg — same copy as the web picker. */
+                    <View style={styles.modal}>
+                        <Text style={styles.title}>{t('amountPicker.jokeTitle')}</Text>
+                        <Text style={[styles.subtitle, { marginBottom: 24 }]}>
+                            {t('amountPicker.jokeBody', { value: formatValue(jokeAmount), unit: displayUnit })}
+                        </Text>
+                        <View style={styles.actions}>
+                            <TouchableOpacity style={styles.cancelButton} onPress={() => setJokeAmount(null)}>
+                                <Text style={styles.cancelText}>{t('amountPicker.jokeCancel')}</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                                style={styles.confirmButton}
+                                onPress={() => {
+                                    bigAmountJokeShown = true;
+                                    const v = jokeAmount;
+                                    setJokeAmount(null);
+                                    onConfirm(v);
+                                }}
+                            >
+                                <Text style={styles.confirmText}>{t('amountPicker.jokeContinue')}</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                ) : (
                 <View style={styles.modal}>
                     <Text style={styles.title}>{productName}</Text>
                     <Text style={styles.subtitle}>
@@ -171,13 +211,19 @@ export default function AmountPickerModal({
                                 // combination across all SPs to satisfy it —
                                 // pre-snapping here would mislead the user
                                 // about which pack actually gets picked.
-                                onConfirm(Math.round(parseInput() * 1000) / 1000);
+                                const value = Math.min(Math.round(parseInput() * 1000) / 1000, HARD_CAP);
+                                if (isMassOrVolume && value >= JOKE_THRESHOLD && !bigAmountJokeShown) {
+                                    setJokeAmount(value);
+                                    return;
+                                }
+                                onConfirm(value);
                             }}
                         >
                             <Text style={styles.confirmText}>{t('amountPicker.add')}</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
+                )}
             </View>
         </Modal>
     );
@@ -193,10 +239,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     modal: {
         backgroundColor: c.cardBackground,
-        borderRadius: 16,
+        borderRadius: radius.xl,
         padding: 24,
         width: '100%',
         maxWidth: 340,
+        ...elevation.level3,
     },
     title: {
         fontSize: 17,
@@ -266,7 +313,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     cancelButton: {
         flex: 1,
         paddingVertical: 12,
-        borderRadius: 10,
+        borderRadius: radius.pill,
         borderWidth: 1,
         borderColor: c.border,
         alignItems: 'center',
@@ -279,7 +326,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     confirmButton: {
         flex: 1,
         paddingVertical: 12,
-        borderRadius: 10,
+        borderRadius: radius.pill,
         backgroundColor: c.primary,
         alignItems: 'center',
     },

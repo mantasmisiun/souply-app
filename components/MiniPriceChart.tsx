@@ -7,6 +7,10 @@ import { useTheme, type AppTheme } from '../constants/theme';
 export interface PricePoint {
     price: number;
     promoPrice: number | null;
+    /** Promo expiry (ISO). Null/absent = treated as still active (receipt-observed promos). */
+    promoEnd?: string | null;
+    /** Synthetic carry-in point (month view): drawn, but never date-labelled. */
+    virtual?: boolean;
     date: string;
     storeName?: string;
     isFallback: number;
@@ -35,8 +39,28 @@ export function filterByRange(data: PricePoint[], key: RangeKey): PricePoint[] {
 
 const MODAL_CHART_PADDING = { top: 14, bottom: 18, left: 46, right: 10 };
 const MINI_CHART_PAD = { top: 8, bottom: 8, left: 8, right: 8 };
-const MINI_TAIL = 18;
 const SCALE_PAD_RATIO = 0.12;
+
+/**
+ * TIME-scaled x axis, domain [first point date, NOW]. The chart is aware of the
+ * current date: points sit at their true positions in elapsed time, so stale data
+ * drifts left and the gap between the last scrape and today is real, visible
+ * space — the regular price extends across it, and an expired promo can end at
+ * its actual promoEnd date. Exported so the chart modals' touch hit-testing uses
+ * the exact same positions the SVG draws.
+ */
+export function timeXPositions(
+    data: { date: string }[],
+    chartW: number,
+    padLeft: number,
+    domain?: { start: number; end: number },
+): number[] {
+    const end = domain?.end ?? Date.now();
+    const times = data.map(d => new Date(d.date).getTime());
+    const start = domain?.start ?? (times.length ? Math.min(times[0], end) : end);
+    const tSpan = Math.max(end - start, 60_000); // guard: single just-scraped point
+    return times.map(t => padLeft + ((Math.min(Math.max(t, start), end) - start) / tSpan) * chartW);
+}
 
 const MINI_CHART_WIDTH = 140;
 const MINI_CHART_HEIGHT = 64;
@@ -51,6 +75,9 @@ export function PriceChartSvg({
     isModal = false,
     shortDate,
     formatEuro,
+    window: win,
+    yMax,
+    pointDateLabels = false,
 }: {
     data: PricePoint[];
     width: number;
@@ -60,10 +87,16 @@ export function PriceChartSvg({
     isModal?: boolean;
     shortDate?: (d: string) => string;
     formatEuro?: (v: number) => string;
+    /** MONTH view: fixed time domain [start, end] (end pre-clamped to now). */
+    window?: { start: number; end: number };
+    /** Fixed y-scale top (all-time max) — bottom pins to 0. */
+    yMax?: number;
+    /** Label every real point with its (rotated) date under the axis. */
+    pointDateLabels?: boolean;
 }) {
     if (!data.length) return null;
 
-    const padding = isModal ? MODAL_CHART_PADDING : MINI_CHART_PAD;
+    const padding = isModal ? (pointDateLabels ? { top: 14, bottom: 34, left: 0, right: 0 } : MODAL_CHART_PADDING) : MINI_CHART_PAD;
     const chartW = width - padding.left - padding.right;
     const chartH = height - padding.top - padding.bottom;
 
@@ -82,7 +115,12 @@ export function PriceChartSvg({
     const zeroBased = !isModal;
     let lo: number;
     let hi: number;
-    if (zeroBased) {
+    if (yMax != null && yMax > 0) {
+        // Month view: identical scale on every month — top is the all-time max,
+        // bottom is 0 — so navigating months compares like-for-like.
+        lo = 0;
+        hi = yMax * 1.05;
+    } else if (zeroBased) {
         lo = 0;
         hi = maxPrice > 0 ? maxPrice * 1.12 : 1;
     } else if (range === 0) {
@@ -95,38 +133,58 @@ export function PriceChartSvg({
     const span = hi - lo || 1;
     const ypos = (v: number) => padding.top + chartH - ((v - lo) / span) * chartH;
 
+    const xs = timeXPositions(data, chartW, padding.left, win);
     const points = data.map((d, i) => {
-        const tail = isModal ? 0 : MINI_TAIL;
-        const x = data.length === 1
-            ? padding.left + (chartW - tail) / 2
-            : padding.left + (i / (data.length - 1)) * (chartW - tail);
         const priceY = ypos(Number(d.price));
         const promoY = d.promoPrice !== null && d.promoPrice !== undefined
             ? ypos(Number(d.promoPrice))
             : null;
-        return { x, priceY, promoY, date: d.date };
+        return { x: xs[i], priceY, promoY, date: d.date };
     });
 
     const hasAnyPromo = points.some(p => p.promoY !== null);
-    const topEdge = points.map(p => `${p.x},${p.priceY}`);
-    const bottomFwd: string[] = [];
-    for (let i = 0; i < points.length; i++) {
-        const p = points[i];
-        const prev = i > 0 ? points[i - 1] : null;
-        if (p.promoY !== null) {
-            if (prev === null || prev.promoY === null)
-                bottomFwd.push(`${p.x},${p.priceY}`);
-            bottomFwd.push(`${p.x},${p.promoY}`);
-        } else {
-            if (prev !== null && prev.promoY !== null)
-                bottomFwd.push(`${p.x},${prev.promoY}`);
-            bottomFwd.push(`${p.x},${p.priceY}`);
-        }
-    }
-    const fillPolygonPoints = [...topEdge, ...bottomFwd.reverse()].join(' ');
-
     const last = points[points.length - 1];
     const lastIdx = points.length - 1;
+    const rightEdge = width - padding.right;
+
+    // Date-aware promo expiry for the LAST point (bounded by the window's end in
+    // month view): drives both the extension rendering and the fill's right border.
+    const lastRaw = data[data.length - 1];
+    const endBound = win?.end ?? Date.now();
+    const lastPromoExpired = last.promoY !== null && lastRaw?.promoEnd != null &&
+        new Date(lastRaw.promoEnd).getTime() < endBound;
+    let promoDotX = last.x;
+    if (lastPromoExpired && lastRaw?.promoEnd) {
+        const endX = timeXPositions([...data, { date: lastRaw.promoEnd }], chartW, padding.left, win)[data.length];
+        promoDotX = Math.max(last.x, Math.min(endX, rightEdge - 2.5));
+    }
+
+    // PROMO FILL — one polygon per promo RUN, spanning the run's full extent:
+    // bordered by the regular line on top, the promo line on the bottom, the
+    // dashed promo-start on the left and its END on the right — the dashed
+    // boundary at the next point (row-driven end), the promoEnd dash (date-driven
+    // end), or the chart's right edge while the promo is ongoing.
+    const promoFills: string[] = [];
+    let runStart: number | null = null;
+    for (let i = 0; i <= points.length; i++) {
+        const inRun = i < points.length && points[i].promoY !== null;
+        if (inRun && runStart === null) runStart = i;
+        if (!inRun && runStart !== null) {
+            const runEnd = i - 1;
+            const isLastRun = runEnd === lastIdx;
+            const xEnd = !isLastRun
+                ? points[runEnd + 1].x
+                : lastPromoExpired ? promoDotX : rightEdge;
+            const topYEnd = !isLastRun ? points[runEnd + 1].priceY : points[runEnd].priceY;
+            const top: string[] = [];
+            for (let k = runStart; k <= runEnd; k++) top.push(`${points[k].x},${points[k].priceY}`);
+            top.push(`${xEnd},${topYEnd}`);
+            const bottom: string[] = [`${xEnd},${points[runEnd].promoY}`];
+            for (let k = runEnd; k >= runStart; k--) bottom.push(`${points[k].x},${points[k].promoY}`);
+            promoFills.push([...top, ...bottom].join(' '));
+            runStart = null;
+        }
+    }
 
     const modalTickIndices: number[] = [];
     if (isModal) {
@@ -144,9 +202,9 @@ export function PriceChartSvg({
 
     return (
         <Svg width={width} height={height}>
-            {isModal && hasAnyPromo && (
-                <Polygon points={fillPolygonPoints} fill={colors.primary} fillOpacity={0.18} stroke="none" />
-            )}
+            {isModal && hasAnyPromo && promoFills.map((pts, i) => (
+                <Polygon key={`pfill-${i}`} points={pts} fill={colors.primary} fillOpacity={0.18} stroke="none" />
+            ))}
             {isModal && points.length === 1 && points[0].promoY !== null && (
                 <Line x1={points[0].x} y1={points[0].priceY} x2={points[0].x} y2={points[0].promoY!}
                     stroke={colors.primary} strokeOpacity={0.5} strokeWidth={1.5} />
@@ -195,17 +253,47 @@ export function PriceChartSvg({
                 }
                 return elems.length > 0 ? <React.Fragment key={`promo-boundary-${i}`}>{elems}</React.Fragment> : null;
             })}
-            {(isModal || points.length > 1) && (
-                <>
-                    <Line x1={last.x} y1={last.priceY} x2={width - padding.right} y2={last.priceY}
-                        stroke={colors.textSecondary} strokeWidth={1.25} />
-                    {last.promoY !== null && (
-                        <Line x1={last.x} y1={last.promoY} x2={width - padding.right} y2={last.promoY}
-                            stroke={colors.primary} strokeWidth={1.25} />
-                    )}
-                </>
-            )}
-            {isModal && range > 0 && formatEuro && (
+            {(isModal || points.length > 1) && (() => {
+                const promoExpired = lastPromoExpired;
+                const dotX = promoDotX;
+                const promoLive = last.promoY !== null && !promoExpired;
+                return (
+                    <>
+                        <Line x1={last.x} y1={last.priceY} x2={rightEdge} y2={last.priceY}
+                            stroke={colors.textSecondary} strokeWidth={1.25} />
+                        {promoLive && (
+                            <Line x1={last.x} y1={last.promoY!} x2={rightEdge} y2={last.promoY!}
+                                stroke={colors.primary} strokeWidth={1.25} />
+                        )}
+                        {last.promoY !== null && promoExpired && (
+                            <>
+                                {dotX > last.x && (
+                                    <Line x1={last.x} y1={last.promoY} x2={dotX} y2={last.promoY}
+                                        stroke={colors.primary} strokeWidth={1.25} />
+                                )}
+                                <Circle cx={dotX} cy={last.promoY} r={2.5} fill={colors.primary} />
+                                <Line x1={dotX} y1={last.promoY} x2={dotX} y2={last.priceY}
+                                    stroke={colors.primary} strokeWidth={1} strokeDasharray="2,2" strokeOpacity={0.65} />
+                                {pointDateLabels && lastRaw?.promoEnd != null && shortDate && (
+                                    // The promo's END is a real event on the axis: continue the
+                                    // dashed line down to the baseline and date-label it like a
+                                    // data point.
+                                    <>
+                                        <Line x1={dotX} y1={Math.max(last.priceY, last.promoY)} x2={dotX} y2={height - padding.bottom}
+                                            stroke={colors.primary} strokeWidth={0.8} strokeDasharray="2,2" strokeOpacity={0.5} />
+                                        <SvgText x={dotX} y={height - padding.bottom + 12} fontSize={8.5}
+                                            fill={colors.primary} textAnchor="end"
+                                            transform={`rotate(-45, ${dotX}, ${height - padding.bottom + 12})`}>
+                                            {shortDate(lastRaw.promoEnd)}
+                                        </SvgText>
+                                    </>
+                                )}
+                            </>
+                        )}
+                    </>
+                );
+            })()}
+            {isModal && !pointDateLabels && range > 0 && formatEuro && (
                 <>
                     <Line x1={padding.left} y1={ypos(maxPrice)} x2={width - padding.right} y2={ypos(maxPrice)}
                         stroke={colors.textMuted} strokeWidth={0.5} strokeDasharray="2,3" strokeOpacity={0.45} />
@@ -244,7 +332,7 @@ export function PriceChartSvg({
                 <>
                     {points.map((p, i) => {
                         if (activePtIndex !== null && i === activePtIndex) return null;
-                        if (i === lastIdx && activePtIndex === null) return (
+                        if (i === lastIdx && activePtIndex === null && !pointDateLabels) return (
                             <React.Fragment key={`dot-r-${i}`}>
                                 <Circle cx={p.x} cy={p.priceY} r={5} fill="transparent" stroke={colors.textSecondary} strokeWidth={1.5} strokeOpacity={0.4} />
                                 <Circle cx={p.x} cy={p.priceY} r={3} fill={colors.textSecondary} />
@@ -255,7 +343,7 @@ export function PriceChartSvg({
                     {points.map((p, i) => {
                         if (p.promoY === null) return null;
                         if (activePtIndex !== null && i === activePtIndex) return null;
-                        if (i === lastIdx && activePtIndex === null) return (
+                        if (i === lastIdx && activePtIndex === null && !pointDateLabels) return (
                             <React.Fragment key={`dot-p-${i}`}>
                                 <Circle cx={p.x} cy={p.promoY} r={5} fill="transparent" stroke={colors.primary} strokeWidth={1.5} strokeOpacity={0.4} />
                                 <Circle cx={p.x} cy={p.promoY} r={3} fill={colors.primary} />
@@ -275,7 +363,7 @@ export function PriceChartSvg({
                     )}
                 </>
             )}
-            {isModal && shortDate && modalTickIndices.map((idx, tickPos) => {
+            {isModal && shortDate && !pointDateLabels && modalTickIndices.map((idx, tickPos) => {
                 const p = points[idx];
                 const isFirst = tickPos === 0;
                 const isLast = tickPos === modalTickIndices.length - 1;
@@ -285,6 +373,34 @@ export function PriceChartSvg({
                         fill={colors.textMuted} textAnchor={anchor}>
                         {shortDate(p.date)}
                     </SvgText>
+                );
+            })}
+            {pointDateLabels && (
+                // Muted baseline marking ZERO — the month view's y-scale bottoms at 0,
+                // and the axis line makes that edge legible.
+                <Line x1={padding.left} y1={height - padding.bottom} x2={rightEdge} y2={height - padding.bottom}
+                    stroke={colors.textMuted} strokeWidth={0.75} strokeOpacity={0.5} />
+            )}
+            {isModal && shortDate && pointDateLabels && points.map((p, i) => {
+                // MONTH view: every real point carries its date, rotated 45° so a burst
+                // of scrapes within a few days doesn't overlap. Carry-in points are
+                // synthetic (virtual) and stay unlabelled.
+                if (data[i]?.virtual) return null;
+                const lx = p.x;
+                const ly = height - padding.bottom + 12;
+                // Drop-line from the point down to its date — EVERY price point gets one,
+                // discount or not. Starts at the LOWER of the pair (promo sits below).
+                const fromY = Math.max(p.priceY, p.promoY ?? p.priceY);
+                return (
+                    <React.Fragment key={`pdate-${i}`}>
+                        <Line x1={lx} y1={fromY} x2={lx} y2={height - padding.bottom}
+                            stroke={colors.textMuted} strokeWidth={0.8} strokeDasharray="2,2" strokeOpacity={0.6} />
+                        <SvgText x={lx} y={ly} fontSize={8.5}
+                            fill={colors.textMuted} textAnchor="end"
+                            transform={`rotate(-45, ${lx}, ${ly})`}>
+                            {shortDate(p.date)}
+                        </SvgText>
+                    </React.Fragment>
                 );
             })}
         </Svg>
@@ -302,8 +418,23 @@ export default function MiniPriceChart({ prices, onTap, width = MINI_CHART_WIDTH
     const colors = useTheme();
 
     const allData = preparePriceData(prices);
-    const recentData = filterByRange(allData, '3M');
-    const data = (recentData.length > 0 ? recentData : allData).slice(-MINI_CHART_MAX_POINTS);
+    // Quick-glance window: the mini chart shows only the LAST MONTH of movement.
+    // With no in-window points, the latest known price still renders — as a single
+    // (possibly old) point whose flat extension to today reads "stable since then";
+    // the full history lives in the expanded modal.
+    const recentData = filterByRange(allData, '1M');
+    const raw = (recentData.length > 0 ? recentData : allData.slice(-1)).slice(-MINI_CHART_MAX_POINTS);
+    // A LONE point renders as flat lines to today ("still valid") — which is only true
+    // for the REGULAR price. Its promo, if date-expired, is dead and must not paint a
+    // discount across the window (čiobreliai: the May 1,60 flat-lined through July).
+    // Multi-point windows keep expired promos: the >1-point path ends them honestly
+    // with the dot at promoEnd.
+    const data = raw.map((pt, i) =>
+        raw.length === 1 && i === 0 && pt.promoPrice != null &&
+        pt.promoEnd != null && new Date(pt.promoEnd).getTime() < Date.now()
+            ? { ...pt, promoPrice: null, promoEnd: null }
+            : pt,
+    );
 
     if (!data.length) {
         return (

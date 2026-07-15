@@ -87,12 +87,19 @@ export default function CreatorAuthScreen() {
             // returning users go straight back to Profilis.
             if (!res.user.username) {
                 setNeedUsername(true);
+                setPending(null);
+            } else if (Platform.OS === 'ios') {
+                // The native Apple/Google sheet may still be mid-dismissal when
+                // the token exchange resolves — a router.back() fired then gets
+                // SWALLOWED by UIKit (the "stayed on the login screen, but back
+                // showed me signed in" report). Defer the pop past the dismissal
+                // and KEEP the spinner so the wait doesn't read as a failure.
+                setTimeout(() => router.back(), 550);
             } else {
                 router.back();
             }
         } catch {
             Alert.alert(t('creatorAuth.title'), t('basketTab.errorGeneric'));
-        } finally {
             setPending(null);
         }
     }, [setSession, router, t]);
@@ -226,7 +233,20 @@ export default function CreatorAuthScreen() {
             </Modal>
 
             {/* Required first-sign-in username picker. */}
-            <CreateUsernameModal visible={needUsername} onDone={() => router.back()} />
+            <CreateUsernameModal
+                visible={needUsername}
+                // Close the handle modal FIRST, then return to Profilis. Firing
+                // router.back() while the native <Modal> is still presented gets
+                // swallowed on iOS (the "stuck on creator-auth after picking a
+                // handle" bug), so on iOS we navigate from the modal's onDismiss
+                // — which fires only after it's fully gone. Android's Modal has no
+                // onDismiss and doesn't block the pop, so go back immediately.
+                onDone={() => {
+                    setNeedUsername(false);
+                    if (Platform.OS !== 'ios') router.back();
+                }}
+                onDismiss={() => { if (Platform.OS === 'ios') router.back(); }}
+            />
         </View>
     );
 }

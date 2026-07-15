@@ -44,7 +44,20 @@ app-example
 /ios
 /android
 
+# Local Expo modules — keep the source, ignore native build output
+modules/*/android/build/
+modules/*/android/.gradle/
+modules/*/android/.cxx/
+modules/*/ios/build/
+modules/*/ios/Pods/
+
 # Synced copy of /Project/shared/ — populated by `npm run sync-shared`
 # before each EAS build so the upload includes the parser source. The
 # canonical edit point is /Project/shared/ at the monorepo root.
 /shared/
+
+# Local build artifacts (200MB+ each) — never committed. Scripted local
+# builds land in builds/ under a stable name (overwritten per build); the
+# loose pattern still catches artifacts from a bare `eas build --local`.
+builds/
+build-*.apk

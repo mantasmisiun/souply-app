@@ -1,5 +1,6 @@
 import { type ScoredCombo } from './splitBasketScore';
 import { type StoreResult } from './basketPricing';
+import { haversineKm } from './locationStorage';
 
 /**
  * Pure helpers that turn scored combos + priced stores into the ranked option
@@ -13,6 +14,9 @@ export type SheetOption = {
     combo: ScoredCombo | null; // null = single-store option
     total: number;
     saving: number;
+    /** Extra travel a SPLIT adds over the single-store option: route through its
+     *  stores − the single store's distance. null for the single-store option. */
+    detourKm: number | null;
 };
 
 /** One-shopping-trip radius. Combos whose extra travel exceeds this are not
@@ -42,6 +46,26 @@ export function savingBaseline(stores: StoreResult[]): number | null {
 const round2 = (n: number) => Math.round(n * 100) / 100;
 
 /**
+ * Extra distance a split adds over just visiting the single-store option:
+ * route(loc → nearest split store → next…) − (loc → single store). The first leg
+ * uses each store's radial distance from the search centre; inter-store legs use
+ * straight-line (haversine) between coords, falling back to radial when a store
+ * has no coordinates. Communicates "how much more driving for the saving".
+ */
+function routeDetourKm(stores: StoreResult[], singleDistance: number | null): number | null {
+    if (singleDistance == null || stores.length < 2) return null;
+    const ordered = [...stores].sort((a, b) => a.distance - b.distance);
+    let route = ordered[0].distance; // loc → nearest split store (radial)
+    for (let i = 1; i < ordered.length; i++) {
+        const prev = ordered[i - 1], cur = ordered[i];
+        route += (prev.latitude != null && prev.longitude != null && cur.latitude != null && cur.longitude != null)
+            ? haversineKm(prev.latitude, prev.longitude, cur.latitude, cur.longitude)
+            : cur.distance; // no coords → radial fallback
+    }
+    return Math.max(0, round2(route - singleDistance));
+}
+
+/**
  * Ranked options for a tapped store: the splits it belongs to (best→worst,
  * capped) plus its single-store baseline last.
  *
@@ -61,14 +85,21 @@ export function buildSplitOptions(
     opts: { tripRadiusKm?: number } = {},
 ): SheetOption[] {
     const tripRadiusKm = opts.tripRadiusKm ?? TRIP_RADIUS_KM;
-    const baseline = savingBaseline([...results, ...lazyResults]);
 
     const richById = new Map<number, StoreResult>();
     for (const r of results) richById.set(r.storeId, r);
     for (const r of lazyResults) if (!richById.has(r.storeId)) richById.set(r.storeId, r);
 
+    // Saving is measured against the SINGLE-store option shown in this same sheet
+    // (the tapped store's own total) — "is a 2nd/3rd shop actually cheaper than
+    // just this one?". The old average-baseline made a split claim a saving even
+    // when the 1-store option had the identical total; now an equal split = €0 =
+    // no saving label.
+    const single = richById.get(storeId) ?? null;
+    const singleTotal = single?.total ?? null;
+    const singleDistance = single?.distance ?? null;
     const displaySaving = (total: number) =>
-        baseline != null ? Math.max(0, round2(baseline - total)) : 0;
+        singleTotal != null ? Math.max(0, round2(singleTotal - total)) : 0;
 
     const toMulti = (c: ScoredCombo): SheetOption | null => {
         const stores = c.storeIds.map(id => richById.get(id)).filter((s): s is StoreResult => !!s);
@@ -80,6 +111,7 @@ export function buildSplitOptions(
             combo: c,
             total: c.splitTotal,
             saving: displaySaving(c.splitTotal),
+            detourKm: routeDetourKm(stores, singleDistance),
         };
     };
 
@@ -100,16 +132,25 @@ export function buildSplitOptions(
         else if (c.extraDistanceKm < prev.extraDistanceKm) bestByOffer.set(key, c);
     }
     const multis: SheetOption[] = [];
+    const seenKeys = new Set<string>();
     for (const key of offerOrder) {
         const opt = toMulti(bestByOffer.get(key)!);
-        if (opt) multis.push(opt);
+        // Two offers (same stores, different totals) resolve to the SAME store
+        // set → same `key` (comboKey). Dedupe so the sheet never renders two
+        // cards sharing one key — that made BOTH highlight and made a tap on the
+        // second resolve to the first ("tap does nothing"). First-seen wins
+        // (combos are pre-ranked best→worst).
+        if (opt && !seenKeys.has(opt.key)) {
+            seenKeys.add(opt.key);
+            multis.push(opt);
+        }
         if (multis.length >= MAX_OPTIONS) break;
     }
 
     const out = [...multis];
     const sr = richById.get(storeId);
     if (sr) {
-        out.push({ key: `s-${storeId}`, storeIds: [storeId], stores: [sr], combo: null, total: sr.total, saving: 0 });
+        out.push({ key: `s-${storeId}`, storeIds: [storeId], stores: [sr], combo: null, total: sr.total, saving: 0, detourKm: null });
     }
     return out;
 }

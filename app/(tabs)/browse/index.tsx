@@ -1,9 +1,10 @@
-import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
-import { useMemo, useRef } from 'react';
-import { useRouter } from 'expo-router';
+import { View, TouchableOpacity, Text, StyleSheet, BackHandler, Platform } from 'react-native';
+import { useCallback, useMemo, useRef } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
+import { Toast, type ToastHandle } from '../../../components/Toast';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useTheme, type AppTheme } from '../../../constants/theme';
+import { useTheme, radius, elevation, type AppTheme } from '../../../constants/theme';
 import { GlassIconButton } from '../../../components/GlassIconButton';
 import { CategoriesList, type Category } from '../../../components/browse/CategoriesList';
 import { ScreenHeading } from '../../../components/ScreenHeading';
@@ -16,6 +17,27 @@ export default function BrowseIndex() {
     const router = useRouter();
     // Collapsing header: "Naršyti" title hides on scroll (no pinned filter here).
     const header = useCollapsingHeader();
+
+    // Android double-back-to-exit on the HOME tab. Without this, back on
+    // Naršyti pops the root stack to app/index.tsx, whose <Redirect> instantly
+    // re-creates (tabs)/browse — visually "another Naršyti behind" — and the
+    // pop/redirect cycle repeats forever instead of exiting.
+    const toastRef = useRef<ToastHandle>(null);
+    const lastBackPressAt = useRef(0);
+    useFocusEffect(useCallback(() => {
+        if (Platform.OS !== 'android') return;
+        const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+            const now = Date.now();
+            if (now - lastBackPressAt.current < 2000) {
+                BackHandler.exitApp();
+                return true;
+            }
+            lastBackPressAt.current = now;
+            toastRef.current?.show(t('browse.backToExit'));
+            return true;
+        });
+        return () => sub.remove();
+    }, [t]));
 
     // Tap-debounce so a quick double-tap doesn't push /search twice.
     const lastSearchPushAt = useRef(0);
@@ -70,6 +92,7 @@ export default function BrowseIndex() {
                 contentPaddingTop={header.paddingTop}
                 header={discountsHeader}
             />
+            <Toast ref={toastRef} />
         </View>
     );
 }
@@ -77,7 +100,7 @@ export default function BrowseIndex() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     discountsCard: {
         backgroundColor: c.primary,
-        borderRadius: 14,
+        borderRadius: radius.lg,
         paddingHorizontal: 16,
         paddingVertical: 18,
         // Sits inside the list's 16px content padding now; this matches
@@ -86,9 +109,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         flexDirection: 'row',
         alignItems: 'center',
         gap: 12,
-        elevation: 2,
-        shadowColor: '#000', shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.12, shadowRadius: 4,
+        ...elevation.level2,
     },
     discountsIcon: { fontSize: 28 },
     discountsTextWrap: { flex: 1 },

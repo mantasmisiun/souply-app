@@ -1,6 +1,11 @@
 import {
-    View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator,
-} from 'react-native';
+    View,
+    Text,
+    FlatList,
+    TouchableOpacity,
+    StyleSheet,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
@@ -69,7 +74,7 @@ const L1Item = memo(function L1Item({
             <Animated.View style={animatedContentStyle}>
                 <View onLayout={handleLayout} style={styles.l2Container}>
                     {l2.length === 0 ? (
-                        <ActivityIndicator size="small" color={colors.primary} style={{ padding: 12 }} />
+                        <MaterialProgress size="small" color={colors.primary} style={{ padding: 12 }} />
                     ) : (
                         l2.map((cat, index) => (
                             <View key={cat.id}>

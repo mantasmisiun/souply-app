@@ -85,6 +85,11 @@ export default function SettingsScreen() {
                 { method: 'DELETE' },
             );
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
+            // Server account is gone — reset the local identity immediately so
+            // the dead UUID can't be reused (e.g. if the user closes the app on
+            // the goodbye screen before tapping "open new account"). Best-effort:
+            // a reset failure must not revert the already-succeeded deletion.
+            try { await resetUserId(); } catch { /* next getUserId() retries */ }
             setDeleteStage('goodbye');
         } catch (e) {
             Alert.alert(t('delete.errorTitle'), t('delete.errorBody'));

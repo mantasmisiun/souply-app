@@ -1,13 +1,22 @@
-import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, InteractionManager } from 'react-native';
+import {
+    View,
+    Text,
+    TouchableOpacity,
+    StyleSheet,
+    Alert,
+    InteractionManager,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect, useNavigation, Stack } from 'expo-router';
 import React, { useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Animated, { FadeIn } from 'react-native-reanimated';
+import Animated, { FadeIn, useSharedValue, withTiming, useAnimatedStyle } from 'react-native-reanimated';
+import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
-import { useTheme, type AppTheme } from '../../../constants/theme';
+import { useTheme, spacing, radius, elevation, typography, iconSize, type AppTheme } from '../../../constants/theme';
 import { useBasketState } from '../../../state/basketState';
 import { useProfileStore } from '../../../state/profileStore';
 import { loadCachedCoords, tryGpsCoords, persistCoords, type UserCoords } from '../../../utils/location';
@@ -15,7 +24,7 @@ import LocationPromptModal from '../../../components/LocationPromptModal';
 import { scoreAllCombinations, type ScoredCombo } from '../../../utils/splitBasketScore';
 import { type StoreResult, fetchStorePrices } from '../../../utils/basketPricing';
 import { getStoreDirectory } from '../../../utils/storeDirectory';
-import { type StoreLite } from '../../../utils/candidatePool';
+import { buildCandidatePool, type StoreLite } from '../../../utils/candidatePool';
 import { orderStopsNearestFirst, orderStopsAlongRoute, buildGoogleMapsRouteUrl } from '../../../utils/multiStopRoute';
 import { getPresets, getLocationSettings, saveLocationSettings } from '../../../utils/locationStorage';
 import StoreResultsMap, { type MapPin } from '../../../components/results/StoreResultsMap';
@@ -30,9 +39,14 @@ import { buildSplitOptions, TRIP_RADIUS_KM, type SheetOption } from '../../../ut
  *  hundreds of stores; we only ever show the top 10 ranked options. */
 const MAX_SINGLE_STORES = 10;
 
+/** Width (dp) of one digit segment in the 1·2·3 store-count toggle — also the
+ *  sliding indicator's width. Fixed so the pill stays compact, not full-width. */
+const STORE_COUNT_SEG = 34;
+
 
 export default function BasketResultsScreen() {
     const colors = useTheme();
+    const { t } = useTranslation();
     const { clearSessionBasket } = useBasketState();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset, top: topInset } = useSafeAreaInsets();
@@ -187,21 +201,41 @@ export default function BasketResultsScreen() {
         if (!isPull) setLoading(true);
         setSelectedStoreId(null);
         try {
+            // SAME contract as the basket screen's calc: honour the location
+            // settings — candidate pool from the settings, and the calculate
+            // origin = the settings-resolved centre (place/bus), falling back
+            // to the resolved coords (current/route modes). Previously this
+            // recalc posted raw GPS with NO pool, silently reverting a
+            // place-mode basket to closest-stores-around-me.
+            const [pool, settings] = await Promise.all([
+                buildCandidatePool({ lat: coords.lat, lng: coords.lng }),
+                getLocationSettings(),
+            ]);
+            const origin = pool.searchCenter ?? coords;
+            const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
+            if (pool.storeIds.length > 0) body.storeIds = pool.storeIds;
             const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ lat: coords.lat, lng: coords.lng }),
+                body: JSON.stringify(body),
             });
             const newResults = await res.json();
-            await AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults));
+            await Promise.all([
+                AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults)),
+                AsyncStorage.setItem(`basket_calc_meta_${id}`, JSON.stringify({
+                    storeCount: settings.storeCount,
+                    searchCenter: pool.searchCenter,
+                    settings,
+                })),
+            ]);
             await persistCoords(coords);
-            setUserCoords({ lat: coords.lat, lng: coords.lng });
+            setUserCoords({ lat: origin.lat, lng: origin.lng });
             setResults(newResults);
             setSelectedOptionKey(null);
             setLazyResults([]); // re-priced basket → old lazy prices are stale
             setLoading(false);
         } catch {
-            Alert.alert('Klaida', 'Nepavyko perskaičiuoti');
+            Alert.alert(t('results.errorTitle'), t('results.errorRecalc'));
             setLoading(false);
         }
     }, [id]);
@@ -304,13 +338,17 @@ export default function BasketResultsScreen() {
     // basket total, or the best in-radius split it's part of (then the pin shows
     // the combo's price). Plus the globally cheapest option's stores = the
     // recommended set (one store if a single wins, 2-3 if a split wins).
-    const { pinPriceByStore, recommendedStoreIds, recommendedStores } = useMemo(() => {
+    const { pinPriceByStore, pinComboByStore, recommendedStoreIds, recommendedStores } = useMemo(() => {
         const richById = new Map<number, StoreResult>();
         for (const r of results) richById.set(r.storeId, r);
         for (const r of lazyResults) if (!richById.has(r.storeId)) richById.set(r.storeId, r);
 
         const priceByStore = new Map<number, number>();
         for (const [, r] of richById) priceByStore.set(r.storeId, r.total);
+        // storeId → the combo that provided its shown price (null = a single
+        // total won). Drives the pill's partner badge: the price is a split
+        // total, so show WHO it splits with.
+        const comboByStore = new Map<number, ScoredCombo>();
 
         // Global best starts as the recommended single store; a cheaper in-radius
         // split takes over.
@@ -321,7 +359,10 @@ export default function BasketResultsScreen() {
             if (c.stores.length <= 1 || c.extraDistanceKm > TRIP_RADIUS_KM) continue;
             for (const sid of c.storeIds) {
                 const cur = priceByStore.get(sid);
-                if (cur == null || c.splitTotal < cur) priceByStore.set(sid, c.splitTotal);
+                if (cur == null || c.splitTotal < cur) {
+                    priceByStore.set(sid, c.splitTotal);
+                    comboByStore.set(sid, c);
+                }
             }
             if (!best || c.splitTotal < best.price) {
                 const stores = c.storeIds.map(id => richById.get(id)).filter((s): s is StoreResult => !!s);
@@ -330,10 +371,33 @@ export default function BasketResultsScreen() {
         }
         return {
             pinPriceByStore: priceByStore,
+            pinComboByStore: comboByStore,
             recommendedStoreIds: new Set(best?.ids ?? []),
             recommendedStores: best?.stores ?? [],
         };
     }, [results, lazyResults, combos]);
+
+    // Per-store SHARE of the selected split: Σ of the assigned items' line
+    // totals at that store — mirrors splitBasketScore's splitTotal sum exactly,
+    // so the members' shares add up to the option total shown before the tap.
+    const selectedShareByStore = useMemo(() => {
+        const shares = new Map<number, number>();
+        const combo = selectedOption?.combo;
+        if (!combo) return shares;
+        const itemsByStore = new Map<number, Map<number, number>>(); // storeId → productId → totalPrice
+        for (const s of selectedOption!.stores) {
+            const m = new Map<number, number>();
+            for (const it of s.items) if (!it.isMissing && it.totalPrice != null) m.set(it.productId, it.totalPrice);
+            itemsByStore.set(s.storeId, m);
+        }
+        for (const [pidStr, sid] of Object.entries(combo.itemAssignments)) {
+            const line = itemsByStore.get(sid)?.get(Number(pidStr));
+            if (line != null) shares.set(sid, (shares.get(sid) ?? 0) + line);
+        }
+        // Round to cents so the pills show clean figures.
+        for (const [sid, v] of shares) shares.set(sid, Math.round(v * 100) / 100);
+        return shares;
+    }, [selectedOption]);
 
     // Stores shown as pills = the priced set, plus the recommended option's
     // stores and any member of the selected option (so a recommended/chosen
@@ -350,23 +414,48 @@ export default function BasketResultsScreen() {
     const pins: MapPin[] = useMemo(() =>
         pinStores
             .filter(s => s.latitude != null && s.longitude != null)
-            .map(s => ({
-                storeId: s.storeId, chainId: s.chainId, chainName: s.chainName,
-                miniLogoUrl: s.chainMiniLogoUrl ?? s.chainLogoUrl ?? null,
-                latitude: s.latitude as number, longitude: s.longitude as number,
-                euro: pinPriceByStore.get(s.storeId) ?? s.total, // cheapest option for this store
-                active: activeIds.has(s.storeId),
-                recommended: recommendedStoreIds.has(s.storeId), // all stores of the best option
-            })),
-        [pinStores, activeIds, pinPriceByStore, recommendedStoreIds]);
+            .map(s => {
+                const active = activeIds.has(s.storeId);
+                // UNSELECTED: the cheapest option's price (a split shows the combo
+                // TOTAL + the partner's badge). SELECTED member: the pin's OWN
+                // figure — its share of the split (or its single total) — and the
+                // partner badge hides (the drawn route already shows the pairing).
+                let euro = pinPriceByStore.get(s.storeId) ?? s.total;
+                let partnerChainIds: number[] = [];
+                if (active && selectedOption) {
+                    euro = selectedOption.combo
+                        ? (selectedShareByStore.get(s.storeId) ?? euro)
+                        : (selectedOption.stores.find(st => st.storeId === s.storeId)?.total ?? euro);
+                } else {
+                    const combo = pinComboByStore.get(s.storeId);
+                    // ALL partners: 2-store combo → 1 badge, 3-store → 2 stacked.
+                    partnerChainIds = combo
+                        ? combo.stores.filter(st => st.storeId !== s.storeId).map(st => st.chainId)
+                        : [];
+                }
+                return {
+                    storeId: s.storeId, chainId: s.chainId, chainName: s.chainName,
+                    miniLogoUrl: s.chainMiniLogoUrl ?? s.chainLogoUrl ?? null,
+                    latitude: s.latitude as number, longitude: s.longitude as number,
+                    euro,
+                    active,
+                    recommended: recommendedStoreIds.has(s.storeId), // all stores of the best option
+                    partnerChainIds,
+                };
+            }),
+        [pinStores, activeIds, pinPriceByStore, pinComboByStore, selectedShareByStore, selectedOption, recommendedStoreIds]);
 
-    // The recommended option's representative point — the map centers here on
-    // load (a single store, or the first store of a recommended split).
+    // The recommended option's store coordinates — the map frames ALL of them on
+    // load (fit for a split, center for a single) so a combo partner is never
+    // left outside the initial viewport.
     const recommendedCoords = useMemo(() => {
-        const s = recommendedStores[0] ?? singlePriced.find(x => x.storeId === cheapestStoreId);
-        return s && s.latitude != null && s.longitude != null
-            ? { latitude: s.latitude as number, longitude: s.longitude as number }
-            : null;
+        const stores = recommendedStores.length
+            ? recommendedStores
+            : [singlePriced.find(x => x.storeId === cheapestStoreId)].filter((x): x is NonNullable<typeof x> => !!x);
+        const cs = stores
+            .filter(s => s.latitude != null && s.longitude != null)
+            .map(s => ({ latitude: s.latitude as number, longitude: s.longitude as number }));
+        return cs.length ? cs : null;
     }, [recommendedStores, singlePriced, cheapestStoreId]);
 
     // Coords the map zooms to: the selected option's store(s), or null = fit all.
@@ -400,6 +489,15 @@ export default function BasketResultsScreen() {
         // longer affects pricing, so this never forces a recalc.
         try { await saveLocationSettings({ storeCount: n }); } catch {}
     }, [maxStores, closeSheet]);
+
+    // Sliding capsule for the 1/2/3 store-count toggle — the selection animates
+    // between segments instead of hard-cutting. `segW` is one segment's width
+    // (measured), `idx` the active segment (0-based).
+    const storeCountIdx = useSharedValue(maxStores - 1);
+    useEffect(() => { storeCountIdx.value = maxStores - 1; }, [maxStores, storeCountIdx]);
+    const storeCountIndicatorStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: withTiming(storeCountIdx.value * STORE_COUNT_SEG, { duration: 220 }) }],
+    }));
 
     // Stores that already carry a price pill — excluded from the directory layer.
     const pricedStoreIds = useMemo(
@@ -437,7 +535,7 @@ export default function BasketResultsScreen() {
                 Alert.alert('Nėra kainos', 'Šioje parduotuvėje nepavyko įkainoti krepšelio.');
             }
         } catch {
-            Alert.alert('Klaida', 'Nepavyko gauti kainos');
+            Alert.alert(t('results.errorTitle'), t('results.errorGetPrice'));
         } finally {
             setPricingStoreId(null);
         }
@@ -460,7 +558,7 @@ export default function BasketResultsScreen() {
                 });
             }
         } catch {
-            Alert.alert('Klaida', 'Nepavyko įkainoti parduotuvių');
+            Alert.alert(t('results.errorTitle'), t('results.errorPriceStores'));
         } finally {
             setBatchPricing(false);
         }
@@ -593,7 +691,7 @@ export default function BasketResultsScreen() {
                 router.push(`/shopping-list/${listData.id}` as any);
             }, 100);
         } catch (error: any) {
-            Alert.alert('Klaida', 'Nepavyko sukurti pirkinių sąrašo');
+            Alert.alert(t('results.errorTitle'), t('results.errorCreateList'));
         } finally {
             setCreatingList(false);
         }
@@ -656,7 +754,7 @@ export default function BasketResultsScreen() {
                 router.push(`/shopping-list/split/${id}` as any);
             }, 100);
         } catch {
-            Alert.alert('Klaida', 'Nepavyko sukurti pirkinių sąrašo');
+            Alert.alert(t('results.errorTitle'), t('results.errorCreateList'));
         } finally {
             setCreatingList(false);
         }
@@ -672,8 +770,8 @@ export default function BasketResultsScreen() {
             <View style={styles.container}>
                 {loading && !pullRefreshing ? (
                     <Animated.View entering={FadeIn} style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color={colors.primary} />
-                        <Text style={styles.loadingText}>Skaičiuojamos kainos...</Text>
+                        <MaterialProgress size="large" color={colors.primary} />
+                        <Text style={styles.loadingText}>{t('results.loading')}</Text>
                     </Animated.View>
                 ) : mapMounted ? (
                     // Full-bleed map fills the content region; the option sheet
@@ -701,7 +799,7 @@ export default function BasketResultsScreen() {
                         <View style={[styles.mapTopLeft, { top: topInset + 10 }]} pointerEvents="box-none">
                             <TouchableOpacity style={styles.mapBackShadow} onPress={() => router.back()} activeOpacity={0.8}>
                                 <LiquidGlass style={styles.mapBackBtn} fallback="solid">
-                                    <Ionicons name="chevron-back" size={24} color={colors.primary} />
+                                    <Ionicons name="chevron-back" size={iconSize.lg} color={colors.primary} />
                                 </LiquidGlass>
                             </TouchableOpacity>
                         </View>
@@ -710,27 +808,30 @@ export default function BasketResultsScreen() {
                         <View style={[styles.mapTopCenter, { top: topInset + 10 }]} pointerEvents="box-none">
                             <View style={styles.storeCountShadow}>
                                 <LiquidGlass style={styles.storeCountPill} fallback="solid">
-                                    <Ionicons name="storefront-outline" size={15} color={colors.textSecondary} style={styles.storeCountIcon} />
-                                    {([1, 2, 3] as const).map(n => {
-                                        const active = maxStores === n;
-                                        return (
-                                            <TouchableOpacity
-                                                key={n}
-                                                style={[styles.storeCountBtn, active && styles.storeCountBtnActive]}
-                                                onPress={() => setStoreCount(n)}
-                                                activeOpacity={0.8}
-                                            >
-                                                <Text style={[styles.storeCountText, active && styles.storeCountTextActive]}>{n}</Text>
-                                            </TouchableOpacity>
-                                        );
-                                    })}
+                                    <Ionicons name="storefront-outline" size={iconSize.sm} color={colors.textSecondary} style={styles.storeCountIcon} />
+                                    <View style={styles.storeCountSegments}>
+                                        <Animated.View style={[styles.storeCountIndicator, storeCountIndicatorStyle]} />
+                                        {([1, 2, 3] as const).map(n => {
+                                            const active = maxStores === n;
+                                            return (
+                                                <TouchableOpacity
+                                                    key={n}
+                                                    style={styles.storeCountBtn}
+                                                    onPress={() => setStoreCount(n)}
+                                                    activeOpacity={0.8}
+                                                >
+                                                    <Text style={[styles.storeCountText, active && styles.storeCountTextActive]}>{n}</Text>
+                                                </TouchableOpacity>
+                                            );
+                                        })}
+                                    </View>
                                 </LiquidGlass>
                             </View>
                         </View>
                     </>
                 ) : (
                     <View style={styles.loadingContainer}>
-                        <ActivityIndicator size="large" color={colors.primary} />
+                        <MaterialProgress size="large" color={colors.primary} />
                     </View>
                 )}
                 {/* Tap a pin → options sheet; nothing selected → a subtle hint. */}
@@ -750,7 +851,7 @@ export default function BasketResultsScreen() {
                         />
                     ) : visibleUnpriced.length > 0 ? (
                         // Un-priced stores in view → one-tap "price this area".
-                        <View style={[styles.hintWrap, { bottom: 20 + bottomInset }]} pointerEvents="box-none">
+                        <View style={[styles.hintWrap, { bottom: spacing.xl + bottomInset }]} pointerEvents="box-none">
                             <TouchableOpacity
                                 style={styles.batchBtn}
                                 onPress={handleBatchPrice}
@@ -758,18 +859,18 @@ export default function BasketResultsScreen() {
                                 activeOpacity={0.85}
                             >
                                 {batchPricing
-                                    ? <ActivityIndicator size="small" color={colors.onPrimary} />
-                                    : <Ionicons name="pricetags-outline" size={17} color={colors.onPrimary} />}
+                                    ? <MaterialProgress size="small" color={colors.onPrimary} />
+                                    : <Ionicons name="pricetags-outline" size={iconSize.sm} color={colors.onPrimary} />}
                                 <Text style={styles.batchBtnText}>
-                                    {batchPricing ? 'Skaičiuojama…' : `Paskaičiuoti dar (${visibleUnpriced.length})`}
+                                    {batchPricing ? t('results.batchCalculating') : t('results.batchMore', { count: visibleUnpriced.length })}
                                 </Text>
                             </TouchableOpacity>
                         </View>
                     ) : (
-                        <View style={[styles.hintWrap, { bottom: 20 + bottomInset }]} pointerEvents="none">
+                        <View style={[styles.hintWrap, { bottom: spacing.xl + bottomInset }]} pointerEvents="none">
                             <LiquidGlass style={styles.hintPill} fallback="solid" interactive={false}>
-                                <Ionicons name="hand-left-outline" size={15} color={colors.textSecondary} />
-                                <Text style={styles.hintText}>Palieskite parduotuvę</Text>
+                                <Ionicons name="hand-left-outline" size={iconSize.sm} color={colors.textSecondary} />
+                                <Text style={styles.hintText}>{t('results.tapStore')}</Text>
                             </LiquidGlass>
                         </View>
                     )
@@ -791,15 +892,15 @@ export default function BasketResultsScreen() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     // Floating map header (map view is full-bleed): back circle + toggle, left.
-    mapTopLeft: { position: 'absolute', left: 12, alignItems: 'flex-start', gap: 10, zIndex: 20 },
+    mapTopLeft: { position: 'absolute', left: spacing.md, alignItems: 'flex-start', gap: spacing.sm, zIndex: 20 },
     // Glass surfaces clip to their rounded shape (overflow hidden), so the
     // drop shadow lives on an outer wrapper — a clipped view can't cast one.
     mapBackShadow: {
-        borderRadius: 21,
-        elevation: 5, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.2, shadowRadius: 4,
+        borderRadius: radius.pill,
+        ...elevation.level2,
     },
     mapBackBtn: {
-        width: 42, height: 42, borderRadius: 21, overflow: 'hidden',
+        width: 42, height: 42, borderRadius: radius.pill, overflow: 'hidden',
         backgroundColor: c.cardBackground,
         alignItems: 'center', justifyContent: 'center',
         borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
@@ -807,232 +908,38 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // Top-centre store-count segmented toggle (1·2·3).
     mapTopCenter: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 20 },
     storeCountShadow: {
-        borderRadius: 22,
-        elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.16, shadowRadius: 8,
+        borderRadius: radius.pill,
+        ...elevation.level3,
     },
     storeCountPill: {
         flexDirection: 'row', alignItems: 'center', overflow: 'hidden',
-        backgroundColor: c.cardBackground, borderRadius: 22,
-        paddingLeft: 10, paddingRight: 4, paddingVertical: 4, gap: 2,
+        backgroundColor: c.cardBackground, borderRadius: radius.pill,
+        paddingLeft: spacing.sm, paddingRight: spacing.xs, paddingVertical: spacing.xs, gap: 2,
         borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
     },
-    storeCountIcon: { marginRight: 4 },
-    storeCountBtn: { minWidth: 34, paddingVertical: 6, borderRadius: 16, alignItems: 'center', justifyContent: 'center' },
-    storeCountBtnActive: { backgroundColor: c.primary },
+    storeCountIcon: { marginRight: spacing.xs },
+    storeCountSegments: { flexDirection: 'row', position: 'relative' },
+    // Sliding selection capsule; sits behind the digits and animates between them.
+    storeCountIndicator: { position: 'absolute', top: 0, bottom: 0, left: 0, width: STORE_COUNT_SEG, borderRadius: radius.pill, backgroundColor: c.primary },
+    storeCountBtn: { width: STORE_COUNT_SEG, paddingVertical: 6, alignItems: 'center', justifyContent: 'center' },
     storeCountText: { fontSize: 15, fontWeight: '800', color: c.textSecondary },
     storeCountTextActive: { color: c.onPrimary },
-    centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
-    loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 16, backgroundColor: c.pageBackground },
-    loadingText: { fontSize: 15, color: c.textSecondary },
-    list: { padding: 16, paddingBottom: 100 },
-    card: {
-        backgroundColor: c.cardBackground, borderRadius: 12, padding: 16, marginBottom: 10,
-        flexDirection: 'row', alignItems: 'center',
-        elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.08, shadowRadius: 2,
-    },
-    cardCheapest: { borderWidth: 2, borderColor: c.primary },
-    cardClosest: { borderWidth: 2, borderColor: c.info },
-    cardSelected: { backgroundColor: c.primaryMuted },
-    cheapestBadge: {
-        position: 'absolute', top: -8, left: 16,
-        backgroundColor: c.primary, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8,
-    },
-    cheapestBadgeText: { color: c.onPrimary, fontSize: 10, fontWeight: '700' },
-    closestBadge: {
-        position: 'absolute', top: -8, left: 16,
-        backgroundColor: c.info, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8,
-    },
-    closestBadgeText: { color: c.textInverse, fontSize: 10, fontWeight: '700' },
-    cardLeft: { marginRight: 12 },
-    logo: {
-        width: 48, height: 48, borderRadius: 8,
-        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-    },
-    logoImage: { width: 36, height: 36 },
-    logoPlaceholderText: { fontSize: 20, fontWeight: '700', color: '#FFFFFF' },
-    cardContent: { flex: 1 },
-    storeName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
-    metaRow: { flexDirection: 'row', alignItems: 'center', marginTop: 4, gap: 4 },
-    distance: { fontSize: 11, color: c.textMuted },
-    missingBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 2,
-        marginLeft: 6,
-        paddingHorizontal: 6,
-        paddingVertical: 1,
-        borderRadius: 8,
-        backgroundColor: c.warningMuted,
-    },
-    missingBadgeText: {
-        fontSize: 10,
-        color: c.warning,
-        fontWeight: '600',
-    },
-    missingList: {
-        marginTop: 4,
-        fontSize: 11,
-        color: c.textSecondary,
-        fontStyle: 'italic',
-    },
-    // Tier-3 substitute: the store carries a name-similar product, just
-    // not the user's exact one. Blue = "decent confidence, something to
-    // grab off the shelf".
-    substitutedBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 2,
-        marginLeft: 6,
-        paddingHorizontal: 6,
-        paddingVertical: 1,
-        borderRadius: 8,
-        backgroundColor: c.infoMuted,
-    },
-    substitutedBadgeText: {
-        fontSize: 10,
-        color: c.info,
-        fontWeight: '600',
-    },
-    approxBadge: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        gap: 2,
-        marginLeft: 6,
-        paddingHorizontal: 6,
-        paddingVertical: 1,
-        borderRadius: 8,
-        backgroundColor: c.surfaceMuted,
-    },
-    approxBadgeText: {
-        fontSize: 10,
-        color: c.textMuted,
-        fontWeight: '600',
-    },
-    price: { fontSize: 18, fontWeight: '700', color: c.primary, marginLeft: 8 },
-    bottomBar: {
-        flexDirection: 'row', padding: 12, gap: 10,
-        backgroundColor: c.cardBackground, borderTopWidth: 1, borderTopColor: c.border,
-    },
+    loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.lg, backgroundColor: c.pageBackground },
+    loadingText: { ...typography.body, color: c.textSecondary },
     hintWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
     hintPill: {
         flexDirection: 'row', alignItems: 'center', gap: 6, overflow: 'hidden',
-        backgroundColor: c.cardBackground, borderRadius: 999,
-        paddingHorizontal: 14, paddingVertical: 8,
+        backgroundColor: c.cardBackground, borderRadius: radius.pill,
+        paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
         borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
     },
-    hintText: { fontSize: 13, fontWeight: '600', color: c.textSecondary },
+    hintText: { ...typography.label, color: c.textSecondary },
     // Area-batch "price this area" button (pink pill, bottom-center).
     batchBtn: {
-        flexDirection: 'row', alignItems: 'center', gap: 8,
-        backgroundColor: c.primary, borderRadius: 999,
-        paddingHorizontal: 18, paddingVertical: 12,
-        elevation: 6, shadowColor: '#000', shadowOffset: { width: 0, height: 3 }, shadowOpacity: 0.25, shadowRadius: 5,
+        flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+        backgroundColor: c.primary, borderRadius: radius.pill,
+        paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
+        ...elevation.level3,
     },
-    batchBtnText: { fontSize: 14, fontWeight: '700', color: c.onPrimary },
-    emptyText: { fontSize: 16, color: c.textSecondary },
-    shoppingListButton: {
-        flex: 2, backgroundColor: c.primary, borderRadius: 12,
-        padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    },
-    shoppingListText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
-    navigateButton: {
-        flex: 1, borderWidth: 1, borderColor: c.primary, borderRadius: 12,
-        padding: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-    },
-    navigateText: { color: c.primary, fontWeight: '600', fontSize: 15 },
-
-    gateOverlay: {
-        flex: 1, alignItems: 'center', justifyContent: 'center',
-        padding: 32, gap: 16,
-    },
-    gateTitle: { fontSize: 20, fontWeight: '700', color: c.textPrimary, textAlign: 'center' },
-    gateBody: { fontSize: 14, color: c.textSecondary, textAlign: 'center', lineHeight: 22 },
-    gateButton: {
-        backgroundColor: c.primary, borderRadius: 10,
-        paddingVertical: 12, paddingHorizontal: 24, marginTop: 8,
-    },
-    gateButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 15 },
-
-    // ── Split basket section ──
-    splitSectionTitle: {
-        fontSize: 12, fontWeight: '700', color: c.textMuted,
-        textTransform: 'uppercase', letterSpacing: 0.5,
-        marginTop: 4, marginBottom: 8,
-    },
-    nudgeBanner: {
-        flexDirection: 'row', alignItems: 'flex-start', gap: 8,
-        backgroundColor: c.surfaceMuted, borderRadius: 10,
-        paddingVertical: 10, paddingHorizontal: 12, marginBottom: 10,
-    },
-    nudgeBannerText: { flex: 1, fontSize: 13, color: c.textSecondary, lineHeight: 18 },
-    comboCard: {
-        backgroundColor: c.cardBackground, borderRadius: 12,
-        padding: 14, marginBottom: 10,
-        elevation: 2, shadowColor: '#000', shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.08, shadowRadius: 2,
-    },
-    comboCardRecommended: {
-        borderWidth: 2, borderColor: c.primary,
-    },
-    comboCardSelected: {
-        borderWidth: 2, borderColor: c.primary, backgroundColor: c.primaryMuted,
-    },
-    comboCardDimmed: { opacity: 0.55 },
-    recommendedBadge: {
-        position: 'absolute', top: -8, left: 14,
-        backgroundColor: c.primary, paddingHorizontal: 8, paddingVertical: 2, borderRadius: 8,
-    },
-    recommendedBadgeText: { color: c.onPrimary, fontSize: 10, fontWeight: '700' },
-    criticalWarning: {
-        flexDirection: 'row', alignItems: 'center', gap: 4,
-        marginBottom: 6,
-    },
-    criticalWarningText: { fontSize: 11, color: c.warning, fontWeight: '600' },
-    comboLogos: {
-        flexDirection: 'row', alignItems: 'center', gap: 0, marginBottom: 8, marginTop: 4,
-    },
-    comboLogoWrap: { flexDirection: 'row', alignItems: 'center' },
-    comboPlusSep: { width: 28, textAlign: 'center', fontSize: 13, color: c.textMuted, paddingVertical: 2 },
-    comboLogo: { width: 40, height: 40, borderRadius: 8 },
-    comboLogoPlaceholder: {
-        width: 40, height: 40, borderRadius: 8,
-        backgroundColor: c.border, alignItems: 'center', justifyContent: 'center',
-    },
-    comboLogoPlaceholderText: { fontSize: 16, fontWeight: '700', color: c.textSecondary },
-    comboStoreDetails: {
-        flexDirection: 'column',
-        marginBottom: 10, marginTop: 4,
-    },
-    comboStoreDetailRow: {
-        flexDirection: 'row', alignItems: 'flex-start', gap: 6,
-    },
-    comboMiniLogo: {
-        width: 28, height: 28, borderRadius: 6,
-        alignItems: 'center', justifyContent: 'center', overflow: 'hidden',
-    },
-    comboMiniLogoImage: { width: 20, height: 20 },
-    comboMiniLogoText: { fontSize: 12, fontWeight: '700', color: '#FFFFFF' },
-    comboItemCount: { fontSize: 13, color: c.textSecondary, fontWeight: '500' },
-    comboStoreAddress: { fontSize: 11, color: c.textMuted, marginTop: 1 },
-    comboCardRow: { flexDirection: 'row', alignItems: 'center' },
-    comboCardLeft: { flex: 1 },
-    comboCardRight: { alignItems: 'flex-end', paddingLeft: 12 },
-    comboDelta: { fontSize: 12, color: c.textMuted, marginTop: 2 },
-    comboDeltaGood: { color: c.success },
-    comboDistRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-    comboDistText: { fontSize: 11, color: c.textMuted },
-    comboTotalsRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
-    comboTotal: { fontSize: 18, fontWeight: '700', color: c.primary },
-    comboSavingBadge: {
-        backgroundColor: c.successMuted, borderRadius: 8,
-        paddingHorizontal: 8, paddingVertical: 3,
-    },
-    comboSavingText: { fontSize: 13, fontWeight: '700', color: c.success },
-    comboEurosPerKm: { fontSize: 11, color: c.textMuted, marginTop: 4 },
-    showMoreBtn: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        gap: 4, paddingVertical: 10, marginBottom: 6,
-    },
-    showMoreBtnText: { fontSize: 13, fontWeight: '600', color: c.primary },
+    batchBtnText: { ...typography.bodyStrong, fontWeight: '700', color: c.onPrimary },
 });

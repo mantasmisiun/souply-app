@@ -1,10 +1,22 @@
 import React, { useMemo, useState } from 'react';
-import { View, Text, Image, TouchableOpacity, TextInput, Modal, StyleSheet, ActivityIndicator, Alert, KeyboardAvoidingView, Platform } from 'react-native';
+import {
+    View,
+    Text,
+    Image,
+    TouchableOpacity,
+    TextInput,
+    Modal,
+    StyleSheet,
+    Alert,
+    KeyboardAvoidingView,
+    Platform,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import * as ImagePicker from 'expo-image-picker';
 import * as ImageManipulator from 'expo-image-manipulator';
-import { useTheme, type AppTheme } from '../constants/theme';
+import { useTheme, spacing, radius, typography, type AppTheme } from '../constants/theme';
 import { useAuthState } from '../state/authState';
 import { type ProfileData } from '../state/profileStore';
 import { API_BASE_URL } from '../config/api';
@@ -145,7 +157,7 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
                     )}
                     <View style={styles.avatarEdit}>
                         {uploading
-                            ? <ActivityIndicator size="small" color="#FFFFFF" />
+                            ? <MaterialProgress size="small" color="#FFFFFF" />
                             : <Ionicons name="camera" size={13} color="#FFFFFF" />}
                     </View>
                 </TouchableOpacity>
@@ -190,7 +202,7 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
                             </TouchableOpacity>
                             <TouchableOpacity style={styles.modalSave} onPress={saveName} disabled={savingName}>
                                 {savingName
-                                    ? <ActivityIndicator size="small" color={colors.onPrimary} />
+                                    ? <MaterialProgress size="small" color={colors.onPrimary} />
                                     : <Text style={styles.modalSaveText}>{t('basketTab.creatorProfile.save')}</Text>}
                             </TouchableOpacity>
                         </View>
@@ -204,44 +216,44 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
 const AVATAR = 64;
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    wrap: { gap: 14, marginBottom: 18 },
-    row: { flexDirection: 'row', alignItems: 'center', gap: 14 },
+    wrap: { gap: spacing.lg, marginBottom: spacing.lg },
+    row: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg },
     avatarBtn: { width: AVATAR, height: AVATAR },
     avatarImg: { width: AVATAR, height: AVATAR, borderRadius: AVATAR / 2, backgroundColor: c.surfaceMuted },
     avatarInitials: {
         width: AVATAR, height: AVATAR, borderRadius: AVATAR / 2,
         backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center',
     },
-    avatarInitialsText: { fontSize: 24, fontWeight: '800', color: c.onPrimary },
+    avatarInitialsText: { ...typography.title, fontWeight: '800', color: c.onPrimary },
     avatarEdit: {
         position: 'absolute', right: -2, bottom: -2,
-        width: 22, height: 22, borderRadius: 11, backgroundColor: c.primary,
+        width: 22, height: 22, borderRadius: radius.pill, backgroundColor: c.primary,
         alignItems: 'center', justifyContent: 'center',
         borderWidth: 2, borderColor: c.pageBackground,
     },
     nameCol: { flex: 1 },
     nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    name: { fontSize: 18, fontWeight: '800', color: c.textPrimary, flexShrink: 1 },
-    handle: { fontSize: 14, color: c.textSecondary, marginTop: 2 },
-    modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 24 },
-    modalCard: { width: '100%', maxWidth: 420, backgroundColor: c.cardBackground, borderRadius: 18, padding: 20, gap: 8 },
-    modalTitle: { fontSize: 17, fontWeight: '800', color: c.textPrimary, marginBottom: 4 },
-    inputLabel: { fontSize: 12, fontWeight: '600', color: c.textMuted, marginTop: 4 },
+    name: { ...typography.subheading, fontWeight: '800', color: c.textPrimary, flexShrink: 1 },
+    handle: { ...typography.bodySmall, color: c.textSecondary, marginTop: 2 },
+    modalBackdrop: { flex: 1, backgroundColor: c.overlayBackdrop, alignItems: 'center', justifyContent: 'center', padding: spacing.xl },
+    modalCard: { width: '100%', maxWidth: 420, backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: spacing.xl, gap: spacing.sm },
+    modalTitle: { ...typography.subheading, fontWeight: '800', color: c.textPrimary, marginBottom: spacing.xs },
+    inputLabel: { ...typography.labelSmall, color: c.textMuted, marginTop: spacing.xs },
     input: {
-        borderWidth: 1, borderColor: c.border, borderRadius: 10,
-        paddingHorizontal: 12, paddingVertical: 10, fontSize: 15, color: c.textPrimary,
+        borderWidth: 1, borderColor: c.border, borderRadius: radius.sm,
+        paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: 15, color: c.textPrimary,
     },
-    modalActions: { flexDirection: 'row', gap: 10, marginTop: 12, justifyContent: 'flex-end' },
-    modalCancel: { paddingHorizontal: 16, paddingVertical: 11, borderRadius: 10 },
-    modalCancelText: { fontSize: 15, fontWeight: '700', color: c.textSecondary },
-    modalSave: { paddingHorizontal: 18, paddingVertical: 11, borderRadius: 10, backgroundColor: c.primary, minWidth: 96, alignItems: 'center' },
-    modalSaveText: { fontSize: 15, fontWeight: '700', color: c.onPrimary },
-    cards: { flexDirection: 'row', gap: 8 },
+    modalActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md, justifyContent: 'flex-end' },
+    modalCancel: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.pill },
+    modalCancelText: { ...typography.bodyStrong, fontWeight: '700', color: c.textSecondary },
+    modalSave: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.pill, backgroundColor: c.primary, minWidth: 96, alignItems: 'center' },
+    modalSaveText: { ...typography.bodyStrong, fontWeight: '700', color: c.onPrimary },
+    cards: { flexDirection: 'row', gap: spacing.sm },
     card: {
-        flex: 1, backgroundColor: c.cardBackground, borderRadius: 12,
-        paddingVertical: 12, paddingHorizontal: 6, alignItems: 'center', gap: 3,
+        flex: 1, backgroundColor: c.cardBackground, borderRadius: radius.lg,
+        paddingVertical: spacing.md, paddingHorizontal: 6, alignItems: 'center', gap: 3,
         borderWidth: 1, borderColor: c.border,
     },
-    cardValue: { fontSize: 17, fontWeight: '800', color: c.primary },
-    cardLabel: { fontSize: 10, fontWeight: '600', color: c.textSecondary, textAlign: 'center' },
+    cardValue: { ...typography.subheading, fontWeight: '800', color: c.primary },
+    cardLabel: { ...typography.caption, fontWeight: '600', color: c.textSecondary, textAlign: 'center' },
 });

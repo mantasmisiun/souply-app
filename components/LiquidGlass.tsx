@@ -39,20 +39,40 @@ export function LiquidGlass({
     tintColor,
     interactive = true,
     fallback = 'blur',
+    glassStyle = 'regular',
+    intensity = 50,
+    blurTint,
+    forceFallback = false,
 }: {
     style?: StyleProp<ViewStyle>;
     children?: React.ReactNode;
     tintColor?: string;
     interactive?: boolean;
     fallback?: 'blur' | 'solid';
+    /** Skip the native Liquid Glass even when available and render the
+     *  fallback material. The native glass draws its own specular RIM at the
+     *  view's edges — right for buttons/pills, but on a large sheet surface it
+     *  reads as an unwanted edge decoration; the blur fallback has no rim. */
+    forceFallback?: boolean;
+    /** iOS 26 material flavour: 'regular' (default) or 'clear' — clear carries
+     *  almost no tint, for surfaces stacked ON another glass (e.g. option cards
+     *  on the results sheet) so glass-on-glass doesn't go muddy. */
+    glassStyle?: 'regular' | 'clear';
+    /** Blur-fallback strength (expo-blur intensity). Default matches the old
+     *  hardcoded 50; lighter stacked surfaces pass more blur + less tint. */
+    intensity?: number;
+    /** Blur-fallback tint override. Stacking two scheme-tinted blurs COMPOUNDS
+     *  the tint (dark-on-dark goes muddier, not lighter) — a surface layered on
+     *  another glass passes 'light' so it LIGHTENS what's beneath instead. */
+    blurTint?: 'light' | 'dark' | 'default';
 }) {
     const scheme = useColorScheme();
-    if (HAS_LIQUID_GLASS && GlassView) {
+    if (!forceFallback && HAS_LIQUID_GLASS && GlassView) {
         // Strip any solid backgroundColor so the glass material shows through.
         return (
             <GlassView
                 style={[style, { backgroundColor: 'transparent' }]}
-                glassEffectStyle="regular"
+                glassEffectStyle={glassStyle}
                 tintColor={tintColor}
                 isInteractive={interactive}
             >
@@ -64,7 +84,7 @@ export function LiquidGlass({
         return <View style={style}>{children}</View>;
     }
     return (
-        <BlurView intensity={50} tint={scheme === 'dark' ? 'dark' : 'light'} style={style}>
+        <BlurView intensity={intensity} tint={blurTint ?? (scheme === 'dark' ? 'dark' : 'light')} style={style}>
             {children}
         </BlurView>
     );

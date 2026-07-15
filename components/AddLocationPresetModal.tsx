@@ -5,9 +5,9 @@ import {
     TouchableOpacity,
     StyleSheet,
     Modal,
-    ActivityIndicator,
     Platform,
-} from 'react-native';
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { KeyboardAwareScrollView } from 'react-native-keyboard-controller';
 import MapView, { Marker, MapPressEvent } from 'react-native-maps';
 import { useMemo, useState } from 'react';
@@ -136,7 +136,7 @@ export default function AddLocationPresetModal({
                         {/* GPS button */}
                         <TouchableOpacity style={styles.gpsButton} onPress={handleGps} disabled={loading}>
                             {loading ? (
-                                <ActivityIndicator color={colors.onPrimary} />
+                                <MaterialProgress color={colors.onPrimary} />
                             ) : (
                                 <>
                                     <Ionicons name="locate" size={20} color={colors.onPrimary} />
@@ -229,7 +229,7 @@ export default function AddLocationPresetModal({
                                 disabled={loading || !coords}
                             >
                                 {loading ? (
-                                    <ActivityIndicator color={colors.onPrimary} />
+                                    <MaterialProgress color={colors.onPrimary} />
                                 ) : (
                                     <Text style={styles.saveButtonText}>Išsaugoti</Text>
                                 )}

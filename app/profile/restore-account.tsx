@@ -1,7 +1,12 @@
 import {
-    View, Text, StyleSheet, TouchableOpacity, ActivityIndicator,
-    ScrollView, Modal,
-} from 'react-native';
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    ScrollView,
+    Modal,
+} from "react-native";
+import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
 import Animated from 'react-native-reanimated';
@@ -130,6 +135,7 @@ export default function RestoreAccountScreen() {
             const result = await attemptRestore(
                 filled.map(s => ({
                     receiptNo: s.extract.receiptNo,
+                    receiptNos: s.extract.receiptNos,
                     date: s.extract.date,
                     total: s.extract.total,
                 })),
@@ -199,7 +205,7 @@ export default function RestoreAccountScreen() {
                     disabled={!submitEnabled}
                 >
                     {submitting ? (
-                        <ActivityIndicator color={colors.onPrimary} />
+                        <MaterialProgress color={colors.onPrimary} />
                     ) : (
                         <Text style={styles.submitBtnText}>{t('restore.submit')}</Text>
                     )}
@@ -268,7 +274,7 @@ function SlotCard({
     if (slot.state === 'processing') {
         return (
             <View style={[styles.slot, styles.slotProcessing]}>
-                <ActivityIndicator color={colors.primary} />
+                <MaterialProgress color={colors.primary} />
                 <Text style={styles.slotProcessingText}>{t('restore.slotProcessing')}</Text>
             </View>
         );

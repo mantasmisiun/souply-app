@@ -12,6 +12,9 @@ export type QueueStatus =
 export interface QueueItem {
   id: string;
   uris: string[];
+  /** True when uris[0] is a PDF still awaiting page conversion (done as the
+   *  item's first processing stage). */
+  isPdf?: boolean;
   /** Original filename for display in error/awaiting cards. */
   name?: string;
   status: QueueStatus;
@@ -36,7 +39,7 @@ interface ReceiptQueueState {
   initialized: boolean;
 
   initialize: () => Promise<void>;
-  addItems: (entries: { uris: string[]; name?: string }[]) => void;
+  addItems: (entries: { uris: string[]; name?: string; isPdf?: boolean }[]) => void;
   markProcessing: (id: string, progress?: string) => void;
   updateProgress: (
     id: string,
@@ -47,6 +50,7 @@ interface ReceiptQueueState {
   markAwaitingNetwork: (id: string) => void;
   resumeAwaitingNetwork: () => void;
   markDone: (id: string, receiptId: number) => void;
+  noteReceiptCreated: (receiptId: number) => void;
   markError: (id: string, error: string) => void;
   removeItem: (id: string) => void;
   pruneRecentIds: (idsToKeep: number[]) => void;
@@ -94,6 +98,7 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
     const newItems: QueueItem[] = entries.map((e) => ({
       id: genId(),
       uris: e.uris,
+      isPdf: e.isPdf,
       name: e.name,
       status: "pending",
       addedAt: Date.now(),
@@ -178,6 +183,21 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
       persist(items);
       return { items, lastCompletedAt: Date.now(), recentIds };
     });
+  },
+
+  // A fresh camera scan is created directly by receipt-process, which never goes through
+  // the batch queue runner (the only caller of markDone). Without this, a scanned receipt
+  // would never enter recentIds nor bump lastCompletedAt — so it wouldn't appear in the
+  // "Nauji" section and the Analyze list wouldn't refetch until the tab next regains focus.
+  // This gives the scan path the same store signal the batch-upload path already emits.
+  // No `persist` — it touches only in-memory session state (items are unchanged).
+  noteReceiptCreated: (receiptId) => {
+    set((state) => ({
+      lastCompletedAt: Date.now(),
+      recentIds: state.recentIds.includes(receiptId)
+        ? state.recentIds
+        : [...state.recentIds, receiptId],
+    }));
   },
 
   markError: (id, error) => {
