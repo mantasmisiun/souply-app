@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, Platform } from 'react-native';
+import { View, StyleSheet, Platform, Dimensions } from 'react-native';
 import MapView, { type Region } from 'react-native-maps';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
@@ -227,6 +227,36 @@ export function StoreResolutionOverlay({ onCancel }: {
     // "stopped working". Every marker onPress stamps it.
     const markerPressAtRef = useRef(0);
     const stampMarkerPress = () => { markerPressAtRef.current = Date.now(); };
+    // OVERLAP CYCLE: Google/Apple dispatch a tap on overlapping pills to the
+    // front/nearest-anchor marker — the pill BEHIND is unreachable directly.
+    // Tapping the already-selected pill hands the selection to the nearest
+    // overlapping neighbour instead (tap again → cycles back).
+    const overlapAlt = (from: ChainStore): ChainStore | null => {
+        const { width, height } = Dimensions.get('window');
+        const lngPerDp = region.longitudeDelta / width;
+        const latPerDp = region.latitudeDelta / height;
+        const cands = allStores.filter((s) =>
+            s.id !== from.id &&
+            Math.abs(s.longitude - from.longitude) < 150 * lngPerDp &&
+            Math.abs(s.latitude - from.latitude) < 55 * latPerDp);
+        if (!cands.length) return null;
+        return cands.reduce((best, s) =>
+            ((s.latitude - from.latitude) ** 2 + (s.longitude - from.longitude) ** 2) <
+            ((best.latitude - from.latitude) ** 2 + (best.longitude - from.longitude) ** 2) ? s : best);
+    };
+    const selectStore = (store: ChainStore) => {
+        if (store.id === selectedId) {
+            const alt = overlapAlt(store);
+            if (alt) {
+                console.log(`[SRO] overlap cycle ${store.id} -> ${alt.id}`);
+                setSelectedId(alt.id);
+                setSelNonce((n) => n + 1);
+            }
+            return; // no neighbour → tapping the selected pill is a no-op
+        }
+        setSelectedId(store.id);
+        setSelNonce((n) => n + 1);
+    };
     // Bumped on every selection: salts the standalone pink marker's key so each
     // selection mounts a genuinely NEW annotation. Remounting under the SAME key
     // after a deselect made Apple Maps reuse a stale annotation view that drew
@@ -479,7 +509,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                 initialRegion={initialRegion}
                 mountMap={mountMap}
                 onMapReady={handleMapReady}
-                mapReady={mapReady}
+                mapReady={mapReady && centered}
                 onRegionChangeComplete={handleRegionChange}
                 onRegionChange={handleRegionDrag}
                 onMapPress={(e) => {
@@ -525,8 +555,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                                     onPress={() => {
                                         stampMarkerPress();
                                         console.log(`[SRO] tap store=${store.id} prevSel=${selectedId}`);
-                                        setSelectedId(store.id);
-                                        setSelNonce((n) => n + 1);
+                                        selectStore(store);
                                     }}
                                 />
                             );
@@ -570,7 +599,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                                     pillSize={bake}
                                     refreshKey={mapRefreshKey}
                                     zIndex={10}
-                                    onPress={() => { stampMarkerPress(); console.log(`[SRO] tap standalone sel=${selectedStore.id}`); }}
+                                    onPress={() => { stampMarkerPress(); console.log(`[SRO] tap standalone sel=${selectedStore.id}`); selectStore(selectedStore); }}
                                 />
                             );
                         })()}
