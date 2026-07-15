@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Image, Platform, StyleSheet, Text, View, type ImageSourcePropType, type ImageURISource, type LayoutChangeEvent } from 'react-native';
+import { Animated, Image, Platform, StyleSheet, Text, View, type ImageSourcePropType, type ImageURISource, type LayoutChangeEvent } from 'react-native';
 import { Marker } from 'react-native-maps';
 import { captureRef } from 'react-native-view-shot';
 import { chainBadgeImage } from '../../utils/chainLogoAssets';
@@ -230,23 +230,37 @@ const styles_bakeryHost = { position: 'absolute' as const, top: -10000, left: 0,
  *  markers can't run RN Animated, so opacity steps over ~180 ms instead —
  *  4 property updates per marker, only on band crossings. */
 function useSteppedFade(hidden: boolean): number {
-  const [v, setV] = useState(hidden ? 0 : 1);
+  // Starts at 0 so markers FADE IN on mount instead of popping. 8×20 ms ≈ a
+  // 60 fps-feeling ramp — a native marker's opacity is a plain property, so
+  // stepping is the only option (the iOS pill path animates a real child).
+  const [v, setV] = useState(0);
   const vRef = useRef(v);
   vRef.current = v;
   useEffect(() => {
     const target = hidden ? 0 : 1;
     if (vRef.current === target) return;
     const from = vRef.current;
-    const steps = 4;
+    const steps = 8;
     let i = 0;
     const iv = setInterval(() => {
       i++;
       setV(i >= steps ? target : from + (target - from) * (i / steps));
       if (i >= steps) clearInterval(iv);
-    }, 45);
+    }, 20);
     return () => clearInterval(iv);
   }, [hidden]);
   return v;
+}
+
+/** iOS live-view fade: the child of a tracksViewChanges marker is a real view,
+ *  so a native-driver Animated opacity runs smoothly — the stepped marker
+ *  property looked stuttery on selection crossfades. */
+function useChildFade(hidden: boolean): Animated.Value {
+  const anim = useRef(new Animated.Value(0)).current;
+  useEffect(() => {
+    Animated.timing(anim, { toValue: hidden ? 0 : 1, duration: 180, useNativeDriver: true }).start();
+  }, [hidden, anim]);
+  return anim;
 }
 
 export function MapPillMarker({
@@ -291,6 +305,7 @@ export function MapPillMarker({
   const badge = chainBadgeImage(chainId);
   const source: ImageSourcePropType | null = baked ?? (badge != null ? badge : null);
   const fade = useSteppedFade(hidden);
+  const childFade = useChildFade(hidden);
   // Android-only: re-track briefly when the shown image changes so Google Maps
   // re-rasterises the swapped image (tracksViewChanges is honoured there and
   // ignored by Apple Maps). Settling back to false keeps the static map cheap.
@@ -347,7 +362,7 @@ export function MapPillMarker({
       <Marker
         coordinate={coordinate}
         anchor={usePill ? anchorBaked : { x: 0.5, y: 0.5 }}
-        opacity={fade * (dimmed ? 0.4 : 1)}
+        opacity={dimmed ? 0.4 : 1}
         // ALWAYS true on iOS: with false, AIRMap SNAPSHOTS the child view into
         // an image, and Apple Maps' annotation-view recycling on zoom drops
         // that snapshot → blank pill until a remount (the "pill disappears
@@ -360,9 +375,9 @@ export function MapPillMarker({
           ? () => { console.log(`[PILL ${debugId}] TAP`); onPress?.(); }
           : onPress)}
       >
-        <Image
+        <Animated.Image
           source={childSource}
-          style={{ width: w, height: h }}
+          style={{ width: w, height: h, opacity: childFade }}
           resizeMode="contain"
           onLoad={__DEV__ && debugId ? () => console.log(`[PILL ${debugId}] child Image LOADED ${tail(pillUri)}`) : undefined}
           onError={__DEV__ && debugId ? (e) => console.log(`[PILL ${debugId}] child Image ERROR ${tail(pillUri)}:`, e.nativeEvent?.error) : undefined}
