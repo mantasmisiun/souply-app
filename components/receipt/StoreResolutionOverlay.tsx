@@ -44,7 +44,9 @@ const streetOnly = (address: string | null | undefined): string => {
 const addrLines = (address: string | null | undefined): string[] => {
     const s = streetOnly(address);
     if (!s) return ['—'];
-    const m = s.match(/^(.*?)[,\s]+(\d[\w./-]*)\s*$/);
+    // Separator optional: "GEDIMINO PR.28" (no space after the abbreviation
+    // dot) must still split into street + number lines.
+    const m = s.match(/^(.*?)[,\s]*(\d[\w./-]*)\s*$/);
     return m && m[1].trim() ? [m[1].trim(), m[2].trim()] : [s];
 };
 
@@ -269,22 +271,35 @@ export function StoreResolutionOverlay({ onCancel }: {
                 for (const s of members) { la += s.latitude; ln += s.longitude; }
                 return { lat: la / members.length, lng: ln / members.length };
             };
+            const span = (members: ChainStore[]) => {
+                let latMin = Infinity, latMax = -Infinity, lngMin = Infinity, lngMax = -Infinity;
+                for (const s of members) {
+                    latMin = Math.min(latMin, s.latitude); latMax = Math.max(latMax, s.latitude);
+                    lngMin = Math.min(lngMin, s.longitude); lngMax = Math.max(lngMax, s.longitude);
+                }
+                return { lat: latMax - latMin, lng: lngMax - lngMin };
+            };
             let groups: Group[] = [...buckets.entries()]
                 .sort(([a], [b]) => (a < b ? -1 : 1))
                 .map(([key, members]) => ({ key, members, ...centroid(members) }));
             const NEAR = cell * 0.95;
+            // BBOX-CAPPED merging: only combine boundary-straddling neighbours —
+            // the merged group must still fit ~one cell. Uncapped iteration
+            // chain-merged whole regions into a single circle.
+            const MAX_SPAN = cell * 1.4;
             for (let merged = true; merged;) {
                 merged = false;
                 outer: for (let i = 0; i < groups.length; i++) {
                     for (let j = i + 1; j < groups.length; j++) {
                         const a = groups[i], b = groups[j];
-                        if (Math.abs(a.lat - b.lat) < NEAR && Math.abs(a.lng - b.lng) < NEAR) {
-                            const members = [...a.members, ...b.members];
-                            groups[i] = { key: a.key < b.key ? a.key : b.key, members, ...centroid(members) };
-                            groups.splice(j, 1);
-                            merged = true;
-                            break outer;
-                        }
+                        if (Math.abs(a.lat - b.lat) >= NEAR || Math.abs(a.lng - b.lng) >= NEAR) continue;
+                        const members = [...a.members, ...b.members];
+                        const sp = span(members);
+                        if (sp.lat > MAX_SPAN || sp.lng > MAX_SPAN) continue;
+                        groups[i] = { key: a.key < b.key ? a.key : b.key, members, ...centroid(members) };
+                        groups.splice(j, 1);
+                        merged = true;
+                        break outer;
                     }
                 }
             }
@@ -304,8 +319,23 @@ export function StoreResolutionOverlay({ onCancel }: {
         return { A: build(TIERS.A, 'A'), B: build(TIERS.B, 'B') };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [allStores]);
-    const band: 'A' | 'B' | 'pills' =
-        region.longitudeDelta > 0.6 ? 'A' : region.longitudeDelta > 0.05 ? 'B' : 'pills';
+    // HYSTERESIS on the zoom bands: the map opens at delta 0.05 and iOS
+    // adjusts/jitters the reported delta with the screen aspect — a hard
+    // threshold at 0.05 flapped EVERY pill's visibility while panning. A band
+    // switches only when the delta crosses its boundary with ~20% margin.
+    const bandRef = useRef<'A' | 'B' | 'pills'>('pills');
+    const band = (() => {
+        const d = region.longitudeDelta;
+        const prev = bandRef.current;
+        let next = prev;
+        if (prev !== 'A' && d > (prev === 'B' ? 0.7 : 0.6)) next = 'A';
+        else if (prev === 'A' && d < 0.5) next = 'B';
+        if (prev === 'pills' && d > 0.085) next = 'B';
+        else if (prev === 'B' && d < 0.065) next = 'pills';
+        if (next !== prev) console.log(`[SRO] band ${prev} -> ${next} d=${d.toFixed(4)}`);
+        bandRef.current = next;
+        return next;
+    })();
     // Fit a bubble's members with padding; tier-B taps land INSIDE the pills
     // band so one tap always resolves the bubble into pills.
     const zoomToBubble = (b: TierBubble, tier: 'A' | 'B') => {
