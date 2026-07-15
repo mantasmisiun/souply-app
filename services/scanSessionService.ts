@@ -19,6 +19,7 @@
  * refine), per-chain store/product matching, buildParsedData, masked upload.
  */
 import * as Clipboard from "expo-clipboard";
+import { isNetworkLikeError } from "./receiptProcessingService";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImageManipulator from "expo-image-manipulator";
 import i18n from "../i18n";
@@ -196,6 +197,14 @@ export function startScanSession(opts: StartScanOptions): number | null {
   if (!opts.preview && opts.imageUris.length > 0) saveReceiptDraft(opts.imageUris).catch(() => {});
   runPipeline(sessionId, opts).catch((e) => {
     console.error("[scanSession] pipeline crashed:", e);
+    // Infra blips (offline, tunnel error pages → JSON parse failures) are NOT
+    // receipt failures: no FailedReceiptLog entry (nothing for an admin to
+    // fix), and the user gets a "check your connection" message instead of
+    // the misleading "OCR error" (prod FailedReceiptLog #26).
+    if (isNetworkLikeError(e)) {
+      sessionSet(sessionId, { phase: "failed", failMessage: i18n.t("receiptProcess.errorNetwork") });
+      return;
+    }
     void bailWithLog(sessionId, "ocr_error", { ocrPreview: e instanceof Error ? e.message : String(e) });
   });
   return sessionId;
