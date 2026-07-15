@@ -931,7 +931,6 @@ export default function BasketDetailScreen() {
                         <LocationSettingsPanel
                             refreshKey={settingsRefreshKey}
                             onChanged={setActiveSettings}
-                            onCollapse={() => settingsSheetRef.current?.snapTo(0)}
                             onOpenPresetMap={(key, label, existing) => {
                                 // The sheet stays mounted (and expanded) through
                                 // the push; the focus effect's refreshKey bump

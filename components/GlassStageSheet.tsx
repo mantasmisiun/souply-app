@@ -114,6 +114,13 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
         const atLast = snaps.length > 1 && safeStage === snaps.length - 1;
         stagePSV.value = withTiming(atLast ? 1 : 0, { duration: 240 });
     }, [safeStage, snaps.length, settleTick, stagePSV, dockAtLast]);
+    // Leaving the expanded stage resets the body scroll: scrolling is DISABLED
+    // below the last stage, so a retained offset stranded the panel header
+    // above the viewport on the next expansion ("the sheet has no title") with
+    // no way to scroll back up.
+    useEffect(() => {
+        if (safeStage < snaps.length - 1) scrollRef.current?.scrollTo({ y: 0, animated: false });
+    }, [safeStage, snaps.length]);
     const dockP = useDerivedValue(() => {
         if (!dockAtLast) return 0;
         const sn = snapsSV.value;
