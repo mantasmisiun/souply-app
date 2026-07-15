@@ -6,11 +6,11 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 import { GlassIconButton } from '../GlassIconButton';
 import { MapPickerScaffold } from '../map/MapPickerScaffold';
 import {
-    useBakedPills, useBakedClusters, MapPillMarker, MapClusterMarker,
-    type MapPillSpec, type MapClusterSpec,
+    useBakedPills, MapPillMarker,
+    type MapPillSpec,
 } from '../map/MapPill';
-import { clusterByGrid, type Cluster, type GridRegion } from '../../utils/mapClustering';
-import { chainBadgeImage } from '../../utils/chainLogoAssets';
+import { type GridRegion } from '../../utils/mapClustering';
+import {  } from '../../utils/chainLogoAssets';
 import { geocodeAddress } from '../../utils/nominatim';
 import { tryGpsCoords, VILNIUS_FALLBACK } from '../../utils/location';
 import { getStoreResolutionRequest, completeStoreResolution } from '../../utils/storeResolution';
@@ -133,12 +133,13 @@ export function StoreResolutionOverlay({ onCancel }: {
             const c = center ?? VILNIUS_FALLBACK;
             const delta = geocoded ? CLOSE_DELTA : DELTA;
             if (!cancelled) {
-                mapRef.current?.animateToRegion(
-                    { latitude: c.lat, longitude: c.lng, latitudeDelta: delta, longitudeDelta: delta },
-                    600,
-                );
-                // Markers stay unmounted until this centering settles (see `centered`), so the
-                // first (and only) mount is one clean batch — all stores, then never changed.
+                const target = { latitude: c.lat, longitude: c.lng, latitudeDelta: delta, longitudeDelta: delta };
+                mapRef.current?.animateToRegion(target, 600);
+                // Seed the region state DIRECTLY: iOS does not reliably fire
+                // onRegionChangeComplete for this pre-paint animation, and a
+                // stale (Vilnius) region made the first bakes prioritise the
+                // wrong area — "no pills until I drag a tiny bit".
+                setRegion(target);
                 centerTimer.current = setTimeout(() => setCentered(true), 750);
             }
         })();
@@ -189,16 +190,6 @@ export function StoreResolutionOverlay({ onCancel }: {
         handleRegionChange(r);
     }, [handleRegionChange]);
 
-    // Zoom one step into a tapped cluster (thirds the visible span, recentred).
-    const onClusterPress = useCallback((c: Cluster) => {
-        mapRef.current?.animateToRegion({
-            latitude: c.latitude,
-            longitude: c.longitude,
-            latitudeDelta: Math.max(region.latitudeDelta / 3, 0.006),
-            longitudeDelta: Math.max(region.longitudeDelta / 3, 0.006),
-        }, 350);
-    }, [region.latitudeDelta, region.longitudeDelta]);
-
     const onSearch = useCallback(async () => {
         const q = searchText.trim();
         if (q.length < 3) { setSearchError(t('storeResolution.minChars')); return; }
@@ -207,10 +198,9 @@ export function StoreResolutionOverlay({ onCancel }: {
         const r = await geocodeAddress(q);
         setSearching(false);
         if (!r) { setSearchError(t('storeResolution.addressNotFound')); return; }
-        mapRef.current?.animateToRegion(
-            { latitude: r.lat, longitude: r.lng, latitudeDelta: CLOSE_DELTA, longitudeDelta: CLOSE_DELTA },
-            600,
-        );
+        const target = { latitude: r.lat, longitude: r.lng, latitudeDelta: CLOSE_DELTA, longitudeDelta: CLOSE_DELTA };
+        mapRef.current?.animateToRegion(target, 600);
+        setRegion(target);
     }, [searchText, t]);
 
     const onConfirm = useCallback(() => {
@@ -222,45 +212,56 @@ export function StoreResolutionOverlay({ onCancel }: {
 
     const selectedStore = useMemo(() => stores.find((s) => s.id === selectedId) ?? null, [stores, selectedId]);
 
-    // Grid-cluster the stores for the current viewport: dense areas collapse to a
-    // count bubble when zoomed out and resolve into individual address pills as the
-    // user zooms in (clusterByGrid stops clustering below its city-district delta).
-    const { clusters, singles } = useMemo(() => {
-        const points = stores
-            .filter((s) => Number.isFinite(s.latitude) && Number.isFinite(s.longitude))
-            .map((s) => ({ ...s, id: s.id, latitude: s.latitude, longitude: s.longitude }));
-        // 2× inflated viewport: one chain's stores are few (tens), so pre-mounting
-        // a viewport ring around the visible area is cheap and pans reveal pills
-        // that already exist instead of empty tiles waiting for a settle.
-        const padded = { ...region, latitudeDelta: region.latitudeDelta * 2, longitudeDelta: region.longitudeDelta * 2 };
-        const result = clusterByGrid(points, padded);
-        console.log(`[SRO] cluster @${region.latitude.toFixed(3)},${region.longitude.toFixed(3)} d=${region.longitudeDelta.toFixed(4)} -> clusters=${result.clusters.length} singles=[${result.singles.map((s) => s.id).join(',')}]`);
-        return result;
-    }, [stores, region]);
+    // MOUNT EVERYTHING, ONCE (back to this file's original crash-free design):
+    // region-driven clustering re-mounted markers in remove+insert batches on
+    // every zoom-level crossing, and each batch risks the AIRMap interop
+    // silently DROPPING an annotation view (the clamp patch stops the crash,
+    // not the loss) — a dropped marker's key never changes, so it stays
+    // invisible at every zoom (the Kuršėnai report). One chain has ≤240
+    // stores — every pill mounts exactly once, append-only in bake-completion
+    // order, and the marker set NEVER changes afterwards. Zero churn.
+    const allStores = useMemo(
+        () => stores.filter((s) => Number.isFinite(s.latitude) && Number.isFinite(s.longitude)),
+        [stores],
+    );
+    const storeById = useMemo(() => new Map(allStores.map((s) => [s.id, s])), [allStores]);
 
-    // Bake an ADDRESS PILL (logo + street + number) for each VISIBLE single, plus a
-    // 'selected' variant for the pick; and a count bubble for each cluster.
+    // Bake priority = distance to the current map centre (nearest first), so
+    // the pills the user is LOOKING AT appear within the first bake window.
+    // Re-sorting on camera settle only re-prioritises the remaining bakes —
+    // completed bakes (and mounted markers) are untouched.
     const pillSpecs = useMemo<MapPillSpec[]>(() => {
         if (!req) return [];
-        const specs: MapPillSpec[] = singles.map((s) => ({
-            key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral',
-        }));
+        const specs: MapPillSpec[] = [...allStores]
+            .sort((a, b) =>
+                ((a.latitude - region.latitude) ** 2 + (a.longitude - region.longitude) ** 2) -
+                ((b.latitude - region.latitude) ** 2 + (b.longitude - region.longitude) ** 2))
+            .map((s) => ({ key: `${s.id}|n`, chainId: req.chainId, lines: addrLines(s.address), variant: 'neutral' as const }));
         if (selectedStore) {
-            specs.push({ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' });
+            // Selected bake goes FIRST so the pink swap lands ASAP after a tap.
+            specs.unshift({ key: `${selectedStore.id}|s`, chainId: req.chainId, lines: addrLines(selectedStore.address), variant: 'selected' });
         }
         return specs;
-    }, [singles, selectedStore, req]);
-    const { uriFor, sizeFor, bakery } = useBakedPills(pillSpecs);
+    }, [allStores, selectedStore, req, region.latitude, region.longitude]);
+    const { sizeFor, bakery, bakedKeys } = useBakedPills(pillSpecs);
 
-    const clusterSpecs = useMemo<MapClusterSpec[]>(
-        () => clusters.map((c) => ({ key: c.id, count: c.count, big: c.count >= 20 })),
-        [clusters],
-    );
-    // Camera-settle key: bumping it re-tracks every marker briefly so iOS
-    // repaints annotation views AIRMap re-created during the zoom (they
-    // otherwise stay blank — the "pill disappears until I re-cluster" report).
+    // Neutral pills in BAKE-COMPLETION order — the on-map marker list only ever
+    // APPENDS (no mid-list insert, the AIRMap crash/drop surface).
+    const mountedPills = useMemo(() => {
+        const out: { store: ChainStore; bake: { uri: string; w: number; h: number } }[] = [];
+        for (const key of bakedKeys) {
+            if (!key.endsWith('|n')) continue;
+            const store = storeById.get(Number(key.slice(0, -2)));
+            const bake = sizeFor(key);
+            if (store && bake) out.push({ store, bake });
+        }
+        console.log(`[SRO] mounted=${out.length}/${allStores.length} sel=${selectedId ?? '-'}`);
+        return out;
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [bakedKeys, storeById, sizeFor]);
+
+    // Android-only re-track key (harmless on iOS): bumped on camera settle.
     const mapRefreshKey = `${region.latitude.toFixed(4)},${region.longitude.toFixed(4)},${region.latitudeDelta.toFixed(4)}`;
-    const { uriFor: clusterUriFor, bakery: clusterBakery } = useBakedClusters(clusterSpecs);
 
     if (!req) return null;
 
@@ -298,57 +299,33 @@ export function StoreResolutionOverlay({ onCancel }: {
                 onConfirm={onConfirm}
                 mapChildren={
                     !centered ? null : <>
-                        {/* Count bubbles for clustered areas (stable grid-cell key → the marker
-                            mounts once and swaps its baked image in place; a chain-badge fallback
-                            keeps it from flashing null, the AIRMap insert crash surface). */}
-                        {clusters.map((c) => (
-                            <MapClusterMarker
-                                key={`c-${c.id}`}
-                                coordinate={{ latitude: c.latitude, longitude: c.longitude }}
-                                pillUri={clusterUriFor(c.id)}
-                                fallback={chainBadgeImage(req.chainId) ?? undefined}
+                        {/* Append-only neutral pills (bake-completion order). Keys are
+                            STABLE FOREVER — the set only grows, never reorders, never
+                            remounts. All selection styling happens on the standalone
+                            marker below, so these never churn. */}
+                        {mountedPills.map(({ store, bake }) => (
+                            <MapPillMarker
+                                key={`s-${store.id}`}
+                                coordinate={{ latitude: store.latitude, longitude: store.longitude }}
+                                chainId={req.chainId}
+                                pillUri={bake.uri}
+                                pillSize={bake}
                                 refreshKey={mapRefreshKey}
-                                zIndex={3}
-                                onPress={() => onClusterPress(c)}
+                                zIndex={2}
+                                onPress={() => {
+                                    console.log(`[SRO] tap store=${store.id} prevSel=${selectedId}`);
+                                    setSelectedId(store.id);
+                                }}
                             />
                         ))}
-                        {/* Address pills for the individual (unclustered) stores. Stable storeId
-                            key + the CGSizeZero decode patch → badge→pill swaps in place. */}
-                        {/* SELECTION = in-place image swap on the store's OWN marker
-                            (the pattern the cluster bubbles use). A separate stacked
-                            "selected" marker broke both platforms: Android showed the
-                            old pill until a zoom forced a redraw, and Apple Maps drew
-                            the remounted normal pill OVER the selected one after a
-                            zoom cycle (re-taps were no-ops — same selectedId). Falls
-                            back to the normal pill until the pink bake lands. */}
-                        {singles.map((s) => {
-                            const isSel = s.id === selectedId;
-                            const selBake = isSel ? sizeFor(`${s.id}|s`) : undefined;
-                            return (
-                                <MapPillMarker
-                                    /* Selection changes the KEY on purpose: the remounted
-                                       marker is the NEWEST native annotation, which Apple
-                                       Maps both draws on top and hit-tests first — zIndex
-                                       alone is dropped on annotation recycling, which left
-                                       the pink pill buried under neighbours after a pan. */
-                                    key={`s-${s.id}-${isSel ? 'sel' : 'n'}`}
-                                    coordinate={{ latitude: s.latitude, longitude: s.longitude }}
-                                    chainId={req.chainId}
-                                    pillUri={selBake ? selBake.uri : uriFor(`${s.id}|n`)}
-                                    pillSize={selBake ?? sizeFor(`${s.id}|n`)}
-                                    refreshKey={mapRefreshKey}
-                                    zIndex={isSel ? 10 : 2}
-                                    onPress={() => {
-                                        console.log(`[SRO] tap store=${s.id} prevSel=${selectedId}`);
-                                        setSelectedId(s.id);
-                                    }}
-                                />
-                            );
-                        })}
-                        {/* Keep a standalone selected pill ONLY while the selected store
-                            is clustered away (zoomed out) so the pick stays visible. */}
-                        {selectedStore && !singles.some((s) => s.id === selectedStore.id) && (() => {
-                            const bake = sizeFor(`${selectedStore.id}|s`);
+                        {/* Selected pill: ONE standalone marker, keyed by store id — a
+                            selection change is the ONLY marker swap on this map, and the
+                            fresh marker is the newest native annotation, so Apple Maps
+                            draws it on top AND hit-tests it first (zIndex alone is lost
+                            to annotation recycling). Falls back to the neutral bake so
+                            it appears instantly; swaps to pink in place when ready. */}
+                        {selectedStore && (() => {
+                            const bake = sizeFor(`${selectedStore.id}|s`) ?? sizeFor(`${selectedStore.id}|n`);
                             if (!bake) return null;
                             return (
                                 <MapPillMarker
@@ -370,7 +347,6 @@ export function StoreResolutionOverlay({ onCancel }: {
                 (normal Views, not Markers). Gated on mapReady so the view-shot capture
                 burst doesn't run during map init. */}
             {mapReady && bakery}
-            {mapReady && clusterBakery}
         </View>
     );
 }
