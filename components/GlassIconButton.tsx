@@ -19,6 +19,9 @@ interface Props {
      * off in headers avoids a double-glass artifact.
      */
     glass?: boolean;
+    /** Solid disc fallback where glass is unavailable (Android): use for chrome
+     *  floating over a MAP — a bare icon has no contrast against tiles. */
+    solid?: boolean;
 }
 
 /**
@@ -37,6 +40,7 @@ export function GlassIconButton({
     accessibilityLabel,
     disabled,
     glass,
+    solid,
 }: Props) {
     const colors = useTheme();
     const tint = disabled ? colors.textMuted : (color ?? colors.primary);
@@ -66,7 +70,13 @@ export function GlassIconButton({
                     {iconEl}
                 </LiquidGlass>
             ) : (
-                <View style={[styles.disc, { width: disc, height: disc }]}>
+                <View
+                    style={[
+                        styles.disc,
+                        { width: disc, height: disc },
+                        solid && { backgroundColor: colors.cardBackground, borderRadius: disc / 2, elevation: 3 },
+                    ]}
+                >
                     {iconEl}
                 </View>
             )}
