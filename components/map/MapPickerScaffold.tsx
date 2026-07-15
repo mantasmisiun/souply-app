@@ -115,6 +115,13 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
                     showsUserLocation={props.showsUserLocation ?? true}
                     customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
                     toolbarEnabled={false}
+                    // Android: Google's built-in My Location button anchors to the
+                    // map's top edge — full-bleed that's UNDER the status bar and
+                    // the floating glass chrome. Pad the map's UI area below them
+                    // (back row ~40 + search ~48 + gaps ≈ 110dp under the inset).
+                    mapPadding={Platform.OS === 'android'
+                        ? { top: topInset + 110, right: 0, bottom: 0, left: 0 }
+                        : undefined}
                     // Typing in the search field leaves the keyboard up, covering the
                     // confirm pill; a native MapView never dismisses it on its own. Any
                     // touch on the map (tap OR the start of a drag) closes the keyboard —
