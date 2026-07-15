@@ -336,22 +336,32 @@ export function StoreResolutionOverlay({ onCancel }: {
         bandRef.current = next;
         return next;
     })();
-    // Fit a bubble's members with padding; tier-B taps land INSIDE the pills
-    // band so one tap always resolves the bubble into pills.
+    // Every bubble tap must land ONE MEANINGFUL LEVEL deeper — pills when the
+    // group is compact (a tier-B view would just show the same circle again),
+    // split circles otherwise. Both clamps keep the target inside the next
+    // band's hysteresis window, so a tap can never zoom and change nothing.
+    const bubbleSeedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => () => { if (bubbleSeedTimer.current) clearTimeout(bubbleSeedTimer.current); }, []);
     const zoomToBubble = (b: TierBubble, tier: 'A' | 'B') => {
         const pad = 1.6;
-        const latDelta = Math.max((b.latMax - b.latMin) * pad, tier === 'A' ? 0.08 : 0.015);
-        const lngDelta = Math.max((b.lngMax - b.lngMin) * pad, tier === 'A' ? 0.08 : 0.015);
+        const fitLat = (b.latMax - b.latMin) * pad;
+        const fitLng = (b.lngMax - b.lngMin) * pad;
+        const compact = (b.latMax - b.latMin) <= TIERS.B && (b.lngMax - b.lngMin) <= TIERS.B;
+        const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+        const toPills = tier === 'B' || compact;
         const target = {
             latitude: (b.latMin + b.latMax) / 2,
             longitude: (b.lngMin + b.lngMax) / 2,
-            latitudeDelta: tier === 'B' ? Math.min(latDelta, 0.045) : latDelta,
-            longitudeDelta: tier === 'B' ? Math.min(lngDelta, 0.045) : lngDelta,
+            latitudeDelta: toPills ? clamp(fitLat, 0.015, 0.045) : clamp(fitLat, 0.08, 0.45),
+            longitudeDelta: toPills ? clamp(fitLng, 0.015, 0.045) : clamp(fitLng, 0.08, 0.45),
         };
-        // NO setRegion here: seeding it flipped the band (pills flashed) before
-        // the 350 ms camera animation arrived — the live region feed flips the
-        // band in sync with the camera instead.
         mapRef.current?.animateToRegion(target, 350);
+        // Seed the region AFTER the animation lands: iOS often skips the settle
+        // event for programmatic animations (same quirk as the opening centering),
+        // which froze the band — the next tap then "did nothing". Seeding
+        // immediately is also wrong (the band flipped 350 ms early = pill flash).
+        if (bubbleSeedTimer.current) clearTimeout(bubbleSeedTimer.current);
+        bubbleSeedTimer.current = setTimeout(() => setRegion(target), 380);
     };
 
     // Bake priority = distance to the current map centre (nearest first), so
