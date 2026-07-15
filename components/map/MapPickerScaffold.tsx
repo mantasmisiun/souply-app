@@ -38,8 +38,10 @@ export interface MapPickerScaffoldProps {
     onRegionChangeComplete?: (r: Region) => void;
     /** Continuous (per-frame) camera updates — throttle in the caller. */
     onRegionChange?: (r: Region) => void;
-    /** Tap on the map itself (NOT a marker) — e.g. clear the selection. */
-    onMapPress?: () => void;
+    /** Tap on the map itself (NOT a marker) — e.g. clear the selection.
+     *  NOTE: iOS fires this for MARKER presses too — callers must guard
+     *  (event action + a timestamp set in their marker onPress handlers). */
+    onMapPress?: (e: { nativeEvent?: { action?: string } }) => void;
     showsUserLocation?: boolean;
 
     /** While false, an opaque themed cover + spinner hides the raw white MapView

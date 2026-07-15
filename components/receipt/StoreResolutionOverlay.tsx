@@ -220,6 +220,12 @@ export function StoreResolutionOverlay({ onCancel }: {
         setRegion(target);
     }, [searchText, t]);
 
+    // iOS fires the MapView's onPress for MARKER taps too — without this guard
+    // the empty-tap deselect ran right after every pill tap and selection
+    // "stopped working". Every marker onPress stamps it.
+    const markerPressAtRef = useRef(0);
+    const stampMarkerPress = () => { markerPressAtRef.current = Date.now(); };
+
     const onConfirm = useCallback(() => {
         const s = stores.find((x) => x.id === selectedId);
         console.log(`[SRO] confirm sel=${selectedId} found=${!!s}`);
@@ -464,7 +470,9 @@ export function StoreResolutionOverlay({ onCancel }: {
                 mapReady={mapReady}
                 onRegionChangeComplete={handleRegionChange}
                 onRegionChange={handleRegionDrag}
-                onMapPress={() => {
+                onMapPress={(e) => {
+                    if (e?.nativeEvent?.action === 'marker-press') return;
+                    if (Date.now() - markerPressAtRef.current < 350) return;
                     if (selectedId != null) console.log(`[SRO] map tap -> deselect ${selectedId}`);
                     setSelectedId(null);
                 }}
@@ -494,6 +502,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                                 zIndex={2}
                                 hidden={band !== 'pills'}
                                 onPress={() => {
+                                    stampMarkerPress();
                                     console.log(`[SRO] tap store=${store.id} prevSel=${selectedId}`);
                                     setSelectedId(store.id);
                                 }}
@@ -513,6 +522,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                                     zIndex={3}
                                     hidden={band !== tier}
                                     onPress={() => {
+                                        stampMarkerPress();
                                         console.log(`[SRO] tap bubble=${b.key} n=${b.count}`);
                                         zoomToBubble(b, tier);
                                     }}
@@ -537,7 +547,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                                     pillSize={bake}
                                     refreshKey={mapRefreshKey}
                                     zIndex={10}
-                                    onPress={() => console.log(`[SRO] tap standalone sel=${selectedStore.id}`)}
+                                    onPress={() => { stampMarkerPress(); console.log(`[SRO] tap standalone sel=${selectedStore.id}`); }}
                                 />
                             );
                         })()}
