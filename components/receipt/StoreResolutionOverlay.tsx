@@ -6,11 +6,11 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 import { GlassIconButton } from '../GlassIconButton';
 import { MapPickerScaffold } from '../map/MapPickerScaffold';
 import {
-    useBakedPills, MapPillMarker,
-    type MapPillSpec,
+    useBakedPills, useBakedClusters, MapPillMarker, MapClusterMarker,
+    type MapPillSpec, type MapClusterSpec,
 } from '../map/MapPill';
 import { type GridRegion } from '../../utils/mapClustering';
-import {  } from '../../utils/chainLogoAssets';
+import { chainBadgeImage } from '../../utils/chainLogoAssets';
 import { geocodeAddress } from '../../utils/nominatim';
 import { tryGpsCoords, VILNIUS_FALLBACK } from '../../utils/location';
 import { getStoreResolutionRequest, completeStoreResolution } from '../../utils/storeResolution';
@@ -226,6 +226,40 @@ export function StoreResolutionOverlay({ onCancel }: {
     );
     const storeById = useMemo(() => new Map(allStores.map((s) => [s.id, s])), [allStores]);
 
+    // FIXED two-tier bubbles (country + district) computed ONCE from the static
+    // store list — never from the zoom level, so nothing ever remounts. The
+    // current zoom picks a BAND, and the band only flips marker OPACITY:
+    //   delta > 0.6   → tier-A bubbles (country view)
+    //   delta > 0.05  → tier-B bubbles (district view)
+    //   else          → the address pills
+    // Cells with a single store show that store's pill in the bubble bands too.
+    const TIERS = { A: 0.35, B: 0.055 } as const;
+    const tiers = useMemo(() => {
+        const build = (cell: number, tier: string) => {
+            const buckets = new Map<string, ChainStore[]>();
+            for (const s of allStores) {
+                const key = `${tier}:${Math.floor(s.latitude / cell)}:${Math.floor(s.longitude / cell)}`;
+                const arr = buckets.get(key);
+                if (arr) arr.push(s); else buckets.set(key, [s]);
+            }
+            const bubbles: { key: string; latitude: number; longitude: number; count: number }[] = [];
+            const lone = new Set<number>();
+            for (const [key, arr] of buckets) {
+                if (arr.length === 1) { lone.add(arr[0].id); continue; }
+                let la = 0, ln = 0;
+                for (const s of arr) { la += s.latitude; ln += s.longitude; }
+                bubbles.push({ key, latitude: la / arr.length, longitude: ln / arr.length, count: arr.length });
+            }
+            return { bubbles, lone };
+        };
+        return { A: build(TIERS.A, 'A'), B: build(TIERS.B, 'B') };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [allStores]);
+    const band: 'A' | 'B' | 'pills' =
+        region.longitudeDelta > 0.6 ? 'A' : region.longitudeDelta > 0.05 ? 'B' : 'pills';
+    const pillVisible = (id: number): boolean =>
+        band === 'pills' ? true : band === 'B' ? tiers.B.lone.has(id) : tiers.A.lone.has(id);
+
     // Bake priority = distance to the current map centre (nearest first), so
     // the pills the user is LOOKING AT appear within the first bake window.
     // Re-sorting on camera settle only re-prioritises the remaining bakes —
@@ -259,6 +293,12 @@ export function StoreResolutionOverlay({ onCancel }: {
         return out;
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [bakedKeys, storeById, sizeFor]);
+
+    const clusterSpecs = useMemo<MapClusterSpec[]>(
+        () => [...tiers.A.bubbles, ...tiers.B.bubbles].map((b) => ({ key: b.key, count: b.count, big: b.count >= 20 })),
+        [tiers],
+    );
+    const { uriFor: clusterUriFor, bakery: clusterBakery } = useBakedClusters(clusterSpecs);
 
     // Android-only re-track key (harmless on iOS): bumped on camera settle.
     const mapRefreshKey = `${region.latitude.toFixed(4)},${region.longitude.toFixed(4)},${region.latitudeDelta.toFixed(4)}`;
@@ -312,12 +352,35 @@ export function StoreResolutionOverlay({ onCancel }: {
                                 pillSize={bake}
                                 refreshKey={mapRefreshKey}
                                 zIndex={2}
+                                hidden={!pillVisible(store.id)}
                                 onPress={() => {
                                     console.log(`[SRO] tap store=${store.id} prevSel=${selectedId}`);
                                     setSelectedId(store.id);
                                 }}
                             />
                         ))}
+                        {/* Count bubbles — BOTH fixed tiers permanently mounted; the zoom
+                            band flips opacity only. Tapping zooms into the cell one band
+                            deeper (pills for tier B, tier B for tier A). */}
+                        {(['A', 'B'] as const).map((tier) =>
+                            tiers[tier].bubbles.map((b) => (
+                                <MapClusterMarker
+                                    key={b.key}
+                                    coordinate={{ latitude: b.latitude, longitude: b.longitude }}
+                                    pillUri={clusterUriFor(b.key)}
+                                    fallback={chainBadgeImage(req.chainId) ?? undefined}
+                                    refreshKey={mapRefreshKey}
+                                    zIndex={3}
+                                    hidden={band !== tier}
+                                    onPress={() => {
+                                        console.log(`[SRO] tap bubble=${b.key}`);
+                                        const delta = tier === 'A' ? 0.3 : 0.03;
+                                        const target = { latitude: b.latitude, longitude: b.longitude, latitudeDelta: delta, longitudeDelta: delta };
+                                        mapRef.current?.animateToRegion(target, 350);
+                                        setRegion(target);
+                                    }}
+                                />
+                            )))}
                         {/* Selected pill: ONE standalone marker, keyed by store id — a
                             selection change is the ONLY marker swap on this map, and the
                             fresh marker is the newest native annotation, so Apple Maps
@@ -347,6 +410,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                 (normal Views, not Markers). Gated on mapReady so the view-shot capture
                 burst doesn't run during map init. */}
             {mapReady && bakery}
+            {mapReady && clusterBakery}
         </View>
     );
 }

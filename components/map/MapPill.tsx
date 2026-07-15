@@ -232,6 +232,7 @@ export function MapPillMarker({
   pillUri,
   pillSize,   // reserved: used by the child-image path once the rebuilt client ships
   dimmed = false,
+  hidden = false,
   zIndex = 1,
   anchorBaked = { x: 0.18, y: 0.5 },
   refreshKey,
@@ -246,6 +247,10 @@ export function MapPillMarker({
    *  child never renders a uri at a stale size. Unused on Android. */
   pillSize?: { w: number; h: number };
   dimmed?: boolean;
+  /** Zoom-band visibility WITHOUT unmounting: opacity 0 + taps ignored. Marker
+   *  mount/unmount churn is what loses annotation views on iOS — visibility
+   *  MUST be a property toggle on a permanently mounted marker. */
+  hidden?: boolean;
   zIndex?: number;
   /** Where the geographic point sits on the baked pill — defaults near the logo
    *  on the left (the badge-only fallback always centres). */
@@ -318,7 +323,7 @@ export function MapPillMarker({
       <Marker
         coordinate={coordinate}
         anchor={usePill ? anchorBaked : { x: 0.5, y: 0.5 }}
-        opacity={dimmed ? 0.4 : 1}
+        opacity={hidden ? 0 : dimmed ? 0.4 : 1}
         // ALWAYS true on iOS: with false, AIRMap SNAPSHOTS the child view into
         // an image, and Apple Maps' annotation-view recycling on zoom drops
         // that snapshot → blank pill until a remount (the "pill disappears
@@ -327,9 +332,9 @@ export function MapPillMarker({
         // stays a live view, MapKit's native mode; cheap at our pill counts.
         tracksViewChanges={true}
         zIndex={zIndex}
-        onPress={__DEV__ && debugId
+        onPress={hidden ? undefined : (__DEV__ && debugId
           ? () => { console.log(`[PILL ${debugId}] TAP`); onPress?.(); }
-          : onPress}
+          : onPress)}
       >
         <Image
           source={childSource}
@@ -350,10 +355,10 @@ export function MapPillMarker({
       coordinate={coordinate}
       anchor={baked ? anchorBaked : { x: 0.5, y: 0.5 }}
       image={source}
-      opacity={dimmed ? 0.4 : 1}
+      opacity={hidden ? 0 : dimmed ? 0.4 : 1}
       tracksViewChanges={tracks}
       zIndex={zIndex}
-      onPress={onPress}
+      onPress={hidden ? undefined : onPress}
     />
   );
 }
@@ -442,9 +447,11 @@ export function useBakedClusters(specs: MapClusterSpec[]): {
   return { uriFor: (key) => uris[key], bakery };
 }
 
-export function MapClusterMarker({ coordinate, pillUri, fallback, zIndex = 1, refreshKey, onPress }: {
+export function MapClusterMarker({ coordinate, pillUri, fallback, hidden = false, zIndex = 1, refreshKey, onPress }: {
   coordinate: { latitude: number; longitude: number };
   pillUri?: string;
+  /** See MapPillMarker.hidden — visibility as a property, never a mount change. */
+  hidden?: boolean;
   /** Shown until the bake lands (e.g. the chain badge on a single-chain map). Without
    *  it the marker renders nothing while un-baked — and the resulting null→Marker
    *  flips insert children mid-array, which is the iOS AIRMap interop crash surface
@@ -471,9 +478,10 @@ export function MapClusterMarker({ coordinate, pillUri, fallback, zIndex = 1, re
       coordinate={coordinate}
       anchor={{ x: 0.5, y: 0.5 }}
       image={source}
+      opacity={hidden ? 0 : 1}
       tracksViewChanges={tracks}
       zIndex={zIndex}
-      onPress={onPress}
+      onPress={hidden ? undefined : onPress}
     />
   );
 }
