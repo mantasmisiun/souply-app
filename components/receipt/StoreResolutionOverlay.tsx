@@ -225,6 +225,11 @@ export function StoreResolutionOverlay({ onCancel }: {
     // "stopped working". Every marker onPress stamps it.
     const markerPressAtRef = useRef(0);
     const stampMarkerPress = () => { markerPressAtRef.current = Date.now(); };
+    // Bumped on every selection: salts the standalone pink marker's key so each
+    // selection mounts a genuinely NEW annotation. Remounting under the SAME key
+    // after a deselect made Apple Maps reuse a stale annotation view that drew
+    // UNDER the store's own neutral pill — "selected but not pink until zoom".
+    const [selNonce, setSelNonce] = useState(0);
 
     const onConfirm = useCallback(() => {
         const s = stores.find((x) => x.id === selectedId);
@@ -500,11 +505,12 @@ export function StoreResolutionOverlay({ onCancel }: {
                                 pillSize={bake}
                                 refreshKey={mapRefreshKey}
                                 zIndex={2}
-                                hidden={band !== 'pills'}
+                                hidden={band !== 'pills' || store.id === selectedId}
                                 onPress={() => {
                                     stampMarkerPress();
                                     console.log(`[SRO] tap store=${store.id} prevSel=${selectedId}`);
                                     setSelectedId(store.id);
+                                    setSelNonce((n) => n + 1);
                                 }}
                             />
                         ))}
@@ -540,7 +546,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                             if (!bake) return null;
                             return (
                                 <MapPillMarker
-                                    key={`sel-${selectedStore.id}`}
+                                    key={`sel-${selectedStore.id}-${selNonce}`}
                                     coordinate={{ latitude: selectedStore.latitude, longitude: selectedStore.longitude }}
                                     chainId={req.chainId}
                                     pillUri={bake.uri}
