@@ -397,7 +397,12 @@ export function MapPillMarker({
   return (
     <Marker
       coordinate={coordinate}
-      anchor={baked ? anchorBaked : { x: 0.5, y: 0.5 }}
+      // CENTERED on Android (ignores anchorBaked): Google dispatches a tap on
+      // overlapping markers to the NEAREST ANCHOR. With the left-edge (0.18)
+      // anchor, most of a pill's width sat nearer a NEIGHBOUR's anchor — taps
+      // "selected the pill next to it". A centre anchor makes nearest-anchor =
+      // the pill under the finger. iOS keeps the logo-on-point anchor.
+      anchor={{ x: 0.5, y: 0.5 }}
       image={source}
       opacity={fade * (dimmed ? 0.4 : 1)}
       tracksViewChanges={tracks}
