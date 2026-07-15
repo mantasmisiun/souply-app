@@ -55,7 +55,7 @@ import {
     claimResumePrompt,
     unclaimResumePrompt,
 } from "../../../state/receiptDraft";
-import { useScanSession, isSessionLive } from "../../../state/scanSession";
+import { useScanSession, isSessionLive, consumeSession } from "../../../state/scanSession";
 import { fetchWithTimeout, TIMEOUT_STANDARD_MS } from "../../../utils/fetchWithTimeout";
 import { formatDate } from "../../../utils/formatCurrency";
 import { useNetworkStatus } from "../../../state/networkStatus";
@@ -184,6 +184,16 @@ export default function ReceiptsScreen() {
   const scanConsumed = useScanSession((s) => s.consumed);
   const scanMatchProgress = useScanSession((s) => s.matchProgress);
   const scanEntryParams = useScanSession((s) => s.opts?.entryParams);
+  const scanSessionId = useScanSession((s) => s.sessionId);
+  const scanFailMessage = useScanSession((s) => s.failMessage);
+  // A FAILED scan card is informational, exactly like a duplicate queue card:
+  // no navigation target exists any more (the session bailed), so it offers
+  // only ✕ and auto-dismisses on the same 4 s the duplicate card uses.
+  useEffect(() => {
+    if (scanPhase !== "failed" || scanConsumed || scanSessionId === 0) return;
+    const t = setTimeout(() => consumeSession(scanSessionId), 4000);
+    return () => clearTimeout(t);
+  }, [scanPhase, scanConsumed, scanSessionId]);
   const liveScanVisible =
     scanPhase === "processing" || scanPhase === "input" || scanPhase === "saving" ||
     ((scanPhase === "done" || scanPhase === "failed") && !scanConsumed);
@@ -631,7 +641,9 @@ export default function ReceiptsScreen() {
       : isDone
       ? t('receipts.liveScan.done')
       : t('receipts.liveScan.processing');
-    const subline = isFailed || isDone || needsInput
+    const subline = isFailed
+      ? (scanFailMessage ?? null)
+      : isDone || needsInput
       ? t('receipts.liveScan.tapToOpen')
       : scanMatchProgress
       ? t('receipts.liveScan.matching', { done: scanMatchProgress.done, total: scanMatchProgress.total })
@@ -655,8 +667,9 @@ export default function ReceiptsScreen() {
           isFailed && { borderLeftColor: colors.error },
           needsInput && { borderLeftColor: colors.warning },
         ]}
-        activeOpacity={0.8}
-        onPress={openSession}
+        activeOpacity={isFailed ? 1 : 0.8}
+        onPress={isFailed ? undefined : openSession}
+        disabled={isFailed}
       >
         <View style={{ marginRight: spacing.md }}>{leftIcon}</View>
         <View style={{ flex: 1, minWidth: 0 }}>
@@ -668,9 +681,15 @@ export default function ReceiptsScreen() {
               <Text style={styles.statusText}>{statusLabel}</Text>
             </View>
           </View>
-          <Text style={styles.queueSubline} numberOfLines={1}>{subline}</Text>
+          {subline ? <Text style={styles.queueSubline} numberOfLines={1}>{subline}</Text> : null}
         </View>
-        <Ionicons name="chevron-forward" size={iconSize.md} color={colors.textMuted} />
+        {isFailed ? (
+          <TouchableOpacity onPress={() => consumeSession(scanSessionId)} style={{ paddingLeft: spacing.sm }} hitSlop={8}>
+            <Ionicons name="close" size={iconSize.md} color={colors.textMuted} />
+          </TouchableOpacity>
+        ) : (
+          <Ionicons name="chevron-forward" size={iconSize.md} color={colors.textMuted} />
+        )}
       </TouchableOpacity>
     );
   };
