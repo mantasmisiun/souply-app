@@ -250,7 +250,11 @@ export function StoreResolutionOverlay({ onCancel }: {
     //   delta > 0.05  → tier-B bubbles (district view)
     //   else          → the address pills
     // Cells with a single store show that store's pill in the bubble bands too.
-    const TIERS = { A: 0.35, B: 0.055 } as const;
+    // A = country, B = city ("zoom out further they combine"), C = fine
+    // district (~2 km cells) — the FIRST combination after pills, so a city
+    // like Šiauliai splits into its real areas (centre vs south) instead of
+    // one aggregate circle.
+    const TIERS = { A: 0.35, B: 0.055, C: 0.022 } as const;
     interface TierBubble { key: string; latitude: number; longitude: number; count: number;
         latMin: number; latMax: number; lngMin: number; lngMax: number }
     const tiers = useMemo(() => {
@@ -316,22 +320,31 @@ export function StoreResolutionOverlay({ onCancel }: {
             });
             return { bubbles };
         };
-        return { A: build(TIERS.A, 'A'), B: build(TIERS.B, 'B') };
+        return { A: build(TIERS.A, 'A'), B: build(TIERS.B, 'B'), C: build(TIERS.C, 'C') };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [allStores]);
     // HYSTERESIS on the zoom bands: the map opens at delta 0.05 and iOS
     // adjusts/jitters the reported delta with the screen aspect — a hard
     // threshold at 0.05 flapped EVERY pill's visibility while panning. A band
     // switches only when the delta crosses its boundary with ~20% margin.
-    const bandRef = useRef<'A' | 'B' | 'pills'>('pills');
+    type Band = 'A' | 'B' | 'C' | 'pills';
+    const bandRef = useRef<Band>('pills');
     const band = (() => {
         const d = region.longitudeDelta;
         const prev = bandRef.current;
-        let next = prev;
-        if (prev !== 'A' && d > (prev === 'B' ? 0.7 : 0.6)) next = 'A';
-        else if (prev === 'A' && d < 0.5) next = 'B';
-        if (prev === 'pills' && d > 0.085) next = 'B';
-        else if (prev === 'B' && d < 0.065) next = 'pills';
+        // Hysteresis ladder (enter-up / exit-down thresholds per boundary):
+        // pills <0.065|0.085> C <0.16|0.20> B <0.5|0.7> A
+        let next: Band = prev;
+        if (prev === 'pills') { if (d > 0.085) next = d > 0.20 ? (d > 0.7 ? 'A' : 'B') : 'C'; }
+        else if (prev === 'C') {
+            if (d < 0.065) next = 'pills';
+            else if (d > 0.20) next = d > 0.7 ? 'A' : 'B';
+        } else if (prev === 'B') {
+            if (d < 0.16) next = d < 0.065 ? 'pills' : 'C';
+            else if (d > 0.7) next = 'A';
+        } else if (prev === 'A') {
+            if (d < 0.5) next = d < 0.16 ? (d < 0.065 ? 'pills' : 'C') : 'B';
+        }
         if (next !== prev) console.log(`[SRO] band ${prev} -> ${next} d=${d.toFixed(4)}`);
         bandRef.current = next;
         return next;
@@ -342,18 +355,28 @@ export function StoreResolutionOverlay({ onCancel }: {
     // band's hysteresis window, so a tap can never zoom and change nothing.
     const bubbleSeedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
     useEffect(() => () => { if (bubbleSeedTimer.current) clearTimeout(bubbleSeedTimer.current); }, []);
-    const zoomToBubble = (b: TierBubble, tier: 'A' | 'B') => {
+    const zoomToBubble = (b: TierBubble, tier: 'A' | 'B' | 'C') => {
         const pad = 1.6;
         const fitLat = (b.latMax - b.latMin) * pad;
         const fitLng = (b.lngMax - b.lngMin) * pad;
-        const compact = (b.latMax - b.latMin) <= TIERS.B && (b.lngMax - b.lngMin) <= TIERS.B;
+        const span = Math.max(b.latMax - b.latMin, b.lngMax - b.lngMin);
         const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
-        const toPills = tier === 'B' || compact;
+        // Deepest band where THIS group visibly changes: a group that still fits
+        // one cell of the next tier would render as the same circle there — skip
+        // ahead until it splits (or becomes pills). Windows sit inside each
+        // band's hysteresis range so the landing zoom is stable.
+        const dest: 'pills' | 'C' | 'B' =
+            span <= TIERS.C * 1.2 || tier === 'C' ? 'pills'
+            : span <= TIERS.B * 1.4 || tier === 'B' ? 'C'
+            : 'B';
+        const win = dest === 'pills' ? [0.015, 0.045] as const
+            : dest === 'C' ? [0.095, 0.15] as const
+            : [0.22, 0.45] as const;
         const target = {
             latitude: (b.latMin + b.latMax) / 2,
             longitude: (b.lngMin + b.lngMax) / 2,
-            latitudeDelta: toPills ? clamp(fitLat, 0.015, 0.045) : clamp(fitLat, 0.08, 0.45),
-            longitudeDelta: toPills ? clamp(fitLng, 0.015, 0.045) : clamp(fitLng, 0.08, 0.45),
+            latitudeDelta: clamp(fitLat, win[0], win[1]),
+            longitudeDelta: clamp(fitLng, win[0], win[1]),
         };
         mapRef.current?.animateToRegion(target, 350);
         // Seed the region AFTER the animation lands: iOS often skips the settle
@@ -398,10 +421,18 @@ export function StoreResolutionOverlay({ onCancel }: {
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [bakedKeys, storeById, sizeFor]);
 
-    const clusterSpecs = useMemo<MapClusterSpec[]>(
-        () => [...tiers.A.bubbles, ...tiers.B.bubbles].map((b) => ({ key: b.key, count: b.count, big: b.count >= 20 })),
-        [tiers],
-    );
+    // One bake per UNIQUE COUNT — the circle image depends only on the number,
+    // so cells sharing a count share a PNG (~20 bakes instead of ~300).
+    const bubbleBakeKey = (count: number) => `n${count}${count >= 20 ? 'L' : ''}`;
+    const clusterSpecs = useMemo<MapClusterSpec[]>(() => {
+        const seen = new Map<string, MapClusterSpec>();
+        for (const b of [...tiers.A.bubbles, ...tiers.B.bubbles, ...tiers.C.bubbles]) {
+            const key = bubbleBakeKey(b.count);
+            if (!seen.has(key)) seen.set(key, { key, count: b.count, big: b.count >= 20 });
+        }
+        return [...seen.values()];
+         
+    }, [tiers]);
     const { uriFor: clusterUriFor, bakery: clusterBakery } = useBakedClusters(clusterSpecs);
 
     // Android-only re-track key (harmless on iOS): bumped on camera settle.
@@ -433,6 +464,10 @@ export function StoreResolutionOverlay({ onCancel }: {
                 mapReady={mapReady}
                 onRegionChangeComplete={handleRegionChange}
                 onRegionChange={handleRegionDrag}
+                onMapPress={() => {
+                    if (selectedId != null) console.log(`[SRO] map tap -> deselect ${selectedId}`);
+                    setSelectedId(null);
+                }}
                 searchText={searchText}
                 onSearchTextChange={(v) => { setSearchText(v); setSearchError(null); }}
                 onSearch={onSearch}
@@ -467,12 +502,12 @@ export function StoreResolutionOverlay({ onCancel }: {
                         {/* Count bubbles — BOTH fixed tiers permanently mounted; the zoom
                             band flips opacity only. Tapping zooms into the cell one band
                             deeper (pills for tier B, tier B for tier A). */}
-                        {(['A', 'B'] as const).map((tier) =>
+                        {(['A', 'B', 'C'] as const).map((tier) =>
                             tiers[tier].bubbles.map((b) => (
                                 <MapClusterMarker
                                     key={b.key}
                                     coordinate={{ latitude: b.latitude, longitude: b.longitude }}
-                                    pillUri={clusterUriFor(b.key)}
+                                    pillUri={clusterUriFor(bubbleBakeKey(b.count))}
                                     fallback={chainBadgeImage(req.chainId) ?? undefined}
                                     refreshKey={mapRefreshKey}
                                     zIndex={3}
