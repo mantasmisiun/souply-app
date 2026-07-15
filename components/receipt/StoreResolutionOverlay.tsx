@@ -63,7 +63,11 @@ const addrLines = (address: string | null | undefined): string[] => {
  * the badge→pill in-place swap ("rectangle"). Search only moves the camera. No clustering (dense
  * areas overlap) — that needs the committed patch, which lands on the next build.
  */
-export function StoreResolutionOverlay() {
+export function StoreResolutionOverlay({ onCancel }: {
+    /** Called after a back/cancel resolves the handoff with null — lets the
+     *  host navigate away instead of stranding the user on an empty screen. */
+    onCancel?: () => void;
+} = {}) {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -251,7 +255,12 @@ export function StoreResolutionOverlay() {
             <MapPickerScaffold
                 glassChrome
                 headerLeft={
-                    <GlassIconButton icon="chevron-back" glass onPress={() => completeStoreResolution(null)} size={22} />
+                    <GlassIconButton
+                        icon="chevron-back"
+                        glass
+                        onPress={() => { completeStoreResolution(null); onCancel?.(); }}
+                        size={22}
+                    />
                 }
                 title={t('storeResolution.title')}
                 mapRef={mapRef}
@@ -286,28 +295,41 @@ export function StoreResolutionOverlay() {
                         ))}
                         {/* Address pills for the individual (unclustered) stores. Stable storeId
                             key + the CGSizeZero decode patch → badge→pill swaps in place. */}
-                        {singles.map((s) => (
-                            <MapPillMarker
-                                key={`s-${s.id}`}
-                                coordinate={{ latitude: s.latitude, longitude: s.longitude }}
-                                chainId={req.chainId}
-                                pillUri={uriFor(`${s.id}|n`)}
-                                pillSize={sizeFor(`${s.id}|n`)}
-                                refreshKey={mapRefreshKey}
-                                zIndex={2}
-                                onPress={() => setSelectedId(s.id)}
-                            />
-                        ))}
-                        {selectedStore && (() => {
-                            const uri = uriFor(`${selectedStore.id}|s`);
-                            if (!uri) return null;
+                        {/* SELECTION = in-place image swap on the store's OWN marker
+                            (the pattern the cluster bubbles use). A separate stacked
+                            "selected" marker broke both platforms: Android showed the
+                            old pill until a zoom forced a redraw, and Apple Maps drew
+                            the remounted normal pill OVER the selected one after a
+                            zoom cycle (re-taps were no-ops — same selectedId). Falls
+                            back to the normal pill until the pink bake lands. */}
+                        {singles.map((s) => {
+                            const isSel = s.id === selectedId;
+                            const selBake = isSel ? sizeFor(`${s.id}|s`) : undefined;
+                            return (
+                                <MapPillMarker
+                                    key={`s-${s.id}`}
+                                    coordinate={{ latitude: s.latitude, longitude: s.longitude }}
+                                    chainId={req.chainId}
+                                    pillUri={selBake ? selBake.uri : uriFor(`${s.id}|n`)}
+                                    pillSize={selBake ?? sizeFor(`${s.id}|n`)}
+                                    refreshKey={mapRefreshKey}
+                                    zIndex={isSel ? 10 : 2}
+                                    onPress={() => setSelectedId(s.id)}
+                                />
+                            );
+                        })}
+                        {/* Keep a standalone selected pill ONLY while the selected store
+                            is clustered away (zoomed out) so the pick stays visible. */}
+                        {selectedStore && !singles.some((s) => s.id === selectedStore.id) && (() => {
+                            const bake = sizeFor(`${selectedStore.id}|s`);
+                            if (!bake) return null;
                             return (
                                 <MapPillMarker
                                     key={`sel-${selectedStore.id}`}
                                     coordinate={{ latitude: selectedStore.latitude, longitude: selectedStore.longitude }}
                                     chainId={req.chainId}
-                                    pillUri={uri}
-                                    pillSize={sizeFor(`${selectedStore.id}|s`)}
+                                    pillUri={bake.uri}
+                                    pillSize={bake}
                                     refreshKey={mapRefreshKey}
                                     zIndex={10}
                                     onPress={() => setSelectedId(selectedStore.id)}
