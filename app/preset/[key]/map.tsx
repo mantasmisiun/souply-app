@@ -64,7 +64,10 @@ export default function PresetMapScreen() {
         if (trimmed.length < 3) { setSearchError('Įveskite bent 3 simbolius'); return; }
         setSearching(true);
         setSearchError(null);
-        const result = await geocodeAddress(trimmed);
+        // Bias to where the map is currently looking — street names repeat
+        // across cities ("Vytauto g. 20"), nearest match beats Nominatim's
+        // biggest-city rank.
+        const result = await geocodeAddress(trimmed, centerCoords ?? undefined);
         setSearching(false);
         if (!result) { setSearchError('Adresas nerastas'); return; }
         setCenterCoords({ lat: result.lat, lng: result.lng });
@@ -128,7 +131,7 @@ export default function PresetMapScreen() {
             <MapPickerScaffold
                 glassChrome
                 headerLeft={
-                    <GlassIconButton icon="chevron-back" glass onPress={() => router.back()} size={22} />
+                    <GlassIconButton icon="chevron-back" glass solid onPress={() => router.back()} size={22} />
                 }
                 titleNode={titleNode}
                 mapRef={mapRef}
