@@ -1378,7 +1378,9 @@
     "testUserRestartBody": "Vartotojo ID bus pakeistas į: {{id}}. Programa bus perkrauta.",
     "testUserRestart": "Perkrauti",
     "shoppingLists": "Pirkinių sąrašai",
-    "receipts": "Kvitai"
+    "receipts": "Kvitai",
+    "planningScore": "Mano planavimo balas",
+    "vsLastMonthScore": "nei pr. mėn."
   },
   "receiptPhoto": {
     "title": "Atpažinti duomenys",
@@ -1477,6 +1479,18 @@
     "sheetStats": "Statistika",
     "statSpent": "Išleista",
     "statSaved": "Sutaupyta",
-    "statOverpaid": "Permokėta"
+    "statOverpaid": "Permokėta",
+    "ctaStores": "Parduotuvės",
+    "plansTitle": "Pirkimo planai",
+    "planSingle": "Vien tik {{chain}}",
+    "planStores": "Parduotuvės: {{count}}",
+    "planStoreLine": "Prekių: {{count}} · {{km}} km",
+    "createLists": "Sukurti sąrašą",
+    "searchErrorTitle": "Paieška nepavyko",
+    "searchErrorBody": "Patikrink ryšį ir bandyk dar kartą."
+  },
+  "notifications": {
+    "title": "Pranešimai",
+    "empty": "Pranešimų nėra"
   }
 }

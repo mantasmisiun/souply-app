@@ -119,11 +119,8 @@ export default function TripsScreen() {
             if (trip.basket) router.push(`/basket/${trip.basket.id}` as any);
             return;
         }
-        if (trip.stage === 2) {
-            if (trip.basket) router.push(`/basket/results/${trip.basket.id}` as any);
-            return;
-        }
-        // Stages 3+ live on the trip-map surface (slots, invites, receipts).
+        // Stages 2+ live on the trip-map surface (zero-decision search,
+        // slots, invites, receipts).
         router.push(`/trip/${trip.id}` as any);
     }, [router]);
 

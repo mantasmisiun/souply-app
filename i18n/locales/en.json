@@ -1401,7 +1401,9 @@
     "testUserRestartBody": "The user ID will switch to: {{id}}. The app will restart.",
     "testUserRestart": "Restart",
     "shoppingLists": "Shopping lists",
-    "receipts": "Receipts"
+    "receipts": "Receipts",
+    "planningScore": "My planning score",
+    "vsLastMonthScore": "vs last month"
   },
   "receiptPhoto": {
     "title": "Recognised data",
@@ -1500,6 +1502,18 @@
     "sheetStats": "Statistics",
     "statSpent": "Spent",
     "statSaved": "Saved",
-    "statOverpaid": "Overpaid"
+    "statOverpaid": "Overpaid",
+    "ctaStores": "Stores",
+    "plansTitle": "Shopping plans",
+    "planSingle": "Only {{chain}}",
+    "planStores": "Stores: {{count}}",
+    "planStoreLine": "Items: {{count}} · {{km}} km",
+    "createLists": "Create the list",
+    "searchErrorTitle": "Search failed",
+    "searchErrorBody": "Check your connection and try again."
+  },
+  "notifications": {
+    "title": "Notifications",
+    "empty": "No notifications yet"
   }
 }

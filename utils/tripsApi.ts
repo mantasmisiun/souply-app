@@ -99,3 +99,23 @@ export interface TripStats {
 
 export const fetchTripStats = async (tripId: number): Promise<TripStats> =>
     jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/stats`));
+
+export interface PlanningScoreMonth { month: string; score: number | null; tripCount: number; adHocCount: number }
+
+export const fetchMonthlyPlanningScore = async (): Promise<PlanningScoreMonth[]> =>
+    jsonOrThrow(await fetch(`${API_BASE_URL}/api/planning-score/monthly`));
+
+export interface TripScore {
+    tripId: number;
+    score: number | null;
+    coverage: number;
+    discipline: number;
+    precision: number;
+    isAdHoc: boolean;
+    pairs: { listItemId: number; receiptItemId: number; source: 'auto' | 'manual'; productName: string | null }[];
+    unmatchedListItems: { listItemId: number; name: string | null }[];
+    unmatchedReceiptItems: { receiptItemId: number; name: string }[];
+}
+
+export const fetchTripScore = async (tripId: number): Promise<TripScore> =>
+    jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/score`));
