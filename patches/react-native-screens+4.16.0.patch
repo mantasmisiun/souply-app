@@ -1,0 +1,22 @@
+diff --git a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/utils/ScreenDummyLayoutHelper.kt b/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/utils/ScreenDummyLayoutHelper.kt
+index f9ca3ed..e9fb5b3 100644
+--- a/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/utils/ScreenDummyLayoutHelper.kt
++++ b/node_modules/react-native-screens/android/src/main/java/com/swmansion/rnscreens/utils/ScreenDummyLayoutHelper.kt
+@@ -178,7 +178,16 @@ internal class ScreenDummyLayoutHelper(
+             return cache.headerHeight
+         }
+ 
+-        val topLevelDecorView = requireActivity().window.decorView
++        // PATCH(souply): don't hard-crash when the activity is transiently
++        // detached (backgrounded / relaunch via dev-client deep link) — the
++        // same graceful degradation upstream applies to the late-init race
++        // above. A zeroed height only skips one cached header measurement.
++        val activity = reactContextRef.get()?.currentActivity
++        if (activity == null) {
++            Log.e(TAG, "[RNScreens] computeDummyLayout called with detached activity; returning 0 height")
++            return 0.0f
++        }
++        val topLevelDecorView = activity.window.decorView
+ 
+         // These dimensions are not accurate, as they do include status bar & navigation bar, however
+         // it is ok for our purposes.
