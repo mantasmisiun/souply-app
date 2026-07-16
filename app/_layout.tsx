@@ -311,7 +311,7 @@ function RootLayout() {
             titleless glass bar comes from each screen's CollapsingHeader;
             registering the chevron here keeps it on the first frame. */}
         <Stack.Screen name="shopping-list/index" options={{ title: '', headerLeft: () => <ScreenBackButton /> }} />
-        <Stack.Screen name="receipts/index" options={{ title: '', headerLeft: () => <ScreenBackButton /> }} />
+        <Stack.Screen name="receipt/index" options={{ title: '', headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess'), headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
         <Stack.Screen

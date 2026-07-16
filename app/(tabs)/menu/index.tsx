@@ -741,7 +741,7 @@ export default function ProfilisScreen() {
                 </TouchableOpacity>
                 <TouchableOpacity
                     style={styles.row}
-                    onPress={() => router.push('/receipts' as any)}
+                    onPress={() => router.push('/receipt' as any)}
                 >
                     <Ionicons name="receipt-outline" size={iconSize.lg} color={colors.textSecondary} />
                     <Text style={styles.rowText}>{t('profilis.receipts')}</Text>

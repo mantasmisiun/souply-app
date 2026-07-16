@@ -481,7 +481,7 @@ export default function ReceiptsScreen() {
       pathname: "/swipe/queue",
       params: {
         receiptIds: ids.join(","),
-        returnTo: "/receipts",
+        returnTo: "/receipt",
       },
     } as any);
   };
@@ -800,7 +800,7 @@ export default function ReceiptsScreen() {
               pathname: "/swipe/queue",
               params: {
                 receiptIds: String(item.id),
-                returnTo: "/receipts",
+                returnTo: "/receipt",
               },
             } as any);
           } else {

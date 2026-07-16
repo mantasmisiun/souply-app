@@ -210,7 +210,7 @@ export default function TemplatesScreen() {
                                 onDismiss={dismissGate}
                                 actions={[
                                     { label: t('basketTab.templates.gateLater'), onPress: dismissGate, style: 'secondary' },
-                                    { label: t('basketTab.templates.gateUpload'), onPress: () => router.navigate('/receipts' as any), style: 'primary' },
+                                    { label: t('basketTab.templates.gateUpload'), onPress: () => router.navigate('/receipt' as any), style: 'primary' },
                                 ]}
                             />
                         )}
@@ -224,7 +224,7 @@ export default function TemplatesScreen() {
                                     progress: Math.min(receiptCount, 3),
                                     chains: Math.min(distinctChainCount, 2),
                                 })}
-                                actions={[{ label: t('basketTab.templates.gateBannerCta'), onPress: () => router.navigate('/receipts' as any) }]}
+                                actions={[{ label: t('basketTab.templates.gateBannerCta'), onPress: () => router.navigate('/receipt' as any) }]}
                             />
                         )}
                         {/* Qualified → offer to build the auto template. */}

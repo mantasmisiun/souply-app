@@ -58,7 +58,7 @@ export default function SettingsScreen() {
                             await useAuthState.getState().clear();
                             await resetUserId();
                             try { const Updates = await import('expo-updates'); await Updates.reloadAsync(); }
-                            catch { router.replace('/receipts' as any); }
+                            catch { router.replace('/receipt' as any); }
                         } catch { /* best-effort */ }
                     },
                 },
@@ -105,7 +105,7 @@ export default function SettingsScreen() {
         // getUserId() call in any subsequent fetch will mint a fresh UUID
         // and POST /api/users to register it.
         await resetUserId();
-        router.replace('/receipts' as any);
+        router.replace('/receipt' as any);
     };
 
     return (
