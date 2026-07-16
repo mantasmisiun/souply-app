@@ -107,17 +107,8 @@ export default function TripsScreen() {
             if (trip.basket) router.push(`/basket/results/${trip.basket.id}` as any);
             return;
         }
-        if (trip.stage === 3) {
-            const slot = trip.slots.find(s => s.listStatus === 'active') ?? trip.slots[0];
-            if (slot) router.push(`/shopping-list/${slot.listId}` as any);
-            return;
-        }
-        if (trip.stage === 4) {
-            const slot = trip.slots.find(s => s.listStatus === 'completed' && !s.hasReceipt && !s.receiptSkipped) ?? trip.slots[0];
-            if (slot) router.push(`/shopping-list/${slot.listId}` as any);
-            return;
-        }
-        router.push('/receipt' as any); // stage 5 interim: receipts/stats home
+        // Stages 3+ live on the trip-map surface (slots, invites, receipts).
+        router.push(`/trip/${trip.id}` as any);
     }, [router]);
 
     const onArchivedTap = useCallback((trip: TripSummary) => {

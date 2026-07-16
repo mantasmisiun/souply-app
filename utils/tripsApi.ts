@@ -10,6 +10,10 @@ export interface TripSlot {
     storeId: number;
     storeName: string | null;
     chainName: string | null;
+    chainId: number | null;
+    address: string | null;
+    latitude: number | null;
+    longitude: number | null;
     listStatus: 'active' | 'completed';
     hasReceipt: boolean;
     receiptSkipped: boolean;
@@ -74,5 +78,11 @@ export const createOwnHousehold = async (name?: string): Promise<{ householdId: 
 /** Returns the join URL to encode in the QR (web landing + app-link chain). */
 export const createHouseholdInviteUrl = async (): Promise<string> => {
     const r = await jsonOrThrow(await fetch(`${API_BASE_URL}/api/households/mine/invites`, { method: 'POST' }));
+    return `https://souply.lt/join/${r.code}`;
+};
+
+/** Trip invite QR value (web landing + app-link chain), member-gated. */
+export const createTripInviteUrl = async (tripId: number): Promise<string> => {
+    const r = await jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/invites`, { method: 'POST' }));
     return `https://souply.lt/join/${r.code}`;
 };
