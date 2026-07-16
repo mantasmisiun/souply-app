@@ -25,7 +25,7 @@ import { useBakedPills, MapPillMarker, type MapPillSpec } from '../../components
 import { chainIdByName } from '../../utils/chainBrandName';
 import { useTheme, radius, spacing, type AppTheme } from '../../constants/theme';
 import { VILNIUS_FALLBACK } from '../../utils/location';
-import { fetchTrips, createTripInviteUrl, type TripSummary, type TripSlot } from '../../utils/tripsApi';
+import { fetchTrips, createTripInviteUrl, fetchTripStats, type TripSummary, type TripSlot, type TripStats } from '../../utils/tripsApi';
 
 const BAR_H = 64;
 
@@ -44,12 +44,18 @@ export default function TripMapScreen() {
     const [contentH, setContentH] = useState(240);
     const [qrOpen, setQrOpen] = useState(false);
     const [qrUrl, setQrUrl] = useState<string | null>(null);
+    const [stats, setStats] = useState<TripStats | null>(null);
     const framedRef = useRef(false);
 
     const load = useCallback(async () => {
         try {
             const trips = await fetchTrips();
-            setTrip(trips.find(tr => tr.id === tripId) ?? null);
+            const found = trips.find(tr => tr.id === tripId) ?? null;
+            setTrip(found);
+            // Spend/savings appear once any receipt is in (stage-5 material).
+            if (found && found.receiptCount > 0) {
+                fetchTripStats(tripId).then(setStats).catch(() => {});
+            }
         } catch {}
     }, [tripId]);
     useFocusEffect(useCallback(() => { load(); }, [load]));
@@ -150,6 +156,31 @@ export default function TripMapScreen() {
                     </View>
                     <Text style={[styles.rowTitle, { color: colors.primary, flex: 1 }]}>{t('trips.invite')}</Text>
                 </TouchableOpacity>
+                {stats && stats.receiptCount > 0 && (
+                    <>
+                        <Text style={styles.section}>{t('trips.sheetStats')}</Text>
+                        <View style={styles.statsRow}>
+                            <View style={styles.statBox}>
+                                <Text style={styles.statValue}>€{stats.totalSpent.toFixed(2)}</Text>
+                                <Text style={styles.statLabel}>{t('trips.statSpent')}</Text>
+                            </View>
+                            <View style={styles.statBox}>
+                                <Text style={[styles.statValue, { color: stats.savings >= 0 ? colors.success : colors.textPrimary }]}>
+                                    €{Math.abs(stats.savings).toFixed(2)}
+                                </Text>
+                                <Text style={styles.statLabel}>
+                                    {stats.savings >= 0 ? t('trips.statSaved') : t('trips.statOverpaid')}
+                                </Text>
+                            </View>
+                        </View>
+                        {stats.categoryBreakdown.slice(0, 3).map(c => (
+                            <View key={c.categoryName} style={styles.catRow}>
+                                <Text style={styles.catName} numberOfLines={1}>{c.categoryName}</Text>
+                                <Text style={styles.catTotal}>€{c.total.toFixed(2)}</Text>
+                            </View>
+                        ))}
+                    </>
+                )}
                 {trip.receiptCount > 0 && (
                     <>
                         <Text style={styles.section}>{t('trips.sheetReceipts', { count: trip.receiptCount })}</Text>
@@ -284,6 +315,17 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.primaryMuted ?? c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
     },
+
+    statsRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.sm },
+    statBox: {
+        flex: 1, backgroundColor: c.surfaceMuted, borderRadius: radius.md,
+        paddingVertical: 10, alignItems: 'center',
+    },
+    statValue: { fontSize: 17, fontWeight: '800', color: c.textPrimary },
+    statLabel: { fontSize: 11, color: c.textSecondary, marginTop: 2 },
+    catRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 6 },
+    catName: { flex: 1, fontSize: 13, color: c.textSecondary },
+    catTotal: { fontSize: 13, fontWeight: '700', color: c.textPrimary },
 
     qrBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', padding: 28 },
     qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: 22, gap: 10, alignItems: 'center', maxWidth: 380, width: '100%' },

@@ -1462,6 +1462,21 @@
     "householdQrTitle": "Pakviesk į šeimą",
     "householdQrBody": "Tegul nuskenuoja šį QR kodą programėlėje arba telefono kamera.",
     "householdErrorTitle": "Nepavyko",
-    "householdErrorBody": "Patikrink ryšį ir bandyk dar kartą."
+    "householdErrorBody": "Patikrink ryšį ir bandyk dar kartą.",
+    "sheetStores": "Parduotuvės",
+    "sheetMembers": "Nariai ({{count}})",
+    "sheetReceipts": "Kvitai ({{count}})",
+    "invite": "Pakviesti į apsipirkimą",
+    "viewReceipts": "Peržiūrėti kvitus",
+    "slotShopping": "Renkama {{have}}/{{total}}",
+    "slotReceiptIn": "Kvitas įkeltas",
+    "slotSkipped": "Praleista",
+    "slotAwaiting": "Laukia kvito",
+    "tripQrTitle": "Pakviesk į apsipirkimą",
+    "tripQrBody": "Nuskenavęs QR kodą narys matys sąrašus ir galės įkelti kvitą.",
+    "sheetStats": "Statistika",
+    "statSpent": "Išleista",
+    "statSaved": "Sutaupyta",
+    "statOverpaid": "Permokėta"
   }
 }

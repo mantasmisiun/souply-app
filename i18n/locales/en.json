@@ -1485,6 +1485,21 @@
     "householdQrTitle": "Invite your family",
     "householdQrBody": "Have them scan this QR code in the app or with the phone camera.",
     "householdErrorTitle": "Something went wrong",
-    "householdErrorBody": "Check your connection and try again."
+    "householdErrorBody": "Check your connection and try again.",
+    "sheetStores": "Stores",
+    "sheetMembers": "Members ({{count}})",
+    "sheetReceipts": "Receipts ({{count}})",
+    "invite": "Invite to this trip",
+    "viewReceipts": "View receipts",
+    "slotShopping": "Collecting {{have}}/{{total}}",
+    "slotReceiptIn": "Receipt uploaded",
+    "slotSkipped": "Skipped",
+    "slotAwaiting": "Awaiting receipt",
+    "tripQrTitle": "Invite to this trip",
+    "tripQrBody": "Scanning the QR lets a member see the lists and upload the receipt.",
+    "sheetStats": "Statistics",
+    "statSpent": "Spent",
+    "statSaved": "Saved",
+    "statOverpaid": "Overpaid"
   }
 }

@@ -86,3 +86,16 @@ export const createTripInviteUrl = async (tripId: number): Promise<string> => {
     const r = await jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/invites`, { method: 'POST' }));
     return `https://souply.lt/join/${r.code}`;
 };
+
+export interface TripStats {
+    tripId: number;
+    receiptCount: number;
+    totalSpent: number;
+    savings: number;
+    categoryBreakdown: { categoryName: string; total: number }[];
+    chainBreakdown: { chainName: string; total: number }[];
+    memberSpend: { userId: string; total: number; receiptCount: number }[];
+}
+
+export const fetchTripStats = async (tripId: number): Promise<TripStats> =>
+    jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/stats`));
