@@ -23,6 +23,7 @@ import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
 import { useReceiptQueueRunner } from '../hooks/useReceiptQueueRunner';
+import { usePushNotifications } from '../hooks/usePushNotifications';
 import '../i18n';
 import { useTranslation } from 'react-i18next';
 import { installFetchInterceptor } from '../utils/installFetchInterceptor';
@@ -155,6 +156,7 @@ function RootLayout() {
   // consumers read via `useNetworkStatus(s => s.isOnline)`.
   useBindNetInfo();
   useReceiptQueueRunner();
+  usePushNotifications();
 
   // Hydrate the user-settings store once at app boot — pulls the
   // persisted language choice (or detects device locale on first launch)

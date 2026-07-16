@@ -16,6 +16,8 @@ import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHei
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
 import { useTranslation } from 'react-i18next';
+import { fetchMonthlyPlanningScore, type PlanningScoreMonth } from '../../../utils/tripsApi';
+import { API_BASE_URL } from '../../../config/api';
 import { useTheme, spacing, radius, elevation, iconSize, typography, type AppTheme } from '../../../constants/theme';
 import { getLevelData, getLevelName } from '../../../constants/levels';
 import { DonutChart, type DonutSlice } from '../../../components/DonutChart';
@@ -232,6 +234,17 @@ export default function ProfilisScreen() {
     const level = profile?.level ?? 1;
     // "How do I earn points?" explainer for the level card's ? button.
     const [pointsInfoOpen, setPointsInfoOpen] = useState(false);
+    // Inbox bell badge — polled on focus (the inbox is the source of truth).
+    const [unread, setUnread] = useState(0);
+    useFocusEffect(useCallback(() => {
+        fetch(`${API_BASE_URL}/api/notifications/unread-count`)
+            .then(r => r.json()).then(d => setUnread(Number(d?.unread) || 0)).catch(() => {});
+    }, []));
+    // Monthly planning score (2.0): current month + Δ vs previous.
+    const [planScore, setPlanScore] = useState<PlanningScoreMonth[] | null>(null);
+    useFocusEffect(useCallback(() => {
+        fetchMonthlyPlanningScore().then(setPlanScore).catch(() => {});
+    }, []));
 
     // Dev/staging test-identity switch: fixed dev UUID ↔ persisted random UUID.
     // The resolved id is memoized + baked into every store, so applying the
@@ -530,7 +543,21 @@ export default function ProfilisScreen() {
     ];
 
     const settingsGear = (
-        <GlassIconButton icon="settings-outline" onPress={() => router.push('/settings' as any)} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View>
+                <GlassIconButton icon="notifications-outline" onPress={() => { setUnread(0); router.push('/notifications' as any); }} />
+                {unread > 0 && (
+                    <View style={{
+                        position: 'absolute', top: -2, right: -2, minWidth: 16, height: 16,
+                        borderRadius: 8, backgroundColor: colors.primary,
+                        alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3,
+                    }}>
+                        <Text style={{ color: colors.onPrimary, fontSize: 9, fontWeight: '700' }}>{unread > 9 ? '9+' : unread}</Text>
+                    </View>
+                )}
+            </View>
+            <GlassIconButton icon="settings-outline" onPress={() => router.push('/settings' as any)} />
+        </View>
     );
 
     return (
@@ -654,6 +681,47 @@ export default function ProfilisScreen() {
                                     </Text>
                                 </View>
                                 <Text style={styles.savingsChangeCaption}>{t('profilis.vsLastMonth')}</Text>
+                            </View>
+                        )}
+                    </View>
+                );
+            })()}
+
+            {/* Planning score card (2.0) — current month + Δ vs previous. */}
+            {(() => {
+                if (!planScore || planScore.length < 1) return null;
+                const cur = planScore[planScore.length - 1];
+                const prev = planScore.length > 1 ? planScore[planScore.length - 2] : null;
+                if (cur.score == null) return null;
+                const delta = prev?.score != null ? cur.score - prev.score : null;
+                const good = cur.score >= 70;
+                return (
+                    <View style={styles.savingsCard}>
+                        <Ionicons
+                            name={good ? 'ribbon-outline' : 'compass-outline'}
+                            size={22}
+                            color={good ? colors.success : colors.textSecondary}
+                            style={{ marginRight: spacing.md }}
+                        />
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.savingsLabel}>{t('profilis.planningScore')}</Text>
+                            <Text style={[styles.savingsAmount, { color: good ? colors.success : colors.textPrimary }]}>
+                                {cur.score}/100
+                            </Text>
+                        </View>
+                        {delta != null && delta !== 0 && (
+                            <View style={styles.savingsChange}>
+                                <View style={styles.savingsChangeChip}>
+                                    <Ionicons
+                                        name={delta > 0 ? 'arrow-up' : 'arrow-down'}
+                                        size={12}
+                                        color={delta > 0 ? colors.success : colors.textSecondary}
+                                    />
+                                    <Text style={[styles.savingsChangePct, { color: delta > 0 ? colors.success : colors.textSecondary }]}>
+                                        {Math.abs(delta)}
+                                    </Text>
+                                </View>
+                                <Text style={styles.savingsChangeCaption}>{t('profilis.vsLastMonthScore')}</Text>
                             </View>
                         )}
                     </View>
