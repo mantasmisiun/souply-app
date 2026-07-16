@@ -10,7 +10,6 @@ import { getUserId } from '../../config/user';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { useProfileStore } from '../../state/profileStore';
 import { HapticTab } from '../../components/haptic-tab';
-import { countAwaitingReceiptGroups } from '../../utils/awaitingReceipts';
 import { FloatingPillTabBar } from '../../components/FloatingPillTabBar';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { devLog } from '../../utils/devLog';
@@ -42,38 +41,19 @@ export default function TabLayout() {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const [basketCount, setBasketCount] = useState(0);
-    const [listCount, setListCount] = useState(0);
+    const [tripCount, setTripCount] = useState(0);
     const [pendingSwipeCount, setPendingSwipeCount] = useState(0);
 
+    // ONE badge endpoint (2.0): trips ≈ non-archived trips in stages 1-4
+    // (server-side grouping of baskets + lists until Phase 4 goes Trip-native);
+    // pendingSwipes moved to the Profilis tab badge.
     const fetchCounts = async () => {
         try {
             const userId = await getUserId();
-            const [basketRes, listRes, profileRes] = await Promise.all([
-                fetch(`${API_BASE_URL}/api/baskets/user/${userId}`),
-                fetch(`${API_BASE_URL}/api/shopping-lists/user/${userId}`),
-                fetch(`${API_BASE_URL}/api/users/${userId}/profile`),
-            ]);
-            const baskets = await basketRes.json();
-            const lists = await listRes.json();
-            const profile = await profileRes.json();
-
-            setBasketCount(Array.isArray(baskets)
-                ? baskets.filter((b: any) => b.status !== 'completed').length
-                : 0
-            );
-            // List badge = active list groups + completed groups still
-            // awaiting a receipt (both grouped by basket so a split counts once).
-            const activeGroups = Array.isArray(lists)
-                ? new Set(
-                    lists
-                        .filter((l: any) => l.status === 'active')
-                        .map((l: any) => l.basketId != null ? `b-${l.basketId}` : `l-${l.id}`)
-                ).size
-                : 0;
-            const awaitingGroups = Array.isArray(lists) ? countAwaitingReceiptGroups(lists) : 0;
-            setListCount(activeGroups + awaitingGroups);
-            setPendingSwipeCount(profile?.pendingSwipeCount ?? (profile?.pendingSwipes ? 1 : 0));
+            const res = await fetch(`${API_BASE_URL}/api/users/${userId}/tab-badges`);
+            const badges = await res.json();
+            setTripCount(Number(badges?.trips) || 0);
+            setPendingSwipeCount(Number(badges?.pendingSwipes) || 0);
         } catch (error) {
             console.error('Failed to fetch counts:', error);
         }
@@ -121,36 +101,21 @@ export default function TabLayout() {
             <Tabs.Screen
                 name="basket"
                 options={{
-                    title: t('tabs.basket'),
+                    title: t('tabs.trips'),
                     tabBarIcon: ({ focused, color, size }) => (
                         <View>
                             <Ionicons name={focused ? 'cart' : 'cart-outline'} size={size} color={color} />
-                            <TabBadge count={basketCount} styles={styles} />
+                            <TabBadge count={tripCount} styles={styles} />
                         </View>
                     ),
                 }}
             />
             <Tabs.Screen
-                name="shoppingList"
+                name="templates"
                 options={{
-                    title: t('tabs.shoppingList'),
+                    title: t('tabs.templates'),
                     tabBarIcon: ({ focused, color, size }) => (
-                        <View>
-                            <Ionicons name={focused ? 'list' : 'list-outline'} size={size} color={color} />
-                            <TabBadge count={listCount} styles={styles} />
-                        </View>
-                    ),
-                }}
-            />
-            <Tabs.Screen
-                name="receipts"
-                options={{
-                    title: t('tabs.receipts'),
-                    tabBarIcon: ({ focused, color, size }) => (
-                        <View>
-                            <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />
-                            {pendingSwipeCount > 0 && <TabBadge count={pendingSwipeCount} styles={styles} />}
-                        </View>
+                        <Ionicons name={focused ? 'bookmarks' : 'bookmarks-outline'} size={size} color={color} />
                     ),
                 }}
             />
@@ -159,7 +124,10 @@ export default function TabLayout() {
                 options={{
                     title: t('tabs.profilis'),
                     tabBarIcon: ({ focused, color, size }) => (
-                        <Ionicons name={focused ? 'person' : 'person-outline'} size={size} color={color} />
+                        <View>
+                            <Ionicons name={focused ? 'person' : 'person-outline'} size={size} color={color} />
+                            {pendingSwipeCount > 0 && <TabBadge count={pendingSwipeCount} styles={styles} />}
+                        </View>
                     ),
                 }}
             />
@@ -167,10 +135,9 @@ export default function TabLayout() {
     );
 
     if (Platform.OS === 'ios') {
-        devLog('tabs.iosLayoutMount', { basketCount, listCount, pendingSwipeCount });
+        devLog('tabs.iosLayoutMount', { tripCount, pendingSwipeCount });
         const fmt = (n: number) => (n > 0 ? (n > 9 ? '9+' : String(n)) : undefined);
-        const basketBadge = fmt(basketCount);
-        const listBadge = fmt(listCount);
+        const tripBadge = fmt(tripCount);
         const swipeBadge = fmt(pendingSwipeCount);
         return (
             <NativeTabsBoundary fallback={jsTabs}>
@@ -181,22 +148,17 @@ export default function TabLayout() {
                     </NativeTabs.Trigger>
                     <NativeTabs.Trigger name="basket">
                         <Icon sf={{ default: 'cart', selected: 'cart.fill' }} />
-                        <Label>{t('tabs.basket')}</Label>
-                        {basketBadge ? <Badge>{basketBadge}</Badge> : null}
+                        <Label>{t('tabs.trips')}</Label>
+                        {tripBadge ? <Badge>{tripBadge}</Badge> : null}
                     </NativeTabs.Trigger>
-                    <NativeTabs.Trigger name="shoppingList">
-                        <Icon sf="list.bullet" />
-                        <Label>{t('tabs.shoppingList')}</Label>
-                        {listBadge ? <Badge>{listBadge}</Badge> : null}
-                    </NativeTabs.Trigger>
-                    <NativeTabs.Trigger name="receipts">
-                        <Icon sf={{ default: 'doc.text', selected: 'doc.text.fill' }} />
-                        <Label>{t('tabs.receipts')}</Label>
-                        {swipeBadge ? <Badge>{swipeBadge}</Badge> : null}
+                    <NativeTabs.Trigger name="templates">
+                        <Icon sf={{ default: 'bookmark', selected: 'bookmark.fill' }} />
+                        <Label>{t('tabs.templates')}</Label>
                     </NativeTabs.Trigger>
                     <NativeTabs.Trigger name="menu">
                         <Icon sf={{ default: 'person', selected: 'person.fill' }} />
                         <Label>{t('tabs.profilis')}</Label>
+                        {swipeBadge ? <Badge>{swipeBadge}</Badge> : null}
                     </NativeTabs.Trigger>
                 </NativeTabs>
             </NativeTabsBoundary>

@@ -670,7 +670,7 @@ export default function BasketResultsScreen() {
                 const data = await res.json();
                 clearSessionBasket();
                 router.dismissAll();
-                router.navigate('/(tabs)/shoppingList' as any);
+                router.navigate('/shopping-list' as any);
                 setTimeout(() => {
                     router.push(`/shopping-list/${data.listId}` as any);
                 }, 100);
@@ -686,7 +686,7 @@ export default function BasketResultsScreen() {
             clearSessionBasket();
             useProfileStore.getState().invalidate();
             router.dismissAll();
-            router.navigate('/(tabs)/shoppingList' as any);
+            router.navigate('/shopping-list' as any);
             setTimeout(() => {
                 router.push(`/shopping-list/${listData.id}` as any);
             }, 100);
@@ -749,7 +749,7 @@ export default function BasketResultsScreen() {
             clearSessionBasket();
             useProfileStore.getState().invalidate();
             router.dismissAll();
-            router.navigate('/(tabs)/shoppingList' as any);
+            router.navigate('/shopping-list' as any);
             setTimeout(() => {
                 router.push(`/shopping-list/split/${id}` as any);
             }, 100);

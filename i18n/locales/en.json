@@ -27,7 +27,9 @@
     "browse": "Browse",
     "basket": "Basket",
     "shoppingList": "List",
-    "profilis": "Profile"
+    "profilis": "Profile",
+    "trips": "Shopping",
+    "templates": "Templates"
   },
   "levels": {
     "0": "Onion",
@@ -1392,7 +1394,9 @@
     "testUserRandom": "random device ID",
     "testUserRestartTitle": "Restart required",
     "testUserRestartBody": "The user ID will switch to: {{id}}. The app will restart.",
-    "testUserRestart": "Restart"
+    "testUserRestart": "Restart",
+    "shoppingLists": "Shopping lists",
+    "receipts": "Receipts"
   },
   "receiptPhoto": {
     "title": "Recognised data",

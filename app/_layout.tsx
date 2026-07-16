@@ -306,6 +306,12 @@ function RootLayout() {
             empty header bar pushing the map down (the "black bar at the top"). */}
         <Stack.Screen name="basket/results/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="shopping-list/[id]" options={{ title: t('screens.shoppingList'), headerLeft: () => <ScreenBackButton /> }} />
+        {/* 2.0 re-homes: the former Sąrašas + Analizė tabs live on as pushed
+            routes (reached from Profilis quick-links and receipt flows). The
+            titleless glass bar comes from each screen's CollapsingHeader;
+            registering the chevron here keeps it on the first frame. */}
+        <Stack.Screen name="shopping-list/index" options={{ title: '', headerLeft: () => <ScreenBackButton /> }} />
+        <Stack.Screen name="receipts/index" options={{ title: '', headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess'), headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
         <Stack.Screen

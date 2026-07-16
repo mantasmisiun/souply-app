@@ -656,7 +656,7 @@ export function ShoppingListDetail({
             });
             const data = await res.json();
             router.dismissAll();
-            router.replace('/(tabs)/shoppingList' as any);
+            router.replace('/shopping-list' as any);
             setTimeout(() => { router.push(`/shopping-list/${data.id}` as any); }, 100);
         } catch {
             Alert.alert(t('shoppingListDetail.errorGeneric'), t('shoppingListDetail.errorCopy'));

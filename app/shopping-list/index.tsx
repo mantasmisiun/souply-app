@@ -14,26 +14,25 @@ import { MaterialProgress } from '@/components/MaterialProgress';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
 import { useTranslation } from 'react-i18next';
-import { API_BASE_URL } from '../../../config/api';
-import { getUserId } from '../../../config/user';
-import { useTheme, spacing, radius, elevation, iconSize, avatarSize, typography, type AppTheme } from '../../../constants/theme';
+import { API_BASE_URL } from '../../config/api';
+import { getUserId } from '../../config/user';
+import { useTheme, spacing, radius, elevation, iconSize, avatarSize, typography, type AppTheme } from '../../constants/theme';
 import Animated from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { glassHeaderOptions } from '../../../constants/navHeader';
-import { ScreenHeading } from '../../../components/ScreenHeading';
-import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
-import { SkeletonBox } from '../../../components/SkeletonBox';
-import { formatDate } from '../../../utils/formatCurrency';
-import { chainBrandName, getMiniLogoUrl, chainIdByName } from '../../../utils/chainBrandName';
-import { ChainLogoChip } from '../../../components/ChainLogoChip';
-import { formatStoreStreet } from '../../../utils/formatAddress';
-import { launchDocumentScanner } from '../../../utils/launchDocumentScanner';
-import { StoreChipBar } from '../../../components/StoreChipBar';
-import { CardActionBar, type CardAction } from '../../../components/CardActionBar';
-import { useTabBarOverride } from '../../../state/tabBarOverride';
-import { isAwaitingReceipt, groupReceiptProgress } from '../../../utils/awaitingReceipts';
+import { glassHeaderOptions } from '../../constants/navHeader';
+import { ScreenHeading } from '../../components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
+import { SkeletonBox } from '../../components/SkeletonBox';
+import { formatDate } from '../../utils/formatCurrency';
+import { chainBrandName, getMiniLogoUrl, chainIdByName } from '../../utils/chainBrandName';
+import { ChainLogoChip } from '../../components/ChainLogoChip';
+import { formatStoreStreet } from '../../utils/formatAddress';
+import { launchDocumentScanner } from '../../utils/launchDocumentScanner';
+import { StoreChipBar } from '../../components/StoreChipBar';
+import { CardActionBar, type CardAction } from '../../components/CardActionBar';
+import { useTabBarOverride } from '../../state/tabBarOverride';
+import { isAwaitingReceipt, groupReceiptProgress } from '../../utils/awaitingReceipts';
 import * as DocumentPicker from 'expo-document-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
@@ -292,7 +291,8 @@ export default function ShoppingListScreen() {
     const insets = useSafeAreaInsets();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const tabBarHeight = useSafeBottomTabBarHeight();
+    // Pushed route (Souply 2.0): no tab bar below — clear only the system inset.
+    const tabBarHeight = insets.bottom;
     const [lists, setLists] = useState<ShoppingList[]>([]);
     const [splitGroups, setSplitGroups] = useState<SplitGroup[]>([]);
     const [chainFilter, setChainFilter] = useState<string | null>(null);
@@ -668,8 +668,8 @@ export default function ShoppingListScreen() {
 
     if (loading) return (
         <View style={styles.container}>
-            <Stack.Screen options={glassHeaderOptions()} />
-            <ScreenHeading title={t('tabs.shoppingList')} topInset={insets.top} />
+            <Stack.Screen options={glassHeaderOptions({ back: true })} />
+            <ScreenHeading title={t('tabs.shoppingList')} />
             <View style={{ padding: spacing.lg }}>
                 <SkeletonBox width={70} height={13} borderRadius={radius.sm} style={{ marginBottom: spacing.md }} />
                 {Array.from({ length: 5 }).map((_, i) => (
@@ -690,9 +690,9 @@ export default function ShoppingListScreen() {
 
     return (
         <View style={styles.container}>
-            {/* No bar action → the empty bar is hidden; this header takes the inset. */}
             <CollapsingHeader
                 controller={header}
+                back
                 background={colors.cardBackground}
                 collapsing={<ScreenHeading title={t('tabs.shoppingList')} />}
                 pinned={allChains.length >= 2 ? (

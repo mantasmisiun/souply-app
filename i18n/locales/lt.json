@@ -27,7 +27,9 @@
     "browse": "Naršyti",
     "basket": "Krepšelis",
     "shoppingList": "Sąrašas",
-    "profilis": "Profilis"
+    "profilis": "Profilis",
+    "trips": "Apsipirkimai",
+    "templates": "Šablonai"
   },
   "screens": {
     "basket": "Krepšelis",
@@ -1369,7 +1371,9 @@
     "testUserRandom": "atsitiktinis įrenginio ID",
     "testUserRestartTitle": "Reikia perkrauti",
     "testUserRestartBody": "Vartotojo ID bus pakeistas į: {{id}}. Programa bus perkrauta.",
-    "testUserRestart": "Perkrauti"
+    "testUserRestart": "Perkrauti",
+    "shoppingLists": "Pirkinių sąrašai",
+    "receipts": "Kvitai"
   },
   "receiptPhoto": {
     "title": "Atpažinti duomenys",

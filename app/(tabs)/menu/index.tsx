@@ -729,6 +729,24 @@ export default function ProfilisScreen() {
 
             {/* Quick links */}
             <View style={{ marginTop: spacing.sm }}>
+                {/* 2.0 re-homes: the former Sąrašas + Analizė tabs live here as
+                    management/history views (spec: above Voting history). */}
+                <TouchableOpacity
+                    style={styles.row}
+                    onPress={() => router.push('/shopping-list' as any)}
+                >
+                    <Ionicons name="list-outline" size={iconSize.lg} color={colors.textSecondary} />
+                    <Text style={styles.rowText}>{t('profilis.shoppingLists')}</Text>
+                    <Ionicons name="chevron-forward" size={iconSize.md} color={colors.textMuted} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                    style={styles.row}
+                    onPress={() => router.push('/receipts' as any)}
+                >
+                    <Ionicons name="receipt-outline" size={iconSize.lg} color={colors.textSecondary} />
+                    <Text style={styles.rowText}>{t('profilis.receipts')}</Text>
+                    <Ionicons name="chevron-forward" size={iconSize.md} color={colors.textMuted} />
+                </TouchableOpacity>
                 <TouchableOpacity
                     style={styles.row}
                     onPress={() => router.push('/profile/vote-history')}

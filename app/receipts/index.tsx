@@ -5,10 +5,9 @@ import * as FileSystem from "expo-file-system/legacy";
 import { Stack,
     useFocusEffect,
     useRouter } from "expo-router";
-import { useSafeBottomTabBarHeight } from "../../../hooks/useSafeBottomTabBarHeight";
-import { StoreFilterButton } from "../../../components/StoreFilterButton";
-import { DateFilterButton } from "../../../components/DateFilterButton";
-import type { FilterOption } from "../../../components/FilterDropdownModal";
+import { StoreFilterButton } from "../../components/StoreFilterButton";
+import { DateFilterButton } from "../../components/DateFilterButton";
+import type { FilterOption } from "../../components/FilterDropdownModal";
 import { useCallback,
     useEffect,
     useMemo,
@@ -17,7 +16,7 @@ import { useCallback,
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 import { useReceiptQueueStore,
-    type QueueItem } from "../../../state/receiptQueueStore";
+    type QueueItem } from "../../state/receiptQueueStore";
 import {
     ActivityIndicator,
     Alert,
@@ -33,34 +32,34 @@ import {
     View,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
-import { API_BASE_URL } from "../../../config/api";
-import { getUserId } from "../../../config/user";
-import { useTheme, spacing, radius, elevation, iconSize, typography, type AppTheme } from "../../../constants/theme";
+import { API_BASE_URL } from "../../config/api";
+import { getUserId } from "../../config/user";
+import { useTheme, spacing, radius, elevation, iconSize, typography, type AppTheme } from "../../constants/theme";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { glassHeaderOptions } from "../../../constants/navHeader";
-import { ScreenHeading } from "../../../components/ScreenHeading";
-import { useCollapsingHeader, CollapsingHeader } from "../../../components/CollapsingHeader";
-import { chainBrandName, chainIdByName } from "../../../utils/chainBrandName";
-import { launchDocumentScanner } from "../../../utils/launchDocumentScanner";
-import { looksLikePdf } from "../../../utils/pdfToImages";
-import { buildReceiptDotMap, parseLooseDate, sameDay } from "../../../utils/receiptDots";
-import { ChainLogoChip } from "../../../components/ChainLogoChip";
-import { SkeletonBox } from "../../../components/SkeletonBox";
-import { PendingSwipesBanner } from "../../../components/PendingSwipesBanner";
-import { DEV_MODE } from "../../../constants/flags";
+import { glassHeaderOptions } from "../../constants/navHeader";
+import { ScreenHeading } from "../../components/ScreenHeading";
+import { useCollapsingHeader, CollapsingHeader } from "../../components/CollapsingHeader";
+import { chainBrandName, chainIdByName } from "../../utils/chainBrandName";
+import { launchDocumentScanner } from "../../utils/launchDocumentScanner";
+import { looksLikePdf } from "../../utils/pdfToImages";
+import { buildReceiptDotMap, parseLooseDate, sameDay } from "../../utils/receiptDots";
+import { ChainLogoChip } from "../../components/ChainLogoChip";
+import { SkeletonBox } from "../../components/SkeletonBox";
+import { PendingSwipesBanner } from "../../components/PendingSwipesBanner";
+import { DEV_MODE } from "../../constants/flags";
 import {
     clearReceiptDraft,
     loadReceiptDraft,
     claimResumePrompt,
     unclaimResumePrompt,
-} from "../../../state/receiptDraft";
-import { useScanSession, isSessionLive, consumeSession } from "../../../state/scanSession";
-import { fetchWithTimeout, TIMEOUT_STANDARD_MS } from "../../../utils/fetchWithTimeout";
-import { formatDate } from "../../../utils/formatCurrency";
-import { useNetworkStatus } from "../../../state/networkStatus";
-import { useLevelStore } from "../../../state/levelStore";
-import { useSettingsStore } from "../../../state/settingsStore";
+} from "../../state/receiptDraft";
+import { useScanSession, isSessionLive, consumeSession } from "../../state/scanSession";
+import { fetchWithTimeout, TIMEOUT_STANDARD_MS } from "../../utils/fetchWithTimeout";
+import { formatDate } from "../../utils/formatCurrency";
+import { useNetworkStatus } from "../../state/networkStatus";
+import { useLevelStore } from "../../state/levelStore";
+import { useSettingsStore } from "../../state/settingsStore";
 
 // The resume-prompt one-shot now lives in state/receiptDraft.ts (claim/unclaim/
 // arm) so saving a NEW draft re-arms it — the old module flag was claimed once
@@ -156,7 +155,8 @@ export default function ReceiptsScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useTranslation();
   const styles = useMemo(() => makeStyles(colors), [colors]);
-  const tabBarHeight = useSafeBottomTabBarHeight();
+  // Pushed route (Souply 2.0): no tab bar below — clear only the system inset.
+  const tabBarHeight = insets.bottom;
   const checkCandidate = useLevelStore(s => s.checkCandidate);
   useFocusEffect(useCallback(() => { checkCandidate(); }, [checkCandidate]));
   const [receipts, setReceipts] = useState<Receipt[]>([]);
@@ -481,7 +481,7 @@ export default function ReceiptsScreen() {
       pathname: "/swipe/queue",
       params: {
         receiptIds: ids.join(","),
-        returnTo: "/(tabs)/receipts",
+        returnTo: "/receipts",
       },
     } as any);
   };
@@ -584,8 +584,8 @@ export default function ReceiptsScreen() {
   if (loading) {
     return (
       <View style={styles.container}>
-        <Stack.Screen options={glassHeaderOptions()} />
-        <ScreenHeading title={t('tabs.receipts')} topInset={insets.top} />
+        <Stack.Screen options={glassHeaderOptions({ back: true })} />
+        <ScreenHeading title={t('tabs.receipts')} />
         <View style={{
           backgroundColor: colors.cardBackground,
           borderBottomWidth: 0.5, borderBottomColor: colors.border,
@@ -800,7 +800,7 @@ export default function ReceiptsScreen() {
               pathname: "/swipe/queue",
               params: {
                 receiptIds: String(item.id),
-                returnTo: "/(tabs)/receipts",
+                returnTo: "/receipts",
               },
             } as any);
           } else {
@@ -849,9 +849,9 @@ export default function ReceiptsScreen() {
 
   return (
     <View style={styles.container}>
-      {/* No bar action → the empty bar is hidden; this header takes the inset. */}
       <CollapsingHeader
         controller={header}
+        back
         background={colors.cardBackground}
         collapsing={<ScreenHeading title={t('tabs.receipts')} />}
         pinned={(storeOptions.length > 1 || receipts.length > 0) ? (

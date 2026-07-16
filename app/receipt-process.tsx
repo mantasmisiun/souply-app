@@ -814,7 +814,7 @@ export default function ProcessReceiptScreen() {
         setLoading(false);
         isHydratingRef.current = false;
         useProfileStore.getState().invalidate();
-        router.replace("/(tabs)/receipts");
+        router.replace("/receipts");
         setTimeout(() => {
           Alert.alert(
             t('receiptProcess.savedFailTitle'),
@@ -1122,7 +1122,7 @@ export default function ProcessReceiptScreen() {
       void fetchComparison(id);
     } catch (e) {
       console.warn("[loadExistingReceipt] failed:", e);
-      router.replace("/(tabs)/receipts");
+      router.replace("/receipts");
     } finally {
       setLoading(false);
       setTimeout(() => {
@@ -1244,7 +1244,7 @@ export default function ProcessReceiptScreen() {
         if (started === null) {
           // A DIFFERENT scan is still mid-flight — refuse to silently kill it.
           setLoading(false);
-          router.replace('/(tabs)/receipts');
+          router.replace('/receipts');
           setTimeout(() => {
             Alert.alert(t('receiptProcess.scanBusyTitle'), t('receiptProcess.scanBusyBody'));
           }, 100);
@@ -1322,21 +1322,21 @@ export default function ProcessReceiptScreen() {
         break;
       case 'cancelled_list':
         // Chain gate declined on a list upload — a retry, not a failure.
-        router.replace('/(tabs)/shoppingList');
+        router.replace('/shopping-list' as any);
         break;
       case 'duplicate': {
         // Receipt already exists server-side and there's nothing to resume
         // with. Bail out to the right tab with a clear message — no
         // half-state on this screen.
         if (sCompletion.linkedToList) {
-          router.replace('/(tabs)/shoppingList');
+          router.replace('/shopping-list' as any);
           setTimeout(() => {
             Alert.alert(t('receiptProcess.duplicateTitle'), t('receiptProcess.duplicateLinkedBody'));
           }, 100);
           break;
         }
         const crossAccount = sCompletion.crossAccount;
-        router.replace('/(tabs)/receipts');
+        router.replace('/receipts');
         setTimeout(() => {
           Alert.alert(
             crossAccount ? t('receiptProcess.dupOtherAccountTitle') : t('receiptProcess.duplicateTitle'),
@@ -2838,12 +2838,12 @@ export default function ProcessReceiptScreen() {
         visible={sessionIsMine && sInput?.kind === 'store'}
         animationType="slide"
         presentationStyle="fullScreen"
-        onRequestClose={() => { completeStoreResolution(null); router.replace("/(tabs)/receipts"); }}
+        onRequestClose={() => { completeStoreResolution(null); router.replace("/receipts"); }}
       >
         {/* Cancelling the map is giving up on THIS scan — go straight back to
             the Analyze tab instead of stranding the user on the (now-empty)
             processing screen that needs a second back. */}
-        <StoreResolutionOverlay onCancel={() => router.replace("/(tabs)/receipts")} />
+        <StoreResolutionOverlay onCancel={() => router.replace("/receipts")} />
       </Modal>
 
       {/* Manual date entry: receipt readable (receiptNo + time) but DATE unreadable. */}
@@ -2909,7 +2909,7 @@ export default function ProcessReceiptScreen() {
         visible={failGate !== null}
         transparent
         animationType="fade"
-        onRequestClose={() => { setFailGate(null); router.replace("/(tabs)/receipts"); }}
+        onRequestClose={() => { setFailGate(null); router.replace("/receipts"); }}
       >
         <View style={styles.chainGateBackdrop}>
           <View style={styles.chainGateCard}>
@@ -2931,7 +2931,7 @@ export default function ProcessReceiptScreen() {
             >
               <Text style={styles.chainGatePrimaryText}>{t('receiptProcess.failTryAgain')}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => { setFailGate(null); router.replace("/(tabs)/receipts"); }}>
+            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => { setFailGate(null); router.replace("/receipts"); }}>
               <Text style={styles.chainGateSecondaryText}>{t('receiptProcess.failClose')}</Text>
             </TouchableOpacity>
           </View>
