@@ -36,6 +36,8 @@ import { ScalePressable } from '../../../components/ScalePressable';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { BrandedQR } from '../../../components/BrandedQR';
 import { formatDate } from '../../../utils/formatCurrency';
+import { DateFilterButton } from '../../../components/DateFilterButton';
+import { buildReceiptDotMap, parseLooseDate, sameDay } from '../../../utils/receiptDots';
 import {
     fetchTrips, unarchiveTrip, fetchOwnHousehold, createOwnHousehold,
     createHouseholdInviteUrl, type TripSummary, type HouseholdInfo,
@@ -94,8 +96,22 @@ export default function TripsScreen() {
         fetchAll(silent);
     }, [fetchAll]));
 
-    const active = useMemo(() => trips.filter(tr => tr.archivedAt == null), [trips]);
-    const archived = useMemo(() => trips.filter(tr => tr.archivedAt != null), [trips]);
+    // Calendar filter (spec): dot per trip on its best-known shopping date,
+    // chain-coloured via the trip's slots; ad-hoc trips dot as "Kita".
+    const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+    const tripDotMap = useMemo(() => buildReceiptDotMap(trips.flatMap(tr => {
+        const date = parseLooseDate(tr.anchorDate);
+        const chains = tr.slots.map(sl => sl.chainName).filter((c): c is string => !!c);
+        return (chains.length > 0 ? chains : ['Kita']).map(chainName => ({ date, chainName }));
+    })), [trips]);
+    const byDate = useCallback((tr: TripSummary) => {
+        if (!selectedDate) return true;
+        const d = parseLooseDate(tr.anchorDate);
+        return d != null && sameDay(d, selectedDate);
+    }, [selectedDate]);
+
+    const active = useMemo(() => trips.filter(tr => tr.archivedAt == null && byDate(tr)), [trips, byDate]);
+    const archived = useMemo(() => trips.filter(tr => tr.archivedAt != null && byDate(tr)), [trips, byDate]);
 
     // Stage CTA → the existing surface that continues the journey.
     const openTrip = useCallback((trip: TripSummary) => {
@@ -179,12 +195,24 @@ export default function TripsScreen() {
                 controller={header}
                 background={colors.cardBackground}
                 collapsing={<ScreenHeading title={t('tabs.trips')} />}
-                pinned={refreshing ? (
-                    <View style={styles.refreshingBanner}>
-                        <MaterialProgress size="small" color={colors.primary} />
-                        <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
-                    </View>
-                ) : null}
+                pinned={(
+                    <>
+                        <View style={styles.filterRow}>
+                            <DateFilterButton
+                                value={selectedDate}
+                                onChange={setSelectedDate}
+                                label={t('receipts.filterDate')}
+                                markedDates={tripDotMap}
+                            />
+                        </View>
+                        {refreshing && (
+                            <View style={styles.refreshingBanner}>
+                                <MaterialProgress size="small" color={colors.primary} />
+                                <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
+                            </View>
+                        )}
+                    </>
+                )}
             />
             <Animated.ScrollView
                 {...header.scroll}
@@ -261,7 +289,7 @@ export default function TripsScreen() {
                             <Text style={styles.archiveCount}>{archived.length}</Text>
                             <Ionicons name={archiveOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textSecondary} />
                         </TouchableOpacity>
-                        {archiveOpen && archived.map(trip => (
+                        {(archiveOpen || (selectedDate != null && active.length === 0)) && archived.map(trip => (
                             <TouchableOpacity key={trip.id} style={styles.archiveRow} onPress={() => onArchivedTap(trip)}>
                                 <Ionicons name={STAGE_ICONS[trip.stage]} size={18} color={colors.textMuted} />
                                 <View style={{ flex: 1 }}>
@@ -303,6 +331,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     centered: { alignItems: 'center', justifyContent: 'center', padding: 32 },
     list: { padding: 16 },
 
+    filterRow: {
+        flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8,
+        backgroundColor: c.cardBackground,
+        borderBottomWidth: 0.5, borderBottomColor: c.border,
+    },
     householdCard: {
         flexDirection: 'row', alignItems: 'center', gap: spacing.md,
         backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: 14, marginBottom: 12,
