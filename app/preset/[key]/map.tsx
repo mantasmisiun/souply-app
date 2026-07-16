@@ -5,7 +5,7 @@ import { useRef, useState, useMemo, useCallback } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, typography, radius, spacing, type AppTheme } from '../../../constants/theme';
-import { MapPickerScaffold } from '../../../components/map/MapPickerScaffold';
+import { MapHost } from '../../../components/map/MapHost';
 import { GlassIconButton } from '../../../components/GlassIconButton';
 import { setPreset, type PresetKey } from '../../../utils/locationStorage';
 import { geocodeAddress, reverseGeocode } from '../../../utils/nominatim';
@@ -13,6 +13,12 @@ import { tryGpsCoords, VILNIUS_FALLBACK } from '../../../utils/location';
 
 const DELTA = 0.012;
 
+/**
+ * Home/work/other point picker — the first surface on the 2.0 one-map host
+ * (MapHost with a permanently-active 'point' pick session). Behaviour is
+ * identical to the old MapPickerScaffold glass-chrome screen: centre pin,
+ * viewport-biased address search, tap-to-rename title, floating confirm.
+ */
 export default function PresetMapScreen() {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -100,8 +106,7 @@ export default function PresetMapScreen() {
         longitudeDelta: DELTA,
     };
 
-    // Tap-to-rename title, now living INSIDE the floating glass chip (same pattern
-    // as basket [id].tsx, restyled for the chip's fixed 40pt height).
+    // Tap-to-rename title inside the floating glass chip.
     const titleNode = editingName
         ? (
             <TextInput
@@ -124,45 +129,49 @@ export default function PresetMapScreen() {
 
     return (
         <>
-            {/* Full-bleed glass-chrome map (same shell as the store-resolution screen):
-                no native header — the map runs edge to edge, the back chevron + title
-                chip + search float over it in liquid glass. */}
+            {/* Full-bleed one-map host, permanently in a 'point' pick session:
+                no native header — the back chevron + title chip + search float
+                over the map in liquid glass. */}
             <Stack.Screen options={{ headerShown: false }} />
-            <MapPickerScaffold
-                glassChrome
-                headerLeft={
-                    <GlassIconButton icon="chevron-back" glass solid onPress={() => router.back()} size={22} />
-                }
-                titleNode={titleNode}
+            <MapHost
                 mapRef={mapRef}
                 initialRegion={initialRegion}
                 onMapReady={handleMapReady}
                 mapReady={mapReady}
                 onRegionChangeComplete={r => setCenterCoords({ lat: r.latitude, lng: r.longitude })}
-                searchText={searchText}
-                onSearchTextChange={v => { setSearchText(v); setSearchError(null); }}
-                onSearch={handleSearch}
-                searching={searching}
-                searchError={searchError}
-                searchPlaceholder="Ieškoti adreso..."
-                confirmLabel="Patvirtinti vietą"
-                confirmEnabled={!!centerCoords}
-                confirmAlwaysVisible
-                confirmLoading={saving}
-                onConfirm={handleConfirm}
-                overlay={
-                    <>
-                        <View style={styles.pinWrapper} pointerEvents="none">
-                            <Ionicons name="location" size={44} color={colors.primary} style={styles.pinIcon} />
-                            <View style={styles.pinShadow} />
-                        </View>
-                        {/* Drag hint floats above the confirm pill (the map is full-bleed
-                            now, so bottom:0 would put it under the button/home indicator). */}
-                        <View style={[styles.mapHintBar, { bottom: Math.max(bottomInset, 16) + 64 }]} pointerEvents="none">
-                            <Text style={styles.mapHint}>Vilkite žemėlapį, kad patikslintumėte vietą</Text>
-                        </View>
-                    </>
-                }
+                pick={{
+                    kind: 'point',
+                    titleNode,
+                    headerLeft: (
+                        <GlassIconButton icon="chevron-back" glass solid onPress={() => router.back()} size={22} />
+                    ),
+                    confirmLabel: 'Patvirtinti vietą',
+                    confirmEnabled: !!centerCoords,
+                    confirmLoading: saving,
+                    onConfirm: handleConfirm,
+                    onCancel: () => router.back(),
+                    search: {
+                        text: searchText,
+                        onChangeText: v => { setSearchText(v); setSearchError(null); },
+                        onSubmit: handleSearch,
+                        searching,
+                        error: searchError,
+                        placeholder: 'Ieškoti adreso...',
+                    },
+                    overlay: (
+                        <>
+                            <View style={styles.pinWrapper} pointerEvents="none">
+                                <Ionicons name="location" size={44} color={colors.primary} style={styles.pinIcon} />
+                                <View style={styles.pinShadow} />
+                            </View>
+                            {/* Drag hint floats above the confirm pill (the map is full-bleed,
+                                so bottom:0 would put it under the button/home indicator). */}
+                            <View style={[styles.mapHintBar, { bottom: Math.max(bottomInset, 16) + 64 }]} pointerEvents="none">
+                                <Text style={styles.mapHint}>Vilkite žemėlapį, kad patikslintumėte vietą</Text>
+                            </View>
+                        </>
+                    ),
+                }}
             />
         </>
     );
