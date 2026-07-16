@@ -1,0 +1,67 @@
+{
+  "project_info": {
+    "project_number": "807371118612",
+    "project_id": "souply-654f9",
+    "storage_bucket": "souply-654f9.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:807371118612:android:db1b53946fa82214e36f01",
+        "android_client_info": {
+          "package_name": "lt.souply.app"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAoW_FaSGBQxjeWgoq7uY4_LRo9ZrEbXqo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:807371118612:android:49f730860a524c3ae36f01",
+        "android_client_info": {
+          "package_name": "lt.souply.app.dev"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAoW_FaSGBQxjeWgoq7uY4_LRo9ZrEbXqo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    },
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:807371118612:android:3f4325152c58458ae36f01",
+        "android_client_info": {
+          "package_name": "lt.souply.app.staging"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAoW_FaSGBQxjeWgoq7uY4_LRo9ZrEbXqo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

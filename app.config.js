@@ -112,6 +112,11 @@ export default {
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       package: BUNDLE_ID,
+      // FCM identity for push notifications. ONE file covers all three
+      // variants — Firebase bundles every registered app (dev/staging/prod
+      // packages) into the same google-services.json and the Android build
+      // picks the client matching `package`. Client-side keys, not secrets.
+      googleServicesFile: './google-services.json',
       // Android Maps SDK key — set via Expo's native android config because
       // react-native-maps 1.20.x ships no config plugin (free key: Google Cloud
       // Console → enable "Maps SDK for Android" → GOOGLE_MAPS_API_KEY_ANDROID).
