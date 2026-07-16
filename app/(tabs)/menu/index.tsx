@@ -225,6 +225,7 @@ export default function ProfilisScreen() {
     const devItems: { label: string; icon: keyof typeof Ionicons.glyphMap; route: string }[] = [
         { label: t('profilis.devReceiptBatch'), icon: 'flask-outline', route: '/dev/receipt-batch' },
         { label: 'Admin', icon: 'shield-outline', route: '/dev/admin' },
+        { label: 'Sheet stack demo', icon: 'layers-outline', route: '/dev/sheet-stack' },
     ];
 
     const progressPercent = profile ? Math.round(profile.progressFraction * 100) : 0;

@@ -1,5 +1,5 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, Dimensions, Platform, type StyleProp, type ViewStyle } from 'react-native';
+import { View, StyleSheet, Dimensions, Platform, BackHandler, type StyleProp, type ViewStyle } from 'react-native';
 import { Gesture, GestureDetector, ScrollView, State } from 'react-native-gesture-handler';
 import Animated, {
     SlideOutDown, runOnJS, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
@@ -48,6 +48,19 @@ export interface GlassStageSheetRef {
     snapTo(stage: number): void;
 }
 
+/** One page of the in-sheet nav stack (Find-My: stores → store → plan). */
+export interface SheetPage {
+    key: string;
+    content: React.ReactNode;
+    /** Per-page contentContainerStyle (falls back to the sheet-level prop). */
+    contentContainerStyle?: StyleProp<ViewStyle>;
+}
+
+/** Spec: max stack depth 3 (stores → store → plan). Slots are PRE-CREATED so
+ *  every page's ScrollView ref participates in the pan gesture from mount —
+ *  the gesture is memoed on [height] only and never re-created per page. */
+export const SHEET_MAX_PAGES = 3;
+
 type Props = {
     /** Ascending snap heights; [0] is the collapsed bar. A single entry
      *  renders a fixed (non-expandable) bar — the pill hides automatically. */
@@ -59,9 +72,19 @@ type Props = {
     onHeightChange?: (height: number) => void;
     /** Bottom-pinned bar content (always visible). Measured & reported. */
     bar: React.ReactNode;
-    /** Body content, revealed by expansion, inside the sheet's ScrollView. */
+    /** Body content, revealed by expansion, inside the sheet's ScrollView.
+     *  Ignored when `pages` is set. */
     children?: React.ReactNode;
     contentContainerStyle?: StyleProp<ViewStyle>;
+    /** IN-SHEET NAV STACK (2.0 Find-My): the body becomes a horizontal page
+     *  stack; the LAST entry is the active page. Push/pop by changing the
+     *  array — the slide (and any resulting snap-height change) animates.
+     *  Max depth SHEET_MAX_PAGES. NEVER stack GlassStageSheet instances —
+     *  this is the supported way to nest sheet content. */
+    pages?: SheetPage[];
+    /** Android hardware back pops one page while depth > 1 (the caller owns
+     *  the stack state, so popping = the caller trimming `pages`). */
+    onPopPage?: () => void;
     onBarHeight?: (h: number) => void;
     onContentHeight?: (h: number) => void;
     colors: AppTheme;
@@ -79,6 +102,7 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     snaps, initialStage = 0, onStageChange, onHeightChange,
     bar, children, contentContainerStyle, onBarHeight, onContentHeight,
     colors, bottomInset, dockAtLast = false, exitSlide = false,
+    pages, onPopPage,
 }, ref) {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const [barH, setBarH] = useState(60);
@@ -119,7 +143,10 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     // above the viewport on the next expansion ("the sheet has no title") with
     // no way to scroll back up.
     useEffect(() => {
-        if (safeStage < snaps.length - 1) scrollRef.current?.scrollTo({ y: 0, animated: false });
+        if (safeStage < snaps.length - 1) {
+            [scrollRef, slotRef1, slotRef2].forEach(r => r.current?.scrollTo?.({ y: 0, animated: false }));
+        }
+         
     }, [safeStage, snaps.length]);
     const dockP = useDerivedValue(() => {
         if (!dockAtLast) return 0;
@@ -172,10 +199,18 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
         height.value = withTiming(s[Math.min(stageRef.current, s.length - 1)], { duration: 220 });
     }, [safeStage, settleTick, height]);
 
-    // SETTLE INSTANTLY when measurements change the snap heights.
+    // SETTLE when measurements change the snap heights — INSTANT for plain
+    // measurement drift, ANIMATED when the change was caused by a page
+    // push/pop (the Find-My slide and the height morph run together).
     useEffect(() => {
         if (dragging.current) return;
-        height.value = snaps[Math.min(stageRef.current, snaps.length - 1)];
+        const target = snaps[Math.min(stageRef.current, snaps.length - 1)];
+        if (pageAnimRef.current) {
+            pageAnimRef.current = false;
+            height.value = withTiming(target, { duration: 240 });
+        } else {
+            height.value = target;
+        }
     }, [snaps, height]);
 
     useEffect(() => { onHeightChange?.(snaps[safeStage] + bottomOffset); }, [safeStage, snaps, onHeightChange, bottomOffset]);
@@ -202,9 +237,68 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
         else setSettleTick(t => t + 1); // cancelled drag → animate back
     };
     const scrollRef = useRef<any>(null);
+
+    // ── IN-SHEET PAGE STACK ──────────────────────────────────────────────────
+    // The plain-children path is just a 1-page stack (slot 0), so there is ONE
+    // body code path. Slots are fixed (SHEET_MAX_PAGES): every slot's scroll
+    // ref + scrollY exists from mount, letting the pan gesture reference them
+    // all statically (it is memoed on [height] and never re-created).
+    const pageList: SheetPage[] = pages && pages.length > 0
+        ? pages.slice(-SHEET_MAX_PAGES)
+        : [{ key: '__root', content: children }];
+    if (__DEV__ && pages && pages.length > SHEET_MAX_PAGES) {
+        console.warn(`[GlassStageSheet] pages deeper than ${SHEET_MAX_PAGES}; showing the last ${SHEET_MAX_PAGES}`);
+    }
+    const depth = pageList.length - 1;
+    // scrollRef doubles as slot 0 (the legacy single-scroll path).
+    const slotRef1 = useRef<any>(null);
+    const slotRef2 = useRef<any>(null);
+    const slotRefs = [scrollRef, slotRef1, slotRef2];
+    const scrollY1 = useSharedValue(0);
+    const scrollY2 = useSharedValue(0);
+    const onListScroll1 = useAnimatedScrollHandler((e) => { scrollY1.value = e.contentOffset.y; });
+    const onListScroll2 = useAnimatedScrollHandler((e) => { scrollY2.value = e.contentOffset.y; });
+    // The gesture gates on the ACTIVE page's scroll offset.
+    const depthIndexSV = useSharedValue(depth);
+    useEffect(() => { depthIndexSV.value = depth; }, [depth, depthIndexSV]);
+    // Horizontal slide between pages — animated on push/pop (Find-My).
+    const depthSV = useSharedValue(depth);
+    const mountedRef = useRef(false);
+    // Per-slot content heights; the ACTIVE slot's height is what the parent
+    // sees via onContentHeight (it computes snaps from it).
+    const slotContentHRef = useRef<Record<number, number>>({});
+    // Height changes caused by a page transition ANIMATE (the measurement
+    // settle effect below is instant); this flag marks the next snaps-change
+    // as page-driven.
+    const pageAnimRef = useRef(false);
+    useEffect(() => {
+        if (!mountedRef.current) { mountedRef.current = true; return; }
+        pageAnimRef.current = true;
+        depthSV.value = withTiming(depth, { duration: 240 });
+        // A fresh push starts at the top; popping PRESERVES the previous
+        // page's offset (its slot kept its scroll position).
+        if (depth > 0) slotRefs[depth]?.current?.scrollTo?.({ y: 0, animated: false });
+        // Re-report the newly active page's content height so the parent can
+        // recompute snaps for THIS page.
+        const h = slotContentHRef.current[depth];
+        if (h != null) onContentHeight?.(h);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [depth]);
+    const [pageW, setPageW] = useState(SCREEN_W);
+    const pageWSV = useSharedValue(SCREEN_W);
+    const pagesRowStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: -depthSV.value * pageWSV.value }],
+    }));
+    // Android hardware back pops one page while the stack is deep.
+    useEffect(() => {
+        if (!pages || pages.length <= 1 || !onPopPage) return;
+        const sub = BackHandler.addEventListener('hardwareBackPress', () => { onPopPage(); return true; });
+        return () => sub.remove();
+    }, [pages, onPopPage]);
+
     const sheetGesture = useMemo(() => Gesture.Pan()
         .manualActivation(true)
-        .simultaneousWithExternalGesture(scrollRef)
+        .simultaneousWithExternalGesture(scrollRef, slotRef1, slotRef2)
         .onBegin((e) => {
             'worklet';
             grabX.value = e.absoluteX;
@@ -225,7 +319,8 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
             const sn = snapsSV.value;
             if (sn.length <= 1) { sm.fail(); return; }        // fixed bar — nothing to drag
             const atFull = height.value >= sn[sn.length - 1] - 2;
-            if (!atFull || (dy > 0 && scrollY.value <= 1)) sm.activate();
+            const activeScrollY = [scrollY.value, scrollY1.value, scrollY2.value][depthIndexSV.value] ?? 0;
+            if (!atFull || (dy > 0 && activeScrollY <= 1)) sm.activate();
             else sm.fail();                                    // at full, the list owns it
         })
         .onStart((e) => {
@@ -342,26 +437,44 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
 
             {/* Counter-scale wrapper (identity in float mode). */}
             <Animated.View style={[StyleSheet.absoluteFillObject, counterScaleStyle]} pointerEvents="box-none">
-                {/* Body viewport: root-fixed, ends at the bar's top edge. */}
+                {/* Body viewport: root-fixed, ends at the bar's top edge. The
+                    page-stack row slides horizontally inside it (plain children
+                    = a 1-page stack, so this is the only body code path). */}
                 <View
                     style={[styles.viewport, { left: viewportInset, right: viewportInset, height: Math.max(0, maxSnap - barH) }]}
                     pointerEvents="box-none"
+                    onLayout={e => {
+                        const w = e.nativeEvent.layout.width;
+                        if (w > 0 && Math.abs(w - pageW) > 0.5) { setPageW(w); pageWSV.value = w; }
+                    }}
                 >
                     <Animated.View style={bodyStyle}>
-                        <AnimatedGHScrollView
-                            ref={scrollRef}
-                            style={[styles.list, { height: listH, marginTop: SHEET_HANDLE_H }]}
-                            contentContainerStyle={contentContainerStyle}
-                            showsVerticalScrollIndicator={expandable && safeStage === snaps.length - 1}
-                            scrollEnabled={expandable && safeStage === snaps.length - 1}
-                            bounces={false}
-                            overScrollMode="never"
-                            onScroll={onListScroll}
-                            scrollEventThrottle={16}
-                            onContentSizeChange={(_, h) => onContentHeight?.(h)}
-                        >
-                            {children}
-                        </AnimatedGHScrollView>
+                        <Animated.View style={[styles.pagesRow, { width: pageW * pageList.length }, pagesRowStyle]}>
+                            {pageList.map((page, i) => {
+                                const active = i === depth;
+                                return (
+                                    <View key={page.key} style={{ width: pageW }}>
+                                        <AnimatedGHScrollView
+                                            ref={slotRefs[i]}
+                                            style={[styles.list, { height: listH, marginTop: SHEET_HANDLE_H }]}
+                                            contentContainerStyle={page.contentContainerStyle ?? contentContainerStyle}
+                                            showsVerticalScrollIndicator={active && expandable && safeStage === snaps.length - 1}
+                                            scrollEnabled={active && expandable && safeStage === snaps.length - 1}
+                                            bounces={false}
+                                            overScrollMode="never"
+                                            onScroll={[onListScroll, onListScroll1, onListScroll2][i]}
+                                            scrollEventThrottle={16}
+                                            onContentSizeChange={(_, h) => {
+                                                slotContentHRef.current[i] = h;
+                                                if (i === depth) onContentHeight?.(h);
+                                            }}
+                                        >
+                                            {page.content}
+                                        </AnimatedGHScrollView>
+                                    </View>
+                                );
+                            })}
+                        </Animated.View>
                     </Animated.View>
                 </View>
 
@@ -405,4 +518,5 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     handleArea: { height: SHEET_HANDLE_H, alignItems: 'center', justifyContent: 'center' },
     handle: { width: 44, height: 5, borderRadius: radius.pill, backgroundColor: c.border },
     list: { flexGrow: 0 },
+    pagesRow: { flexDirection: 'row' },
 });
