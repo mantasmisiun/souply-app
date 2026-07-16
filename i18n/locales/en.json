@@ -1429,5 +1429,24 @@
     "softBody": "A newer version with improvements is out. We recommend updating.",
     "updateButton": "Update",
     "later": "Later"
+  },
+  "joinInvite": {
+    "invalidTitle": "This invite is no longer valid",
+    "invalidBody": "The link is wrong, revoked or expired. Ask for a fresh link or QR code.",
+    "householdTitle": "You're invited to join a household",
+    "householdTitleNamed": "You're invited to join “{{name}}”",
+    "tripTitle": "You're invited to a shared shopping trip",
+    "tripTitleNamed": "You're invited to the “{{name}}” trip",
+    "members": "Members: {{count}}",
+    "join": "Join",
+    "householdJoined": "You joined the household",
+    "householdJoinedBody": "You'll now see the shared household basket and trips.",
+    "tripJoined": "You joined the trip",
+    "tripJoinedBody": "You're now a member of this trip — you'll see its lists and receipts.",
+    "leaveFirstTitle": "You already have a household",
+    "leaveFirstBody": "You can only belong to one household at a time. Leave the current one and join this one?",
+    "leaveFirstConfirm": "Leave and join",
+    "errorTitle": "Couldn't join",
+    "errorBody": "Check your connection and try again."
   }
 }

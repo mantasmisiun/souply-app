@@ -1406,5 +1406,24 @@
     "softBody": "Išleista naujesnė versija su patobulinimais. Rekomenduojame atnaujinti.",
     "updateButton": "Atnaujinti",
     "later": "Vėliau"
+  },
+  "joinInvite": {
+    "invalidTitle": "Kvietimas nebegalioja",
+    "invalidBody": "Nuoroda neteisinga, atšaukta arba pasibaigė jos galiojimas. Paprašyk naujos nuorodos ar QR kodo.",
+    "householdTitle": "Tave kviečia prisijungti prie namų ūkio",
+    "householdTitleNamed": "Tave kviečia prisijungti prie „{{name}}“",
+    "tripTitle": "Tave kviečia į bendrą apsipirkimą",
+    "tripTitleNamed": "Tave kviečia į apsipirkimą „{{name}}“",
+    "members": "Nariai: {{count}}",
+    "join": "Prisijungti",
+    "householdJoined": "Prisijungei prie namų ūkio",
+    "householdJoinedBody": "Nuo šiol matysi bendrą namų ūkio krepšelį ir apsipirkimus.",
+    "tripJoined": "Prisijungei prie apsipirkimo",
+    "tripJoinedBody": "Dabar esi šio apsipirkimo dalyvis — matysi jo sąrašus ir kvitus.",
+    "leaveFirstTitle": "Jau turi namų ūkį",
+    "leaveFirstBody": "Vienu metu gali priklausyti tik vienam namų ūkiui. Palikti dabartinį ir prisijungti prie naujo?",
+    "leaveFirstConfirm": "Palikti ir prisijungti",
+    "errorTitle": "Nepavyko prisijungti",
+    "errorBody": "Patikrink ryšį ir bandyk dar kartą."
   }
 }

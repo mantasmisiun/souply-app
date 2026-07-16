@@ -104,6 +104,7 @@ export default {
           data: [
             { scheme: 'https', host: LINK_HOST, pathPrefix: '/t/' },
             { scheme: 'https', host: LINK_HOST, pathPrefix: '/@' },
+            { scheme: 'https', host: LINK_HOST, pathPrefix: '/join/' },
           ],
           category: ['BROWSABLE', 'DEFAULT'],
         },
@@ -145,6 +146,11 @@ export default {
     },
     plugins: [
       '@react-native-community/datetimepicker',
+      // Push notifications (Souply 2.0 invites/trips). Android delivery
+      // additionally needs the per-variant Firebase google-services.json
+      // (android.googleServicesFile) before FCM pushes arrive — local
+      // notifications and the permission flow work without it.
+      'expo-notifications',
       [
         'expo-build-properties',
         {
