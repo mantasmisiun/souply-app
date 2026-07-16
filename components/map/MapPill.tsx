@@ -23,11 +23,13 @@ import { useTheme, type AppTheme } from '../../constants/theme';
  *     left/top/bottom borders (badge height == the two-row text height).
  */
 
-export type MapPillVariant = 'neutral' | 'cheapest' | 'selected';
+export type MapPillVariant = 'neutral' | 'cheapest' | 'selected' | 'progress';
 
 export interface MapPillSpec {
   /** Identity for caching the baked image — re-bakes only when this changes
-   *  (include everything that affects the pixels: id + content + variant). */
+   *  (include everything that affects the pixels: id + content + variant).
+   *  Progress pills (stage-3 check counts like "2/10") MUST fold the count
+   *  into the key, or the baked image goes stale as items get checked. */
   key: string;
   chainId: number;
   /** 1 entry → price pill; 2 entries → address pill (street, number/flat). */
@@ -47,9 +49,13 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
   const ref = useRef<View>(null);
   const badge = chainBadgeImage(spec.chainId);
   const twoRow = spec.lines.length >= 2;
-  const ringStyle = spec.variant === 'selected' || spec.variant === 'cheapest' ? styles.ringAccent : styles.ringNeutral;
+  const ringStyle = spec.variant === 'neutral' ? styles.ringNeutral : styles.ringAccent;
   const fillStyle = spec.variant === 'selected' ? styles.fillPrimary : styles.fillCard;
-  const primaryColor = spec.variant === 'selected' ? '#FFFFFF' : colors.textPrimary;
+  // 'progress' (stage-3 check counts): accent ring + card fill with the count
+  // in brand colour — reads as "yours, in progress" without shouting selected.
+  const primaryColor = spec.variant === 'selected' ? '#FFFFFF'
+    : spec.variant === 'progress' ? colors.primary
+    : colors.textPrimary;
   const secondaryColor = spec.variant === 'selected' ? 'rgba(255,255,255,0.85)' : colors.textSecondary;
 
   // GATE the rounded background on a real layout. RN 0.81's new-arch BackgroundDrawable

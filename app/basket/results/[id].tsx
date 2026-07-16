@@ -7,6 +7,7 @@ import {
     InteractionManager,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
+import { StoreCountToggle } from '../../../components/map/StoreCountToggle';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter, useFocusEffect, useNavigation, Stack } from 'expo-router';
 import React, { useMemo, useState, useCallback, useEffect, useLayoutEffect, useRef } from 'react';
@@ -41,7 +42,6 @@ const MAX_SINGLE_STORES = 10;
 
 /** Width (dp) of one digit segment in the 1·2·3 store-count toggle — also the
  *  sliding indicator's width. Fixed so the pill stays compact, not full-width. */
-const STORE_COUNT_SEG = 34;
 
 
 export default function BasketResultsScreen() {
@@ -481,7 +481,6 @@ export default function BasketResultsScreen() {
     // so the choice survives re-entering these results.
     const setStoreCount = useCallback(async (n: 1 | 2 | 3) => {
         if (n === maxStores) return;
-        try { Haptics.selectionAsync(); } catch {}
         setMaxStores(n);
         closeSheet();
         // Persist to the GLOBAL location setting so the basket's settings button
@@ -489,15 +488,6 @@ export default function BasketResultsScreen() {
         // longer affects pricing, so this never forces a recalc.
         try { await saveLocationSettings({ storeCount: n }); } catch {}
     }, [maxStores, closeSheet]);
-
-    // Sliding capsule for the 1/2/3 store-count toggle — the selection animates
-    // between segments instead of hard-cutting. `segW` is one segment's width
-    // (measured), `idx` the active segment (0-based).
-    const storeCountIdx = useSharedValue(maxStores - 1);
-    useEffect(() => { storeCountIdx.value = maxStores - 1; }, [maxStores, storeCountIdx]);
-    const storeCountIndicatorStyle = useAnimatedStyle(() => ({
-        transform: [{ translateX: withTiming(storeCountIdx.value * STORE_COUNT_SEG, { duration: 220 }) }],
-    }));
 
     // Stores that already carry a price pill — excluded from the directory layer.
     const pricedStoreIds = useMemo(
@@ -806,27 +796,7 @@ export default function BasketResultsScreen() {
                         {/* Top-centre store-count toggle. Instant client re-rank
                             of how the basket is split across 1/2/3 shops. */}
                         <View style={[styles.mapTopCenter, { top: topInset + 10 }]} pointerEvents="box-none">
-                            <View style={styles.storeCountShadow}>
-                                <LiquidGlass style={styles.storeCountPill} fallback="solid">
-                                    <Ionicons name="storefront-outline" size={iconSize.sm} color={colors.textSecondary} style={styles.storeCountIcon} />
-                                    <View style={styles.storeCountSegments}>
-                                        <Animated.View style={[styles.storeCountIndicator, storeCountIndicatorStyle]} />
-                                        {([1, 2, 3] as const).map(n => {
-                                            const active = maxStores === n;
-                                            return (
-                                                <TouchableOpacity
-                                                    key={n}
-                                                    style={styles.storeCountBtn}
-                                                    onPress={() => setStoreCount(n)}
-                                                    activeOpacity={0.8}
-                                                >
-                                                    <Text style={[styles.storeCountText, active && styles.storeCountTextActive]}>{n}</Text>
-                                                </TouchableOpacity>
-                                            );
-                                        })}
-                                    </View>
-                                </LiquidGlass>
-                            </View>
+                            <StoreCountToggle value={maxStores} onChange={setStoreCount} />
                         </View>
                     </>
                 ) : (
@@ -907,23 +877,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     // Top-centre store-count segmented toggle (1·2·3).
     mapTopCenter: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 20 },
-    storeCountShadow: {
-        borderRadius: radius.pill,
-        ...elevation.level3,
-    },
-    storeCountPill: {
-        flexDirection: 'row', alignItems: 'center', overflow: 'hidden',
-        backgroundColor: c.cardBackground, borderRadius: radius.pill,
-        paddingLeft: spacing.sm, paddingRight: spacing.xs, paddingVertical: spacing.xs, gap: 2,
-        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
-    },
-    storeCountIcon: { marginRight: spacing.xs },
-    storeCountSegments: { flexDirection: 'row', position: 'relative' },
-    // Sliding selection capsule; sits behind the digits and animates between them.
-    storeCountIndicator: { position: 'absolute', top: 0, bottom: 0, left: 0, width: STORE_COUNT_SEG, borderRadius: radius.pill, backgroundColor: c.primary },
-    storeCountBtn: { width: STORE_COUNT_SEG, paddingVertical: 6, alignItems: 'center', justifyContent: 'center' },
-    storeCountText: { fontSize: 15, fontWeight: '800', color: c.textSecondary },
-    storeCountTextActive: { color: c.onPrimary },
     loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.lg, backgroundColor: c.pageBackground },
     loadingText: { ...typography.body, color: c.textSecondary },
     hintWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },

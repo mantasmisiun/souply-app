@@ -18,6 +18,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { LiquidGlass } from '../LiquidGlass';
 import { useTheme, useResolvedScheme, spacing, radius, typography, elevation, type AppTheme } from '../../constants/theme';
+import { MapPickChrome } from './MapPickChrome';
 
 /**
  * Shared map-picker shell — the map + address search row + bottom confirm
@@ -174,69 +175,28 @@ export function MapPickerScaffold(props: MapPickerScaffoldProps) {
     );
 
     // FULL-BLEED GLASS CHROME (store-resolution): the map fills the whole surface;
-    // a glass cluster (back chevron + title chip + glass search) floats at the top and
-    // the confirm pill floats at the bottom with no panel, only once a store is picked.
+    // the floating glass clusters (back + title + search, confirm pill) are the
+    // extracted MapPickChrome — shared with the 2.0 unified map host's pick modes.
     if (props.glassChrome) {
-        const chromeFallback = Platform.OS === 'android' ? 'solid' : 'blur';
-        const glassSearch = (
-            <LiquidGlass fallback={chromeFallback} style={styles.glassSearchWrap}>
-                <View style={styles.glassSearchInner}>
-                    <Ionicons name="search" size={20} color={colors.textSecondary} />
-                    <TextInput
-                        style={styles.searchInput}
-                        value={props.searchText}
-                        onChangeText={props.onSearchTextChange}
-                        placeholder={props.searchPlaceholder}
-                        placeholderTextColor={colors.textMuted}
-                        returnKeyType="search"
-                        onSubmitEditing={props.onSearch}
-                    />
-                    {props.searching && <MaterialProgress size="small" color={colors.primary} />}
-                </View>
-            </LiquidGlass>
-        );
         return (
             <View style={styles.root}>
                 {mapBlock}
-                {/* Floating top cluster — reserves the status-bar inset itself. */}
-                <View style={[styles.glassTop, { top: topInset + spacing.sm }]} pointerEvents="box-none">
-                    <View style={styles.glassTopRow} pointerEvents="box-none">
-                        {props.headerLeft}
-                        {(props.titleNode != null || props.title != null) && (
-                            <LiquidGlass fallback={chromeFallback} style={styles.titleChip}>
-                                {props.titleNode ?? (
-                                    <Text style={styles.titleChipText} numberOfLines={1}>{props.title}</Text>
-                                )}
-                            </LiquidGlass>
-                        )}
-                    </View>
-                    {glassSearch}
-                    {/* Error toast BELOW the search (normal flow, not absolute over it) and
-                        pointerEvents:none, so it never blocks tapping/editing the field. The
-                        caller auto-dismisses it after a few seconds. */}
-                    {props.searchError && (
-                        <View style={styles.glassErrorToast} pointerEvents="none">
-                            <Text style={styles.errorText}>{props.searchError}</Text>
-                        </View>
-                    )}
-                </View>
-                {/* Confirm floats over the map, no panel. Default: mounted only once
-                    enabled (store-resolution). confirmAlwaysVisible keeps it mounted,
-                    rendered disabled, for pickers where a selection always exists. */}
-                {(props.confirmEnabled || props.confirmAlwaysVisible) && (
-                    <View style={[styles.confirmFloat, { paddingBottom: Math.max(bottomInset, 16) }]} pointerEvents="box-none">
-                        <TouchableOpacity
-                            style={[styles.confirmBtn, styles.confirmBtnFloating,
-                                (!props.confirmEnabled || props.confirmLoading) && styles.btnDisabled]}
-                            onPress={props.onConfirm}
-                            disabled={!props.confirmEnabled || props.confirmLoading}
-                        >
-                            {props.confirmLoading
-                                ? <MaterialProgress color={colors.onPrimary} />
-                                : <Text style={styles.confirmBtnText}>{props.confirmLabel}</Text>}
-                        </TouchableOpacity>
-                    </View>
-                )}
+                <MapPickChrome
+                    searchText={props.searchText}
+                    onSearchTextChange={props.onSearchTextChange}
+                    onSearch={props.onSearch}
+                    searching={props.searching}
+                    searchError={props.searchError}
+                    searchPlaceholder={props.searchPlaceholder}
+                    confirmLabel={props.confirmLabel}
+                    confirmEnabled={props.confirmEnabled}
+                    confirmLoading={props.confirmLoading}
+                    onConfirm={props.onConfirm}
+                    headerLeft={props.headerLeft}
+                    title={props.title}
+                    titleNode={props.titleNode}
+                    confirmAlwaysVisible={props.confirmAlwaysVisible}
+                />
             </View>
         );
     }
@@ -304,48 +264,4 @@ const makeStyles = (c: AppTheme) =>
         btnDisabled: { opacity: 0.5 },
         confirmBtnText: { ...typography.bodyStrong, fontWeight: '700', color: c.onPrimary },
 
-        // ── Glass-chrome (full-bleed map + floating liquid-glass controls) ──
-        glassTop: {
-            position: 'absolute', left: spacing.md, right: spacing.md, zIndex: 10,
-            gap: spacing.sm,
-        },
-        glassTopRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-        // See-through glass title chip next to the back chevron — hugs its text
-        // (alignSelf so it doesn't stretch to the row height, no flex so it doesn't
-        // stretch to the row width).
-        // Painted hairlines ONLY on the Android blur fallback (needs edge
-        // definition). iOS native glass carries the SYSTEM edge treatment and
-        // follows the user's Liquid Glass appearance setting (Clear/Tinted) —
-        // a border painted on top diverges from the default material look.
-        titleChip: {
-            alignSelf: 'center', overflow: 'hidden', borderRadius: radius.pill,
-            ...(Platform.OS === 'android'
-                ? { backgroundColor: c.cardBackground, elevation: 3 }
-                : null),
-            paddingHorizontal: spacing.lg, height: 40, justifyContent: 'center',
-        },
-        titleChipText: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
-        // Glass search field floating below the title row.
-        glassSearchWrap: {
-            overflow: 'hidden', borderRadius: radius.lg, height: 48,
-            ...(Platform.OS === 'android'
-                ? { backgroundColor: c.cardBackground, elevation: 3 }
-                : null),
-        },
-        glassSearchInner: {
-            flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-            paddingHorizontal: spacing.lg,
-        },
-        // Confirm pill floating over the map (no panel behind it).
-        confirmFloat: {
-            position: 'absolute', left: spacing.lg, right: spacing.lg, bottom: 0, zIndex: 10,
-        },
-        confirmBtnFloating: { ...elevation.level3 },
-        // Search-error toast: sits in the glass top cluster's normal column flow, just under
-        // the search field (so it can't cover it), self-sized, auto-dismissed by the caller.
-        glassErrorToast: {
-            alignSelf: 'flex-start', maxWidth: '100%',
-            backgroundColor: c.error, borderRadius: radius.md,
-            paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
-        },
     });
