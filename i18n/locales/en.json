@@ -1309,7 +1309,12 @@
     "uploadTakePhoto": "Take photo",
     "uploadSelectExisting": "Select from uploaded",
     "selectExistingTitle": "Choose a receipt",
-    "selectExistingEmpty": "No matching receipts for the selected day"
+    "selectExistingEmpty": "No matching receipts for the selected day",
+    "skipReceipt": "Didn't shop here",
+    "skipReceiptAt": "Didn't shop here — {{chain}}",
+    "unskipReceipt": "I have the receipt after all",
+    "unskipReceiptAt": "Have the receipt — {{chain}}",
+    "receiptSkipped": "Skipped"
   },
   "creatorAuth": {
     "title": "Creator login",

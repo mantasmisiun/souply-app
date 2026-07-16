@@ -1284,7 +1284,12 @@
     "uploadTakePhoto": "Fotografuoti",
     "uploadSelectExisting": "Pasirinkti iš įkeltų",
     "selectExistingTitle": "Pasirinkite kvitą",
-    "selectExistingEmpty": "Nėra tinkamų kvitų pasirinktai dienai"
+    "selectExistingEmpty": "Nėra tinkamų kvitų pasirinktai dienai",
+    "skipReceipt": "Nepirkau čia",
+    "skipReceiptAt": "Nepirkau čia — {{chain}}",
+    "unskipReceipt": "Vis dėlto turiu kvitą",
+    "unskipReceiptAt": "Turiu kvitą — {{chain}}",
+    "receiptSkipped": "Praleista"
   },
   "creatorAuth": {
     "title": "Kūrėjo prisijungimas",

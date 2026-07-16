@@ -173,7 +173,11 @@ function ShoppingListCard({ item, onPress, onLongPress, selectionMode, selected,
                 {item.status === 'completed' && (
                     <ReceiptPill
                         awaiting={awaitingReceipt}
-                        label={awaitingReceipt ? t('shoppingListTab.receiptNeeded') : t('shoppingListTab.receiptAdded')}
+                        label={awaitingReceipt
+                            ? t('shoppingListTab.receiptNeeded')
+                            : (item as any).receiptSkippedAt != null && (Number(item.receiptCount) || 0) === 0
+                                ? t('shoppingListTab.receiptSkipped')
+                                : t('shoppingListTab.receiptAdded')}
                         styles={styles}
                         colors={colors}
                     />
@@ -488,6 +492,27 @@ export default function ShoppingListScreen() {
         ]);
         return () => clearTabBarOverride();
     }, [selectionMode, selectedListIds.size, selectionActions, setTabBarOverride, clearTabBarOverride, exitSelection, t]);
+
+    // "Nepirkau čia" (2.0 mini-cycles): close the slot without a receipt;
+    // reversible via unskip. Refreshes the list so the pill flips.
+    const skipReceipt = useCallback(async (listIds: number[]) => {
+        setUploadTarget(null);
+        try {
+            for (const id of listIds) {
+                await fetch(`${API_BASE_URL}/api/shopping-lists/${id}/skip-receipt`, { method: 'POST' });
+            }
+        } catch {}
+        fetchLists();
+    }, [fetchLists]);
+    const unskipReceipt = useCallback(async (listIds: number[]) => {
+        setUploadTarget(null);
+        try {
+            for (const id of listIds) {
+                await fetch(`${API_BASE_URL}/api/shopping-lists/${id}/unskip-receipt`, { method: 'POST' });
+            }
+        } catch {}
+        fetchLists();
+    }, [fetchLists]);
 
     // ── Receipt upload (post-completion "needs receipt" flow) ──────────────────
     // The target is a chainId→listId map; receipt-process auto-selects the
@@ -995,6 +1020,45 @@ export default function ShoppingListScreen() {
                             <Ionicons name="cloud-upload-outline" size={iconSize.lg} color={colors.primary} />
                             <Text style={styles.uploadOptionText}>{t('receipts.menu.uploadAction')}</Text>
                         </TouchableOpacity>
+                        {(() => {
+                            // "Nepirkau čia": one row per still-awaiting slot in the
+                            // sheet's target (chain-labelled when a split has several);
+                            // skipped slots get the inverse ("vis dėlto turiu kvitą").
+                            const targetIds = uploadTarget ? Object.values(uploadTarget).map(Number) : [];
+                            const targetLists = lists.filter(l => targetIds.includes(l.id));
+                            const awaiting = targetLists.filter(l => (Number(l.receiptCount) || 0) === 0 && (l as any).receiptSkippedAt == null);
+                            const skipped = targetLists.filter(l => (l as any).receiptSkippedAt != null);
+                            return (
+                                <>
+                                    {awaiting.map(l => (
+                                        <View key={`skip-${l.id}`}>
+                                            <View style={styles.fabMenuDivider} />
+                                            <TouchableOpacity style={styles.uploadOption} onPress={() => skipReceipt([l.id])}>
+                                                <Ionicons name="close-circle-outline" size={iconSize.lg} color={colors.textSecondary} />
+                                                <Text style={[styles.uploadOptionText, { color: colors.textSecondary }]}>
+                                                    {awaiting.length + skipped.length > 1
+                                                        ? t('shoppingListTab.skipReceiptAt', { chain: l.chainName })
+                                                        : t('shoppingListTab.skipReceipt')}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                    ))}
+                                    {skipped.map(l => (
+                                        <View key={`unskip-${l.id}`}>
+                                            <View style={styles.fabMenuDivider} />
+                                            <TouchableOpacity style={styles.uploadOption} onPress={() => unskipReceipt([l.id])}>
+                                                <Ionicons name="arrow-undo-outline" size={iconSize.lg} color={colors.primary} />
+                                                <Text style={styles.uploadOptionText}>
+                                                    {awaiting.length + skipped.length > 1
+                                                        ? t('shoppingListTab.unskipReceiptAt', { chain: l.chainName })
+                                                        : t('shoppingListTab.unskipReceipt')}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        </View>
+                                    ))}
+                                </>
+                            );
+                        })()}
                         {unlinkedReceiptsForMap(uploadTarget).length > 0 && (
                             <>
                                 <View style={styles.fabMenuDivider} />
