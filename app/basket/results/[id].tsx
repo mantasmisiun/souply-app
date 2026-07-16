@@ -676,10 +676,16 @@ export default function BasketResultsScreen() {
             clearSessionBasket();
             useProfileStore.getState().invalidate();
             router.dismissAll();
-            router.navigate('/shopping-list' as any);
-            setTimeout(() => {
-                router.push(`/shopping-list/${listData.id}` as any);
-            }, 100);
+            // 2.0: the trip map is the journey's home — land there (stage 3,
+            // progress pills) instead of the flat lists screen.
+            if (listData.tripId) {
+                router.navigate(`/trip/${listData.tripId}` as any);
+            } else {
+                router.navigate('/shopping-list' as any);
+                setTimeout(() => {
+                    router.push(`/shopping-list/${listData.id}` as any);
+                }, 100);
+            }
         } catch (error: any) {
             Alert.alert(t('results.errorTitle'), t('results.errorCreateList'));
         } finally {
@@ -695,6 +701,7 @@ export default function BasketResultsScreen() {
             const userId = await getUserId();
 
             const createdLists: { storeId: number; storeName: string; storeAddress: string; chainName: string; chainLogoUrl: string | null; listId: number }[] = [];
+            let splitTripId: number | null = null;
 
             for (const store of selectedCombo.stores) {
                 const assignedPids = new Set(
@@ -731,6 +738,7 @@ export default function BasketResultsScreen() {
                 }
                 if (!res.ok) throw new Error(`HTTP ${res.status}`);
                 const listData = await res.json();
+                if (listData.tripId) splitTripId = listData.tripId;
                 createdLists.push({ storeId: store.storeId, storeName: store.storeName, storeAddress: store.storeAddress, chainName: store.chainName, chainLogoUrl: store.chainLogoUrl, listId: listData.id });
             }
 
@@ -739,10 +747,16 @@ export default function BasketResultsScreen() {
             clearSessionBasket();
             useProfileStore.getState().invalidate();
             router.dismissAll();
-            router.navigate('/shopping-list' as any);
-            setTimeout(() => {
-                router.push(`/shopping-list/split/${id}` as any);
-            }, 100);
+            // 2.0: a split lands on the trip map — every store slot with its
+            // own progress pill beats the flat split view.
+            if (splitTripId) {
+                router.navigate(`/trip/${splitTripId}` as any);
+            } else {
+                router.navigate('/shopping-list' as any);
+                setTimeout(() => {
+                    router.push(`/shopping-list/split/${id}` as any);
+                }, 100);
+            }
         } catch {
             Alert.alert(t('results.errorTitle'), t('results.errorCreateList'));
         } finally {
