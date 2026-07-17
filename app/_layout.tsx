@@ -14,6 +14,7 @@ import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext'
 import { OfflineBanner } from '../components/OfflineBanner';
 import { EnvBadge } from '../components/EnvBadge';
 import { MaskRedactionHost } from '../components/MaskRedactionHost';
+import { BasketSessionHost } from '../components/basket/BasketSessionHost';
 import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { UsernameGate } from '../components/UsernameGate';
 import UpdateGateModal from '../components/UpdateGateModal';
@@ -344,6 +345,10 @@ function RootLayout() {
       </Stack>
       {/* Top-layer overlay (last child = highest paint order) so it sits above
           the navigator without ever altering its frame. */}
+      {/* 2.0 basket-session surface: floating bar + preview sheet + target
+          chooser, self-gating to the browse-y routes. Above the navigator,
+          below EnvBadge. */}
+      <BasketSessionHost />
       <EnvBadge />
       {/* Always-mounted off-screen surface used to burn card-masking boxes
           into receipt images before upload (the headless receipt queue has

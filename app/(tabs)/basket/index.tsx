@@ -80,7 +80,7 @@ export default function TripsScreen() {
             ]);
             setTrips(tripRes);
             setHousehold(hhRes);
-            const draft = Array.isArray(basketRes) ? basketRes.find((b: any) => b.status === 'draft') : null;
+            const draft = Array.isArray(basketRes) ? basketRes.find((b: any) => b.status === 'draft' && b.householdId == null) : null;
             setDraftBasketId(draft ? draft.id : null);
         } catch (error) {
             console.error('Failed to fetch trips:', error);

@@ -11,6 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
+import { useBasketSession } from '../../state/basketSession';
 import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
 import { categoryIcon } from '../../constants/categoryIcons';
 import { useSafeBottomTabBarHeight } from '../../hooks/useSafeBottomTabBarHeight';
@@ -145,6 +146,13 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
     const [l2Map, setL2Map] = useState<Record<number, Category[]>>({});
     const [expandedL1, setExpandedL1] = useState<number | null>(null);
     const [loading, setLoading] = useState(true);
+    // Publish the list ref so the basket dock's Pan can block this scroll while
+    // a drag starts on the bar (else the list steals the gesture).
+    const listRef = useRef(null);
+    useEffect(() => {
+        useBasketSession.getState().setBrowseListRef(listRef);
+        return () => useBasketSession.getState().setBrowseListRef(null);
+    }, []);
 
     // Load L1 + ALL L2 in two parallel requests (was 1 + N: one subcategory
     // call per L1). `/api/categories/l2` returns every L2 with its
@@ -178,6 +186,9 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
     }, [i18n.language]);
 
     const toggleL1 = useCallback((id: number) => {
+        // An expanded basket dock gets out of the way when the user starts
+        // interacting with the page (spec: L1 toggle / scroll collapse it).
+        useBasketSession.getState().collapseDock?.();
         setExpandedL1(prev => prev === id ? null : id);
     }, []);
 
@@ -206,7 +217,9 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
 
     return (
         <Animated.FlatList
+            ref={listRef}
             {...scroll}
+            onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
             style={styles.container}
             data={l1Categories}
             keyExtractor={(item: any) => item.id.toString()}

@@ -1515,5 +1515,19 @@
   "notifications": {
     "title": "Notifications",
     "empty": "No notifications yet"
+  },
+  "basketSession": {
+    "bar": "Items: {{count}} · Basket",
+    "familyBar": "Family basket · Items: {{count}}",
+    "switch": "Switch basket",
+    "empty": "The basket is empty",
+    "chooserTitle": "Which basket should this go to?",
+    "optionFamily": "Family basket",
+    "optionPrevious": "Previous basket",
+    "optionNew": "New basket",
+    "optionCount": "Items: {{count}}",
+    "sheetTitle": "Baskets",
+    "itemsCount": "Items: {{count}}",
+    "openBasket": "Basket"
   }
 }

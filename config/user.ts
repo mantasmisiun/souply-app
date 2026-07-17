@@ -87,7 +87,9 @@ async function initUserId(): Promise<string> {
     if (canSwitchUserId) {
         const mode = await getUserIdMode();
         if (mode === 'fixed') {
-            syncToBackendIfNeeded(DEV_USER_ID);
+            // Await like the normal path below — callers rely on getUserId()
+            // implying the session token is already loaded into memory.
+            await syncToBackendIfNeeded(DEV_USER_ID);
             return DEV_USER_ID;
         }
     }

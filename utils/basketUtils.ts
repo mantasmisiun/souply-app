@@ -1,6 +1,7 @@
 import { API_BASE_URL } from '../config/api';
 import { getUserId } from '../config/user';
 import type { DisplayMode } from '../contexts/DisplayPreferenceContext';
+import { useBasketSession, discoverOptions, postBasketItem } from '../state/basketSession';
 
 /**
  * Module-level in-flight promise: serializes concurrent "create draft
@@ -61,21 +62,58 @@ export const addProductToBasket = async (
     matchMode: DisplayMode = 'sku'
 ) => {
     try {
-        const userId = await getUserId();
-        const basketId = await ensureDraftBasket(draftBasketId, setDraftBasketId, userId);
+        const session = useBasketSession.getState();
 
-        const res = await fetch(`${API_BASE_URL}/api/basket-items`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ basketId, productId, quantity, matchMode }),
-        });
-
-        if (res.status === 409) {
-            return { success: false, message: 'Produktas jau yra krepšelyje' };
+        // 1. Session target already chosen → silent add (re-summons the bar
+        //    even after an X dismissal — user decision 2026-07-16).
+        if (session.target) {
+            const r = await postBasketItem(session.target.basketId, productId, quantity, matchMode);
+            if (r.success) {
+                session.bumpCount(1);
+                session.showBar();
+            }
+            return r;
         }
 
-        return { success: true, message: 'Produktas pridėtas į krepšelį' };
-    } catch (error) {
+        // 2. No target yet (user decision 2026-07-17: NO upfront chooser).
+        //    Silently resume the most-recent stage-1/2 personal basket, or
+        //    create one — the bar is the feedback, and switching (incl. the
+        //    family basket) lives behind the explicit "Keisti krepšelį" flow.
+        const options = await discoverOptions();
+        const previous = options?.find(o => o.key === 'previous') ?? null;
+        let basketId = previous?.basketId ?? null;
+        let count = previous?.itemCount ?? 0;
+        if (basketId == null) {
+            const userId = await getUserId();
+            basketId = await ensureDraftBasket(draftBasketId, setDraftBasketId, userId);
+            count = 0;
+        }
+        const r = await postBasketItem(basketId, productId, quantity, matchMode);
+        if (r.success) useBasketSession.getState().setTarget({ basketId, isFamily: false }, count + 1);
+        return r;
+    } catch {
         return { success: false, message: 'Nepavyko pridėti produkto' };
+    }
+};
+
+/** The chooser's pick handler: resolve the basket (create when `new`),
+ *  set it as the session target and flush every queued add into it. */
+export const applyChooserPick = async (
+    option: { key: 'family' | 'previous' | 'new'; basketId: number | null; itemCount: number },
+    setDraftBasketId: (id: number) => void,
+): Promise<void> => {
+    const session = useBasketSession.getState();
+    let basketId = option.basketId;
+    if (basketId == null) {
+        const userId = await getUserId();
+        basketId = await ensureDraftBasket(null, setDraftBasketId, userId);
+    }
+    session.setTarget({ basketId, isFamily: option.key === 'family' }, option.itemCount);
+    session.closeChooser();
+    const pending = session.takePending();
+    for (const add of pending) {
+        const r = await postBasketItem(basketId, add.productId, add.quantity, add.matchMode);
+        if (r.success) useBasketSession.getState().bumpCount(1);
+        add.resolve(r);
     }
 };

@@ -1492,5 +1492,19 @@
   "notifications": {
     "title": "Pranešimai",
     "empty": "Pranešimų nėra"
+  },
+  "basketSession": {
+    "bar": "Prekių: {{count}} · Krepšelis",
+    "familyBar": "Šeimos krepšelis · Prekių: {{count}}",
+    "switch": "Keisti krepšelį",
+    "empty": "Krepšelis tuščias",
+    "chooserTitle": "Į kurį krepšelį dėti?",
+    "optionFamily": "Šeimos krepšelis",
+    "optionPrevious": "Ankstesnis krepšelis",
+    "optionNew": "Naujas krepšelis",
+    "optionCount": "Prekių: {{count}}",
+    "sheetTitle": "Krepšeliai",
+    "itemsCount": "Prekės: {{count}}",
+    "openBasket": "Krepšelis"
   }
 }
