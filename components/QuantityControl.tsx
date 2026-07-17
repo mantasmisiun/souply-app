@@ -28,6 +28,7 @@ export function QuantityControl({ quantity, onDecrement, onIncrement, unit, size
         <View style={[styles.quantityControl, lg && styles.quantityControlLg, style]}>
             <TouchableOpacity
                 style={[styles.qtyButton, lg && styles.qtyButtonLg]}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 8 }}
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onDecrement(); }}
             >
                 <Ionicons name="remove" size={lg ? 22 : 16} color={colors.primary} />
@@ -43,6 +44,7 @@ export function QuantityControl({ quantity, onDecrement, onIncrement, unit, size
             </TouchableOpacity>
             <TouchableOpacity
                 style={[styles.qtyButton, lg && styles.qtyButtonLg]}
+                hitSlop={{ top: 10, bottom: 10, left: 8, right: 10 }}
                 onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onIncrement(); }}
             >
                 <Ionicons name="add" size={lg ? 22 : 16} color={colors.primary} />
