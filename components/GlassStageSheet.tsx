@@ -1,11 +1,12 @@
 import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react';
-import { View, StyleSheet, Dimensions, Platform, BackHandler, type StyleProp, type ViewStyle } from 'react-native';
+import { View, Pressable, StyleSheet, Dimensions, Platform, BackHandler, type StyleProp, type ViewStyle } from 'react-native';
 import { Gesture, GestureDetector, ScrollView, State } from 'react-native-gesture-handler';
 import Animated, {
     SlideOutDown, runOnJS, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
     useSharedValue, withSpring, withTiming,
 } from 'react-native-reanimated';
-import { spacing, radius, type AppTheme } from '../constants/theme';
+import { BlurView } from 'expo-blur';
+import { spacing, radius, withAlpha, useResolvedScheme, type AppTheme } from '../constants/theme';
 import { LiquidGlass } from './LiquidGlass';
 import { concentricRadius, displayCornerRadius } from '../utils/displayCorners';
 
@@ -46,6 +47,15 @@ const AnimatedGHScrollView = Animated.createAnimatedComponent(ScrollView);
 export interface GlassStageSheetRef {
     /** Animate to a stage (clamped). Same-stage calls re-snap (settle). */
     snapTo(stage: number): void;
+    /** Current sheet height (for external drag bridges: read at drag start). */
+    currentHeight(): number;
+    /** Externally-driven live drag: set the height directly (clamped to the
+     *  snap range). Used by sibling surfaces (the tab bar under the basket
+     *  dock) whose touches this sheet's own pan can never see. */
+    dragTo(height: number): void;
+    /** Finish an external drag: snap to the nearest detent (velocity-nudged,
+     *  same rules as the sheet's own pan release). */
+    dragEnd(velocityY: number): void;
 }
 
 /** One page of the in-sheet nav stack (Find-My: stores → store → plan). */
@@ -92,8 +102,48 @@ type Props = {
     /** Map-sheet mode: the last snap docks edge-to-edge (scaleX morph,
      *  concentric corners, solid backdrop). */
     dockAtLast?: boolean;
+    /** Tap handler for the grabber-pill area (drags still pan the sheet —
+     *  the sheet gesture only activates on vertical movement, so taps fall
+     *  through to this). Use for tap-to-expand on collapsed bars. */
+    onHandlePress?: () => void;
+    /** MERGE-WITH-BAR-BELOW mode (basket dock): square bottom corners and no
+     *  bottom border, so the sheet reads as one entity with a bar it sits
+     *  flush against (that bar squares its top corners in return). */
+    flushBottom?: boolean;
+    /** Light top-highlight rim riding the sheet's top edge (pass the same
+     *  color the bar below uses so the merged silhouette keeps ONE lit top
+     *  border — on the sheet, not the bar). */
+    topRimColor?: string;
     /** Slide out when unmounted (sheets that come and go, e.g. map results). */
     exitSlide?: boolean;
+    /** Grabber-area height (default SHEET_HANDLE_H). Slim it down for sheets
+     *  whose whole underlying bar is draggable (the basket dock) so the strip
+     *  peeking above the bar stays minimal. Include it in snap heights. */
+    handleH?: number;
+    /** Corner radius override (default: concentric from the display corner).
+     *  Pass the bar's radius when merging so top and bottom corners match. */
+    cornerRadius?: number;
+    /** Bottom-corner radius while flushBottom (default 0 = squared into the
+     *  bar). Raise it when the sheet expands DOWN OVER the bar so the sheet's
+     *  own bottom corners take over the bar's silhouette. */
+    flushBottomRadius?: number;
+    /** Fade the GLASS out as the sheet approaches its collapsed snap, leaving
+     *  only the grabber pill visible — collapsed, the sheet adds NOTHING to
+     *  the bar below it; dragging pulls the glass out from behind the bar. */
+    fadeGlassNearCollapse?: boolean;
+    /** Pill position inside the grabber area (default 'center'). 'bottom'
+     *  rests the pill on the sheet's collapsed bottom edge — i.e. directly ON
+     *  the bar below a docked sheet instead of floating above it. */
+    handleAlign?: 'center' | 'bottom';
+    /** Raise the GLASS bottom edge by this many px while the sheet's layout
+     *  (and pill) extend deeper: a docked sheet tucks behind its bar without
+     *  double-tinting it — the glass ends EXACTLY at the bar's top edge, so
+     *  dragging reads as the bar itself expanding vertically. */
+    glassBottomInset?: number;
+    /** Fired (on the JS thread) when the sheet's OWN pan starts/ends — lets a
+     *  docked host merge its bar the instant a pill-drag begins, not only when
+     *  the sheet settles. Bar-originated drags use the imperative bridge. */
+    onActiveChange?: (active: boolean) => void;
 };
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -102,9 +152,13 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     snaps, initialStage = 0, onStageChange, onHeightChange,
     bar, children, contentContainerStyle, onBarHeight, onContentHeight,
     colors, bottomInset, dockAtLast = false, exitSlide = false,
-    pages, onPopPage,
+    pages, onPopPage, onHandlePress, flushBottom = false, topRimColor,
+    handleH = SHEET_HANDLE_H, cornerRadius, flushBottomRadius = 0,
+    fadeGlassNearCollapse = false, handleAlign = 'center', glassBottomInset = 0,
+    onActiveChange,
 }, ref) {
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    const isDark = useResolvedScheme() === 'dark';
     const [barH, setBarH] = useState(60);
     const [stage, setStage] = useState(initialStage);
     // Bumped on each user snap so the settle effect animates even to the SAME
@@ -159,7 +213,9 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
         if (p > 0.995) p = 1;
         return p;
     });
-    const bottomOffset = spacing.sm;
+    // flushBottom sheets sit ON their bar — no float lift (the lift is the
+    // gap the merge exists to remove).
+    const bottomOffset = flushBottom ? 0 : spacing.sm;
 
     // Dock mode lays the root out EDGE-TO-EDGE and scales down in x to the
     // floating width (the morph is transform-only); float mode just lays out
@@ -222,6 +278,29 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
             if (target === stageRef.current) setSettleTick(t => t + 1);
             else setStage(target);
         },
+        currentHeight() {
+            return height.value;
+        },
+        dragTo(h: number) {
+            if (!dragging.current) { dragging.current = true; draggingSV.value = true; }
+            const sn = snapsRef.current;
+            height.value = clamp(h, sn[0], sn[sn.length - 1]);
+        },
+        dragEnd(velocityY: number) {
+            const sn = snapsRef.current;
+            const h = height.value;
+            let idx = 0, best = 1e9;
+            for (let i = 0; i < sn.length; i++) { const d = Math.abs(sn[i] - h); if (d < best) { best = d; idx = i; } }
+            if (velocityY < -500 && idx < sn.length - 1) idx++;
+            else if (velocityY > 500 && idx > 0) idx--;
+            height.value = withSpring(sn[idx], {
+                velocity: -velocityY, damping: 30, stiffness: 280, mass: 0.8, overshootClamping: true,
+            });
+            dragging.current = false;
+            draggingSV.value = false;
+            settleFromUI(idx);
+        },
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }), []);
 
     // ── SHEET-WIDE drag: one RNGH pan, worklet-driven (see map sheet) ────────
@@ -230,7 +309,8 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     const startHSV = useSharedValue(0);
     const grabX = useSharedValue(0);
     const grabY = useSharedValue(0);
-    const setDragging = (v: boolean) => { dragging.current = v; };
+    const onActiveChangeRef = useRef(onActiveChange); onActiveChangeRef.current = onActiveChange;
+    const setDragging = (v: boolean) => { dragging.current = v; onActiveChangeRef.current?.(v); };
     const uiSettled = useRef(false);
     const settleFromUI = (idx: number) => {
         if (idx >= 0) { uiSettled.current = true; setStage(idx); }
@@ -379,8 +459,8 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     , [height]);
 
     const maxSnap = snaps[snaps.length - 1];
-    const listH = Math.max(0, maxSnap - SHEET_HANDLE_H - barH);
-    const cornerR = concentricRadius(bottomInset, spacing.sm);
+    const listH = Math.max(0, maxSnap - handleH - barH);
+    const cornerR = cornerRadius ?? concentricRadius(bottomInset, spacing.sm);
     const displayR = displayCornerRadius(bottomInset);
     const expandable = snaps.length > 1;
 
@@ -394,10 +474,14 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     const glassFrameStyle = useAnimatedStyle(() => {
         const sn = snapsSV.value;
         const top = Math.max(0, sn[sn.length - 1] - height.value);
-        if (!dockAtLast) return { top };
+        // Glass fades over the first 40px of rise from the collapsed snap.
+        const opacity = fadeGlassNearCollapse
+            ? Math.min(1, Math.max(0, (height.value - sn[0]) / 40))
+            : 1;
+        if (!dockAtLast) return { top, opacity };
         const p = dockP.value;
         const r = Math.round(cornerR + (displayR - cornerR) * p);
-        return { top, borderBottomLeftRadius: r, borderBottomRightRadius: r };
+        return { top, opacity, borderBottomLeftRadius: r, borderBottomRightRadius: r };
     });
     const solidBgStyle = useAnimatedStyle(() => ({ opacity: dockP.value }));
 
@@ -410,16 +494,44 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
         <GestureDetector gesture={sheetGesture}>
         <Animated.View
             exiting={exitSlide ? SlideOutDown.duration(240) : undefined}
-            style={[styles.sheetRoot, rootPos, { height: maxSnap, borderRadius: cornerR }, outerStyle, dockCornersStyle]}
+            style={[
+                styles.sheetRoot, rootPos, { height: maxSnap, borderRadius: cornerR },
+                flushBottom && { borderBottomLeftRadius: flushBottomRadius, borderBottomRightRadius: flushBottomRadius },
+                outerStyle, dockCornersStyle,
+            ]}
             pointerEvents="box-none"
         >
             {/* GLASS FRAME — sized to the VISIBLE sheet rect every frame; the
                 material's rim wraps all real edges. Radii on the glass itself. */}
-            <Animated.View style={[styles.glassFrame, {
+            <Animated.View pointerEvents={flushBottom ? 'none' : 'auto'} style={[styles.glassFrame, glassBottomInset > 0 && { bottom: glassBottomInset }, {
                 borderTopLeftRadius: cornerR, borderTopRightRadius: cornerR,
                 borderBottomLeftRadius: cornerR, borderBottomRightRadius: cornerR,
-            }, glassFrameStyle]}>
-                <LiquidGlass fallback="blur" style={[StyleSheet.absoluteFillObject, { borderRadius: cornerR }]} />
+            },
+            flushBottom && { borderBottomLeftRadius: flushBottomRadius, borderBottomRightRadius: flushBottomRadius, borderBottomWidth: 0 },
+            flushBottom && Platform.OS === 'android' && { backgroundColor: 'transparent', borderColor: colors.outlineVariant },
+            topRimColor != null && { borderTopWidth: 1.2, borderTopColor: topRimColor },
+            glassFrameStyle]}>
+                {flushBottom && Platform.OS === 'android' ? (
+                    // Merge mode: replicate the floating tab bar's EXACT glass
+                    // recipe (real blur + 0.6 surface tint) so sheet and bar
+                    // are indistinguishable where they meet — the default
+                    // near-opaque Android frame reads as a different material.
+                    <>
+                        <BlurView
+                            pointerEvents="none"
+                            intensity={isDark ? 40 : 55}
+                            tint={isDark ? 'dark' : 'light'}
+                            experimentalBlurMethod="dimezisBlurView"
+                            style={StyleSheet.absoluteFillObject}
+                        />
+                        <View
+                            pointerEvents="none"
+                            style={[StyleSheet.absoluteFillObject, { backgroundColor: withAlpha(colors.surfaceContainer, 0.8) }]}
+                        />
+                    </>
+                ) : (
+                    <LiquidGlass fallback="blur" style={[StyleSheet.absoluteFillObject, { borderRadius: cornerR }]} />
+                )}
                 {dockAtLast && (
                     <Animated.View
                         pointerEvents="none"
@@ -430,7 +542,7 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
 
             {/* PANEL (handle host) — slides transform-only with the body. */}
             <Animated.View style={[styles.panel, { height: maxSnap }, bodyStyle]} pointerEvents="box-none">
-                <View style={styles.handleArea}>
+                <View style={[styles.handleArea, { height: handleH }, handleAlign === 'bottom' && styles.handleAreaBottom]}>
                     {expandable && <View style={styles.handle} />}
                 </View>
             </Animated.View>
@@ -456,7 +568,7 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
                                     <View key={page.key} style={{ width: pageW }}>
                                         <AnimatedGHScrollView
                                             ref={slotRefs[i]}
-                                            style={[styles.list, { height: listH, marginTop: SHEET_HANDLE_H }]}
+                                            style={[styles.list, { height: listH, marginTop: handleH }]}
                                             contentContainerStyle={page.contentContainerStyle ?? contentContainerStyle}
                                             showsVerticalScrollIndicator={active && expandable && safeStage === snaps.length - 1}
                                             scrollEnabled={active && expandable && safeStage === snaps.length - 1}
@@ -481,12 +593,32 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
                 {/* Bar: transparent overlay pinned to the root's bottom —
                     always over the same panel glass (no seam line). */}
                 <View
+                    pointerEvents="box-none"
                     style={[styles.barOverlay, { paddingHorizontal: viewportInset }]}
                     onLayout={e => { setBarH(e.nativeEvent.layout.height); onBarHeight?.(e.nativeEvent.layout.height); }}
                 >
                     {bar}
                 </View>
             </Animated.View>
+
+            {/* Tap target for the grabber — rendered TOPMOST (the body's
+                page-stack wrapper otherwise swallows taps over the handle)
+                and sliding with the same transform as the handle itself.
+                Drags still pan: the sheet gesture activates on vertical
+                movement at the root before this Pressable completes a tap. */}
+            {onHandlePress && (
+                <Animated.View pointerEvents="box-none" style={[styles.panel, { height: maxSnap }, bodyStyle]}>
+                    {/* Tap-to-expand target. hitSlop extends the touch zone
+                        DOWN over the bar's top strip so a tucked pill (mostly
+                        behind the bar) stays reliably tappable; the strip is
+                        above the tab icons, so it never steals a tab tap. */}
+                    <Pressable
+                        style={[styles.handleArea, { height: handleH }]}
+                        hitSlop={{ bottom: 22, left: 40, right: 40 }}
+                        onPress={onHandlePress}
+                    />
+                </Animated.View>
+            )}
         </Animated.View>
         </GestureDetector>
     );
@@ -515,7 +647,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     panel: { position: 'absolute', top: 0, left: 0, right: 0, overflow: 'hidden' },
     viewport: { position: 'absolute', top: 0, overflow: 'hidden' },
     barOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0 },
-    handleArea: { height: SHEET_HANDLE_H, alignItems: 'center', justifyContent: 'center' },
+    handleArea: { alignItems: 'center', justifyContent: 'center' },
+    handleAreaBottom: { justifyContent: 'flex-end', paddingBottom: 3 },
     handle: { width: 44, height: 5, borderRadius: radius.pill, backgroundColor: c.border },
     list: { flexGrow: 0 },
     pagesRow: { flexDirection: 'row' },
