@@ -1528,6 +1528,8 @@
     "optionCount": "Items: {{count}}",
     "sheetTitle": "Baskets",
     "itemsCount": "Items: {{count}}",
-    "openBasket": "Basket"
+    "openBasket": "Basket",
+    "itemsSection": "Basket items",
+    "add": "Add"
   }
 }

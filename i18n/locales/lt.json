@@ -1505,6 +1505,8 @@
     "optionCount": "Prekių: {{count}}",
     "sheetTitle": "Krepšeliai",
     "itemsCount": "Prekės: {{count}}",
-    "openBasket": "Krepšelis"
+    "openBasket": "Krepšelis",
+    "itemsSection": "Krepšelio prekės",
+    "add": "Į krepšelį"
   }
 }
