@@ -587,7 +587,7 @@ export default function ProductDetailScreen() {
     // Template mode renders a return banner below the add bar, eating
     // another ~64pt of bottom space the ScrollView needs to clear so the
     // final SP card isn't hidden under the stack.
-    const BAR_HEIGHT = isTemplateMode ? 132 : 64;
+    const BAR_HEIGHT = isTemplateMode ? 132 : 84; // basket mode: session-bar clearance
 
     const fetchBasketQty = useCallback(() => {
         const bid = useBasketState.getState().draftBasketId;
@@ -745,6 +745,36 @@ export default function ProductDetailScreen() {
                 style={styles.container}
                 contentContainerStyle={{ paddingTop: header.paddingTop, paddingBottom: BAR_HEIGHT + 16 }}
             >
+                {/* Inline add block (2.0): the primary CTA lives WITH the
+                    content, right under the collapsing header — the bottom
+                    zone belongs to the session bar (status, not actions).
+                    Template mode keeps its sticky bottom bar unchanged. */}
+                {!isTemplateMode && (
+                    <View style={styles.inlineAddBlock}>
+                        {basketQuantity > 0 ? (
+                            <QuantityControl
+                                quantity={basketQuantity}
+                                onDecrement={handleDecrement}
+                                onIncrement={handleIncrement}
+                                unit={resolveDisplayUnit(product)}
+                                size="large"
+                                style={{ width: '100%' }}
+                            />
+                        ) : (
+                            <TouchableOpacity
+                                style={[styles.addButton, isAdding && styles.addButtonDone]}
+                                onPress={handleAdd}
+                                disabled={isAdding}
+                                activeOpacity={0.8}
+                            >
+                                {isAdding
+                                    ? <MaterialProgress size="small" color="#fff" />
+                                    : <Ionicons name="cart-outline" size={20} color="#fff" />}
+                                <Text style={styles.addButtonText}>{t('product.addToBasket')}</Text>
+                            </TouchableOpacity>
+                        )}
+                    </View>
+                )}
 
                 {/* StoreProduct list */}
                 {filteredStoreProducts.length === 0 ? (
@@ -857,51 +887,32 @@ export default function ProductDetailScreen() {
                 editor); otherwise the primary "Į šabloną" CTA. Basket
                 mode keeps the pre-existing QuantityControl ↔ "Į krepšelį"
                 toggle untouched. */}
-            <View style={[styles.addBar, { paddingBottom: isTemplateMode ? 12 : (bottomInset || 12) }]}>
-                {isTemplateMode && templateQuantity > 0 ? (
-                    <QuantityControl
-                        quantity={templateQuantity}
-                        onDecrement={handleTemplateDecrement}
-                        onIncrement={handleTemplateIncrement}
-                        unit={resolveDisplayUnit(product)}
-                        size="large"
-                        style={{ width: '100%' }}
-                    />
-                ) : isTemplateMode ? (
-                    <TouchableOpacity
-                        style={[styles.addButton, isAdding && styles.addButtonDone]}
-                        onPress={handleAdd}
-                        disabled={isAdding}
-                        activeOpacity={0.8}
-                    >
-                        {isAdding
-                            ? <MaterialProgress size="small" color="#fff" />
-                            : <Ionicons name="albums-outline" size={20} color="#fff" />}
-                        <Text style={styles.addButtonText}>{t('basketTab.templates.addToTemplate')}</Text>
-                    </TouchableOpacity>
-                ) : basketQuantity > 0 ? (
-                    <QuantityControl
-                        quantity={basketQuantity}
-                        onDecrement={handleDecrement}
-                        onIncrement={handleIncrement}
-                        unit={resolveDisplayUnit(product)}
-                        size="large"
-                        style={{ width: '100%' }}
-                    />
-                ) : (
-                    <TouchableOpacity
-                        style={[styles.addButton, isAdding && styles.addButtonDone]}
-                        onPress={handleAdd}
-                        disabled={isAdding}
-                        activeOpacity={0.8}
-                    >
-                        {isAdding
-                            ? <MaterialProgress size="small" color="#fff" />
-                            : <Ionicons name="cart-outline" size={20} color="#fff" />}
-                        <Text style={styles.addButtonText}>{t('product.addToBasket')}</Text>
-                    </TouchableOpacity>
-                )}
-            </View>
+            {isTemplateMode && (
+                <View style={[styles.addBar, { paddingBottom: 12 }]}>
+                    {templateQuantity > 0 ? (
+                        <QuantityControl
+                            quantity={templateQuantity}
+                            onDecrement={handleTemplateDecrement}
+                            onIncrement={handleTemplateIncrement}
+                            unit={resolveDisplayUnit(product)}
+                            size="large"
+                            style={{ width: '100%' }}
+                        />
+                    ) : (
+                        <TouchableOpacity
+                            style={[styles.addButton, isAdding && styles.addButtonDone]}
+                            onPress={handleAdd}
+                            disabled={isAdding}
+                            activeOpacity={0.8}
+                        >
+                            {isAdding
+                                ? <MaterialProgress size="small" color="#fff" />
+                                : <Ionicons name="albums-outline" size={20} color="#fff" />}
+                            <Text style={styles.addButtonText}>{t('basketTab.templates.addToTemplate')}</Text>
+                        </TouchableOpacity>
+                    )}
+                </View>
+            )}
             {isTemplateMode && templateId != null && (
                 <TemplateReturnBanner templateId={templateId} />
             )}
@@ -986,6 +997,7 @@ export default function ProductDetailScreen() {
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
+    inlineAddBlock: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 },
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
 
