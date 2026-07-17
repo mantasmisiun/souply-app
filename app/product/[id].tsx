@@ -7,7 +7,6 @@ import {
     Modal,
     Dimensions,
  Animated as RNAnimated } from "react-native";
-import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
 import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { SkeletonBox } from '../../components/SkeletonBox';
@@ -29,12 +28,9 @@ import { addProductToBasket } from '../../utils/basketUtils';
 import { TemplateReturnBanner } from '../../components/template/TemplateReturnBanner';
 import { useTemplateAddState } from '../../state/templateAddState';
 import { useBasketState } from '../../state/basketState';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import * as Haptics from 'expo-haptics';
-import AmountPickerModal from '../../components/AmountPickerModal';
-import { QuantityControl } from '../../components/QuantityControl';
+import { useBasketSession } from '../../state/basketSession';
+import { AddOrStepper } from '../../components/AddOrStepper';
 import { ScreenHeading } from '../../components/ScreenHeading';
-import { resolveCanonicalStep, resolveDisplayUnit } from '../../utils/canonicalStep';
 
 interface StoreProduct {
     id: number;
@@ -482,7 +478,6 @@ export default function ProductDetailScreen() {
     const [chartModalSp, setChartModalSp] = useState<StoreProduct | null>(null);
     const [isAdding, setIsAdding] = useState(false);
     const [basketQuantity, setBasketQuantity] = useState(0);
-    const [amountModalVisible, setAmountModalVisible] = useState(false);
     const { mode, ready: prefReady } = useDisplayMode();
     const { draftBasketId, setDraftBasketId } = useBasketState();
     const templateItems = useTemplateAddState(s => s.items);
@@ -493,7 +488,6 @@ export default function ProductDetailScreen() {
         [isTemplateMode, templateItems, id],
     );
     const templateQuantity = templateEntry?.quantity ?? 0;
-    const { bottom: bottomInset } = useSafeAreaInsets();
     // Collapsing header: title+breadcrumb hide on scroll, store filter stays pinned.
     const header = useCollapsingHeader();
     const draftBasketIdRef = useRef(draftBasketId);
@@ -604,89 +598,48 @@ export default function ProductDetailScreen() {
 
     useFocusEffect(useCallback(() => { fetchBasketQty(); }, [fetchBasketQty]));
 
-    const handleAdd = useCallback(() => {
-        if (!product || isAdding) return;
-        const hasRange = product.minAmount !== null && product.maxAmount !== null
-            && product.minAmount !== product.maxAmount;
-        if (hasRange || !!product.hasWeighable) {
-            setAmountModalVisible(true);
+    // One commit for the header AddOrStepper (basket mode): add (session-aware),
+    // update or remove the draft-basket line. qty 0 = remove (and drop the
+    // basket if it was the last line).
+    const commitQty = useCallback(async (qty: number) => {
+        if (!product) return;
+        if (basketQuantity === 0 && qty > 0) {
+            setIsAdding(true);
+            try {
+                const r = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, qty, mode);
+                if (r.success) setBasketQuantity(qty);
+            } finally { setIsAdding(false); }
             return;
         }
-        const qty = resolveCanonicalStep(product);
-        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-        setIsAdding(true);
-        if (isTemplateMode && templateId != null) {
-            templateAdd(product.id, qty)
-                .catch(() => {})
-                .finally(() => setIsAdding(false));
-            return;
-        }
-        addProductToBasket(product.id, draftBasketId, setDraftBasketId, qty, mode)
-            .then(result => { if (result.success) setBasketQuantity(qty); })
-            .finally(() => setIsAdding(false));
-    }, [product, isAdding, draftBasketId, mode, isTemplateMode, templateId, templateAdd]);
-
-    const handleTemplateDecrement = useCallback(() => {
-        if (!product) return;
-        const step = resolveCanonicalStep(product);
-        const next = Math.max(0, Math.round((templateQuantity - step) / step) * step);
-        templateSetQty(product.id, next).catch(() => {});
-    }, [product, templateQuantity, templateSetQty]);
-
-    const handleTemplateIncrement = useCallback(() => {
-        if (!product) return;
-        const step = resolveCanonicalStep(product);
-        const next = Math.round((templateQuantity + step) / step) * step;
-        templateSetQty(product.id, next).catch(() => {});
-    }, [product, templateQuantity, templateSetQty]);
-
-    const handleDecrement = useCallback(() => {
-        if (!product) return;
-        const step = resolveCanonicalStep(product);
-        const newQty = Math.round((basketQuantity - step) / step) * step;
+        setBasketQuantity(qty);
         const bid = draftBasketIdRef.current;
-        if (newQty <= 0) {
-            setBasketQuantity(0);
-            if (!bid) return;
-            fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (all: any[]) => {
-                const found = Array.isArray(all) ? all.find((i: any) => i.productId === product.id) : null;
-                if (found) await fetch(`${API_BASE_URL}/api/basket-items/${found.id}`, { method: 'DELETE' });
-                const remaining = Array.isArray(all) ? all.filter((i: any) => i.id !== found?.id) : [];
-                if (remaining.length === 0) {
-                    await fetch(`${API_BASE_URL}/api/baskets/${bid}`, { method: 'DELETE' });
-                    setDraftBasketId(null);
-                }
-            }).catch(() => {});
-        } else {
-            setBasketQuantity(newQty);
-            if (!bid) return;
-            fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (all: any[]) => {
-                const found = Array.isArray(all) ? all.find((i: any) => i.productId === product.id) : null;
-                if (found) await fetch(`${API_BASE_URL}/api/basket-items/${found.id}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ quantity: newQty }),
-                });
-            }).catch(() => {});
-        }
-    }, [product, basketQuantity, setDraftBasketId]);
-
-    const handleIncrement = useCallback(() => {
-        if (!product) return;
-        const step = resolveCanonicalStep(product);
-        const newQty = Math.round((basketQuantity + step) / step) * step;
-        const bid = draftBasketIdRef.current;
-        setBasketQuantity(newQty);
         if (!bid) return;
-        fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (all: any[]) => {
-            const found = Array.isArray(all) ? all.find((i: any) => i.productId === product.id) : null;
-            if (found) await fetch(`${API_BASE_URL}/api/basket-items/${found.id}`, {
+        const all = await fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).catch(() => []);
+        const found = Array.isArray(all) ? all.find((i: any) => i.productId === product.id) : null;
+        if (qty <= 0) {
+            if (found) await fetch(`${API_BASE_URL}/api/basket-items/${found.id}`, { method: 'DELETE' });
+            const remaining = Array.isArray(all) ? all.filter((i: any) => i.id !== found?.id) : [];
+            if (remaining.length === 0) {
+                await fetch(`${API_BASE_URL}/api/baskets/${bid}`, { method: 'DELETE' });
+                setDraftBasketId(null);
+            }
+        } else if (found) {
+            await fetch(`${API_BASE_URL}/api/basket-items/${found.id}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ quantity: newQty }),
+                body: JSON.stringify({ quantity: qty }),
             });
-        }).catch(() => {});
-    }, [product, basketQuantity]);
+        }
+    }, [product, basketQuantity, draftBasketId, setDraftBasketId, mode]);
+
+    // Template-mode commit (the sticky bottom AddOrStepper): the picker/stepper
+    // set the absolute quantity (0 = remove).
+    const commitTemplateQty = useCallback((qty: number) => {
+        if (!product || templateId == null) return;
+        if (qty <= 0) templateSetQty(product.id, 0).catch(() => {});
+        else if (templateQuantity === 0) templateAdd(product.id, qty).catch(() => {});
+        else templateSetQty(product.id, qty).catch(() => {});
+    }, [product, templateId, templateQuantity, templateAdd, templateSetQty]);
 
     if (loading) return (
         <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, gap: 10 }}>
@@ -714,6 +667,16 @@ export default function ProductDetailScreen() {
                 controller={header}
                 background={colors.cardBackground}
                 back
+                right={!isTemplateMode && product ? (
+                    <AddOrStepper
+                        product={product}
+                        quantity={basketQuantity}
+                        onCommit={commitQty}
+                        busy={isAdding}
+                        addLabel={t('basketSession.add')}
+                        style={styles.headerStepper}
+                    />
+                ) : undefined}
                 collapsing={
                     <ScreenHeading
                         title={product.name}
@@ -742,39 +705,13 @@ export default function ProductDetailScreen() {
                 overlay's space (the opaque overlay hides the brief measure jump). */}
             <Animated.ScrollView
                 {...header.scroll}
+                onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
                 style={styles.container}
                 contentContainerStyle={{ paddingTop: header.paddingTop, paddingBottom: BAR_HEIGHT + 16 }}
             >
-                {/* Inline add block (2.0): the primary CTA lives WITH the
-                    content, right under the collapsing header — the bottom
-                    zone belongs to the session bar (status, not actions).
-                    Template mode keeps its sticky bottom bar unchanged. */}
-                {!isTemplateMode && (
-                    <View style={styles.inlineAddBlock}>
-                        {basketQuantity > 0 ? (
-                            <QuantityControl
-                                quantity={basketQuantity}
-                                onDecrement={handleDecrement}
-                                onIncrement={handleIncrement}
-                                unit={resolveDisplayUnit(product)}
-                                size="large"
-                                style={{ width: '100%' }}
-                            />
-                        ) : (
-                            <TouchableOpacity
-                                style={[styles.addButton, isAdding && styles.addButtonDone]}
-                                onPress={handleAdd}
-                                disabled={isAdding}
-                                activeOpacity={0.8}
-                            >
-                                {isAdding
-                                    ? <MaterialProgress size="small" color="#fff" />
-                                    : <Ionicons name="cart-outline" size={20} color="#fff" />}
-                                <Text style={styles.addButtonText}>{t('product.addToBasket')}</Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
-                )}
+                {/* Add ⇄ stepper now lives at the TOP-RIGHT of the header
+                    (see CollapsingHeader `right` below); the body is just the
+                    SP list. Template mode keeps its sticky bottom bar. */}
 
                 {/* StoreProduct list */}
                 {filteredStoreProducts.length === 0 ? (
@@ -889,72 +826,20 @@ export default function ProductDetailScreen() {
                 toggle untouched. */}
             {isTemplateMode && (
                 <View style={[styles.addBar, { paddingBottom: 12 }]}>
-                    {templateQuantity > 0 ? (
-                        <QuantityControl
-                            quantity={templateQuantity}
-                            onDecrement={handleTemplateDecrement}
-                            onIncrement={handleTemplateIncrement}
-                            unit={resolveDisplayUnit(product)}
-                            size="large"
-                            style={{ width: '100%' }}
-                        />
-                    ) : (
-                        <TouchableOpacity
-                            style={[styles.addButton, isAdding && styles.addButtonDone]}
-                            onPress={handleAdd}
-                            disabled={isAdding}
-                            activeOpacity={0.8}
-                        >
-                            {isAdding
-                                ? <MaterialProgress size="small" color="#fff" />
-                                : <Ionicons name="albums-outline" size={20} color="#fff" />}
-                            <Text style={styles.addButtonText}>{t('basketTab.templates.addToTemplate')}</Text>
-                        </TouchableOpacity>
-                    )}
+                    <AddOrStepper
+                        product={product}
+                        quantity={templateQuantity}
+                        onCommit={commitTemplateQty}
+                        size="large"
+                        fullWidth
+                        addLabel={t('basketTab.templates.addToTemplate')}
+                        addIcon="albums-outline"
+                    />
                 </View>
             )}
             {isTemplateMode && templateId != null && (
                 <TemplateReturnBanner templateId={templateId} />
             )}
-
-            <AmountPickerModal
-                visible={amountModalVisible}
-                productName={product.name}
-                canonicalUnit={product.canonicalUnit}
-                canonicalStep={product.canonicalStep}
-                canonicalFamily={product.canonicalFamily}
-                minAmount={product.minAmount ?? 0}
-                maxAmount={product.maxAmount ?? 0}
-                unit={product.unit ?? 'g'}
-                isWeighable={!!product.hasWeighable}
-                onCancel={() => setAmountModalVisible(false)}
-                onConfirm={async (amount) => {
-                    setAmountModalVisible(false);
-                    setIsAdding(true);
-                    if (isTemplateMode && templateId != null) {
-                        try {
-                            // Picker is the "set absolute quantity" surface
-                            // — override any existing row rather than
-                            // incrementing (mirrors the template editor's
-                            // per-row input).
-                            if (templateEntry) {
-                                await templateSetQty(product.id, amount);
-                            } else {
-                                await templateAdd(product.id, amount);
-                            }
-                        } catch {
-                            // Swallow; template detail screen will reflect
-                            // server truth on next focus.
-                        } finally {
-                            setIsAdding(false);
-                        }
-                        return;
-                    }
-                    const result = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, amount, mode);
-                    setIsAdding(false);
-                    if (result.success) setBasketQuantity(amount);
-                }}
-            />
 
             <Modal
                 visible={chartModalSp !== null}
@@ -1000,6 +885,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     inlineAddBlock: { paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 },
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+
+    // Header Add/stepper: a fixed min width so the −/+ get more room from the
+    // amount (space-between spreads them) and the button↔stepper toggle doesn't
+    // resize the header slot.
+    headerStepper: { minWidth: 150 },
 
     breadcrumbRow: { flexDirection: 'row', alignItems: 'center', gap: 2 },
     navBreadcrumbSep: { fontSize: 10, color: c.textMuted },
