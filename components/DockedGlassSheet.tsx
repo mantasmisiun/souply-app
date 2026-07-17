@@ -2,92 +2,89 @@ import React, {
     forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
     type ReactNode,
 } from 'react';
-import { View, Pressable, StyleSheet, Platform, type LayoutChangeEvent } from 'react-native';
-import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import {
+    View, Pressable, StyleSheet, Platform, Dimensions,
+    type LayoutChangeEvent, type StyleProp, type ViewStyle,
+} from 'react-native';
+import {
+    Gesture, GestureDetector, ScrollView as GHScrollView, State,
+} from 'react-native-gesture-handler';
 import Animated, {
-    runOnJS, useAnimatedStyle, useSharedValue, withSpring,
+    runOnJS, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
+    useSharedValue, withSpring,
 } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
     useTheme, useResolvedScheme, spacing, radius, withAlpha, type AppTheme,
 } from '../constants/theme';
+import { concentricRadius, displayCornerRadius } from '../utils/displayCorners';
 
 /**
  * DockedGlassSheet — ONE frosted-glass panel that IS a floating bottom bar and
- * grows upward into a sheet. The reusable, artifact-free replacement for the
- * old two-layer (tab-bar + separately-mounted GlassStageSheet) dock.
+ * grows upward into a sheet, through STANDARD detents:
  *
- * Why one panel (2026-07 research): stacking two BlurViews over the same pixels
- * BRIGHTENS (blur compositing), animating a BlurView's opacity POPS, and two
- * independently-computed edges MISALIGN. All three vanish when there is a
- * single glass surface whose only animated property is HEIGHT.
+ *   stage 0  collapsed — just the bar row (+ a pill).
+ *   stage 1  MEDIUM   — 50 % of the screen (iOS/Material medium detent).
+ *   stage 2  FULL     — the panel goes SOLID (glass → opaque), its bottom
+ *                       corners square and its left/right edges expand to the
+ *                       screen edges; the internal list scroll switches on.
  *
- * Architecture:
- *  · A bottom-pinned CLIP (`overflow:'hidden'`) whose HEIGHT is the single
- *    animated value (one shared value, spring-snapped). Its glass/tint/border/
- *    shadow are CONSTANT — collapsing just makes the clip shorter, it never
- *    fades. Corner radius is identical top and bottom at every height, so the
- *    bar and the expanded sheet share one silhouette.
- *  · A fixed-size inner PANEL (height = expanded), bottom-anchored, laid out
- *    ONCE: the glass fill, the sheet CONTENT (above the bar row), the BAR ROW
- *    pinned at the bottom. The clip reveals the bottom `h` of it — content
- *    never reflows, the BlurView never resizes (no per-frame re-blur).
- *  · One Pan over the whole panel. Because the bar row (its tab buttons) lives
- *    INSIDE this component, a drag and a tab tap coexist with zero cross-tree
- *    plumbing: vertical travel drives the sheet, a tap falls through.
+ * The detents are FIXED fractions of the screen — the content's size never
+ * dictates the height. `sheet.maxStage` picks how far it may open: 1 = medium
+ * only (the tab-bar basket chooser), 2 = full (the session list sheet).
  *
- * `sheet` omitted → a plain glass bar (fixed height, no pill, no gesture) —
- * the normal tab bar on every screen with no dock.
+ * Scroll HANDOFF (industry standard): below full, an upward drag on the list
+ * EXPANDS the sheet (scroll disabled); the list only scrolls once it is at
+ * full and you keep dragging up. A downward drag at full with the list at its
+ * top collapses the sheet.
+ *
+ * Single-glass rationale (2026-07 research): two stacked BlurViews brighten and
+ * opacity-animating a BlurView pops — so the glass recipe here is CONSTANT and
+ * only HEIGHT (and, at full, a solid-backdrop fade) animates.
  */
 
+const SCREEN_H = Dimensions.get('window').height;
+const MEDIUM_FRACTION = 0.5;   // stage-1 detent — the standard medium height.
+const PEEK = 14;               // slim pill strip above the bar row.
+const FLOAT_MARGIN = spacing.lg;
 const PILL_W = 40;
 const PILL_H = 5;
-// A slim glass strip above the bar row holding the grabber pill — so the pill
-// sits ABOVE the tab buttons, never overlapping (and stealing) their taps.
-const PEEK = 14;
 const SNAP_SPRING = { damping: 30, stiffness: 280, mass: 0.9, overshootClamping: true } as const;
 
-export interface DockedSheetControls {
-    expand(): void;
-    collapse(): void;
-    /** Current visible panel height (px) — for external drag bridges. */
-    height(): number;
-    dragBegin(): void;
-    dragTo(height: number): void;
-    dragEnd(velocityY: number): void;
-}
-
-interface SheetSpec {
-    /** Sheet body, laid out once at its natural height above the bar row. */
-    content: ReactNode;
-    /** Known content height (px). Drives the expanded snap. */
-    contentHeight: number;
-    /** Settled stage callback (0 collapsed → 1 expanded). */
-    onStageChange?: (stage: 0 | 1) => void;
-    /** Drag in progress (true on grab, false on release). */
-    onActiveChange?: (active: boolean) => void;
-}
-
-interface Props {
-    /** Pinned at the panel bottom — the tab buttons, or a session header. */
-    barRow: ReactNode;
-    /** Height of `barRow`. */
-    barRowHeight: number;
-    /** Optional expandable sheet. Omit for a plain bar. */
-    sheet?: SheetSpec;
-    colors?: AppTheme;
-    /** Report the panel's collapsed (bar) height for scroll-clearance. */
-    onBarHeight?: (h: number) => void;
-    /** A scrollable behind the bar whose scroll must yield to this sheet's Pan
-     *  — the Pan `blocksExternalGesture`s it so a drag starting on the bar
-     *  expands the sheet instead of letting the list steal the scroll. */
-    blockScrollRef?: { current: unknown } | null;
-}
+const AnimatedScroll = Animated.createAnimatedComponent(GHScrollView);
 
 function clamp(v: number, lo: number, hi: number) {
     'worklet';
     return Math.max(lo, Math.min(hi, v));
+}
+
+export interface DockedSheetControls {
+    /** Open to the medium detent (stage 1). */
+    expand(): void;
+    collapse(): void;
+    /** Snap to an explicit stage index (clamped). */
+    snapTo(stage: number): void;
+    height(): number;
+}
+
+interface SheetSpec {
+    content: ReactNode;
+    /** How far the sheet may open: 1 = medium only, 2 = full. Default 2. */
+    maxStage?: 1 | 2;
+    onStageChange?: (stage: number) => void;
+    onActiveChange?: (active: boolean) => void;
+    contentContainerStyle?: StyleProp<ViewStyle>;
+}
+
+interface Props {
+    barRow: ReactNode;
+    barRowHeight: number;
+    sheet?: SheetSpec;
+    colors?: AppTheme;
+    onBarHeight?: (h: number) => void;
+    /** A scrollable behind the bar whose scroll must yield to this sheet's Pan. */
+    blockScrollRef?: { current: unknown } | null;
 }
 
 export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function DockedGlassSheet({
@@ -100,97 +97,175 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     const styles = useMemo(() => makeStyles(colors, isDark), [colors, isDark]);
 
     const hasSheet = sheet != null;
-    const contentHeight = sheet?.contentHeight ?? 0;
+    const maxStage = sheet?.maxStage ?? 2;
+    const dockAtLast = hasSheet && maxStage >= 2;
     const peek = hasSheet ? PEEK : 0;
-    // Collapsed = bar row + a slim pill strip; expanded adds the content above.
-    const collapsedH = barRowHeight + peek;
-    const expandedH = barRowHeight + peek + contentHeight;
 
-    // THE single source of truth. Collapsed = bar height; expanded = + content.
+    // ── STANDARD detents (fixed, content-independent) ─────────────────────────
+    const collapsedH = barRowHeight + peek;
+    const mediumH = Math.max(Math.round(SCREEN_H * MEDIUM_FRACTION), collapsedH + 160);
+    const fullH = SCREEN_H - insets.top;
+    const snaps = useMemo(
+        () => (!hasSheet ? [collapsedH]
+            : maxStage >= 2 ? [collapsedH, mediumH, fullH]
+            : [collapsedH, mediumH]),
+        [hasSheet, maxStage, collapsedH, mediumH, fullH],
+    );
+    const lastIdx = snaps.length - 1;
+
     const h = useSharedValue(collapsedH);
     const startH = useSharedValue(collapsedH);
-    const collapsedSV = useSharedValue(collapsedH);
-    const expandedSV = useSharedValue(expandedH);
-    useEffect(() => {
-        collapsedSV.value = collapsedH;
-        expandedSV.value = expandedH;
-    }, [collapsedH, expandedH, collapsedSV, expandedSV]);
+    const snapsSV = useSharedValue(snaps);
+    useEffect(() => { snapsSV.value = snaps; }, [snaps, snapsSV]);
 
     const draggingRef = useRef(false);
-    const stageRef = useRef<0 | 1>(0);
-    const [, force] = useState(0);
+    const draggingSV = useSharedValue(false);
+    const stageRef = useRef(0);
+    const [stage, setStageState] = useState(0);
 
     const onStageChange = sheet?.onStageChange;
     const onActiveChange = sheet?.onActiveChange;
-    const setStageJS = useCallback((s: 0 | 1) => {
+    const setStageJS = useCallback((s: number) => {
         stageRef.current = s;
+        setStageState(s);
         onStageChange?.(s);
-        force(n => n + 1); // re-render so pill/press logic reads the new stage
     }, [onStageChange]);
     const setActiveJS = useCallback((a: boolean) => {
         draggingRef.current = a;
         onActiveChange?.(a);
     }, [onActiveChange]);
 
-    const springTo = useCallback((s: 0 | 1) => {
-        h.value = withSpring(s === 1 ? expandedSV.value : collapsedSV.value, SNAP_SPRING);
-    }, [h, expandedSV, collapsedSV]);
+    const springTo = useCallback((idx: number) => {
+        const i = Math.max(0, Math.min(idx, snapsSV.value.length - 1));
+        h.value = withSpring(snapsSV.value[i], SNAP_SPRING);
+    }, [h, snapsSV]);
 
-    // Re-settle when the measured heights change (chooser↔list swap, content
-    // grew) — hold the current stage at the new geometry. No animation glass,
-    // just the height spring.
+    // Re-settle to the current stage if the detents change (bar height measured,
+    // rotation) without a drag in flight.
     useEffect(() => {
         if (draggingRef.current) return;
-        h.value = withSpring(stageRef.current === 1 ? expandedH : collapsedH, SNAP_SPRING);
-    }, [expandedH, collapsedH, h]);
+        const i = Math.min(stageRef.current, snaps.length - 1);
+        h.value = withSpring(snaps[i], SNAP_SPRING);
+    }, [snaps, h]);
 
-    const endDrag = useCallback((velocityY: number) => {
+    // ── Content scroll (only at the last detent) ──────────────────────────────
+    const scrollRef = useRef<any>(null);
+    const scrollY = useSharedValue(0);
+    const onScroll = useAnimatedScrollHandler((e) => { scrollY.value = e.contentOffset.y; });
+    // Leaving the last stage resets scroll to top so the next open starts clean.
+    useEffect(() => {
+        if (stage < lastIdx) scrollRef.current?.scrollTo?.({ y: 0, animated: false });
+    }, [stage, lastIdx]);
+
+    const snapEnd = useCallback((velocityY: number) => {
         'worklet';
-        const lo = collapsedSV.value, hi = expandedSV.value;
-        const projected = h.value - velocityY * 0.12; // up (‑vy) grows height
-        const target = Math.abs(projected - hi) < Math.abs(projected - lo) ? hi : lo;
-        h.value = withSpring(target, { ...SNAP_SPRING, velocity: -velocityY });
-        runOnJS(setStageJS)(target === hi ? 1 : 0);
+        const sn = snapsSV.value;
+        const cur = h.value;
+        let idx = 0, best = 1e9;
+        for (let i = 0; i < sn.length; i++) { const d = Math.abs(sn[i] - cur); if (d < best) { best = d; idx = i; } }
+        if (velocityY < -500 && idx < sn.length - 1) idx++;
+        else if (velocityY > 500 && idx > 0) idx--;
+        h.value = withSpring(sn[idx], { ...SNAP_SPRING, velocity: -velocityY });
+        draggingSV.value = false;
+        runOnJS(setStageJS)(idx);
         runOnJS(setActiveJS)(false);
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, []);
+    }, [h, snapsSV, draggingSV, setStageJS, setActiveJS]);
 
     useImperativeHandle(ref, (): DockedSheetControls => ({
         expand: () => { setStageJS(1); springTo(1); },
         collapse: () => { setStageJS(0); springTo(0); },
+        snapTo: (idx) => { const i = Math.max(0, Math.min(idx, snaps.length - 1)); setStageJS(i); springTo(i); },
         height: () => h.value,
-        dragBegin: () => { startH.value = h.value; setActiveJS(true); },
-        dragTo: (nh) => { h.value = clamp(nh, collapsedSV.value, expandedSV.value); },
-        dragEnd: (vy) => { endDrag(vy); },
-    }), [setStageJS, springTo, endDrag, setActiveJS, h, startH, collapsedSV, expandedSV]);
+    }), [setStageJS, springTo, snaps.length, h]);
 
-    // Pan drives the sheet; vertical-dominant activates, taps + horizontal
-    // swipes fall through to the bar-row buttons. It BLOCKS the list scrolling
-    // behind the bar so a drag that starts on the bar can never leak into a
-    // page scroll (or a scroll-then-handoff).
+    // ── One worklet-driven pan (scroll-aware handoff) ─────────────────────────
+    const grabY = useSharedValue(0);
+    const grabX = useSharedValue(0);
     const pan = useMemo(() => {
         let g = Gesture.Pan()
             .enabled(hasSheet)
-            .activeOffsetY([-8, 8])
-            .failOffsetX([-18, 18])
-            .onStart(() => { 'worklet'; startH.value = h.value; runOnJS(setActiveJS)(true); })
+            .manualActivation(true)
+            .simultaneousWithExternalGesture(scrollRef)
+            .onBegin((e) => { 'worklet'; grabY.value = e.absoluteY; grabX.value = e.absoluteX; })
+            .onTouchesMove((e, sm) => {
+                'worklet';
+                if (e.state === State.ACTIVE) return;
+                const t = e.allTouches[0];
+                if (!t) return;
+                const dy = t.absoluteY - grabY.value;
+                const dx = t.absoluteX - grabX.value;
+                if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.5) { sm.fail(); return; }
+                if (Math.abs(dy) < 4) return;                    // taps stay taps
+                if (Math.abs(dy) <= Math.abs(dx) * 1.5) return;  // not vertical-dominant
+                const sn = snapsSV.value;
+                if (sn.length <= 1) { sm.fail(); return; }
+                const atFull = h.value >= sn[sn.length - 1] - 2;
+                // Below full: the sheet always owns the drag (scroll is off).
+                // At full: the list owns UPWARD drags; a downward drag at the
+                // list's top collapses the sheet.
+                if (!atFull || (dy > 0 && scrollY.value <= 1)) sm.activate();
+                else sm.fail();
+            })
+            .onStart(() => {
+                'worklet';
+                startH.value = h.value;
+                draggingSV.value = true;
+                runOnJS(setActiveJS)(true);
+            })
             .onUpdate((e) => {
                 'worklet';
-                h.value = clamp(startH.value - e.translationY, collapsedSV.value, expandedSV.value);
+                const sn = snapsSV.value;
+                const lo = sn[0], hi = sn[sn.length - 1];
+                let nh = startH.value - e.translationY;
+                if (nh > hi) { startH.value = hi + e.translationY; nh = hi; }
+                else if (nh < lo) { startH.value = lo + e.translationY; nh = lo; }
+                h.value = nh;
             })
-            .onEnd((e) => { 'worklet'; endDrag(e.velocityY); })
-            .onFinalize((_e, success) => { 'worklet'; if (!success) runOnJS(setActiveJS)(false); });
+            .onEnd((e) => { 'worklet'; snapEnd(e.velocityY); })
+            .onFinalize((_e, success) => {
+                'worklet';
+                if (success) return;
+                draggingSV.value = false;
+                runOnJS(setActiveJS)(false);
+            });
         if (blockScrollRef) g = g.blocksExternalGesture(blockScrollRef as never);
         return g;
-    }, [hasSheet, endDrag, h, startH, collapsedSV, expandedSV, setActiveJS, blockScrollRef]);
+    }, [hasSheet, snapEnd, h, startH, snapsSV, scrollY, draggingSV, grabX, grabY, setActiveJS, blockScrollRef]);
 
-    const clipStyle = useAnimatedStyle(() => ({ height: h.value }));
-    // Separator fades in over the first bit of expansion (never on the plain
-    // collapsed bar).
+    // ── Dock-to-full progress (0 floating → 1 edge-to-edge solid) ─────────────
+    const dockP = useDerivedValue(() => {
+        if (!dockAtLast) return 0;
+        const sn = snapsSV.value;
+        const last = sn[sn.length - 1];
+        const prev = sn.length > 1 ? sn[sn.length - 2] : last;
+        return clamp((h.value - prev) / Math.max(1, last - prev), 0, 1);
+    });
+    const cornerR = concentricRadius(insets.bottom, spacing.sm);
+    const displayR = displayCornerRadius(insets.bottom);
+
+    // ── Animated styles ───────────────────────────────────────────────────────
+    // Dock morph animates the EDGES directly (left/right/bottom/bottom-radius)
+    // so the content keeps its normal side padding — a scaleX morph would need
+    // a counter-scale that renders content full-width and clips off the padding.
+    const clipStyle = useAnimatedStyle(() => {
+        const base: Record<string, unknown> = { height: h.value };
+        if (dockAtLast) {
+            const p = dockP.value;
+            const m = FLOAT_MARGIN * (1 - p);
+            const r = Math.round(cornerR + (displayR - cornerR) * p);
+            base.left = m;
+            base.right = m;
+            base.bottom = insets.bottom + spacing.sm * (1 - p);
+            base.borderBottomLeftRadius = r;
+            base.borderBottomRightRadius = r;
+        }
+        return base;
+    });
+    const solidStyle = useAnimatedStyle(() => ({ opacity: dockAtLast ? dockP.value : 0 }));
     const sepStyle = useAnimatedStyle(() => {
-        const lo = collapsedSV.value, hi = expandedSV.value;
-        const p = hi > lo ? clamp((h.value - lo) / Math.min(70, hi - lo), 0, 1) : 0;
-        return { opacity: p };
+        const sn = snapsSV.value;
+        const lo = sn[0], hi = sn[sn.length - 1];
+        return { opacity: hi > lo ? clamp((h.value - lo) / Math.min(70, hi - lo), 0, 1) : 0 };
     });
 
     const onExpandTap = useCallback(() => {
@@ -198,17 +273,23 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         else { setStageJS(0); springTo(0); }
     }, [setStageJS, springTo]);
 
+    const scrollEnabled = hasSheet && dockAtLast && stage === lastIdx;
+
     const panel = (
         <Animated.View
-            style={[styles.clip, { bottom: insets.bottom + spacing.sm }, clipStyle]}
-            // When there's a sheet the panel must CAPTURE touches over its area
-            // (drag anywhere on it) so they can't leak through to the list
-            // behind — box-none let non-touchable content pass through and, with
-            // blocksExternalGesture, deadlocked the drag. Plain bar stays
-            // box-none (only its tab buttons are interactive).
+            style={[
+                styles.clip,
+                { borderRadius: cornerR },
+                // Non-dock: fixed floating margins. Dock: left/right/bottom come
+                // from clipStyle and animate to the screen edges at full.
+                !dockAtLast && styles.clipFloat,
+                !dockAtLast && { bottom: insets.bottom + spacing.sm },
+                clipStyle,
+            ]}
             pointerEvents={hasSheet ? 'auto' : 'box-none'}
         >
-            {/* CONSTANT GLASS — fills the clip; fixed recipe, never animated. */}
+            {/* CONSTANT GLASS (blur + tint) + a SOLID backdrop that fades in at
+                the full detent. */}
             <BlurView
                 pointerEvents="none"
                 intensity={isDark ? 40 : 55}
@@ -217,33 +298,36 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                 style={styles.glassFill}
             />
             <View pointerEvents="none" style={[styles.glassFill, styles.tint]} />
+            {dockAtLast && (
+                <Animated.View pointerEvents="none" style={[styles.glassFill, styles.solid, solidStyle]} />
+            )}
             <View pointerEvents="none" style={styles.rim} />
 
-            {/* CONTENT — Find-My reveal: pinned below the pill (top: peek) and
-                ABOVE the bar row (bottom: barRowHeight). It fills exactly the
-                revealed gap, so as the sheet shrinks the TITLE stays put at the
-                top and the rows clip from the BOTTOM (behind the bar). */}
+            {/* CONTENT — Find-My reveal: pinned below the pill, above the bar
+                row; a ScrollView that only scrolls at the full detent. */}
             {hasSheet && (
-                <View
-                    style={[styles.contentClip, { top: peek, bottom: barRowHeight }]}
-                    pointerEvents="box-none"
-                >
-                    <View style={{ height: contentHeight }} pointerEvents="box-none">
+                <View style={[styles.contentClip, { top: peek, bottom: barRowHeight }]} pointerEvents="box-none">
+                    <AnimatedScroll
+                        ref={scrollRef}
+                        style={StyleSheet.absoluteFill}
+                        contentContainerStyle={sheet!.contentContainerStyle}
+                        scrollEnabled={scrollEnabled}
+                        showsVerticalScrollIndicator={scrollEnabled}
+                        onScroll={onScroll}
+                        scrollEventThrottle={16}
+                        bounces={false}
+                        overScrollMode="never"
+                    >
                         {sheet!.content}
-                    </View>
+                    </AnimatedScroll>
                 </View>
             )}
 
-            {/* Thin separator between the sheet content and the bar row — fades
-                in as the sheet opens. */}
             {hasSheet && (
-                <Animated.View
-                    pointerEvents="none"
-                    style={[styles.separator, { bottom: barRowHeight }, sepStyle]}
-                />
+                <Animated.View pointerEvents="none" style={[styles.separator, { bottom: barRowHeight }, sepStyle]} />
             )}
 
-            {/* BAR ROW — always pinned at the bottom (tabs / session header). */}
+            {/* BAR ROW — always pinned at the bottom. */}
             <View
                 style={[styles.barRow, { height: barRowHeight }]}
                 onLayout={(e: LayoutChangeEvent) => onBarHeight?.(e.nativeEvent.layout.height)}
@@ -252,9 +336,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                 {barRow}
             </View>
 
-            {/* Grabber pill — rides the clip's TOP edge (the reveal line): on the
-                bar's top edge when collapsed, at the sheet's top when expanded.
-                Tap toggles; drag is the panel Pan. */}
+            {/* Grabber pill — rides the clip's top edge. */}
             {hasSheet && (
                 <View style={styles.pillWrap} pointerEvents="box-none">
                     <Pressable hitSlop={{ top: 12, bottom: 4, left: 28, right: 28 }} onPress={onExpandTap}>
@@ -275,30 +357,29 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
 const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     wrap: {
         position: 'absolute', left: 0, right: 0, bottom: 0,
-        paddingHorizontal: spacing.lg,
+        paddingHorizontal: FLOAT_MARGIN,
     },
     clip: {
-        position: 'absolute', left: spacing.lg, right: spacing.lg,
-        borderRadius: radius.xl,
+        position: 'absolute',
         overflow: 'hidden',
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: c.outlineVariant,
-        // One constant lift shadow — never toggled (toggling it was what made
-        // the strip below the bar flicker).
         ...(isDark
             ? { shadowColor: '#000000', shadowOpacity: 0.5, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 16 }
             : { shadowColor: '#5A2233', shadowOpacity: 0.28, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 16 }),
     },
+    // Non-dock floating side margins (dock animates left/right in clipStyle).
+    clipFloat: { left: FLOAT_MARGIN, right: FLOAT_MARGIN },
     glassFill: {
         ...StyleSheet.absoluteFillObject,
         backgroundColor: Platform.OS === 'android' ? undefined : 'transparent',
     },
     tint: { backgroundColor: withAlpha(c.surfaceContainer, isDark ? 0.62 : 0.6) },
+    solid: { backgroundColor: c.pageBackground },
     rim: {
         ...StyleSheet.absoluteFillObject,
         borderTopWidth: 1.2,
         borderTopColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.9)',
-        borderRadius: radius.xl,
     },
     contentClip: { position: 'absolute', left: 0, right: 0, overflow: 'hidden' },
     separator: {

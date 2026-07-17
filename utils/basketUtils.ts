@@ -70,6 +70,7 @@ export const addProductToBasket = async (
             const r = await postBasketItem(session.target.basketId, productId, quantity, matchMode);
             if (r.success) {
                 session.bumpCount(1);
+                session.bumpBasketRev();
                 session.showBar();
             }
             return r;
@@ -89,7 +90,10 @@ export const addProductToBasket = async (
             count = 0;
         }
         const r = await postBasketItem(basketId, productId, quantity, matchMode);
-        if (r.success) useBasketSession.getState().setTarget({ basketId, isFamily: false }, count + 1);
+        if (r.success) {
+            useBasketSession.getState().setTarget({ basketId, isFamily: false }, count + 1);
+            useBasketSession.getState().bumpBasketRev();
+        }
         return r;
     } catch {
         return { success: false, message: 'Nepavyko pridėti produkto' };

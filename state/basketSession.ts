@@ -62,12 +62,18 @@ interface BasketSessionState {
      *  sheet, NOT let the list behind it steal the scroll (cross-tree, so it
      *  goes through the store). */
     browseListRef: { current: unknown } | null;
+    /** Bumped on every basket mutation that happens OUTSIDE the list sheet's
+     *  own steppers (an add from a product/search/L2 "Add" button). The
+     *  root list sheet re-fetches its items when this changes so a freshly
+     *  added product actually shows up (the counter alone was updating). */
+    basketRev: number;
 
     setTarget: (t: SessionTarget, itemCount?: number) => void;
     setDormant: (d: { count: number } | null) => void;
     setCollapseDock: (fn: (() => void) | null) => void;
     setDockOptions: (o: ChooserOption[] | null) => void;
     setBrowseListRef: (r: { current: unknown } | null) => void;
+    bumpBasketRev: () => void;
     dismissBar: () => void;
     showBar: () => void;
     bumpCount: (delta: number) => void;
@@ -89,6 +95,7 @@ export const useBasketSession = create<BasketSessionState>((set, get) => ({
     collapseDock: null,
     dockOptions: null,
     browseListRef: null,
+    basketRev: 0,
 
     setTarget: (t, itemCount) => set(s => ({
         target: t, barVisible: true,
@@ -98,6 +105,7 @@ export const useBasketSession = create<BasketSessionState>((set, get) => ({
     setCollapseDock: (fn) => set({ collapseDock: fn }),
     setDockOptions: (o) => set({ dockOptions: o }),
     setBrowseListRef: (r) => set({ browseListRef: r }),
+    bumpBasketRev: () => set(s => ({ basketRev: s.basketRev + 1 })),
     dismissBar: () => set({ barVisible: false }),
     showBar: () => set({ barVisible: true }),
     bumpCount: (delta) => set(s => ({ itemCount: Math.max(0, s.itemCount + delta) })),
