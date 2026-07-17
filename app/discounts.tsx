@@ -12,6 +12,7 @@ import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '../config/api';
 import { useBasketState } from '../state/basketState';
+import { useBasketSession } from '../state/basketSession';
 import { addProductToBasket } from '../utils/basketUtils';
 import { resolveCanonicalStep } from '../utils/canonicalStep';
 import { ProductImage } from '../components/ProductImage';
@@ -728,6 +729,7 @@ export default function DiscountsScreen() {
                         ) : (
                             <Animated.FlatList
                                 {...header.scroll}
+                                onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
                                 data={products}
                                 keyExtractor={(item: any) => item.id.toString()}
                                 contentContainerStyle={[
@@ -773,27 +775,8 @@ export default function DiscountsScreen() {
                     </View>
                 </View>
 
-                {!isTemplateMode && sessionBasketId !== null && basketItemCount > 0 && (
-                    <Animated.View
-                        entering={FadeInDown.duration(200)}
-                        exiting={FadeOutDown.duration(150)}
-                        style={[styles.basketBar, { paddingBottom: Math.max(12, bottomInset) }]}
-                    >
-                        <View style={styles.basketBarLeft}>
-                            <Ionicons name="cart" size={20} color={colors.primary} />
-                            <Text style={styles.basketBarCount}>
-                                {t('items.count', { count: basketItemCount })}
-                            </Text>
-                        </View>
-                        <ScalePressable
-                            style={styles.basketBarButton}
-                            onPress={() => router.push(`/basket/${sessionBasketId}` as any)}
-                        >
-                            <Text style={styles.basketBarButtonText}>{t('browse.basketShortcut')}</Text>
-                            <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
-                        </ScalePressable>
-                    </Animated.View>
-                )}
+                {/* Legacy per-screen basket bar removed — the universal
+                    root-level BasketListSheet is the single indicator now. */}
                 {isTemplateMode && templateId != null && (
                     <TemplateReturnBanner templateId={templateId} />
                 )}

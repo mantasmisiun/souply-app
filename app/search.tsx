@@ -25,6 +25,7 @@ import {
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { API_BASE_URL } from "../config/api";
 import { useReceiptPickerState , useBasketState } from "../state/basketState";
+import { useBasketSession } from "../state/basketSession";
 import { addProductToBasket } from '../utils/basketUtils';
 import BasketProductCard, { type UnitPriceBadge } from '../components/browse/BasketProductCard';
 import { TemplateReturnBanner } from '../components/template/TemplateReturnBanner';
@@ -593,6 +594,8 @@ export default function SearchScreen() {
           <FlatList<StoreGridItem>
             key="store-products-search-grid"
             data={storeGridData}
+            keyboardDismissMode="on-drag"
+            onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
             keyExtractor={(item, idx) => {
                 if (item.kind === "create") return `create-${idx}`;
                 if (item.kind === "local") return `local-${item.data.id}-${idx}`;
@@ -616,6 +619,8 @@ export default function SearchScreen() {
           <FlatList<ProductRow>
             key="products-search-grid"
             data={filteredProductResults}
+            keyboardDismissMode="on-drag"
+            onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
             keyExtractor={(item, idx) => `p-${item.id}-${idx}`}
             contentContainerStyle={[
               styles.list,
@@ -734,23 +739,10 @@ const quantity = basketQuantities[item.id] ?? 0;
           />
         )}
       </View>
-      {/* Bottom basket bar — browse parity: live item count + jump to basket. */}
-      {!isTemplateMode && basketItemCount > 0 && draftBasketId && (
-          <View style={[styles.basketBar, { paddingBottom: Math.max(12, insets.bottom) }]}>
-              <View style={styles.basketBarLeft}>
-                  <Ionicons name="cart" size={20} color={colors.primary} />
-                  <Text style={styles.basketBarCount}>{t('items.count', { count: basketItemCount })}</Text>
-              </View>
-              <TouchableOpacity
-                  style={styles.basketBarButton}
-                  activeOpacity={0.85}
-                  onPress={() => router.push(`/basket/${draftBasketId}` as any)}
-              >
-                  <Text style={styles.basketBarButtonText}>{t('browse.basketShortcut')}</Text>
-                  <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
-              </TouchableOpacity>
-          </View>
-      )}
+      {/* The bottom basket indicator is now the universal, root-level
+          BasketListSheet (the "collecting items" session sheet) — the old
+          per-screen basketBar here was redundant and fought it on Android
+          (elevation z-order), so it's removed. */}
       <AmountPickerModal
         visible={amountModal.visible}
         productName={amountModal.product?.name ?? ''}
