@@ -55,6 +55,7 @@ export function BasketListSheet() {
     const browseListRef = useBasketSession(s => s.browseListRef);
     const basketRev = useBasketSession(s => s.basketRev);
     const setCollapseDock = useBasketSession(s => s.setCollapseDock);
+    const newProductIds = useBasketSession(s => s.newProductIds);
 
     const onSurface = ROUTE_PREFIXES.some(p => pathname === p || pathname.startsWith(`${p}/`));
     const onTabRoot = pathname === '/catalog';
@@ -119,13 +120,14 @@ export function BasketListSheet() {
         }
     }, [pathname]);
 
-    // A freshly-picked basket opens expanded (showing its items); re-entry after
-    // navigation keeps whatever state the sheet was in.
+    // A freshly-targeted basket stays COLLAPSED (just the bar) — the user picked
+    // where the item goes and keeps browsing; they pull the sheet up to review,
+    // where this-session adds carry a "New" badge. (Was: auto-expand on pick.)
     const prevBasket = useRef<string | null>(null);
     useEffect(() => {
         if (tKey != null && tKey !== prevBasket.current) {
             prevBasket.current = tKey;
-            const id = setTimeout(() => controls.current?.expand(), 60);
+            const id = setTimeout(() => controls.current?.collapse(), 60);
             return () => clearTimeout(id);
         }
         if (tKey == null) prevBasket.current = null;
@@ -213,22 +215,33 @@ export function BasketListSheet() {
                         <React.Fragment key={item.id}>
                             <View style={styles.sep} />
                             <View style={styles.item}>
-                                <View style={styles.itemTop}>
+                                {/* Picture row: image left, name (2 lines) + New badge stacked on the right. */}
+                                <View style={styles.pictureRow}>
                                     {item.imageUrl
                                         ? <Image source={{ uri: item.imageUrl }} style={styles.itemImage} />
                                         : <View style={[styles.itemImage, styles.itemImageFallback]}><Text style={{ opacity: 0.5 }}>🫜</Text></View>}
-                                    <Text style={styles.itemName} numberOfLines={2}>{item.name ?? `#${item.productId}`}</Text>
+                                    <View style={styles.pictureRowInfo}>
+                                        <Text style={styles.itemName} numberOfLines={2}>{item.name ?? `#${item.productId}`}</Text>
+                                        {newProductIds.includes(item.productId) && (
+                                            <View style={styles.newBadge}>
+                                                <Text style={styles.newBadgeText}>{t('basketSession.newBadge')}</Text>
+                                            </View>
+                                        )}
+                                    </View>
+                                </View>
+                                {/* Action row: stepper left-aligned, trash right-aligned. */}
+                                <View style={styles.actionRow}>
+                                    <AddOrStepper
+                                        product={item}
+                                        quantity={item.quantity}
+                                        onCommit={(qty) => commitItem(item, qty)}
+                                        noPicker
+                                        style={styles.stepper}
+                                    />
                                     <TouchableOpacity onPress={() => removeItem(item)} hitSlop={8} style={styles.trashBtn}>
-                                        <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
+                                        <Ionicons name="trash-outline" size={22} color={colors.textMuted} />
                                     </TouchableOpacity>
                                 </View>
-                                <AddOrStepper
-                                    product={item}
-                                    quantity={item.quantity}
-                                    onCommit={(qty) => commitItem(item, qty)}
-                                    noPicker
-                                    style={styles.stepper}
-                                />
                             </View>
                         </React.Fragment>
                     ))}
@@ -288,10 +301,20 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     emptyText: { fontSize: 13, color: c.textMuted, textAlign: 'center', paddingVertical: 20 },
 
     item: { paddingVertical: spacing.md, gap: spacing.sm },
-    itemTop: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-    itemImage: { width: 44, height: 44, borderRadius: 8, backgroundColor: c.surfaceMuted },
+    // Row 1 — picture + (name over badge). Image top-aligned so a 2-line name
+    // grows downward next to it.
+    pictureRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
+    pictureRowInfo: { flex: 1, alignItems: 'flex-start', gap: 6, paddingTop: 2 },
+    // Row 2 — stepper pinned left, trash pinned right.
+    actionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    itemImage: { width: 56, height: 56, borderRadius: 8, backgroundColor: c.surfaceMuted },
     itemImageFallback: { alignItems: 'center', justifyContent: 'center' },
-    itemName: { flex: 1, fontSize: 14, fontWeight: '600', color: c.textPrimary },
+    itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
+    newBadge: {
+        backgroundColor: c.primary, borderRadius: radius.pill,
+        paddingHorizontal: 8, paddingVertical: 2,
+    },
+    newBadgeText: { color: c.onPrimary, fontSize: 10, fontWeight: '800', letterSpacing: 0.3 },
     trashBtn: { width: 32, height: 32, alignItems: 'center', justifyContent: 'center' },
     // Wider stepper: more space between −/+ and the amount/unit (space-between
     // spreads them across the wider container).
