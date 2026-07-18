@@ -23,23 +23,29 @@ let createDraftPromise: Promise<number> | null = null;
 async function ensureDraftBasket(
     existingId: number | null,
     setDraftBasketId: (id: number) => void,
-    userId: string
+    userId: string,
+    // Explicit "new basket" pick: mint a fresh draft even if one exists, and
+    // do NOT share the in-flight singleton (each force is its own basket).
+    force: boolean = false,
 ): Promise<number> {
-    if (existingId) return existingId;
-    if (createDraftPromise) return createDraftPromise;
+    if (existingId && !force) return existingId;
+    if (!force && createDraftPromise) return createDraftPromise;
 
-    createDraftPromise = (async () => {
+    const doCreate = async (): Promise<number> => {
         const res = await fetch(`${API_BASE_URL}/api/baskets`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId }),
+            body: JSON.stringify(force ? { userId, forceNew: true } : { userId }),
         });
         if (!res.ok) throw new Error(`create basket failed: ${res.status}`);
         const data = await res.json();
         setDraftBasketId(data.id);
         return data.id as number;
-    })();
+    };
 
+    if (force) return doCreate();
+
+    createDraftPromise = doCreate();
     createDraftPromise.finally(() => {
         createDraftPromise = null;
     });
@@ -83,31 +89,42 @@ export const addProductToBasket = async (
             }
             if (r.success) {
                 session.bumpCount(1);
+                session.markNewProduct(productId);
                 session.bumpBasketRev();
                 session.showBar();
             }
             return r;
         }
 
-        // 2. No target yet (user decision 2026-07-17: NO upfront chooser).
-        //    Silently resume the most-recent stage-1/2 personal basket, or
-        //    create one — the bar is the feedback, and switching (incl. the
-        //    family basket) lives behind the explicit "Keisti krepšelį" flow.
+        // 2. No target yet (cold start / first add). Supersedes the 2026-07-17
+        //    silent-resume (user decision 2026-07-18): DON'T assume the last
+        //    basket. When a resumable basket exists (family and/or previous),
+        //    QUEUE this add and raise the "Baskets" dock sheet so the user
+        //    picks; the pick flushes the queue. Only when there's no ambiguity
+        //    at all do we create a personal draft silently.
         const options = await discoverOptions();
-        const previous = options?.find(o => o.key === 'previous') ?? null;
-        let basketId = previous?.basketId ?? null;
-        let count = previous?.itemCount ?? 0;
-        if (basketId == null) {
+        if (options == null) {
             const userId = await getUserId();
-            basketId = await ensureDraftBasket(draftBasketId, setDraftBasketId, userId);
-            count = 0;
+            const basketId = await ensureDraftBasket(draftBasketId, setDraftBasketId, userId);
+            const r = await postBasketItem(basketId, productId, quantity, matchMode);
+            if (r.success) {
+                // Bar appears COLLAPSED (BasketListSheet no longer auto-expands).
+                useBasketSession.getState().setTarget({ kind: 'basket', basketId, isFamily: false }, 1);
+                useBasketSession.getState().markNewProduct(productId);
+                useBasketSession.getState().bumpBasketRev();
+            }
+            return r;
         }
-        const r = await postBasketItem(basketId, productId, quantity, matchMode);
-        if (r.success) {
-            useBasketSession.getState().setTarget({ kind: 'basket', basketId, isFamily: false }, count + 1);
-            useBasketSession.getState().bumpBasketRev();
-        }
-        return r;
+
+        // Ambiguity → publish the options to the dock, mark a resumable basket
+        // exists (so the sheet is available), queue the add and raise the sheet.
+        const resumable = options.find(o => o.key !== 'new') ?? null;
+        useBasketSession.getState().setDockOptions(options);
+        useBasketSession.getState().setDormant({ count: resumable?.itemCount ?? 0 });
+        return await new Promise<{ success: boolean; message: string }>((resolve) => {
+            useBasketSession.getState().queueAdd({ productId, quantity, matchMode, resolve });
+            useBasketSession.getState().requestDockExpand();
+        });
     } catch {
         return { success: false, message: 'Nepavyko pridėti produkto' };
     }
@@ -122,15 +139,24 @@ export const applyChooserPick = async (
     const session = useBasketSession.getState();
     let basketId = option.basketId;
     if (basketId == null) {
+        // key 'new' → force a brand-new draft (don't reuse the existing one;
+        // the previous basket stays available as its own chooser row).
         const userId = await getUserId();
-        basketId = await ensureDraftBasket(null, setDraftBasketId, userId);
+        basketId = await ensureDraftBasket(null, setDraftBasketId, userId, true);
     }
     session.setTarget({ kind: 'basket', basketId, isFamily: option.key === 'family' }, option.itemCount);
     session.closeChooser();
+    // Collapse the raised chooser sheet — the session continues COLLAPSED (just
+    // the bar) so the user keeps browsing; they pull it up to review.
+    session.collapseDock?.();
     const pending = session.takePending();
     for (const add of pending) {
         const r = await postBasketItem(basketId, add.productId, add.quantity, add.matchMode);
-        if (r.success) useBasketSession.getState().bumpCount(1);
+        if (r.success) {
+            useBasketSession.getState().bumpCount(1);
+            useBasketSession.getState().markNewProduct(add.productId);
+        }
         add.resolve(r);
     }
+    useBasketSession.getState().bumpBasketRev();
 };

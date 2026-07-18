@@ -84,7 +84,7 @@ export function BasketSessionHost() {
                         <Text style={styles.chooserTitle}>{t('basketSession.chooserTitle')}</Text>
                         {chooserOptions.map(o => (
                             <TouchableOpacity
-                                key={o.key}
+                                key={o.basketId ?? o.key}
                                 style={styles.chooserOption}
                                 onPress={() => { applyChooserPick(o, setDraftBasketId).catch(() => {}); }}
                             >

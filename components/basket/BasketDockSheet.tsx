@@ -35,6 +35,8 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const dockOptions = useBasketSession(s => s.dockOptions);
     const setCollapseDock = useBasketSession(s => s.setCollapseDock);
     const browseListRef = useBasketSession(s => s.browseListRef);
+    const dockExpandRequest = useBasketSession(s => s.dockExpandRequest);
+    const cancelPending = useBasketSession(s => s.cancelPending);
 
     const onTabRoot = pathname === '/catalog';
     // The whole catalog tree is a session surface, so the swipe-up chooser is
@@ -58,6 +60,16 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
         return () => setCollapseDock(null);
     }, [hasSheet, setCollapseDock]);
 
+    // Raise the chooser to medium when the Add flow requests it. Nonce-driven +
+    // gated on hasSheet so it fires once the sheet is actually mounted (the
+    // dormant flag that enables it may land in the same tick as the request).
+    const handledExpand = useRef(dockExpandRequest);
+    useEffect(() => {
+        if (dockExpandRequest === handledExpand.current || !hasSheet) return;
+        handledExpand.current = dockExpandRequest;
+        controls.current?.expand();
+    }, [dockExpandRequest, hasSheet]);
+
     const optionLabel = (o: ChooserOption) =>
         o.key === 'family' ? t('basketSession.optionFamily')
         : o.key === 'previous' ? t('basketSession.optionPrevious')
@@ -79,7 +91,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                 </TouchableOpacity>
             </View>
             {chooserRows.map((o, i) => (
-                <View key={o.key}>
+                <View key={o.basketId ?? o.key}>
                     <TouchableOpacity style={styles.row} onPress={() => { applyChooserPick(o, setDraftBasketId).catch(() => {}); }}>
                         <View style={styles.rowIcon}>
                             <Ionicons name={optionIcon(o)} size={20} color={colors.primary} />
@@ -107,7 +119,18 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
             barRow={tabsRow}
             barRowHeight={tabsRowHeight}
             blockScrollRef={onTabRoot ? browseListRef : null}
-            sheet={{ content: chooserContent, maxStage: 1 }}
+            sheet={{
+                content: chooserContent,
+                maxStage: 1,
+                // Collapsed back to the bar with adds still queued and no basket
+                // picked ⇒ the user dismissed the chooser: release those adds so
+                // their Add buttons stop spinning.
+                onStageChange: (stage) => {
+                    if (stage !== 0) return;
+                    const s = useBasketSession.getState();
+                    if (s.target == null && s.pendingAdds.length > 0) cancelPending();
+                },
+            }}
         />
     );
 }

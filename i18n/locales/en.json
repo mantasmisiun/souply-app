@@ -1540,6 +1540,7 @@
     "itemsSection": "Basket items",
     "templateItemsSection": "Template items",
     "templateEmpty": "The template is empty",
+    "newBadge": "New",
     "add": "Add"
   }
 }

@@ -75,6 +75,16 @@ interface BasketSessionState {
      *  root list sheet re-fetches its items when this changes so a freshly
      *  added product actually shows up (the counter alone was updating). */
     basketRev: number;
+    /** Product ids added to the target DURING this session (via the browse
+     *  Add flow). The list sheet badges them "New" so a resumed basket's
+     *  pre-existing items are visually distinct from what was just added.
+     *  Cleared whenever a fresh session target is set. */
+    newProductIds: number[];
+    /** Nonce bumped to ask the tab-bar dock to expand its chooser sheet to
+     *  the medium detent (the "raise the Baskets sheet on Add" flow). A nonce
+     *  (not a bool) so it fires even when the value would repeat, and the dock
+     *  reacts via an effect once it actually has the sheet mounted. */
+    dockExpandRequest: number;
 
     setTarget: (t: SessionTarget, itemCount?: number) => void;
     setDormant: (d: { count: number } | null) => void;
@@ -90,6 +100,12 @@ interface BasketSessionState {
     closeChooser: () => void;
     queueAdd: (a: PendingAdd) => void;
     takePending: () => PendingAdd[];
+    /** Release queued adds as no-ops (chooser dismissed without a pick). */
+    cancelPending: () => void;
+    /** Mark a product id as added this session (drives the "New" badge). */
+    markNewProduct: (productId: number) => void;
+    /** Ask the tab-bar dock to raise its chooser sheet to medium. */
+    requestDockExpand: () => void;
 }
 
 export const useBasketSession = create<BasketSessionState>((set, get) => ({
@@ -104,10 +120,15 @@ export const useBasketSession = create<BasketSessionState>((set, get) => ({
     dockOptions: null,
     browseListRef: null,
     basketRev: 0,
+    newProductIds: [],
+    dockExpandRequest: 0,
 
+    // A fresh target starts a fresh session → the "New" set resets so a
+    // resumed basket's pre-existing items don't inherit stale badges.
     setTarget: (t, itemCount) => set(s => ({
         target: t, barVisible: true,
         itemCount: itemCount ?? s.itemCount,
+        newProductIds: [],
     })),
     setDormant: (d) => set({ dormant: d }),
     setCollapseDock: (fn) => set({ collapseDock: fn }),
@@ -126,6 +147,19 @@ export const useBasketSession = create<BasketSessionState>((set, get) => ({
         set({ pendingAdds: [] });
         return p;
     },
+    // The chooser was dismissed without a pick — release every queued add as a
+    // no-op so the waiting Add buttons revert (spinner off) instead of hanging.
+    cancelPending: () => {
+        const p = get().pendingAdds;
+        set({ pendingAdds: [] });
+        p.forEach(a => a.resolve({ success: false, message: '' }));
+    },
+    markNewProduct: (productId) => set(s => (
+        s.newProductIds.includes(productId)
+            ? s
+            : { newProductIds: [...s.newProductIds, productId] }
+    )),
+    requestDockExpand: () => set(s => ({ dockExpandRequest: s.dockExpandRequest + 1 })),
 }));
 
 /** POST one item to a basket; shared by the direct path and the flush. */
@@ -185,21 +219,28 @@ export const discoverOptions = async (): Promise<ChooserOption[] | null> => {
     const memberCount = Array.isArray(hhRes?.members) ? hhRes.members.length : 0;
     const familyBasketId: number | null = memberCount > 1 ? (hhRes?.sharedBasketId ?? null) : null;
     const familyRow = familyBasketId ? baskets.find(b => b.id === familyBasketId) : null;
-    // Previous = most-recent PERSONAL basket still at stage 1-2 (draft or
-    // compared; adding to compared reverts it — existing behavior).
-    const previous = baskets
+    // Recent PERSONAL baskets (draft/compared), most-recent first. The 2.0
+    // chooser keeps EACH as its own resumable row so a "new"-created basket
+    // sits alongside the one it superseded — until the older one ages past 48h
+    // (then it's dropped from the chooser). Fail-open on unparseable dates so a
+    // date-format quirk never hides a live basket. Capped so the sheet stays
+    // compact.
+    const CUTOFF = Date.now() - 48 * 60 * 60 * 1000;
+    const recents = baskets
         .filter(b => b.householdId == null && (b.status === 'draft' || b.status === 'compared'))
-        .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))[0] ?? null;
+        .filter(b => { const t = Date.parse(String(b.updatedAt)); return isNaN(t) || t >= CUTOFF; })
+        .sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)))
+        .slice(0, 5);
 
-    if (!familyBasketId && !previous) return null;
+    if (!familyBasketId && recents.length === 0) return null;
 
     const options: ChooserOption[] = [];
     if (familyBasketId) {
         options.push({ key: 'family', basketId: familyBasketId, label: '', itemCount: Number(familyRow?.itemCount) || 0, updatedAt: familyRow?.updatedAt ?? null });
     }
-    if (previous) {
-        options.push({ key: 'previous', basketId: previous.id, label: '', itemCount: Number(previous.itemCount) || 0, updatedAt: previous.updatedAt ?? null });
+    for (const b of recents) {
+        options.push({ key: 'previous', basketId: b.id, label: '', itemCount: Number(b.itemCount) || 0, updatedAt: b.updatedAt ?? null });
     }
     options.push({ key: 'new', basketId: null, label: '', itemCount: 0, updatedAt: null });
-    return options.slice(0, 3);
+    return options;
 };
