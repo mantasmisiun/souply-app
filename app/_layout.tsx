@@ -285,20 +285,10 @@ function RootLayout() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="(admin)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-        {/* product/[id] lives at the root (no nested stack) so iOS shows a real
-            back item — the native bar reserves the leading area, so the glass
-            back button no longer overlaps the left-aligned title. Same pattern
-            as discounts + browse/[categoryId]. */}
-        <Stack.Screen name="product/[id]" options={{ headerLeft: () => <ScreenBackButton /> }} />
-        {/* discounts + browse/[categoryId] live at the root so the iOS
-            NativeTabs tab bar hides on push (it stays visible when a
-            screen is inside a tab's nested stack). Each screen sets its
-            own <Stack.Screen options/> inline. */}
-        {/* Back button registered at the route-entry level (not in global
-            screenOptions — that caused the iOS phantom-mount bug) so the pink
-            chevron is present on the first frame, with no native-arrow flash. */}
-        <Stack.Screen name="discounts" options={{ headerLeft: () => <ScreenBackButton /> }} />
-        <Stack.Screen name="browse/[categoryId]" options={{ headerLeft: () => <ScreenBackButton /> }} />
+        {/* The catalog tree (product/[id], discounts, browse/[categoryId], the
+            catalog search) now lives INSIDE the Catalog tab's nested stack
+            (app/(tabs)/catalog/*) so the tab bar stays visible while browsing.
+            Only the root-level /search remains here (receipt-matching flow). */}
         <Stack.Screen name="admin/catalog/[categoryId]" options={{ headerShown: false }} />
         <Stack.Screen name="basket/[id]" options={{ title: t('screens.basket') }} />
         {/* basket/results/[id] is the map-only results screen → full-bleed,

@@ -4,35 +4,35 @@ import {
 } from 'react-native';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { GlassIconButton } from '../components/GlassIconButton';
-import { ScreenHeading } from '../components/ScreenHeading';
-import { useCollapsingHeader, CollapsingHeader } from '../components/CollapsingHeader';
+import { GlassIconButton } from '@/components/GlassIconButton';
+import { ScreenHeading } from '@/components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '@/components/CollapsingHeader';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { API_BASE_URL } from '../config/api';
-import { useBasketState } from '../state/basketState';
-import { useBasketSession } from '../state/basketSession';
-import { addProductToBasket } from '../utils/basketUtils';
-import { AddOrStepper } from '../components/AddOrStepper';
-import { ProductImage } from '../components/ProductImage';
-import { useTheme, radius, elevation, type AppTheme } from '../constants/theme';
-import { getUserId } from '../config/user';
+import { API_BASE_URL } from '@/config/api';
+import { useBasketState } from '@/state/basketState';
+import { useBasketSession } from '@/state/basketSession';
+import { addProductToBasket } from '@/utils/basketUtils';
+import { AddOrStepper } from '@/components/AddOrStepper';
+import { ProductImage } from '@/components/ProductImage';
+import { useTheme, radius, elevation, type AppTheme } from '@/constants/theme';
+import { getUserId } from '@/config/user';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../components/ComparedBasketChoiceModal';
-import { Toast, type ToastHandle } from '../components/Toast';
-import { ScalePressable } from '../components/ScalePressable';
-import { SkeletonBox } from '../components/SkeletonBox';
-import { ChainLogoStrip } from '../components/ChainLogoStrip';
-import { ChainLogoChip } from '../components/ChainLogoChip';
-import { FilterDropdownModal, type FilterOption } from '../components/FilterDropdownModal';
-import { StoreFilterButton } from '../components/StoreFilterButton';
-import { categoryIcon } from '../constants/categoryIcons';
+import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '@/components/ComparedBasketChoiceModal';
+import { Toast, type ToastHandle } from '@/components/Toast';
+import { ScalePressable } from '@/components/ScalePressable';
+import { SkeletonBox } from '@/components/SkeletonBox';
+import { ChainLogoStrip } from '@/components/ChainLogoStrip';
+import { ChainLogoChip } from '@/components/ChainLogoChip';
+import { FilterDropdownModal, type FilterOption } from '@/components/FilterDropdownModal';
+import { StoreFilterButton } from '@/components/StoreFilterButton';
+import { categoryIcon } from '@/constants/categoryIcons';
 import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
-import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '../utils/fetchWithTimeout';
-import { fuzzyMatches } from '../utils/fuzzyMatch';
-import { useTemplateAddState } from '../state/templateAddState';
+import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '@/utils/fetchWithTimeout';
+import { fuzzyMatches } from '@/utils/fuzzyMatch';
+import { useTemplateAddState } from '@/state/templateAddState';
 
 interface L2Category {
     id: number;
@@ -500,7 +500,7 @@ export default function DiscountsScreen() {
     useEffect(() => { commitAddRef.current = commitAdd; }, [commitAdd]);
 
     const onNavigate = useCallback((id: number) => {
-        router.push(`/product/${id}` as any);
+        router.push(`/catalog/product/${id}` as any);
     }, [router]);
 
     // Fresh add (non-picker path; the weighable/range picker is owned by

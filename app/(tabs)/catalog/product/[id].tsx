@@ -8,28 +8,28 @@ import {
     Dimensions,
  Animated as RNAnimated } from "react-native";
 import Animated from 'react-native-reanimated';
-import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
-import { SkeletonBox } from '../../components/SkeletonBox';
-import { ProductImage } from '../../components/ProductImage';
+import { useCollapsingHeader, CollapsingHeader } from '@/components/CollapsingHeader';
+import { SkeletonBox } from '@/components/SkeletonBox';
+import { ProductImage } from '@/components/ProductImage';
 import React, { useEffect, useLayoutEffect, useState, useMemo, useRef, useCallback } from 'react';
 import { useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { API_BASE_URL } from '../../config/api';
-import { getUserId } from '../../config/user';
-import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
-import MiniPriceChart, { PriceChartSvg, type PricePoint, preparePriceData, timeXPositions } from '../../components/MiniPriceChart';
-import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
+import { API_BASE_URL } from '@/config/api';
+import { getUserId } from '@/config/user';
+import { useTheme, radius, elevation, type AppTheme } from '@/constants/theme';
+import MiniPriceChart, { PriceChartSvg, type PricePoint, preparePriceData, timeXPositions } from '@/components/MiniPriceChart';
+import { useDisplayMode } from '@/contexts/DisplayPreferenceContext';
 import { useTranslation } from 'react-i18next';
-import { formatDate, formatEuro, formatAmountStr } from '../../utils/formatCurrency';
-import { ChainFilterBar } from '../../components/ChainFilterBar';
-import { ChainLogoStrip } from '../../components/ChainLogoStrip';
-import { getChainMiniLogoUrl } from '../../utils/chainBrandName';
-import { addProductToBasket } from '../../utils/basketUtils';
-import { useTemplateAddState } from '../../state/templateAddState';
-import { useBasketState } from '../../state/basketState';
-import { useBasketSession } from '../../state/basketSession';
-import { AddOrStepper } from '../../components/AddOrStepper';
-import { ScreenHeading } from '../../components/ScreenHeading';
+import { formatDate, formatEuro, formatAmountStr } from '@/utils/formatCurrency';
+import { ChainFilterBar } from '@/components/ChainFilterBar';
+import { ChainLogoStrip } from '@/components/ChainLogoStrip';
+import { getChainMiniLogoUrl } from '@/utils/chainBrandName';
+import { addProductToBasket } from '@/utils/basketUtils';
+import { useTemplateAddState } from '@/state/templateAddState';
+import { useBasketState } from '@/state/basketState';
+import { useBasketSession } from '@/state/basketSession';
+import { AddOrStepper } from '@/components/AddOrStepper';
+import { ScreenHeading } from '@/components/ScreenHeading';
 
 interface StoreProduct {
     id: number;

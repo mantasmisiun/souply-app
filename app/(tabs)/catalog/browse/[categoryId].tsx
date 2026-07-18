@@ -1,31 +1,31 @@
 import { View, FlatList, TouchableOpacity, Text, StyleSheet, Switch, Modal } from 'react-native';
-import { SkeletonBox } from '../../components/SkeletonBox';
+import { SkeletonBox } from '@/components/SkeletonBox';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { API_BASE_URL } from '../../config/api';
-import { useBasketState } from '../../state/basketState';
-import { useBasketSession } from '../../state/basketSession';
-import { addProductToBasket } from '../../utils/basketUtils';
-import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../components/ComparedBasketChoiceModal';
-import BasketProductCard from '../../components/browse/BasketProductCard';
-import type { UnitPriceBadge } from '../../components/browse/BasketProductCard';
-import CategoryBubbles from '../../components/browse/CategoryBubbles';
-import { useTemplateAddState } from '../../state/templateAddState';
-import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
-import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
-import { getUserId } from '../../config/user';
+import { API_BASE_URL } from '@/config/api';
+import { useBasketState } from '@/state/basketState';
+import { useBasketSession } from '@/state/basketSession';
+import { addProductToBasket } from '@/utils/basketUtils';
+import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '@/components/ComparedBasketChoiceModal';
+import BasketProductCard from '@/components/browse/BasketProductCard';
+import type { UnitPriceBadge } from '@/components/browse/BasketProductCard';
+import CategoryBubbles from '@/components/browse/CategoryBubbles';
+import { useTemplateAddState } from '@/state/templateAddState';
+import { useTheme, radius, elevation, type AppTheme } from '@/constants/theme';
+import { useDisplayMode } from '@/contexts/DisplayPreferenceContext';
+import { getUserId } from '@/config/user';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { Toast, type ToastHandle } from '../../components/Toast';
+import { Toast, type ToastHandle } from '@/components/Toast';
 import { useTranslation } from 'react-i18next';
-import { ScalePressable } from '../../components/ScalePressable';
-import { GlassButton } from '../../components/GlassButton';
-import { GlassIconButton } from '../../components/GlassIconButton';
-import { glassHeaderOptions } from '../../constants/navHeader';
-import { ScreenHeading } from '../../components/ScreenHeading';
-import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
+import { ScalePressable } from '@/components/ScalePressable';
+import { GlassButton } from '@/components/GlassButton';
+import { GlassIconButton } from '@/components/GlassIconButton';
+import { glassHeaderOptions } from '@/constants/navHeader';
+import { ScreenHeading } from '@/components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '@/components/CollapsingHeader';
 
 interface Category {
     id: number;
@@ -343,7 +343,7 @@ export default function CategoryScreen() {
         if (now - lastSearchPushAt.current < 600) return;
         lastSearchPushAt.current = now;
         router.push({
-            pathname: '/search',
+            pathname: '/catalog/search',
             params: { mode: 'products', source: 'catalog' },
         } as any);
     }, [router]);
@@ -499,7 +499,7 @@ export default function CategoryScreen() {
     }, [mergedIntoMe, productById]);
 
     const onNavigate = useCallback((id: number) => {
-        router.push(`/product/${id}` as any);
+        router.push(`/catalog/product/${id}` as any);
     }, [router]);
 
     const templateItems = useTemplateAddState(s => s.items);

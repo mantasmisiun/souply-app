@@ -23,7 +23,10 @@ import { getTemplate, patchTemplateItem, deleteTemplateItem } from '../../utils/
  * a basket is picked this takes over as the persistent indicator.
  */
 
-const ROUTE_PREFIXES = ['/catalog', '/browse', '/search', '/discounts', '/product'];
+// The whole catalog tree (index, browse/L2, discounts, product, search) now
+// lives under the Catalog tab, so one prefix covers every session surface. The
+// root-level /search (receipt matching) is intentionally excluded.
+const ROUTE_PREFIXES = ['/catalog'];
 const SESSION_H = 62;
 
 interface PreviewItem {

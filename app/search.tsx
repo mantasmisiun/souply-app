@@ -26,16 +26,16 @@ import { MaterialProgress } from '@/components/MaterialProgress';
 import { API_BASE_URL } from "../config/api";
 import { useReceiptPickerState , useBasketState } from "../state/basketState";
 import { useBasketSession } from "../state/basketSession";
-import { addProductToBasket } from '../utils/basketUtils';
-import BasketProductCard, { type UnitPriceBadge } from '../components/browse/BasketProductCard';
-import { useTemplateAddState } from '../state/templateAddState';
+import { addProductToBasket } from '@/utils/basketUtils';
+import BasketProductCard, { type UnitPriceBadge } from '@/components/browse/BasketProductCard';
+import { useTemplateAddState } from '@/state/templateAddState';
 import { ProductImage } from "../components/ProductImage";
 import CreateStoreProductModal, {
   CreatedStoreProductPayload,
 } from "../components/receipt/CreateStoreProductModal";
 import { useTheme, radius, elevation, type AppTheme } from "../constants/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { Toast, type ToastHandle } from '../components/Toast';
+import { Toast, type ToastHandle } from '@/components/Toast';
 
 // Pick the first URL from the API's imageUrls (string | array | null) for
 // places that only support a single imageUrl field (e.g. pendingPick).
@@ -684,7 +684,7 @@ const quantity = basketQuantities[item.id] ?? 0;
                     product={item}
                     quantity={cardQty}
                     addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
-                    onOpen={() => router.push(`/product/${item.id}` as any)}
+                    onOpen={() => router.push(`/catalog/product/${item.id}` as any)}
                     onCommit={(qty) => commitCardQty(item, cardQty, qty)}
                     />
                 );

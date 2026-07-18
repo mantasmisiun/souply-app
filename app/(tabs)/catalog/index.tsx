@@ -46,13 +46,13 @@ export default function BrowseIndex() {
         if (now - lastSearchPushAt.current < 600) return;
         lastSearchPushAt.current = now;
         router.push({
-            pathname: '/search',
+            pathname: '/catalog/search',
             params: { mode: 'products', source: 'catalog' },
         });
     };
 
     const handleSelectL2 = (l2: Category) => {
-        router.push(`/browse/${l2.id}?name=${encodeURIComponent(l2.name)}`);
+        router.push(`/catalog/browse/${l2.id}?name=${encodeURIComponent(l2.name)}`);
     };
 
     const searchAction = (
@@ -65,7 +65,7 @@ export default function BrowseIndex() {
     const discountsHeader = (
         <TouchableOpacity
             style={styles.discountsCard}
-            onPress={() => router.push('/discounts' as any)}
+            onPress={() => router.push('/catalog/discounts' as any)}
             activeOpacity={0.8}
         >
             <Text style={styles.discountsIcon}>🔥</Text>
