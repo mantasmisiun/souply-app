@@ -173,7 +173,6 @@ export default function TemplatesScreen() {
         <View style={styles.container}>
             <CollapsingHeader
                 controller={header}
-                background={colors.cardBackground}
                 collapsing={<ScreenHeading title={t('tabs.templates')} />}
                 pinned={refreshing ? (
                     <View style={styles.refreshingBanner}>

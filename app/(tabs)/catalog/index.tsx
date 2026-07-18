@@ -82,7 +82,6 @@ export default function BrowseIndex() {
             {/* "Naršyti" collapses on scroll; the discounts shortcut scrolls with the list. */}
             <CollapsingHeader
                 controller={header}
-                background={colors.cardBackground}
                 right={searchAction}
                 collapsing={<ScreenHeading title={t('catalog.title')} />}
             />

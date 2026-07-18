@@ -1,7 +1,6 @@
 import { Stack } from 'expo-router';
 import { useTheme } from '@/constants/theme';
 import { tabStackOptions } from '@/constants/navHeader';
-import { ScreenBackButton } from '@/components/ScreenBackButton';
 
 /**
  * Catalog tab navigator. The whole catalog TREE lives inside this nested Stack
@@ -12,20 +11,26 @@ import { ScreenBackButton } from '@/components/ScreenBackButton';
  * basket-session dock sit over the tab bar across the whole flow and reappear
  * when dismissed.
  *
- * Each screen still sets its OWN native bar via <CollapsingHeader/> (glass back
- * chevron, no title). The per-route headerLeft here is only first-frame polish:
- * it paints the pink chevron before the screen mounts, avoiding a native-arrow
- * flash. Registered per-route (never in global screenOptions — that triggered
- * the iOS phantom-mount bug).
+ * These screens render NO native bar — CollapsingHeader draws its own floating
+ * chrome (back chip / actions) over a gradient fade. headerShown is false
+ * per-route here as FIRST-FRAME polish so no bar flashes before the screen's
+ * own <Stack.Screen options={{ headerShown: false }}/> lands. (Never in global
+ * screenOptions — that triggered the iOS phantom-mount bug.)
  */
 export default function CatalogLayout() {
     const colors = useTheme();
     return (
-        <Stack screenOptions={tabStackOptions(colors)}>
-            <Stack.Screen name="index" />
-            <Stack.Screen name="discounts" options={{ headerLeft: () => <ScreenBackButton /> }} />
-            <Stack.Screen name="browse/[categoryId]" options={{ headerLeft: () => <ScreenBackButton /> }} />
-            <Stack.Screen name="product/[id]" options={{ headerLeft: () => <ScreenBackButton /> }} />
+        // Explicit slide animation: the default Android fade-through push kept
+        // STICKING mid-transition on re-pushes of these barless screens (screen
+        // stuck at partial/zero alpha — "washed" or "empty" pages, with the row
+        // content still ghosting through the tab-bar blur, which redraws the
+        // hierarchy in software). A translation-based push avoids the alpha
+        // animator entirely.
+        <Stack screenOptions={{ ...tabStackOptions(colors), animation: 'slide_from_right' }}>
+            <Stack.Screen name="index" options={{ headerShown: false }} />
+            <Stack.Screen name="discounts" options={{ headerShown: false }} />
+            <Stack.Screen name="browse/[categoryId]" options={{ headerShown: false }} />
+            <Stack.Screen name="product/[id]" options={{ headerShown: false }} />
             <Stack.Screen name="search" options={{ headerShown: false }} />
         </Stack>
     );

@@ -53,10 +53,9 @@ function CategoryBubbles({ categories, selectedId, onSelect, allLabel }: Props) 
 export default memo(CategoryBubbles);
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
+    // No banner background — the chips float on the page; the header's fade
+    // gradient handles items passing beneath.
     row: {
-        backgroundColor: c.cardBackground,
-        borderBottomWidth: 0.5,
-        borderBottomColor: c.border,
         flexGrow: 0,
         flexShrink: 0,
     },

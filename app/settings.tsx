@@ -112,7 +112,6 @@ export default function SettingsScreen() {
         <>
         <CollapsingHeader
             controller={header}
-            background={colors.cardBackground}
             back
             collapsing={<ScreenHeading title={t('settings.title')} />}
         />

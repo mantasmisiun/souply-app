@@ -718,7 +718,6 @@ export default function ShoppingListScreen() {
             <CollapsingHeader
                 controller={header}
                 back
-                background={colors.cardBackground}
                 collapsing={<ScreenHeading title={t('tabs.shoppingList')} />}
                 pinned={allChains.length >= 2 ? (
                     <StoreChipBar

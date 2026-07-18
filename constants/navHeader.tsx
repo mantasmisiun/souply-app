@@ -56,3 +56,8 @@ export const glassHeaderOptions = (
         ...(opts.right ? { headerRight: () => opts.right } : {}),
     };
 };
+// NOTE: CollapsingHeader screens no longer use the native bar at all — it
+// renders its own back/right chip row over the gradient fade (headerShown:
+// false). A `headerTransparent` native bar was tried and abandoned: on Android
+// react-native-screens renders the whole pushed screen semi-transparent when
+// the header background is a translucent color.

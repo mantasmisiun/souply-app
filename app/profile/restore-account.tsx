@@ -168,7 +168,6 @@ export default function RestoreAccountScreen() {
         <View style={styles.page}>
             <CollapsingHeader
                 controller={header}
-                background={colors.cardBackground}
                 back
                 collapsing={<ScreenHeading title={t('restore.title')} />}
             />

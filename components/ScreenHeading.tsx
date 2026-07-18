@@ -41,7 +41,8 @@ export function ScreenHeading({
         <View
             style={[
                 styles.wrap,
-                { backgroundColor: colors.cardBackground },
+                // No background — the heading sits directly on the page; the
+                // top-of-screen fade (CollapsingHeader) handles scroll-out.
                 bleed ? { marginHorizontal: -bleed, marginTop: -bleed } : null,
                 topInset ? { paddingTop: topInset + 6 } : null,
             ]}

@@ -852,7 +852,6 @@ export default function ReceiptsScreen() {
       <CollapsingHeader
         controller={header}
         back
-        background={colors.cardBackground}
         collapsing={<ScreenHeading title={t('tabs.receipts')} />}
         pinned={(storeOptions.length > 1 || receipts.length > 0) ? (
           <ScrollView

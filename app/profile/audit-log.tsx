@@ -118,7 +118,6 @@ export default function AuditLogScreen() {
         <View style={styles.page}>
             <CollapsingHeader
                 controller={header}
-                background={colors.cardBackground}
                 back
                 collapsing={<ScreenHeading title={t('admin.auditLogTitle')} />}
                 pinned={

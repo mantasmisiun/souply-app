@@ -2170,7 +2170,6 @@ export default function ProcessReceiptScreen() {
       <CollapsingHeader
         controller={headerCtl}
         back
-        background={colors.cardBackground}
         collapsing={<ScreenHeading title={headerShopLine} subtitle={headerSubtitle} />}
         // Segmented control stays pinned below the collapsing title so tabs are
         // always reachable while the body scrolls.

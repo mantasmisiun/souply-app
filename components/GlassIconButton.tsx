@@ -1,6 +1,7 @@
-import { Platform, Pressable, View, StyleSheet } from 'react-native';
+import { Platform, Pressable, StyleSheet } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme } from '../constants/theme';
+import { useTheme, motion, withAlpha } from '../constants/theme';
 import { LiquidGlass } from './LiquidGlass';
 
 interface Props {
@@ -27,15 +28,20 @@ interface Props {
 /**
  * Icon button for nav-bar headers and in-screen header bars.
  *
- * In a native nav bar (headerLeft/headerRight) leave `glass` off: iOS 26 gives
- * the bar item its own liquid-glass capsule. For an in-screen bar with no native
- * header (e.g. the search screen) pass `glass` so the button carries its own
- * pill and matches the native look.
+ * Android: an M3-Expressive TONAL icon chip — a 40dp translucent circle
+ * (surfaceContainerHigh at ~85%, sits on the header fade with the page ghosting
+ * through), no shadow, and the Expressive press signature: the circle MORPHS
+ * toward a rounded square and shrinks slightly while pressed (same
+ * springExpressive voice as the tab bar).
+ *
+ * iOS: in a native nav bar leave `glass` off — iOS 26 gives the bar item its
+ * own liquid-glass capsule. For an in-screen bar pass `glass` so the button
+ * carries its own pill and matches the native look.
  */
 export function GlassIconButton({
     icon,
     onPress,
-    size = 22,
+    size = 24,
     color,
     accessibilityLabel,
     disabled,
@@ -44,12 +50,17 @@ export function GlassIconButton({
 }: Props) {
     const colors = useTheme();
     const tint = disabled ? colors.textMuted : (color ?? colors.primary);
-    const disc = size + 14;
+    const disc = size + 16; // M3: 24dp icon in a 40dp container
     const iconEl = <Ionicons name={icon} size={size} color={tint} />;
     // The glass pill is an iOS-only affordance (Liquid Glass / blur capsule).
-    // Android header buttons app-wide are bare icons — the blur fallback
-    // rendered as a dark-tinted circle there (visible in light mode).
     const showGlass = glass && Platform.OS === 'ios';
+
+    // Expressive press morph: round → rounded-square + slight shrink.
+    const pressP = useSharedValue(0);
+    const morphStyle = useAnimatedStyle(() => ({
+        transform: [{ scale: 1 - 0.08 * pressP.value }],
+        borderRadius: disc / 2 - (disc / 2 - disc / 3.4) * pressP.value,
+    }));
 
     return (
         <Pressable
@@ -58,8 +69,10 @@ export function GlassIconButton({
             hitSlop={12}
             accessibilityRole="button"
             accessibilityLabel={accessibilityLabel}
+            onPressIn={() => { pressP.value = withSpring(1, motion.springExpressive); }}
+            onPressOut={() => { pressP.value = withSpring(0, motion.springExpressive); }}
             style={({ pressed }) => ({
-                opacity: disabled ? 0.5 : (pressed ? 0.5 : 1),
+                opacity: disabled ? 0.5 : (pressed && Platform.OS === 'ios' ? 0.5 : 1),
                 marginHorizontal: 4,
             })}
         >
@@ -70,15 +83,27 @@ export function GlassIconButton({
                     {iconEl}
                 </LiquidGlass>
             ) : (
-                <View
+                <Animated.View
                     style={[
                         styles.disc,
                         { width: disc, height: disc },
-                        solid && { backgroundColor: colors.cardBackground, borderRadius: disc / 2, elevation: 3 },
+                        // Android: SOLID card-white chip + hairline outline + soft
+                        // lift — same surface recipe as the search pill, so the
+                        // header buttons are clearly noticeable on the page (the
+                        // translucent tonal fill had no contrast on cream). iOS
+                        // non-glass (native bar items) stays bare.
+                        Platform.OS === 'android' && {
+                            backgroundColor: colors.cardBackground,
+                            borderWidth: StyleSheet.hairlineWidth,
+                            borderColor: colors.border,
+                            elevation: 2,
+                        },
+                        solid && { backgroundColor: colors.cardBackground, elevation: 3 },
+                        Platform.OS === 'android' ? morphStyle : { borderRadius: disc / 2 },
                     ]}
                 >
                     {iconEl}
-                </View>
+                </Animated.View>
             )}
         </Pressable>
     );

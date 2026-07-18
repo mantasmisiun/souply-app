@@ -115,7 +115,6 @@ export default function ReceiptPickerScreen() {
             <CollapsingHeader
                 controller={header}
                 back
-                background={colors.cardBackground}
                 collapsing={<ScreenHeading title={t('shoppingListTab.selectExistingTitle')} />}
                 pinned={
                     <ScrollView

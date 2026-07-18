@@ -190,7 +190,6 @@ export default function TripsScreen() {
         <View style={styles.container}>
             <CollapsingHeader
                 controller={header}
-                background={colors.cardBackground}
                 collapsing={<ScreenHeading title={t('tabs.trips')} />}
                 pinned={(
                     <>

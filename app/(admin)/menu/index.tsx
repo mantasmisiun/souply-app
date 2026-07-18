@@ -78,7 +78,6 @@ export default function AdminMenu() {
         <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
         <CollapsingHeader
             controller={header}
-            background={colors.cardBackground}
             right={settingsGear}
             collapsing={<ScreenHeading title={t('tabs.profilis')} />}
         />

@@ -219,7 +219,6 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
         <Animated.FlatList
             ref={listRef}
             {...scroll}
-            onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
             style={styles.container}
             data={l1Categories}
             keyExtractor={(item: any) => item.id.toString()}

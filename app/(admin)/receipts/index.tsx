@@ -126,7 +126,6 @@ export default function ReceiptsScreen() {
         <View style={styles.root}>
             <CollapsingHeader
                 controller={header}
-                background={colors.cardBackground}
                 collapsing={<ScreenHeading title={t('admin.tabReceipts')} />}
                 pinned={
                     <View style={styles.chipBar}>

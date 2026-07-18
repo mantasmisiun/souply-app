@@ -223,7 +223,6 @@ export default function VoteHistoryScreen() {
         <View style={styles.container}>
             <CollapsingHeader
                 controller={header}
-                background={colors.cardBackground}
                 back
                 right={
                     <GlassIconButton

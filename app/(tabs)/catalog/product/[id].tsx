@@ -666,7 +666,6 @@ export default function ProductDetailScreen() {
             {/* Glass back bar; title + breadcrumb collapse on scroll; filter pinned. */}
             <CollapsingHeader
                 controller={header}
-                background={colors.cardBackground}
                 back
                 right={!isTemplateMode && product ? (
                     <AddOrStepper
@@ -706,7 +705,6 @@ export default function ProductDetailScreen() {
                 overlay's space (the opaque overlay hides the brief measure jump). */}
             <Animated.ScrollView
                 {...header.scroll}
-                onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
                 style={styles.container}
                 contentContainerStyle={{ paddingTop: header.paddingTop, paddingBottom: BAR_HEIGHT + 16 }}
             >

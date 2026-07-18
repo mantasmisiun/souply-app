@@ -151,7 +151,6 @@ export default function CreatorAuthScreen() {
         <View style={styles.container}>
             <CollapsingHeader
                 controller={header}
-                background={colors.cardBackground}
                 back
                 collapsing={<ScreenHeading title={t('creatorAuth.title')} />}
             />
