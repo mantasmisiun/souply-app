@@ -351,25 +351,6 @@ export default function TemplateDetailScreen() {
                         </View>
                     ),
                 }}
-                collapsing={
-                    <TouchableOpacity
-                        onPress={isDefault ? undefined : () => setCoverEditorOpen(true)}
-                        activeOpacity={isDefault ? 1 : 0.7}
-                        disabled={isDefault}
-                        style={styles.titleRow}
-                    >
-                        <View style={[styles.titleEmoji, {
-                            backgroundColor: template.coverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
-                        }]}>
-                            {isDefault
-                                ? <Ionicons name="sparkles" size={20} color={colors.primary} />
-                                : <Text style={{ fontSize: 20 }}>{headerEmoji}</Text>}
-                        </View>
-                        <Text style={[styles.titleText, { color: onCover }]} numberOfLines={2}>
-                            {titleText}
-                        </Text>
-                    </TouchableOpacity>
-                }
                 pinned={authedUser && !isDefault ? (
                     <View style={[styles.tabBar, { backgroundColor: colors.cardBackground }]}>
                         <StoreChipBar
@@ -411,7 +392,25 @@ export default function TemplateDetailScreen() {
                         />
                     }
                     ListHeaderComponent={
-                        isDefault ? (
+                        <>
+                        {<TouchableOpacity
+                        onPress={isDefault ? undefined : () => setCoverEditorOpen(true)}
+                        activeOpacity={isDefault ? 1 : 0.7}
+                        disabled={isDefault}
+                        style={styles.titleRow}
+                    >
+                        <View style={[styles.titleEmoji, {
+                            backgroundColor: template.coverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
+                        }]}>
+                            {isDefault
+                                ? <Ionicons name="sparkles" size={20} color={colors.primary} />
+                                : <Text style={{ fontSize: 20 }}>{headerEmoji}</Text>}
+                        </View>
+                        <Text style={[styles.titleText, { color: onCover }]} numberOfLines={2}>
+                            {titleText}
+                        </Text>
+                    </TouchableOpacity>}
+                        {isDefault ? (
                             <View style={styles.settingRow}>
                                 <View style={{ flex: 1, marginRight: 12 }}>
                                     <Text style={styles.settingLabel}>{t('basketTab.templates.learnLabel')}</Text>
@@ -440,7 +439,8 @@ export default function TemplateDetailScreen() {
                                 <Ionicons name="add" size={18} color={colors.primary} />
                                 <Text style={styles.addItemBtnText}>{t('basketTab.templates.addItemTitle')}</Text>
                             </TouchableOpacity>
-                        )
+                        )}
+                        </>
                     }
                     ListEmptyComponent={
                         <View style={styles.centered}>
@@ -511,6 +511,23 @@ export default function TemplateDetailScreen() {
                     // shows on the template card. Only reachable when signed in
                     // (tabs are hidden otherwise).
                     <Animated.ScrollView {...header.scroll} contentContainerStyle={[styles.statsScroll, { paddingTop: header.paddingTop + 16 }]}>
+                        {<TouchableOpacity
+                        onPress={isDefault ? undefined : () => setCoverEditorOpen(true)}
+                        activeOpacity={isDefault ? 1 : 0.7}
+                        disabled={isDefault}
+                        style={styles.titleRow}
+                    >
+                        <View style={[styles.titleEmoji, {
+                            backgroundColor: template.coverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
+                        }]}>
+                            {isDefault
+                                ? <Ionicons name="sparkles" size={20} color={colors.primary} />
+                                : <Text style={{ fontSize: 20 }}>{headerEmoji}</Text>}
+                        </View>
+                        <Text style={[styles.titleText, { color: onCover }]} numberOfLines={2}>
+                            {titleText}
+                        </Text>
+                    </TouchableOpacity>}
                         <View style={styles.metricsGrid}>
                             <View style={styles.metricTile}>
                                 <Text style={styles.metricValue}>{Number(template.visitCount ?? 0).toLocaleString('lt-LT')}</Text>

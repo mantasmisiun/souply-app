@@ -670,10 +670,10 @@ export function ShoppingListDetail({
             <CollapsingHeader
                 controller={header}
                 back
-                collapsing={<ScreenHeading title={headerTitle ?? t('shoppingListDetail.fallbackTitle')} subtitle={headerSubtitle} />}
                 pinned={pinnedHeader}
             />
             <View style={[styles.container, { paddingTop: header.paddingTop + spacing.lg, paddingHorizontal: spacing.lg, gap: spacing.sm }]}>
+                <ScreenHeading title={headerTitle ?? t('shoppingListDetail.fallbackTitle')} subtitle={headerSubtitle} bleed={spacing.lg} />
                 {Array.from({ length: 8 }).map((_, i) => (
                     <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: spacing.lg, flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
                         <SkeletonBox width={22} height={22} borderRadius={6} />
@@ -712,12 +712,6 @@ export function ShoppingListDetail({
                             <GlassIconButton icon="ellipsis-vertical" color={colors.textMuted} onPress={() => setMenuVisible(true)} />
                         ) : undefined
                     }
-                    collapsing={
-                        <ScreenHeading
-                            title={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
-                            subtitle={headerSubtitle ?? (formatStoreStreet(list?.address) || list?.storeName || undefined)}
-                        />
-                    }
                     pinned={
                         <>
                             {pinnedHeader}
@@ -749,6 +743,10 @@ export function ShoppingListDetail({
                         style={{ flex: 1 }}
                         contentContainerStyle={[styles.scrollContent, { paddingTop: header.paddingTop }]}
                     >
+                        <ScreenHeading
+                            title={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
+                            subtitle={headerSubtitle ?? (formatStoreStreet(list?.address) || list?.storeName || undefined)}
+                        />
                         <View style={styles.listInner}>
                         {uncheckedGroups.map(group => (
                             <View key={group.name ?? '__no_category__'}>

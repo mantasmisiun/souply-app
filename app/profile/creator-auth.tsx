@@ -152,9 +152,9 @@ export default function CreatorAuthScreen() {
             <CollapsingHeader
                 controller={header}
                 back
-                collapsing={<ScreenHeading title={t('creatorAuth.title')} />}
             />
             <Animated.ScrollView {...header.scroll} contentContainerStyle={[styles.scroll, { paddingTop: header.paddingTop + 20 }]}>
+                <ScreenHeading title={t('creatorAuth.title')} />
                 <View style={styles.hero}>
                     <View style={styles.heroBadge}>
                         <Text style={styles.heroEmoji}>✨</Text>

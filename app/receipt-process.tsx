@@ -2170,7 +2170,6 @@ export default function ProcessReceiptScreen() {
       <CollapsingHeader
         controller={headerCtl}
         back
-        collapsing={<ScreenHeading title={headerShopLine} subtitle={headerSubtitle} />}
         // Segmented control stays pinned below the collapsing title so tabs are
         // always reachable while the body scrolls.
         pinned={
@@ -2191,6 +2190,7 @@ export default function ProcessReceiptScreen() {
         style={styles.container}
         contentContainerStyle={{ paddingTop: headerCtl.paddingTop }}
       >
+        <ScreenHeading title={headerShopLine} subtitle={headerSubtitle} />
         {showLoadSkeleton ? (
           <View style={styles.sectionCard}>
             <SkeletonBox width="55%" height={16} borderRadius={6} />
@@ -2288,6 +2288,7 @@ export default function ProcessReceiptScreen() {
         style={styles.container}
         contentContainerStyle={{ paddingTop: headerCtl.paddingTop }}
       >
+        <ScreenHeading title={headerShopLine} subtitle={headerSubtitle} />
         {showLoadSkeleton ? (
           <View style={styles.sectionCard}>
             <SkeletonBox width="40%" height={16} borderRadius={6} />
@@ -2581,6 +2582,7 @@ export default function ProcessReceiptScreen() {
         style={styles.container}
         contentContainerStyle={{ paddingTop: headerCtl.paddingTop }}
       >
+        <ScreenHeading title={headerShopLine} subtitle={headerSubtitle} />
         {showLoadSkeleton ? (
           <View style={styles.sectionCard}>
             <SkeletonBox width="35%" height={16} borderRadius={6} />

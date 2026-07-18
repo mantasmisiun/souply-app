@@ -126,7 +126,6 @@ export default function ReceiptsScreen() {
         <View style={styles.root}>
             <CollapsingHeader
                 controller={header}
-                collapsing={<ScreenHeading title={t('admin.tabReceipts')} />}
                 pinned={
                     <View style={styles.chipBar}>
                         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipBarContent}>
@@ -156,6 +155,7 @@ export default function ReceiptsScreen() {
             ) : (
                 <Animated.FlatList
                     {...header.scroll}
+                    ListHeaderComponent={<ScreenHeading title={t('admin.tabReceipts')} />}
                     data={receipts}
                     keyExtractor={(r: any) => r.id}
                     renderItem={renderItem}

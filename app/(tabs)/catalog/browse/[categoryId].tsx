@@ -22,7 +22,6 @@ import { Toast, type ToastHandle } from '@/components/Toast';
 import { useTranslation } from 'react-i18next';
 import { ScalePressable } from '@/components/ScalePressable';
 import { GlassIconButton } from '@/components/GlassIconButton';
-import { glassHeaderOptions } from '@/constants/navHeader';
 import { ScreenHeading } from '@/components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '@/components/CollapsingHeader';
 
@@ -548,23 +547,22 @@ export default function CategoryScreen() {
 
     if (loading) return (
         <>
-        <Stack.Screen options={{
-            ...glassHeaderOptions({ back: true }),
-            headerStyle: { backgroundColor: colors.cardBackground },
-            headerShadowVisible: false,
-        }} />
-        <ScreenHeading title={decodeURIComponent((name as string) || '')} />
-        <View style={styles.container}>
-            <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 10, gap: 6, backgroundColor: colors.cardBackground }}>
-                <SkeletonBox width={170} height={13} borderRadius={6} />
-                <View style={{ flex: 1 }} />
-                <SkeletonBox width={44} height={26} borderRadius={13} />
-            </View>
-            <View style={{ flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 10, gap: 8, backgroundColor: colors.cardBackground, borderBottomWidth: 0.5, borderBottomColor: colors.borderSubtle }}>
-                {[72, 58, 84, 66].map((w, i) => (
-                    <SkeletonBox key={i} width={w} height={30} borderRadius={20} />
-                ))}
-            </View>
+        {/* Same static chrome as the loaded screen (no native bar, no banner
+            backgrounds): floating back chip + a transparent chips-skeleton row
+            pinned under it; title + card skeletons on the page. */}
+        <CollapsingHeader
+            controller={header}
+            back
+            pinned={
+                <View style={{ flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 10, gap: 8 }}>
+                    {[72, 58, 84, 66].map((w, i) => (
+                        <SkeletonBox key={i} width={w} height={30} borderRadius={20} />
+                    ))}
+                </View>
+            }
+        />
+        <View style={[styles.container, { paddingTop: header.paddingTop }]}>
+            <ScreenHeading title={decodeURIComponent((name as string) || '')} />
             <View style={{ padding: 12 }}>
                 {Array.from({ length: 3 }).map((_, row) => (
                     <View key={row} style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
@@ -585,12 +583,12 @@ export default function CategoryScreen() {
 
     return (
         <>
-            {/* Category title collapses on scroll; mode toggle + L3 filter pin. */}
+            {/* Static chrome + pinned L3 filter; the category TITLE is list
+                content (scrolls natively with the items). */}
             <CollapsingHeader
                 controller={header}
                 back
                 right={<GlassIconButton icon="search" onPress={pushSearch} />}
-                collapsing={<ScreenHeading title={decodeURIComponent(name || '')} />}
                 pinned={
                     <CategoryBubbles
                         categories={l3Categories}
@@ -605,6 +603,7 @@ export default function CategoryScreen() {
                 <View style={{ flex: 1 }}>
                     {loadingProducts ? (
                         <View style={{ padding: 12, paddingTop: header.paddingTop + 12 }}>
+                            <ScreenHeading title={decodeURIComponent(name || '')} bleed={12} />
                             {Array.from({ length: 3 }).map((_, row) => (
                                 <View key={row} style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
                                     {[0, 1].map(col => (
@@ -633,6 +632,9 @@ export default function CategoryScreen() {
                             ]}
                             numColumns={2}
                             columnWrapperStyle={styles.row}
+                            ListHeaderComponent={
+                                <ScreenHeading title={decodeURIComponent(name || '')} bleed={12} />
+                            }
                             ListEmptyComponent={
                                 <Text style={styles.emptyText}>{t('catalog.noProducts')}</Text>
                             }

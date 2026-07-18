@@ -173,7 +173,6 @@ export default function TemplatesScreen() {
         <View style={styles.container}>
             <CollapsingHeader
                 controller={header}
-                collapsing={<ScreenHeading title={t('tabs.templates')} />}
                 pinned={refreshing ? (
                     <View style={styles.refreshingBanner}>
                         <MaterialProgress size="small" color={colors.primary} />
@@ -196,7 +195,9 @@ export default function TemplatesScreen() {
                     />
                 }
                 ListHeaderComponent={
-                    // "Įkelkite kvitus, kad gautumėte savo šabloną" lives here —
+                    <>
+                    <ScreenHeading title={t('tabs.templates')} />
+                    {// "Įkelkite kvitus, kad gautumėte savo šabloną" lives here —
                     // this is where the auto-generated template lands, so the
                     // prompt to earn it belongs on this tab.
                     <>
@@ -242,6 +243,7 @@ export default function TemplatesScreen() {
                         )}
                         {/* While building → AI placeholder card. */}
                         {building && <BuildingTemplateCard />}
+                    </>}
                     </>
                 }
                 ListEmptyComponent={

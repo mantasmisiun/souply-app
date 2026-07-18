@@ -599,20 +599,6 @@ export default function DiscountsScreen() {
             <CollapsingHeader
                 controller={header}
                 back
-                collapsing={(
-                    <ScreenHeading
-                        title={t('discounts.title')}
-                        trailing={
-                            <TouchableOpacity
-                                onPress={() => setInfoOpen(true)}
-                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                accessibilityLabel={t('discounts.infoTitle')}
-                            >
-                                <Ionicons name="help-circle-outline" size={26} color={colors.textSecondary} />
-                            </TouchableOpacity>
-                        }
-                    />
-                )}
                 pinned={(
                     <>
                         <View style={styles.searchFieldWrap}>
@@ -679,6 +665,7 @@ export default function DiscountsScreen() {
                     <View style={{ flex: 1 }}>
                         {isLoading ? (
                             <View style={{ flex: 1, padding: 12, gap: 12, paddingTop: header.paddingTop + 12 }}>
+                                <ScreenHeading title={t('discounts.title')} bleed={12} />
                                 {Array.from({ length: 6 }).map((_, i) => (
                                     <View key={i} style={{ flexDirection: 'row', gap: 12 }}>
                                         {[0, 1].map(j => (
@@ -718,7 +705,21 @@ export default function DiscountsScreen() {
                                 columnWrapperStyle={styles.row}
                                 keyboardDismissMode="on-drag"
                                 ListHeaderComponent={
-                                    isError && allProducts.length > 0 ? (
+                                    <>
+                                        <ScreenHeading
+                                            title={t('discounts.title')}
+                                            bleed={12}
+                                            trailing={
+                                                <TouchableOpacity
+                                                    onPress={() => setInfoOpen(true)}
+                                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                                    accessibilityLabel={t('discounts.infoTitle')}
+                                                >
+                                                    <Ionicons name="help-circle-outline" size={26} color={colors.textSecondary} />
+                                                </TouchableOpacity>
+                                            }
+                                        />
+                                    {isError && allProducts.length > 0 ? (
                                         <TouchableOpacity style={styles.errorBanner} onPress={() => refetch()} activeOpacity={0.7}>
                                             <Ionicons name="warning-outline" size={16} color={colors.onPrimary} style={{ marginRight: 6 }} />
                                             <Text style={styles.errorBannerText} numberOfLines={2}>
@@ -726,7 +727,8 @@ export default function DiscountsScreen() {
                                             </Text>
                                             <Text style={styles.errorBannerRetry}>{t('discounts.retry')}</Text>
                                         </TouchableOpacity>
-                                    ) : null
+                                    ) : null}
+                                    </>
                                 }
                                 refreshControl={
                                     <RefreshControl

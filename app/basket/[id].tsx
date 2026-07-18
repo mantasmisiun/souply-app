@@ -653,8 +653,17 @@ export default function BasketDetailScreen() {
                             />
                         ),
                 }}
-                collapsing={
-                    fromTemplate ? (
+            />
+            <View style={styles.container}>
+                <Animated.FlatList
+                    {...header.scroll}
+                    style={{ flex: 1 }}
+                    data={items}
+                    keyExtractor={(item: any) => item.id.toString()}
+                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: sheetSnaps[0] + 28 }]}
+                    ListHeaderComponent={
+                        <>
+                        {fromTemplate ? (
                         <View style={styles.titleRow}>
                             <View style={[styles.titleEmoji, {
                                 backgroundColor: basket?.templateCoverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
@@ -717,18 +726,8 @@ export default function BasketDetailScreen() {
                                 {titleText}
                             </Text>
                         </TouchableOpacity>
-                    )
-                }
-            />
-            <View style={styles.container}>
-                <Animated.FlatList
-                    {...header.scroll}
-                    style={{ flex: 1 }}
-                    data={items}
-                    keyExtractor={(item: any) => item.id.toString()}
-                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: sheetSnaps[0] + 28 }]}
-                    ListHeaderComponent={
-                        isEditable ? (
+                    )}
+                        {isEditable ? (
                             <TouchableOpacity
                                 style={styles.addItemBtn}
                                 onPress={handleAddItem}
@@ -737,7 +736,8 @@ export default function BasketDetailScreen() {
                                 <Ionicons name="add" size={18} color={colors.primary} />
                                 <Text style={styles.addItemBtnText}>{t('basketDetail.addItem')}</Text>
                             </TouchableOpacity>
-                        ) : null
+                        ) : null}
+                        </>
                     }
                     ListEmptyComponent={
                         <View style={styles.centered}>

@@ -565,7 +565,6 @@ export default function ProfilisScreen() {
         <CollapsingHeader
             controller={header}
             right={settingsGear}
-            collapsing={<ScreenHeading title={t('tabs.profilis')} />}
         />
         <Animated.ScrollView
             ref={scrollRef}
@@ -573,6 +572,7 @@ export default function ProfilisScreen() {
             style={styles.container}
             contentContainerStyle={[styles.content, { paddingTop: header.paddingTop + 16, paddingBottom: tabBarHeight + 24 }]}
         >
+            <ScreenHeading title={t('tabs.profilis')} />
             {/* Creator header — avatar (tap to upload) + name + @handle +
                 aggregate template stats. Only once signed in as a creator. */}
             {authUser && profile && (

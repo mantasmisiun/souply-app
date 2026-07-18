@@ -113,13 +113,13 @@ export default function SettingsScreen() {
         <CollapsingHeader
             controller={header}
             back
-            collapsing={<ScreenHeading title={t('settings.title')} />}
         />
         <Animated.ScrollView
             {...header.scroll}
             style={styles.page}
             contentContainerStyle={[styles.pageContent, { paddingTop: header.paddingTop + 16 }]}
         >
+            <ScreenHeading title={t('settings.title')} />
             {/* ── Language ─────────────────────────────────────────────── */}
             <Section title={t('settings.language.section')} styles={styles}>
                 <TouchableOpacity

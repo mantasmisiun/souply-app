@@ -79,9 +79,9 @@ export default function AdminMenu() {
         <CollapsingHeader
             controller={header}
             right={settingsGear}
-            collapsing={<ScreenHeading title={t('tabs.profilis')} />}
         />
         <Animated.ScrollView {...header.scroll} contentContainerStyle={[styles.scroll, { paddingTop: header.paddingTop + 20 }]}>
+            <ScreenHeading title={t('tabs.profilis')} />
             <View style={styles.header}>
                 <Ionicons name="shield-checkmark" size={48} color={colors.primary} />
                 <Text style={styles.title}>{t('admin.title')}</Text>

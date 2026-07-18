@@ -190,7 +190,6 @@ export default function TripsScreen() {
         <View style={styles.container}>
             <CollapsingHeader
                 controller={header}
-                collapsing={<ScreenHeading title={t('tabs.trips')} />}
                 pinned={(
                     <>
                         <View style={styles.filterRow}>
@@ -223,6 +222,7 @@ export default function TripsScreen() {
                     />
                 }
             >
+                <ScreenHeading title={t('tabs.trips')} />
                 {/* Household card: create-or-invite, always at the top (spec). */}
                 <TouchableOpacity style={styles.householdCard} onPress={openHouseholdQr} activeOpacity={0.85}>
                     <View style={styles.householdIcon}>

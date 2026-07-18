@@ -677,21 +677,6 @@ export default function ProductDetailScreen() {
                         style={styles.headerStepper}
                     />
                 ) : undefined}
-                collapsing={
-                    <ScreenHeading
-                        title={product.name}
-                        subtitle={categoryParts.length > 0 ? (
-                            <View style={styles.breadcrumbRow}>
-                                {categoryParts.map((part, i) => (
-                                    <React.Fragment key={i}>
-                                        {i > 0 && <Text style={styles.navBreadcrumbSep}>›</Text>}
-                                        <Text style={styles.navBreadcrumbPart} numberOfLines={1}>{part}</Text>
-                                    </React.Fragment>
-                                ))}
-                            </View>
-                        ) : undefined}
-                    />
-                }
                 pinned={
                     <ChainFilterBar
                         chains={chains}
@@ -708,6 +693,21 @@ export default function ProductDetailScreen() {
                 style={styles.container}
                 contentContainerStyle={{ paddingTop: header.paddingTop, paddingBottom: BAR_HEIGHT + 16 }}
             >
+                {/* Title + breadcrumb: LIST CONTENT — scrolls natively with the
+                    page (iOS 26 large-title model). */}
+                <ScreenHeading
+                    title={product.name}
+                    subtitle={categoryParts.length > 0 ? (
+                        <View style={styles.breadcrumbRow}>
+                            {categoryParts.map((part, i) => (
+                                <React.Fragment key={i}>
+                                    {i > 0 && <Text style={styles.navBreadcrumbSep}>›</Text>}
+                                    <Text style={styles.navBreadcrumbPart} numberOfLines={1}>{part}</Text>
+                                </React.Fragment>
+                            ))}
+                        </View>
+                    ) : undefined}
+                />
                 {/* Add ⇄ stepper now lives at the TOP-RIGHT of the header
                     (see CollapsingHeader `right` below); the body is just the
                     SP list. Template mode keeps its sticky bottom bar. */}

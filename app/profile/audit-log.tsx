@@ -119,7 +119,6 @@ export default function AuditLogScreen() {
             <CollapsingHeader
                 controller={header}
                 back
-                collapsing={<ScreenHeading title={t('admin.auditLogTitle')} />}
                 pinned={
                     <View style={styles.chipsSurface}>
                         <ScrollView
@@ -158,6 +157,7 @@ export default function AuditLogScreen() {
             ) : (
                 <Animated.FlatList
                     {...header.scroll}
+                    ListHeaderComponent={<ScreenHeading title={t('admin.auditLogTitle')} />}
                     data={rows}
                     keyExtractor={(r: any) => String(r.id)}
                     contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12 }]}

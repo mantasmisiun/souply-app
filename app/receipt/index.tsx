@@ -852,7 +852,6 @@ export default function ReceiptsScreen() {
       <CollapsingHeader
         controller={header}
         back
-        collapsing={<ScreenHeading title={t('tabs.receipts')} />}
         pinned={(storeOptions.length > 1 || receipts.length > 0) ? (
           <ScrollView
             horizontal
@@ -893,6 +892,7 @@ export default function ReceiptsScreen() {
         contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
         ListHeaderComponent={
           <>
+            <ScreenHeading title={t('tabs.receipts')} />
             {liveScanVisible ? renderLiveScanCard() : null}
             {showBanner ? (
               <PendingSwipesBanner

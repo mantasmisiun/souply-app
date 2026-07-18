@@ -718,7 +718,6 @@ export default function ShoppingListScreen() {
             <CollapsingHeader
                 controller={header}
                 back
-                collapsing={<ScreenHeading title={t('tabs.shoppingList')} />}
                 pinned={allChains.length >= 2 ? (
                     <StoreChipBar
                         chips={allChains}
@@ -744,6 +743,7 @@ export default function ShoppingListScreen() {
                 }
                 ListHeaderComponent={
                     <>
+                        <ScreenHeading title={t('tabs.shoppingList')} />
                         {hasActive && (
                             <>
                                 <Text style={styles.sectionTitle}>{t('shoppingListTab.sectionActive')}</Text>

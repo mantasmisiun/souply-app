@@ -79,17 +79,19 @@ export default function BrowseIndex() {
 
     return (
         <View style={{ flex: 1 }}>
-            {/* "Naršyti" collapses on scroll; the discounts shortcut scrolls with the list. */}
-            <CollapsingHeader
-                controller={header}
-                right={searchAction}
-                collapsing={<ScreenHeading title={t('catalog.title')} />}
-            />
+            {/* Static chrome only; the TITLE is list content (scrolls natively
+                with the items — iOS 26 large-title model). */}
+            <CollapsingHeader controller={header} right={searchAction} />
             <CategoriesList
                 onSelectL2={handleSelectL2}
                 scroll={header.scroll}
                 contentPaddingTop={header.paddingTop}
-                header={discountsHeader}
+                header={(
+                    <>
+                        <ScreenHeading title={t('catalog.title')} />
+                        {discountsHeader}
+                    </>
+                )}
             />
             <Toast ref={toastRef} />
         </View>

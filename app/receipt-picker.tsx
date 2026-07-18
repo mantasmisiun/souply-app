@@ -115,7 +115,6 @@ export default function ReceiptPickerScreen() {
             <CollapsingHeader
                 controller={header}
                 back
-                collapsing={<ScreenHeading title={t('shoppingListTab.selectExistingTitle')} />}
                 pinned={
                     <ScrollView
                         horizontal
@@ -134,6 +133,7 @@ export default function ReceiptPickerScreen() {
             />
             <Animated.FlatList
                 {...header.scroll}
+                ListHeaderComponent={<ScreenHeading title={t('shoppingListTab.selectExistingTitle')} />}
                 data={filtered}
                 keyExtractor={(r: PickableReceipt) => `pick-${r.id}`}
                 contentInsetAdjustmentBehavior="never"

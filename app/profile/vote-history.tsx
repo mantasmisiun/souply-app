@@ -232,7 +232,6 @@ export default function VoteHistoryScreen() {
                         onPress={() => setShowHelp(true)}
                     />
                 }
-                collapsing={<ScreenHeading title={t('screens.voteHistory')} />}
                 pinned={
                     <>
                         <View style={styles.searchRow}>
@@ -281,6 +280,7 @@ export default function VoteHistoryScreen() {
             ) : (
                 <Animated.FlatList
                     {...header.scroll}
+                    ListHeaderComponent={<ScreenHeading title={t('screens.voteHistory')} />}
                     data={votes}
                     keyExtractor={(v: any) => `${v.spIdA}-${v.spIdB}`}
                     renderItem={renderItem}
