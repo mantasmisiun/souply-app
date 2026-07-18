@@ -1513,6 +1513,7 @@
     "sheetTitle": "Krepšeliai",
     "itemsCount": "Prekės: {{count}}",
     "openBasket": "Krepšelis",
+    "openTemplate": "Šablonas",
     "itemsSection": "Krepšelio prekės",
     "add": "Į krepšelį"
   }

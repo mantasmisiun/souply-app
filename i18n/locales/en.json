@@ -1536,6 +1536,7 @@
     "sheetTitle": "Baskets",
     "itemsCount": "Items: {{count}}",
     "openBasket": "Basket",
+    "openTemplate": "Template",
     "itemsSection": "Basket items",
     "add": "Add"
   }

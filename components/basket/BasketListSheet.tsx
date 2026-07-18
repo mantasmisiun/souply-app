@@ -8,7 +8,8 @@ import { AddOrStepper } from '@/components/AddOrStepper';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
 import { useTheme, useResolvedScheme, radius, spacing, type AppTheme } from '../../constants/theme';
 import { API_BASE_URL } from '../../config/api';
-import { useBasketSession } from '../../state/basketSession';
+import { useBasketSession, targetKey } from '../../state/basketSession';
+import { getTemplate, patchTemplateItem, deleteTemplateItem } from '../../utils/basketTemplatesApi';
 
 /**
  * BasketListSheet — the ACTIVE-session view ("collecting items"), rendered
@@ -62,12 +63,20 @@ export function BasketListSheet() {
     // Items load only when the BASKET changes — never on navigation, so the
     // sheet stays visually stable as you move between shopping screens.
     const [items, setItems] = useState<PreviewItem[] | null>(null);
+    const tKey = target ? targetKey(target) : null;
     const loadItems = useCallback(async () => {
         if (!target) return;
         try {
-            const res = await fetch(`${API_BASE_URL}/api/baskets/${target.basketId}/items`);
-            const data = await res.json();
-            const rows: PreviewItem[] = (Array.isArray(data) ? data : []).map((it: any) => ({
+            let raw: any[];
+            if (target.kind === 'template') {
+                const tpl = await getTemplate(target.templateId);
+                raw = Array.isArray(tpl.items) ? tpl.items : [];
+            } else {
+                const res = await fetch(`${API_BASE_URL}/api/baskets/${target.basketId}/items`);
+                const data = await res.json();
+                raw = Array.isArray(data) ? data : [];
+            }
+            const rows: PreviewItem[] = raw.map((it: any) => ({
                 id: it.id,
                 productId: it.productId,
                 quantity: Number(it.quantity) || 1,
@@ -80,7 +89,7 @@ export function BasketListSheet() {
             setCount(rows.length);
         } catch { setItems([]); }
     }, [target, setCount]);
-    useEffect(() => { if (target != null) loadItems(); else setItems(null); }, [target?.basketId]); // eslint-disable-line react-hooks/exhaustive-deps
+    useEffect(() => { if (target != null) loadItems(); else setItems(null); }, [tKey]); // eslint-disable-line react-hooks/exhaustive-deps
     // An add from a product/search/L2 "Add" button bumps basketRev — re-fetch so
     // the new item actually appears (the counter alone was updating).
     const firstRev = useRef(basketRev);
@@ -109,33 +118,40 @@ export function BasketListSheet() {
 
     // A freshly-picked basket opens expanded (showing its items); re-entry after
     // navigation keeps whatever state the sheet was in.
-    const prevBasket = useRef<number | null>(null);
+    const prevBasket = useRef<string | null>(null);
     useEffect(() => {
-        if (target != null && target.basketId !== prevBasket.current) {
-            prevBasket.current = target.basketId;
+        if (tKey != null && tKey !== prevBasket.current) {
+            prevBasket.current = tKey;
             const id = setTimeout(() => controls.current?.expand(), 60);
             return () => clearTimeout(id);
         }
-        if (target == null) prevBasket.current = null;
-    }, [target?.basketId]); // eslint-disable-line react-hooks/exhaustive-deps
+        if (tKey == null) prevBasket.current = null;
+    }, [tKey]);  
 
-    // Remove the whole line (the trash icon).
+    // Remove the whole line (the trash icon) — from the basket or the template.
     const removeItem = useCallback((item: PreviewItem) => {
         setItems(prev => prev?.filter(i => i.id !== item.id) ?? null);
         useBasketSession.getState().bumpCount(-1);
-        fetch(`${API_BASE_URL}/api/basket-items/${item.id}`, { method: 'DELETE' }).catch(() => {});
+        const t = useBasketSession.getState().target;
+        if (t?.kind === 'template') deleteTemplateItem(t.templateId, item.id).catch(() => {});
+        else fetch(`${API_BASE_URL}/api/basket-items/${item.id}`, { method: 'DELETE' }).catch(() => {});
     }, []);
 
     // Persist a new quantity for a line (AddOrStepper does the canonical
-    // stepping; 0 = remove).
+    // stepping; 0 = remove) — basket item PUT or template item PATCH.
     const commitItem = useCallback((item: PreviewItem, qty: number) => {
         if (qty <= 0) { removeItem(item); return; }
         setItems(prev => prev?.map(i => (i.id === item.id ? { ...i, quantity: qty } : i)) ?? null);
-        fetch(`${API_BASE_URL}/api/basket-items/${item.id}`, {
-            method: 'PUT',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ quantity: qty }),
-        }).catch(() => {});
+        const t = useBasketSession.getState().target;
+        if (t?.kind === 'template') {
+            patchTemplateItem(t.templateId, item.id, { quantity: qty }).catch(() => {});
+        } else {
+            fetch(`${API_BASE_URL}/api/basket-items/${item.id}`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ quantity: qty }),
+            }).catch(() => {});
+        }
     }, [removeItem]);
 
     const sessionHeader = (
@@ -148,10 +164,17 @@ export function BasketListSheet() {
             </Text>
             <TouchableOpacity
                 style={styles.basketBtn}
-                onPress={() => { if (target) router.push(`/basket/${target.basketId}` as any); }}
+                onPress={() => {
+                    if (!target) return;
+                    router.push((target.kind === 'template'
+                        ? `/template/${target.templateId}`
+                        : `/basket/${target.basketId}`) as any);
+                }}
                 activeOpacity={0.85}
             >
-                <Text style={styles.basketBtnText}>{t('basketSession.openBasket')}</Text>
+                <Text style={styles.basketBtnText}>
+                    {t(target?.kind === 'template' ? 'basketSession.openTemplate' : 'basketSession.openBasket')}
+                </Text>
                 <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
             </TouchableOpacity>
         </View>

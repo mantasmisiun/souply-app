@@ -2,6 +2,7 @@ import { API_BASE_URL } from '../config/api';
 import { getUserId } from '../config/user';
 import type { DisplayMode } from '../contexts/DisplayPreferenceContext';
 import { useBasketSession, discoverOptions, postBasketItem } from '../state/basketSession';
+import { addTemplateItem } from './basketTemplatesApi';
 
 /**
  * Module-level in-flight promise: serializes concurrent "create draft
@@ -64,10 +65,22 @@ export const addProductToBasket = async (
     try {
         const session = useBasketSession.getState();
 
-        // 1. Session target already chosen → silent add (re-summons the bar
-        //    even after an X dismissal — user decision 2026-07-16).
+        // 1. Session target already chosen → silent add. The target is a basket
+        //    OR a template (same mechanic, different persistence). Re-summons the
+        //    bar even after an X dismissal (user decision 2026-07-16).
         if (session.target) {
-            const r = await postBasketItem(session.target.basketId, productId, quantity, matchMode);
+            const t = session.target;
+            let r: { success: boolean; message: string };
+            if (t.kind === 'template') {
+                try {
+                    await addTemplateItem(t.templateId, { productId, quantity });
+                    r = { success: true, message: 'Pridėta į šabloną' };
+                } catch {
+                    r = { success: false, message: 'Nepavyko pridėti produkto' };
+                }
+            } else {
+                r = await postBasketItem(t.basketId, productId, quantity, matchMode);
+            }
             if (r.success) {
                 session.bumpCount(1);
                 session.bumpBasketRev();
@@ -91,7 +104,7 @@ export const addProductToBasket = async (
         }
         const r = await postBasketItem(basketId, productId, quantity, matchMode);
         if (r.success) {
-            useBasketSession.getState().setTarget({ basketId, isFamily: false }, count + 1);
+            useBasketSession.getState().setTarget({ kind: 'basket', basketId, isFamily: false }, count + 1);
             useBasketSession.getState().bumpBasketRev();
         }
         return r;
@@ -112,7 +125,7 @@ export const applyChooserPick = async (
         const userId = await getUserId();
         basketId = await ensureDraftBasket(null, setDraftBasketId, userId);
     }
-    session.setTarget({ basketId, isFamily: option.key === 'family' }, option.itemCount);
+    session.setTarget({ kind: 'basket', basketId, isFamily: option.key === 'family' }, option.itemCount);
     session.closeChooser();
     const pending = session.takePending();
     for (const add of pending) {

@@ -18,10 +18,18 @@ import { getUserId } from '../config/user';
  *     chooser, reachable from the collapsed pill or the preview sheet.
  */
 
-export interface SessionTarget {
-    basketId: number;
-    isFamily: boolean;
-}
+/**
+ * The session collects into EITHER a basket or a template — same browse +
+ * list-sheet mechanic, different persistence layer. `kind` discriminates;
+ * consumers branch on it (fetch/add/label) rather than assuming a basket.
+ */
+export type SessionTarget =
+    | { kind: 'basket'; basketId: number; isFamily: boolean }
+    | { kind: 'template'; templateId: number; name?: string };
+
+/** Stable identity for a target across renders (kind + id). */
+export const targetKey = (t: SessionTarget): string =>
+    t.kind === 'basket' ? `b${t.basketId}` : `t${t.templateId}`;
 
 export interface ChooserOption {
     key: 'family' | 'previous' | 'new';
