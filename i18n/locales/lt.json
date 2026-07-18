@@ -1493,6 +1493,13 @@
     "title": "Pranešimai",
     "empty": "Pranešimų nėra"
   },
+  "units": {
+    "kg": "kg",
+    "l": "l",
+    "vnt": "vnt",
+    "pak": "pak.",
+    "rit": "rit."
+  },
   "basketSession": {
     "bar": "Prekių: {{count}} · Krepšelis",
     "familyBar": "Šeimos krepšelis · Prekių: {{count}}",

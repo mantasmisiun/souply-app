@@ -753,7 +753,10 @@ export default function BasketDetailScreen() {
                         const weighable = isWeighableItem(item);
                         // Measured items label by the product's CANONICAL unit —
                         // fluids are litres, not the old hardcoded kg.
-                        const measuredUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
+                        // Localised: fluids = litres, other measured = kg, count
+                        // = pcs/vnt (t('units.*')) — never a hardcoded 'vnt.'.
+                        const measuredUnit = item.canonicalUnit === 'l' ? t('units.l') : t('units.kg');
+                        const countUnit = t('units.vnt');
                         const step = weighable ? 0.1 : 1;
                         const inputValueDefault = weighable
                             ? Number(item.quantity).toFixed(1).replace('.', ',')
@@ -763,9 +766,9 @@ export default function BasketDetailScreen() {
                                 name={item.productName}
                                 imageUrls={item.imageUrls}
                                 readOnly={readOnly}
-                                readOnlyQtyText={`${item.quantity}${weighable ? ` ${measuredUnit}` : ' vnt.'}`}
+                                readOnlyQtyText={`${item.quantity} ${weighable ? measuredUnit : countUnit}`}
                                 quantityText={quantityInputs[item.id] ?? inputValueDefault}
-                                unit={weighable ? measuredUnit : 'vnt.'}
+                                unit={weighable ? measuredUnit : countUnit}
                                 weighable={weighable}
                                 onChangeQuantity={(v) => {
                                     if (!weighable && (v.includes('.') || v.includes(','))) return;

@@ -32,6 +32,22 @@ export function resolveDisplayUnit(p: ProductCanonical): string {
     return u ?? '';
 }
 
+/** The canonical unit KEY to show next to a quantity: one of
+ *  kg / l / vnt / pak / rit. Callers localise it via `t('units.<key>')`.
+ *
+ *  Unlike resolveDisplayUnit this NEVER maps the raw `unit` field (the browse /
+ *  discounts endpoints hardcode `'g'`, so mapping g→kg painted count items — a
+ *  book, a single can — as "1 kg"). Only a real canonical unit or an explicit
+ *  weighable flag yields kg/l; everything else is a countable pack → 'vnt'
+ *  (localised to pcs / units in EN). This mirrors resolveCanonicalStep, so the
+ *  displayed unit and the step granularity can never disagree. */
+export function resolveDisplayUnitKey(p: ProductCanonical): 'kg' | 'l' | 'vnt' | 'pak' | 'rit' {
+    const cu = p.canonicalUnit;
+    if (cu === 'kg' || cu === 'l' || cu === 'vnt' || cu === 'pak' || cu === 'rit') return cu;
+    if (p.isWeighable ?? p.hasWeighable) return 'kg';
+    return 'vnt';
+}
+
 export function resolveCanonicalStep(p: ProductCanonical): number {
     if (p.canonicalStep && p.canonicalStep > 0) return p.canonicalStep;
     // Weighable always steps in deli granularity.

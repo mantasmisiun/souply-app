@@ -71,6 +71,12 @@ export default function AmountPickerModal({
     // props are a fallback for Products fetched before the server attached
     // canonical metadata (e.g. cached responses, older clients).
     const displayUnit = canonicalUnit ?? (unit === 'g' ? 'kg' : unit === 'ml' ? 'l' : unit);
+    // Localised label for DISPLAY only (kg/l unchanged, vnt→pcs, pak→packs,
+    // rit→rolls in EN). `displayUnit` above stays canonical for the step/scale
+    // logic below — never localise that.
+    const unitLabel = (['kg', 'l', 'vnt', 'pak', 'rit'] as const).includes(displayUnit as any)
+        ? t(`units.${displayUnit}`)
+        : displayUnit;
     const step = canonicalStep && canonicalStep > 0
         ? canonicalStep
         : (isWeighable || displayUnit === 'kg' || displayUnit === 'l' ? 0.1 : 1);
@@ -142,7 +148,7 @@ export default function AmountPickerModal({
                     <View style={styles.modal}>
                         <Text style={styles.title}>{t('amountPicker.jokeTitle')}</Text>
                         <Text style={[styles.subtitle, { marginBottom: 24 }]}>
-                            {t('amountPicker.jokeBody', { value: formatValue(jokeAmount), unit: displayUnit })}
+                            {t('amountPicker.jokeBody', { value: formatValue(jokeAmount), unit: unitLabel })}
                         </Text>
                         <View style={styles.actions}>
                             <TouchableOpacity style={styles.cancelButton} onPress={() => setJokeAmount(null)}>
@@ -168,8 +174,8 @@ export default function AmountPickerModal({
                         {isWeighable
                             ? t('amountPicker.weighable')
                             : (displayMin === displayMax
-                                ? t('amountPicker.packages', { count: 1, value: fmtAmount(displayMin), unit: displayUnit })
-                                : t('amountPicker.packages', { count: 2, min: fmtAmount(displayMin), max: fmtAmount(displayMax), unit: displayUnit }))}
+                                ? t('amountPicker.packages', { count: 1, value: fmtAmount(displayMin), unit: unitLabel })
+                                : t('amountPicker.packages', { count: 2, min: fmtAmount(displayMin), max: fmtAmount(displayMax), unit: unitLabel }))}
                     </Text>
 
                     <Text style={styles.label}>{t('amountPicker.label')}</Text>
@@ -187,7 +193,7 @@ export default function AmountPickerModal({
                                 keyboardType="decimal-pad"
                                 selectTextOnFocus
                             />
-                            <Text style={styles.unitText}>{displayUnit}</Text>
+                            <Text style={styles.unitText}>{unitLabel}</Text>
                         </View>
 
                         <TouchableOpacity style={styles.roundButton} onPress={increase}>

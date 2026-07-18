@@ -1516,6 +1516,13 @@
     "title": "Notifications",
     "empty": "No notifications yet"
   },
+  "units": {
+    "kg": "kg",
+    "l": "l",
+    "vnt": "pcs",
+    "pak": "packs",
+    "rit": "rolls"
+  },
   "basketSession": {
     "bar": "Items: {{count}} · Basket",
     "familyBar": "Family basket · Items: {{count}}",

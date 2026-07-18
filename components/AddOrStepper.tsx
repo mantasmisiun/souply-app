@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { QuantityControl } from './QuantityControl';
 import AmountPickerModal from './AmountPickerModal';
-import { resolveCanonicalStep, resolveDisplayUnit } from '../utils/canonicalStep';
+import { resolveCanonicalStep, resolveDisplayUnitKey } from '../utils/canonicalStep';
 import { useTheme, radius, type AppTheme } from '../constants/theme';
 
 /**
@@ -19,8 +19,8 @@ import { useTheme, radius, type AppTheme } from '../constants/theme';
  *     adds one canonical step directly;
  *   · canonical stepping for +/− (0.1 for weighable kg, 1 for count) with
  *     drop-below-one-step removal;
- *   · each item's unit shown next to the amount (kg / l / vnt), via
- *     resolveDisplayUnit like the product cards.
+ *   · each item's unit shown next to the amount, localised (kg / l / pcs /
+ *     packs / rolls), via resolveDisplayUnitKey + t('units.*').
  *
  * Persistence stays with the caller: `onCommit(qty)` is called with the new
  * quantity (0 = remove) and the parent writes it (draft basket / session /
@@ -54,6 +54,8 @@ interface Props {
     fullWidth?: boolean;
     /** Skip the amount picker (contexts that can't re-edit, e.g. plain lists). */
     noPicker?: boolean;
+    /** Drop the leading icon on the Add button (grid cards keep a text-only CTA). */
+    noIcon?: boolean;
     style?: StyleProp<ViewStyle>;
 }
 
@@ -63,7 +65,7 @@ const isRange = (p: SteppableProduct) =>
 
 export function AddOrStepper({
     product, quantity, onCommit, size = 'default', addLabel, addIcon = 'cart-outline',
-    busy, fullWidth, noPicker, style,
+    busy, fullWidth, noPicker, noIcon, style,
 }: Props) {
     const colors = useTheme();
     const { t } = useTranslation();
@@ -73,9 +75,10 @@ export function AddOrStepper({
 
     const step = resolveCanonicalStep(product);
     const usesPicker = !noPicker && (isRange(product) || weighable(product));
-    // Show every item's unit (kg / l / vnt …) — resolveDisplayUnit maps the
-    // canonical/raw unit like the product cards; count items fall back to 'vnt'.
-    const unit = resolveDisplayUnit(product) || (weighable(product) ? 'kg' : 'vnt');
+    // Localised unit next to the amount (kg / l / pcs / packs / rolls). The KEY
+    // is derived from the canonical unit + weighable flag only — NEVER the raw
+    // 'g' unit — so a countable item (a book, a can) reads "1 pcs", not "1 kg".
+    const unit = t(`units.${resolveDisplayUnitKey(product)}`);
 
     const onAdd = useCallback(() => {
         if (busy) return;
@@ -115,7 +118,7 @@ export function AddOrStepper({
                 >
                     {busy
                         ? <MaterialProgress size="small" color={colors.onPrimary} />
-                        : <Ionicons name={addIcon} size={lg ? 20 : 16} color={colors.onPrimary} />}
+                        : !noIcon && <Ionicons name={addIcon} size={lg ? 20 : 16} color={colors.onPrimary} />}
                     <Text style={styles.addText} numberOfLines={1}>{addLabel ?? t('basketSession.add')}</Text>
                 </TouchableOpacity>
             )}
