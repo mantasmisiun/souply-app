@@ -14,14 +14,12 @@ import { API_BASE_URL } from '../config/api';
 import { useBasketState } from '../state/basketState';
 import { useBasketSession } from '../state/basketSession';
 import { addProductToBasket } from '../utils/basketUtils';
-import { resolveCanonicalStep } from '../utils/canonicalStep';
+import { AddOrStepper } from '../components/AddOrStepper';
 import { ProductImage } from '../components/ProductImage';
 import { useTheme, radius, elevation, type AppTheme } from '../constants/theme';
 import { getUserId } from '../config/user';
-import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../components/ComparedBasketChoiceModal';
-import AmountPickerModal from '../components/AmountPickerModal';
 import { Toast, type ToastHandle } from '../components/Toast';
 import { ScalePressable } from '../components/ScalePressable';
 import { SkeletonBox } from '../components/SkeletonBox';
@@ -71,9 +69,8 @@ interface DiscountedProduct {
 
 interface CardCallbacks {
     onNavigate: (id: number) => void;
-    onAdd: (item: DiscountedProduct) => void;
-    onDecrement: (item: DiscountedProduct, qty: number) => void;
-    onIncrement: (item: DiscountedProduct, qty: number) => void;
+    /** Persist the new quantity (0 = remove); AddOrStepper owns the stepping. */
+    onCommit: (qty: number) => void;
 }
 
 const CHAIN_NAME_BY_ID: Record<number, string> = { 1: 'Maxima', 2: 'Rimi', 3: 'Iki', 4: 'Norfa', 5: 'Lidl' };
@@ -110,7 +107,7 @@ FilterChip.displayName = 'FilterChip';
 
 const DiscountProductCard = memo(({
     item, quantity, isAdding, styles, colors, addLabel,
-    onNavigate, onAdd, onDecrement, onIncrement,
+    onNavigate, onCommit,
 }: CardCallbacks & {
     item: DiscountedProduct;
     quantity: number;
@@ -153,21 +150,15 @@ const DiscountProductCard = memo(({
                 <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
                 <Text style={styles.amountText}>{amountText}</Text>
             </View>
-            {quantity === 0 ? (
-                <ScalePressable style={[styles.addButton, isAdding && { opacity: 0.5 }]} disabled={isAdding} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); onAdd(item); }}>
-                    <Text style={styles.addButtonText}>{addLabel ?? t('browse.addToBasket')}</Text>
-                </ScalePressable>
-            ) : (
-                <View style={styles.quantityControl}>
-                    <TouchableOpacity style={styles.qtyButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onDecrement(item, quantity); }}>
-                        <Ionicons name="remove" size={16} color={colors.primary} />
-                    </TouchableOpacity>
-                    <Text style={styles.qtyText}>{Number.isInteger(quantity) ? quantity : quantity.toFixed(1)}</Text>
-                    <TouchableOpacity style={styles.qtyButton} onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onIncrement(item, quantity); }}>
-                        <Ionicons name="add" size={16} color={colors.primary} />
-                    </TouchableOpacity>
-                </View>
-            )}
+            <AddOrStepper
+                product={item}
+                quantity={quantity}
+                onCommit={onCommit}
+                busy={isAdding}
+                addLabel={addLabel ?? t('browse.addToBasket')}
+                fullWidth
+                noIcon
+            />
         </View>
     );
 });
@@ -407,11 +398,6 @@ export default function DiscountsScreen() {
         visible: boolean;
         resolve: (c: ComparedChoice) => void;
     }>({ visible: false, resolve: () => {} });
-    const [amountModal, setAmountModal] = useState<{
-        visible: boolean;
-        product: DiscountedProduct | null;
-    }>({ visible: false, product: null });
-
     // Stale `discounts_cache_v2` data lived in AsyncStorage from before the
     // React Query rollout. Drop it once so the old bytes don't sit forever
     // on devices that have upgraded.
@@ -518,71 +504,48 @@ export default function DiscountsScreen() {
             : `/product/${id}` as any);
     }, [router, isTemplateMode, templateId]);
 
-    const onAdd = useCallback((item: DiscountedProduct) => {
-        const hasRange = item.minAmount !== null && item.maxAmount !== null && item.minAmount !== item.maxAmount;
-        if (hasRange || item.hasWeighable) { setAmountModal({ visible: true, product: item }); return; }
-        const initialQty = resolveCanonicalStep(item);
-        if (isTemplateMode) {
-            setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
-            templateAddFn(item.id, initialQty)
-                .then(() => toastRef.current?.show(t('basketTab.templates.addedToTemplateToast')))
-                .catch(() => {})
-                .finally(() => {
-                    setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
-                });
-            return;
-        }
-        // First-tap quick-add: send one canonical step as the quantity so
-        // server pack-math lands on exactly one pack (1L for a 1L SP, but
-        // 0.5L = 1 bottle for a 500ml SP — never half a pack).
+    // Fresh add (non-picker path; the weighable/range picker is owned by
+    // AddOrStepper and also lands here via onCommit). One canonical step as the
+    // quantity so server pack-math lands on exactly one pack.
+    const addToBasket = useCallback((item: DiscountedProduct, qty: number) => {
         setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
-        commitAddRef.current(item.id, initialQty).then(result => {
+        commitAddRef.current(item.id, qty).then(result => {
             if (result.success) {
-                setBasketQuantities(prev => ({ ...prev, [item.id]: initialQty }));
+                setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
                 setBasketItemCount(prev => prev + 1);
                 toastRef.current?.show(t('browse.addedToast'));
             }
         }).finally(() => {
             setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
         });
-    }, [setAmountModal, isTemplateMode, templateAddFn, t]);
+    }, [t]);
 
-    const onDecrement = useCallback((item: DiscountedProduct, qty: number) => {
-        const step = resolveCanonicalStep(item);
-        const newQty = Math.round((qty - step) / step) * step;
-        if (isTemplateMode) {
-            const clamped = Math.max(0, newQty);
-            templateSetQty(item.id, clamped).catch(() => {});
-            return;
-        }
+    const commitTemplateAdd = useCallback((item: DiscountedProduct, qty: number) => {
+        setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
+        templateAddFn(item.id, qty)
+            .then(() => toastRef.current?.show(t('basketTab.templates.addedToTemplateToast')))
+            .catch(() => {})
+            .finally(() => {
+                setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
+            });
+    }, [templateAddFn, t]);
+
+    // Remove the whole line (below one step, or explicit 0); tear the draft
+    // basket down when it was the last item.
+    const removeFromBasket = useCallback((item: DiscountedProduct) => {
         const bid = draftBasketIdRef.current;
-        if (newQty <= 0) {
-            setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
-            setBasketItemCount(prev => Math.max(0, prev - 1));
-            if (!bid) return;
-            fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async allItems => {
-                const bi = Array.isArray(allItems) ? allItems.find((i: any) => i.productId === item.id) : null;
-                if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'DELETE' });
-                const remaining = Array.isArray(allItems) ? allItems.filter((i: any) => i.id !== bi?.id) : [];
-                if (remaining.length === 0) { await fetch(`${API_BASE_URL}/api/baskets/${bid}`, { method: 'DELETE' }); clearSessionBasket(); }
-            }).catch(() => {});
-        } else {
-            setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
-            if (!bid) return;
-            fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async items2 => {
-                const bi = items2.find((i: any) => i.productId === item.id);
-                if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
-            }).catch(() => {});
-        }
-    }, [clearSessionBasket, isTemplateMode, templateSetQty]);
+        setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
+        setBasketItemCount(prev => Math.max(0, prev - 1));
+        if (!bid) return;
+        fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async allItems => {
+            const bi = Array.isArray(allItems) ? allItems.find((i: any) => i.productId === item.id) : null;
+            if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'DELETE' });
+            const remaining = Array.isArray(allItems) ? allItems.filter((i: any) => i.id !== bi?.id) : [];
+            if (remaining.length === 0) { await fetch(`${API_BASE_URL}/api/baskets/${bid}`, { method: 'DELETE' }); clearSessionBasket(); }
+        }).catch(() => {});
+    }, [clearSessionBasket]);
 
-    const onIncrement = useCallback((item: DiscountedProduct, qty: number) => {
-        const step = resolveCanonicalStep(item);
-        const newQty = Math.round((qty + step) / step) * step;
-        if (isTemplateMode) {
-            templateSetQty(item.id, newQty).catch(() => {});
-            return;
-        }
+    const onSetQuantity = useCallback((item: DiscountedProduct, newQty: number) => {
         const bid = draftBasketIdRef.current;
         setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
         if (!bid) return;
@@ -590,7 +553,22 @@ export default function DiscountsScreen() {
             const bi = items2.find((i: any) => i.productId === item.id);
             if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
         }).catch(() => {});
-    }, [isTemplateMode, templateSetQty]);
+    }, []);
+
+    // Single commit for AddOrStepper: add / set / remove (or the template
+    // store). `currentQty` is the card's current qty (0 ⇒ a fresh add).
+    const commitCardQty = useCallback((item: DiscountedProduct, currentQty: number, qty: number) => {
+        if (isTemplateMode) {
+            const tq = templateMap[item.id]?.quantity ?? 0;
+            if (qty <= 0) { templateSetQty(item.id, 0).catch(() => {}); return; }
+            if (tq === 0) { commitTemplateAdd(item, qty); return; }
+            templateSetQty(item.id, qty).catch(() => {});
+            return;
+        }
+        if (qty <= 0) { removeFromBasket(item); return; }
+        if (currentQty === 0) { addToBasket(item, qty); return; }
+        onSetQuantity(item, qty);
+    }, [isTemplateMode, templateMap, templateSetQty, commitTemplateAdd, removeFromBasket, addToBasket, onSetQuantity]);
 
     const renderItem = useCallback(({ item }: { item: DiscountedProduct }) => {
         const quantity = isTemplateMode
@@ -605,12 +583,10 @@ export default function DiscountsScreen() {
                 colors={colors}
                 addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
                 onNavigate={onNavigate}
-                onAdd={onAdd}
-                onDecrement={onDecrement}
-                onIncrement={onIncrement}
+                onCommit={(qty) => commitCardQty(item, quantity, qty)}
             />
         );
-    }, [basketQuantities, addingIds, styles, colors, onNavigate, onAdd, onDecrement, onIncrement, isTemplateMode, templateMap, t]);
+    }, [basketQuantities, addingIds, styles, colors, onNavigate, commitCardQty, isTemplateMode, templateMap, t]);
 
     const closeSearch = useCallback(() => {
         setSearch('');
@@ -788,40 +764,6 @@ export default function DiscountsScreen() {
                 onUseExisting={() => comparedModal.resolve('use-existing')}
                 onCreateNew={() => comparedModal.resolve('new')}
                 onCancel={() => comparedModal.resolve('cancel')}
-            />
-            <AmountPickerModal
-                visible={amountModal.visible}
-                productName={amountModal.product?.name || ''}
-                canonicalUnit={amountModal.product?.canonicalUnit ?? null}
-                canonicalStep={amountModal.product?.canonicalStep ?? null}
-                canonicalFamily={amountModal.product?.canonicalFamily ?? null}
-                minAmount={amountModal.product?.minAmount || 0}
-                maxAmount={amountModal.product?.maxAmount || 0}
-                unit={amountModal.product?.unit || 'g'}
-                isWeighable={!!amountModal.product?.hasWeighable}
-                onCancel={() => setAmountModal({ visible: false, product: null })}
-                onConfirm={async (amount) => {
-                    const product = amountModal.product;
-                    setAmountModal({ visible: false, product: null });
-                    if (!product) return;
-                    if (isTemplateMode) {
-                        try {
-                            if (templateMap[product.id]) {
-                                await templateSetQty(product.id, amount);
-                            } else {
-                                await templateAddFn(product.id, amount);
-                                toastRef.current?.show(t('basketTab.templates.addedToTemplateToast'));
-                            }
-                        } catch {}
-                        return;
-                    }
-                    const result = await commitAdd(product.id, amount);
-                    if (result.success) {
-                        setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
-                        setBasketItemCount(prev => prev + 1);
-                        toastRef.current?.show(t('browse.addedToast'));
-                    }
-                }}
             />
             <FilterDropdownModal
                 visible={openFilter !== null}

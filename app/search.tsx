@@ -36,9 +36,7 @@ import CreateStoreProductModal, {
 } from "../components/receipt/CreateStoreProductModal";
 import { useTheme, radius, elevation, type AppTheme } from "../constants/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import AmountPickerModal from '../components/AmountPickerModal';
 import { Toast, type ToastHandle } from '../components/Toast';
-import { resolveCanonicalStep, resolveDisplayUnit } from '../utils/canonicalStep';
 
 // Pick the first URL from the API's imageUrls (string | array | null) for
 // places that only support a single imageUrl field (e.g. pendingPick).
@@ -152,7 +150,6 @@ export default function SearchScreen() {
         typeof params.ocrName === "string" ? params.ocrName : "",
     ).trim();
     const [createModalVisible, setCreateModalVisible] = useState(false);
-    const [amountModal, setAmountModal] = useState<{ visible: boolean; product: ProductRow | null; editQty?: number | null }>({ visible: false, product: null });
     const [basketItemCount, setBasketItemCount] = useState(0);
     const toastRef = useRef<ToastHandle>(null);
 
@@ -209,6 +206,36 @@ export default function SearchScreen() {
             });
         } catch {}
     }, []);
+
+    // Fresh add (non-picker path; the weighable/range picker is owned by
+    // AddOrStepper and also lands here via onCommit). Adopts server truth on
+    // 409 rather than rolling back to "Add".
+    const addToBasket = useCallback((item: ProductRow, qty: number) => {
+        setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
+        addProductToBasket(item.id, draftBasketId, setDraftBasketId, qty).then(result => {
+            if (!result.success) {
+                void hydrateBasket();
+                toastRef.current?.show(result.message);
+            } else {
+                setBasketItemCount(prev => prev + 1);
+                toastRef.current?.show(t('browse.addedToast'));
+            }
+        });
+    }, [draftBasketId, setDraftBasketId, hydrateBasket, t]);
+
+    // Single commit for AddOrStepper: add / set-absolute / remove (or the
+    // template store). `currentQty` is the card's current qty (0 ⇒ fresh add).
+    const commitCardQty = useCallback((item: ProductRow, currentQty: number, qty: number) => {
+        if (isTemplateMode) {
+            const tq = templateMap[item.id]?.quantity ?? 0;
+            if (qty <= 0) { templateSetQty(item.id, 0).catch(() => {}); return; }
+            if (tq === 0) { templateAdd(item.id, qty).catch(() => {}); return; }
+            templateSetQty(item.id, qty).catch(() => {});
+            return;
+        }
+        if (currentQty === 0 && qty > 0) { addToBasket(item, qty); return; }
+        void setBasketQtyAbsolute(item.id, qty);
+    }, [isTemplateMode, templateMap, templateSetQty, templateAdd, addToBasket, setBasketQtyAbsolute]);
     const [query, setQuery] = useState("");
     const [searching, setSearching] = useState(false);
     const [inputKey, setInputKey] = useState(0);
@@ -639,34 +666,6 @@ export default function SearchScreen() {
                 if (!Number.isFinite(item.id) || item.id <= 0 || !Number.isFinite(item.categoryId) || !item.name?.trim()) return null;
 const quantity = basketQuantities[item.id] ?? 0;
 
-                const syncQty = async (newQty: number) => {
-                    setBasketQuantities(prev => ({ ...prev, [item.id]: Math.max(0, newQty) }));
-                    try {
-                    const currentDraftId = useBasketState.getState().draftBasketId;
-                    if (!currentDraftId) return;
-
-                    const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
-                    const items = await res.json();
-                    const basketItem = items.find((i: any) => i.productId === item.id);
-
-                    if (newQty <= 0) {
-                        if (basketItem) {
-                        await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
-                        setBasketItemCount(prev => Math.max(0, prev - 1));
-                        }
-                        return;
-                    }
-
-                    if (basketItem) {
-                        await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ quantity: newQty }),
-                        });
-                    }
-                    } catch {}
-                };
-
                 const bigUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
                 const smallUnit = item.canonicalUnit === 'l' ? 'ml' : 'g';
                 const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
@@ -682,6 +681,7 @@ const quantity = basketQuantities[item.id] ?? 0;
                     chainLogos={item.chainLogos}
                     badge={item.badge}
                     amountText={amountText}
+                    product={item}
                     quantity={cardQty}
                     addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
                     onOpen={() => router.push(
@@ -689,50 +689,7 @@ const quantity = basketQuantities[item.id] ?? 0;
                             ? `/product/${item.id}?templateId=${templateIdNum}`
                             : `/product/${item.id}` as any
                     )}
-                    onAdd={() => {
-                        const hasRange = item.minAmount != null && item.maxAmount != null && item.minAmount !== item.maxAmount;
-                        if (hasRange || !!item.hasWeighable) {
-                            setAmountModal({ visible: true, product: item });
-                            return;
-                        }
-                        const qty = resolveCanonicalStep(item);
-                        if (isTemplateMode && templateIdNum != null) {
-                            templateAdd(item.id, qty).catch(() => {});
-                            return;
-                        }
-                        setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
-                        addProductToBasket(item.id, draftBasketId, setDraftBasketId, qty).then(result => {
-                            if (!result.success) {
-                                // Adopt server truth instead of rolling back to "Add" —
-                                // a 409 means the product IS in the basket; show its real qty.
-                                void hydrateBasket();
-                                toastRef.current?.show(result.message);
-                            } else {
-                                setBasketItemCount(prev => prev + 1);
-                                toastRef.current?.show(t('browse.addedToast'));
-                            }
-                        });
-                    }}
-                    onDec={() => {
-                        if (isTemplateMode) {
-                            const step = resolveCanonicalStep(item);
-                            const next = Math.max(0, Math.round((templateQty - step) / step) * step);
-                            templateSetQty(item.id, next).catch(() => {});
-                            return;
-                        }
-                        syncQty(Number((quantity - 1).toFixed(1)));
-                    }}
-                    onInc={() => {
-                        if (isTemplateMode) {
-                            const step = resolveCanonicalStep(item);
-                            const next = Math.round((templateQty + step) / step) * step;
-                            templateSetQty(item.id, next).catch(() => {});
-                            return;
-                        }
-                        syncQty(Number((quantity + 1).toFixed(1)));
-                    }}
-                    onQuantityPress={() => setAmountModal({ visible: true, product: item, editQty: cardQty })}
-                    quantityUnit={resolveDisplayUnit(item)}
+                    onCommit={(qty) => commitCardQty(item, cardQty, qty)}
                     />
                 );
                 }}
@@ -743,52 +700,6 @@ const quantity = basketQuantities[item.id] ?? 0;
           BasketListSheet (the "collecting items" session sheet) — the old
           per-screen basketBar here was redundant and fought it on Android
           (elevation z-order), so it's removed. */}
-      <AmountPickerModal
-        visible={amountModal.visible}
-        productName={amountModal.product?.name ?? ''}
-        canonicalUnit={amountModal.product?.canonicalUnit}
-        canonicalStep={amountModal.product?.canonicalStep}
-        canonicalFamily={amountModal.product?.canonicalFamily}
-        minAmount={amountModal.product?.minAmount ?? 0}
-        maxAmount={amountModal.product?.maxAmount ?? 0}
-        unit={amountModal.product?.unit ?? 'g'}
-        isWeighable={!!amountModal.product?.hasWeighable}
-        initialAmount={amountModal.editQty ?? null}
-        onCancel={() => setAmountModal({ visible: false, product: null })}
-        onConfirm={async (amount) => {
-          const product = amountModal.product!;
-          const isEdit = amountModal.editQty != null;
-          setAmountModal({ visible: false, product: null });
-          if (!isTemplateMode && isEdit) {
-            // Edit-reopen: SET the amount on the existing basket row.
-            await setBasketQtyAbsolute(product.id, amount);
-            return;
-          }
-          if (isTemplateMode && templateIdNum != null) {
-            try {
-              // Picker = set-absolute; override existing row rather than
-              // incrementing so the new amount matches what the user just
-              // dialed in.
-              if (templateMap[product.id]) {
-                await templateSetQty(product.id, amount);
-              } else {
-                await templateAdd(product.id, amount);
-              }
-            } catch {}
-            return;
-          }
-          setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
-          const result = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, amount);
-          if (!result.success) {
-              void hydrateBasket();
-              toastRef.current?.show(result.message);
-          } else {
-              setBasketItemCount(prev => prev + 1);
-              toastRef.current?.show(t('browse.addedToast'));
-          }
-
-        }}
-      />
       {isTemplateMode && templateIdNum != null && (
         <TemplateReturnBanner templateId={templateIdNum} />
       )}
