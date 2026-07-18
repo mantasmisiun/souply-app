@@ -1,7 +1,8 @@
 import React, {
-    forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
+    createContext, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
     type ReactNode,
 } from 'react';
+import type { SharedValue } from 'react-native-reanimated';
 import {
     View, Pressable, StyleSheet, Platform, Dimensions,
     type LayoutChangeEvent, type StyleProp, type ViewStyle,
@@ -10,15 +11,21 @@ import {
     Gesture, GestureDetector, ScrollView as GHScrollView, State,
 } from 'react-native-gesture-handler';
 import Animated, {
-    runOnJS, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
-    useSharedValue, withSpring,
+    interpolateColor, runOnJS, useAnimatedScrollHandler, useAnimatedStyle,
+    useDerivedValue, useSharedValue, withSpring,
 } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
     useTheme, useResolvedScheme, spacing, radius, withAlpha, type AppTheme,
 } from '../constants/theme';
 import { concentricRadius, displayCornerRadius } from '../utils/displayCorners';
+
+/** The sheet's 0→1 solid/dock progress (0 floating glass → 1 edge-to-edge
+ *  solid), published to sheet CONTENT so cards can fade from transparent (they
+ *  blend with the glass) to raised-white as the sheet docks. */
+export const SheetSolidContext = createContext<SharedValue<number> | null>(null);
 
 /**
  * DockedGlassSheet — ONE frosted-glass panel that IS a floating bottom bar and
@@ -49,14 +56,10 @@ const SCREEN_W = Dimensions.get('window').width;
 const MEDIUM_FRACTION = 0.5;   // stage-1 detent — the standard medium height.
 const PEEK = 14;               // slim pill strip above the bar row.
 const FLOAT_MARGIN = spacing.lg;
-// Collapsed, the floating dock is a touch NARROWER than when raised — the glass
-// tucks in by COLLAPSED_INSET on each side. Raising it (→ medium) widens the
-// glass back out to FLOAT_MARGIN, WITHOUT moving the bar-row content: the tab
-// icons live in a fixed BAR_CONTENT_W strip centred on screen, so the extra
-// width is added purely as empty glass on the left/right. (Applies to the
-// floating tab-bar / chooser dock; the full-screen session sheet is unaffected.)
 const COLLAPSED_INSET = 18;
-const COLLAPSED_MARGIN = FLOAT_MARGIN + COLLAPSED_INSET;
+// The floating dock's gap from every screen edge (left/right/bottom), shrinking
+// to 0 at full. Trimmed 25% for a tighter float.
+const COLLAPSED_MARGIN = Math.round((FLOAT_MARGIN + COLLAPSED_INSET) * 0.75);
 const BAR_CONTENT_W = SCREEN_W - 2 * COLLAPSED_MARGIN;
 const PILL_W = 40;
 const PILL_H = 5;
@@ -101,10 +104,22 @@ interface Props {
     onCollapsedClearance?: (px: number) => void;
     /** A scrollable behind the bar whose scroll must yield to this sheet's Pan. */
     blockScrollRef?: { current: unknown } | null;
+    /** When this panel is stacked IN FRONT of another dock (the session list
+     *  sheet over the tab-bar dock), its own shadow would double the back one
+     *  while collapsed. Set this so the shadow starts at 0 (collapsed — the back
+     *  dock casts it) and fades in with the sheet's expansion instead. */
+    progressiveShadow?: boolean;
+    /** Put the bar row at the TOP of the sheet (a title that RISES with the
+     *  sheet as it expands) and reveal the sheet content BELOW it — a normal
+     *  bottom-sheet layout, vs the default Find-My style (fixed bar at the
+     *  bottom, content revealed above it). The bar↔content separator is dropped
+     *  in this mode. */
+    barAtTop?: boolean;
 }
 
 export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function DockedGlassSheet({
     barRow, barRowHeight, sheet, colors: colorsProp, onBarHeight, onCollapsedClearance, blockScrollRef,
+    progressiveShadow, barAtTop,
 }, ref) {
     const themed = useTheme();
     const colors = colorsProp ?? themed;
@@ -114,19 +129,31 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
 
     const hasSheet = sheet != null;
     const maxStage = sheet?.maxStage ?? 2;
+    // Has a full detent (and, there, docks edge-to-edge). ALL sheets share ONE
+    // geometry now: a symmetric floating gap when collapsed that shrinks equally
+    // on the sides AND bottom, reaching an edge-to-edge dock at full — the bar
+    // row stays screen-fixed throughout (see p / barRowStyle).
     const dockAtLast = hasSheet && maxStage >= 2;
-    const peek = hasSheet ? PEEK : 0;
+    // Reserve the grabber strip ALWAYS — even a sheet-less bar keeps the space,
+    // so the pill's presence/absence never shifts the bar content; only the
+    // grabber itself toggles. The bar content is centred in (barRowHeight + peek)
+    // so its top gap (holding the grabber) matches its bottom gap.
+    const peek = PEEK;
 
     // ── STANDARD detents (fixed, content-independent) ─────────────────────────
-    const collapsedH = barRowHeight + peek;
+    // Collapsed height brackets the bar row with an EQUAL peek above (grabber)
+    // and below (gap), so the bar content is vertically centred in the dock.
+    const collapsedH = barRowHeight + 2 * peek;
     const mediumH = Math.max(Math.round(SCREEN_H * MEDIUM_FRACTION), collapsedH + 160);
+    // Full is edge-to-edge (clip bottom → 0), spanning up to just under the
+    // status bar.
     const fullH = SCREEN_H - insets.top;
 
-    // Distance from the screen bottom to the TOP of the collapsed dock (bottom
-    // margin + bar height, peek excluded for stability). Published so screens
-    // can pad their scroll content to clear the floating bar.
-    const collapsedClearance =
-        insets.bottom + spacing.sm + (dockAtLast ? 0 : COLLAPSED_INSET) + barRowHeight;
+    // Distance from the screen bottom to the TOP of the (screen-fixed) bar row.
+    // The collapsed dock floats a SYMMETRIC COLLAPSED_MARGIN from the left, right
+    // AND bottom screen edges (no safe-area term — that made the bottom gap look
+    // bigger than the sides). Identical for every sheet. Peek excluded.
+    const collapsedClearance = COLLAPSED_MARGIN + barRowHeight + 2 * peek;
     useEffect(() => { onCollapsedClearance?.(collapsedClearance); }, [collapsedClearance, onCollapsedClearance]);
     const snaps = useMemo(
         () => (!hasSheet ? [collapsedH]
@@ -255,72 +282,101 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         return g;
     }, [hasSheet, snapEnd, h, startH, snapsSV, scrollY, draggingSV, grabX, grabY, setActiveJS, blockScrollRef]);
 
-    // ── Dock-to-full progress (0 floating → 1 edge-to-edge solid) ─────────────
-    const dockP = useDerivedValue(() => {
-        if (!dockAtLast) return 0;
+    // ── ONE progress: 0 collapsed → 1 full (edge-to-edge). Margins, bar-row
+    //    counter-offset and content anchor all derive from it, so sides + bottom
+    //    grow in lock-step and the bar row never budges. ────────────────────────
+    const p = useDerivedValue(() => {
         const sn = snapsSV.value;
-        const last = sn[sn.length - 1];
-        const prev = sn.length > 1 ? sn[sn.length - 2] : last;
-        return clamp((h.value - prev) / Math.max(1, last - prev), 0, 1);
-    });
-    // 0 collapsed → 1 raised, for the floating tab-bar / chooser dock. Drives the
-    // narrow-collapsed → wide-raised glass tween (the session sheet uses dockP).
-    const raiseP = useDerivedValue(() => {
-        if (dockAtLast) return 0;
-        const sn = snapsSV.value;
-        const lo = sn[0];
-        const hi = sn.length > 1 ? sn[sn.length - 1] : lo;
+        const lo = sn[0], hi = sn[sn.length - 1];
         return hi > lo ? clamp((h.value - lo) / (hi - lo), 0, 1) : 0;
+    });
+    // Glass→solid + square-corner dock fades over the LAST segment (medium→full).
+    const solidP = useDerivedValue(() => {
+        const sn = snapsSV.value;
+        if (sn.length < 3) return 0;
+        const mid = sn[1], hi = sn[sn.length - 1];
+        return hi > mid ? clamp((h.value - mid) / (hi - mid), 0, 1) : 0;
     });
     const cornerR = concentricRadius(insets.bottom, spacing.sm);
     const displayR = displayCornerRadius(insets.bottom);
 
     // ── Animated styles ───────────────────────────────────────────────────────
-    // Dock morph animates the EDGES directly (left/right/bottom/bottom-radius)
-    // so the content keeps its normal side padding — a scaleX morph would need
-    // a counter-scale that renders content full-width and clips off the padding.
+    // Symmetric margin: COLLAPSED_MARGIN when collapsed → 0 at full, applied to
+    // left/right AND the (visible) bottom gap in lock-step. Bottom corners square
+    // off into the display radius as it docks.
     const clipStyle = useAnimatedStyle(() => {
-        const base: Record<string, unknown> = { height: h.value };
-        if (dockAtLast) {
-            const p = dockP.value;
-            const m = FLOAT_MARGIN * (1 - p);
-            const r = Math.round(cornerR + (displayR - cornerR) * p);
-            base.left = m;
-            base.right = m;
-            base.bottom = insets.bottom + spacing.sm * (1 - p);
-            base.borderBottomLeftRadius = r;
-            base.borderBottomRightRadius = r;
-        } else {
-            // Collapsed the glass is inset by COLLAPSED_INSET on all three free
-            // edges (left/right/bottom); raising grows it back out EQUALLY on the
-            // sides AND downward. The centred, bottom-fixed bar content never
-            // moves (see barRowStyle counter-offsets).
-            const p = raiseP.value;
-            const m = COLLAPSED_MARGIN + (FLOAT_MARGIN - COLLAPSED_MARGIN) * p;
-            base.left = m;
-            base.right = m;
-            base.bottom = insets.bottom + spacing.sm + COLLAPSED_INSET * (1 - p);
-        }
-        return base;
+        const m = COLLAPSED_MARGIN * (1 - p.value);
+        const r = Math.round(cornerR + (displayR - cornerR) * solidP.value);
+        return {
+            height: h.value,
+            left: m,
+            right: m,
+            bottom: m, // symmetric with the sides; → 0 (edge-to-edge) at full
+            borderBottomLeftRadius: r,
+            borderBottomRightRadius: r,
+            // The whole-clip edge outline (wraps the sheet AND the bar) fades out
+            // as it docks — no border once edge-to-edge.
+            borderColor: interpolateColor(solidP.value, [0, 1], [colors.outlineVariant, 'transparent']),
+        };
     });
-    // Bar-row (tab icons) held at a fixed screen box: width BAR_CONTENT_W and a
-    // left/bottom offset that counter-animates the clip's own left/bottom so the
-    // icons' screen x AND y stay constant at every detent — the glass grows
-    // around them. Full-width for the session sheet (dockAtLast).
+    // Bar row held in a FIXED screen box (width BAR_CONTENT_W): its left+bottom
+    // offset counter-animate the clip's own shrinking left+bottom, so its screen
+    // x AND y are constant at every detent — the glass grows around it.
     const barRowStyle = useAnimatedStyle(() => {
-        if (dockAtLast) return { left: 0, right: 0, bottom: 0 };
-        const p = raiseP.value;
-        const m = COLLAPSED_MARGIN + (FLOAT_MARGIN - COLLAPSED_MARGIN) * p;
-        return { left: COLLAPSED_MARGIN - m, width: BAR_CONTENT_W, bottom: COLLAPSED_INSET * p };
+        const off = COLLAPSED_MARGIN * p.value;
+        // The bar row is inset by `peek` on left/right/bottom (and the grabber
+        // sits in the equal peek strip above) so the content's gap to every dock
+        // edge matches. The content itself carries NO extra horizontal padding.
+        return { left: peek + off, width: BAR_CONTENT_W - 2 * peek, bottom: peek + off };
     });
-    // The separator + content sit just above the bar row. Because the bar row is
-    // counter-offset (COLLAPSED_INSET·raiseP) to stay screen-fixed while the clip
-    // bottom grows down, they must carry the SAME offset — otherwise they drift
-    // down over the tab icons on drag. So they anchor to the icons, not the clip.
+    // Separator + content ride above the bar row. The bar row's top edge is at
+    // (peek + off + barRowHeight); the separator must clear it by another `peek`
+    // so its gap to the bar content matches the bar's side/bottom peek — otherwise
+    // it lands flush on the X/Basket buttons, which now fill the whole row.
     const barTopStyle = useAnimatedStyle(() => ({
-        bottom: barRowHeight + (dockAtLast ? 0 : COLLAPSED_INSET * raiseP.value),
+        bottom: barRowHeight + 2 * peek + COLLAPSED_MARGIN * p.value,
     }));
-    const solidStyle = useAnimatedStyle(() => ({ opacity: dockAtLast ? dockP.value : 0 }));
+    // ── barAtTop layout ───────────────────────────────────────────────────────
+    // Bar row pinned to the TOP of the clip (just below the pill). Because the
+    // clip grows UPWARD, a top-anchored row RISES with the sheet — it reads as
+    // the sheet title moving up. `top` is a CONSTANT peek: the title's gap to
+    // the sheet's top edge must never change during the drag. Horizontally the
+    // row hugs the clip's edges (left/right: peek), so as the sheet widens
+    // toward its edge-to-edge dock the row widens WITH it — the X and the
+    // action button gradually spread outward through the stages.
+    const barRowTopStyle = useAnimatedStyle(() => ({ left: peek, right: peek, top: peek }));
+    // Content revealed BELOW the top bar: top rides just under the title (also a
+    // constant gap) and the bottom clips EXACTLY at the sheet's bottom edge
+    // (bottom: 0 of the clip — which is the screen bottom once docked at full).
+    // Left/right hug the clip's edges like the title row, so the item rows
+    // spread outward WITH the sheet as it widens through the stages. The opacity
+    // ramp hides the content sliver that would otherwise peek out below the
+    // title in the collapsed bar (the clip leaves `peek` of slack there).
+    const contentBelowStyle = useAnimatedStyle(() => ({
+        left: peek, right: peek,
+        top: peek + barRowHeight, bottom: 0,
+        opacity: clamp(p.value * 6, 0, 1),
+    }));
+    // Scroll fade under the title (barAtTop, full detent): items gradually fade
+    // as they slide beneath the title row. Only meaningful once the sheet is
+    // solid and actually scrolled (scroll is enabled at full only). Same edge
+    // anchoring as the content it covers.
+    const topFadeStyle = useAnimatedStyle(() => ({
+        left: peek, right: peek,
+        top: peek + barRowHeight,
+        opacity: solidP.value * clamp(scrollY.value / 32, 0, 1),
+    }));
+    // Shadow opacity + elevation animate (color/radius/offset are static in the
+    // clip style). A `progressiveShadow` panel casts NOTHING while collapsed (the
+    // dock behind it already does) and fades its own shadow in as it expands;
+    // every other panel keeps a constant barely-there shadow.
+    const shadowStyle = useAnimatedStyle(() => {
+        const k = progressiveShadow ? p.value : 1;
+        return { shadowOpacity: (isDark ? 0.18 : 0.07) * k, elevation: 3 * k };
+    });
+    const solidStyle = useAnimatedStyle(() => ({ opacity: solidP.value }));
+    // Top rim highlight is part of the edge decoration — fades out with the border.
+    const rimStyle = useAnimatedStyle(() => ({ opacity: 1 - solidP.value }));
     const sepStyle = useAnimatedStyle(() => {
         const sn = snapsSV.value;
         const lo = sn[0], hi = sn[sn.length - 1];
@@ -332,18 +388,18 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         else { setStageJS(0); springTo(0); }
     }, [setStageJS, springTo]);
 
-    const scrollEnabled = hasSheet && dockAtLast && stage === lastIdx;
+    // Scroll at the FULL detent whenever one exists (floating or docked).
+    const scrollEnabled = hasSheet && maxStage >= 2 && stage === lastIdx;
 
     const panel = (
         <Animated.View
             style={[
                 styles.clip,
                 { borderRadius: cornerR },
-                // Non-dock: fixed floating margins. Dock: left/right/bottom come
-                // from clipStyle and animate to the screen edges at full.
-                !dockAtLast && styles.clipFloat,
-                !dockAtLast && { bottom: insets.bottom + spacing.sm },
+                // left/right/bottom + bottom-radius all come from clipStyle (one
+                // symmetric margin that shrinks to the edge-to-edge dock at full).
                 clipStyle,
+                shadowStyle,
             ]}
             pointerEvents={hasSheet ? 'auto' : 'box-none'}
         >
@@ -351,7 +407,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                 the full detent. */}
             <BlurView
                 pointerEvents="none"
-                intensity={isDark ? 40 : 55}
+                intensity={isDark ? 40 : 35}
                 tint={isDark ? 'dark' : 'light'}
                 experimentalBlurMethod="dimezisBlurView"
                 style={styles.glassFill}
@@ -360,12 +416,15 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
             {dockAtLast && (
                 <Animated.View pointerEvents="none" style={[styles.glassFill, styles.solid, solidStyle]} />
             )}
-            <View pointerEvents="none" style={styles.rim} />
+            <Animated.View pointerEvents="none" style={[styles.rim, rimStyle]} />
 
-            {/* CONTENT — Find-My reveal: pinned below the pill, above the bar
-                row; a ScrollView that only scrolls at the full detent. */}
+            {/* CONTENT — default: Find-My reveal (below the pill, above the bar).
+                barAtTop: revealed BELOW the top title bar. Scrolls only at full. */}
             {hasSheet && (
-                <Animated.View style={[styles.contentClip, { top: peek }, barTopStyle]} pointerEvents="box-none">
+                <Animated.View
+                    style={[styles.contentClip, barAtTop ? contentBelowStyle : [{ top: peek }, barTopStyle]]}
+                    pointerEvents="box-none"
+                >
                     <AnimatedScroll
                         ref={scrollRef}
                         style={StyleSheet.absoluteFill}
@@ -377,19 +436,39 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                         bounces={false}
                         overScrollMode="never"
                     >
-                        {sheet!.content}
+                        <SheetSolidContext.Provider value={solidP}>
+                            {sheet!.content}
+                        </SheetSolidContext.Provider>
                     </AnimatedScroll>
                 </Animated.View>
             )}
 
-            {hasSheet && (
+            {hasSheet && !barAtTop && (
                 <Animated.View pointerEvents="none" style={[styles.separator, barTopStyle, sepStyle]} />
             )}
 
-            {/* BAR ROW — pinned at the bottom; held to a fixed centred strip so
-                the tab icons don't shift as the glass widens on raise. */}
+            {/* Scroll fade (barAtTop): a short surface→transparent gradient just
+                below the title row, so items dissolve as they scroll under it. */}
+            {hasSheet && barAtTop && (
+                <Animated.View pointerEvents="none" style={[styles.topFade, topFadeStyle]}>
+                    <Svg width="100%" height="100%">
+                        <Defs>
+                            <SvgLinearGradient id="dockTopFade" x1="0" y1="0" x2="0" y2="1">
+                                <Stop offset="0" stopColor={colors.sheetSurface} stopOpacity="1" />
+                                <Stop offset="1" stopColor={colors.sheetSurface} stopOpacity="0" />
+                            </SvgLinearGradient>
+                        </Defs>
+                        <Rect x="0" y="0" width="100%" height="100%" fill="url(#dockTopFade)" />
+                    </Svg>
+                </Animated.View>
+            )}
+
+            {/* BAR ROW — held to a fixed centred box so the content never shifts
+                as the glass widens/raises or the pill toggles. Default: pinned at
+                the bottom. barAtTop: pinned near the top, rising with the sheet as
+                a title. */}
             <Animated.View
-                style={[styles.barRow, { height: barRowHeight }, barRowStyle]}
+                style={[styles.barRow, { height: barRowHeight }, barAtTop ? barRowTopStyle : barRowStyle]}
                 onLayout={(e: LayoutChangeEvent) => onBarHeight?.(e.nativeEvent.layout.height)}
                 pointerEvents="box-none"
             >
@@ -415,44 +494,60 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
 });
 
 const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
+    // NO horizontal padding — the clip sets its own symmetric left/right/bottom
+    // margin (clipStyle). Padding here would offset the sides but not the bottom,
+    // making the side gaps wider than the bottom.
     wrap: {
         position: 'absolute', left: 0, right: 0, bottom: 0,
-        paddingHorizontal: FLOAT_MARGIN,
     },
     clip: {
         position: 'absolute',
         overflow: 'hidden',
         borderWidth: StyleSheet.hairlineWidth,
         borderColor: c.outlineVariant,
-        ...(isDark
-            ? { shadowColor: '#000000', shadowOpacity: 0.5, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 16 }
-            : { shadowColor: '#5A2233', shadowOpacity: 0.28, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 16 }),
+        // Barely-there shadow — just a hint of lift. Color/radius/offset are
+        // static; opacity + elevation come from the animated shadowStyle so a
+        // stacked front sheet can fade its shadow in on expand.
+        shadowColor: isDark ? '#000000' : '#5A2233',
+        shadowRadius: 6,
+        shadowOffset: { width: 0, height: 2 },
     },
-    // Non-dock floating side margins (dock animates left/right in clipStyle).
-    clipFloat: { left: FLOAT_MARGIN, right: FLOAT_MARGIN },
     glassFill: {
         ...StyleSheet.absoluteFillObject,
         backgroundColor: Platform.OS === 'android' ? undefined : 'transparent',
     },
-    tint: { backgroundColor: withAlpha(c.surfaceContainer, isDark ? 0.62 : 0.6) },
-    solid: { backgroundColor: c.pageBackground },
+    // Glass tint over the blur. Light: WHITE and VERY transparent (stages 1–2
+    // share this constant tint — solid only fades in medium→full — so both read
+    // as the same, markedly see-through white frosted panel). Dark keeps its
+    // tinted container.
+    tint: { backgroundColor: withAlpha(isDark ? c.surfaceContainer : '#FFFFFF', isDark ? 0.62 : 0.08) },
+    // Opaque surface the glass fades INTO at full — WHITE in light (same as the
+    // section cards; a soft card shadow does the separating there).
+    solid: { backgroundColor: c.sheetSurface },
     rim: {
         ...StyleSheet.absoluteFillObject,
         borderTopWidth: 1.2,
         borderTopColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.9)',
     },
     contentClip: { position: 'absolute', left: 0, right: 0, overflow: 'hidden' },
+    // Height of the under-title scroll fade (barAtTop mode).
+    topFade: { position: 'absolute', height: 32 },
+    // The BAR separator (bar ↔ sheet content) — whisper-thin, subtle.
     separator: {
         position: 'absolute', left: spacing.lg, right: spacing.lg,
-        height: StyleSheet.hairlineWidth, backgroundColor: c.outlineVariant,
+        height: StyleSheet.hairlineWidth, backgroundColor: c.dividerBar,
     },
-    barRow: { position: 'absolute', bottom: 0, justifyContent: 'center' },
+    // Position (top/bottom) comes from the mode-specific animated style
+    // (barRowStyle / barRowTopStyle); base only sets absolute + vertical centring.
+    barRow: { position: 'absolute', justifyContent: 'center' },
     pillWrap: {
         position: 'absolute', top: 0, left: 0, right: 0,
         alignItems: 'center', paddingTop: 5,
     },
     pill: {
         width: PILL_W, height: PILL_H, borderRadius: radius.pill,
-        backgroundColor: c.border,
+        // Light: a solid mid-gray — c.border washed out to invisible on the
+        // near-transparent glass. Dark keeps the theme border tone.
+        backgroundColor: isDark ? c.border : 'rgba(60,60,67,0.55)',
     },
 });

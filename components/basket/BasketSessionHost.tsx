@@ -5,7 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { useTheme, radius, spacing, type AppTheme } from '../../constants/theme';
-import { useBasketSession, discoverOptions, type ChooserOption } from '../../state/basketSession';
+import { useBasketSession, discoverOptions, discoverTemplates, type ChooserOption } from '../../state/basketSession';
 import { useBasketState } from '../../state/basketState';
 import { applyChooserPick } from '../../utils/basketUtils';
 import { BasketListSheet } from './BasketListSheet';
@@ -41,6 +41,7 @@ export function BasketSessionHost() {
     const closeChooser = useBasketSession(s => s.closeChooser);
     const setDormant = useBasketSession(s => s.setDormant);
     const setDockOptions = useBasketSession(s => s.setDockOptions);
+    const setDockTemplates = useBasketSession(s => s.setDockTemplates);
 
     const onSurface = ROUTE_PREFIXES.some(p => pathname === p || pathname.startsWith(`${p}/`));
 
@@ -50,12 +51,16 @@ export function BasketSessionHost() {
         let alive = true;
         let retryTimer: ReturnType<typeof setTimeout> | null = null;
         const check = (retriesLeft: number) => {
-            discoverOptions()
-                .then(opts => {
+            // Baskets + templates together so `dormant` (does the chooser have
+            // anything to show) reflects EITHER — a template-only user still gets
+            // the swipe-up chooser. discoverTemplates never rejects.
+            Promise.all([discoverOptions(), discoverTemplates()])
+                .then(([opts, templates]) => {
                     if (!alive) return;
                     setDockOptions(opts ?? []);
+                    setDockTemplates(templates);
                     const prev = opts?.find(o => o.key === 'previous') ?? opts?.find(o => o.key === 'family') ?? null;
-                    setDormant(prev ? { count: prev.itemCount } : null);
+                    setDormant(prev != null || templates.length > 0 ? { count: prev?.itemCount ?? 0 } : null);
                 })
                 .catch(() => {
                     if (alive && retriesLeft > 0) retryTimer = setTimeout(() => check(retriesLeft - 1), 1500);

@@ -1,4 +1,5 @@
 import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -6,7 +7,8 @@ import { useTranslation } from 'react-i18next';
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { AddOrStepper } from '@/components/AddOrStepper';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
-import { useTheme, useResolvedScheme, radius, spacing, type AppTheme } from '../../constants/theme';
+import { useTheme, useResolvedScheme, radius, spacing, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_BASE_URL } from '../../config/api';
 import { useBasketSession, targetKey } from '../../state/basketSession';
 import { getTemplate, patchTemplateItem, deleteTemplateItem } from '../../utils/basketTemplatesApi';
@@ -27,7 +29,8 @@ import { getTemplate, patchTemplateItem, deleteTemplateItem } from '../../utils/
 // lives under the Catalog tab, so one prefix covers every session surface. The
 // root-level /search (receipt matching) is intentionally excluded.
 const ROUTE_PREFIXES = ['/catalog'];
-const SESSION_H = 62;
+// Product image size — the item separator indents past it (image + gap).
+const IMG_W = 56;
 
 interface PreviewItem {
     id: number;
@@ -46,6 +49,7 @@ export function BasketListSheet() {
     const { t } = useTranslation();
     const router = useRouter();
     const pathname = usePathname();
+    const insets = useSafeAreaInsets();
 
     const target = useBasketSession(s => s.target);
     const barVisible = useBasketSession(s => s.barVisible);
@@ -167,14 +171,29 @@ export function BasketListSheet() {
         }
     }, [removeItem]);
 
+    // Title size: compact in the collapsed bar, screen-title size once the sheet
+    // is open. It animates on RELEASE (stage settle), not continuously mid-drag.
+    const titleP = useSharedValue(0);
+    const titleAnimStyle = useAnimatedStyle(() => ({ fontSize: 16 + 6 * titleP.value }));
+
+    // The bar row height is MEASURED from the header's natural content height
+    // (tallest child — currently the 40px X chip), so the dock's collapsed
+    // vertical padding stays exactly `peek` — matching the sides — no matter how
+    // the buttons or text are resized later.
+    const [barH, setBarH] = useState(40);
+    const onHeaderLayout = useCallback((e: { nativeEvent: { layout: { height: number } } }) => {
+        const h = Math.round(e.nativeEvent.layout.height);
+        if (h > 0) setBarH(prev => (prev === h ? prev : h));
+    }, []);
+
     const sessionHeader = (
-        <View style={styles.header}>
+        <View style={styles.header} onLayout={onHeaderLayout}>
             <TouchableOpacity onPress={() => dismissBar()} hitSlop={8} style={styles.xBtn}>
-                <Ionicons name="close" size={26} color={colors.textSecondary} />
+                <Ionicons name="close" size={22} color={colors.textPrimary} />
             </TouchableOpacity>
-            <Text style={styles.headerText} numberOfLines={1}>
+            <Animated.Text style={[styles.headerText, titleAnimStyle]} numberOfLines={1}>
                 {t('basketSession.itemsCount', { count: itemCount })}
-            </Text>
+            </Animated.Text>
             <TouchableOpacity
                 style={styles.basketBtn}
                 onPress={() => {
@@ -186,58 +205,46 @@ export function BasketListSheet() {
                 activeOpacity={0.85}
             >
                 <Text style={styles.basketBtnText}>
-                    {t(target?.kind === 'template' ? 'basketSession.openTemplate' : 'basketSession.openBasket')}
+                    {t(target?.kind === 'template' ? 'basketSession.openTemplate' : 'basketSession.openStores')}
                 </Text>
-                <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
+                <Ionicons name="chevron-forward" size={14} color={colors.onPrimary} />
             </TouchableOpacity>
         </View>
     );
 
+    // Bare items — no section card/background, divided by the item separator,
+    // pulled up from the bottom under the title as the sheet expands.
     const listContent = (
-        <View style={styles.bodyScroll}>
-            {items == null ? (
-                <View style={{ paddingVertical: 24, alignItems: 'center' }}>
-                    <MaterialProgress size="large" color={colors.primary} />
-                </View>
-            ) : (
-                <View style={styles.card}>
-                    <View style={styles.cardHeader}>
-                        <Ionicons
-                            name={target?.kind === 'template' ? 'bookmark-outline' : 'cart-outline'}
-                            size={24}
-                            color={colors.primary}
-                        />
-                        <Text style={styles.cardHeaderText}>
-                            {t(target?.kind === 'template'
-                                ? 'basketSession.templateItemsSection'
-                                : 'basketSession.itemsSection')}
-                        </Text>
-                    </View>
-                    {items.length === 0 ? (
-                        <Text style={styles.emptyText}>
-                            {t(target?.kind === 'template'
-                                ? 'basketSession.templateEmpty'
-                                : 'basketSession.empty')}
-                        </Text>
-                    ) : items.map((item, i) => (
-                        <React.Fragment key={item.id}>
-                            <View style={styles.sep} />
-                            <View style={styles.item}>
-                                {/* Picture row: image left, name (2 lines) + New badge stacked on the right. */}
-                                <View style={styles.pictureRow}>
-                                    {item.imageUrl
-                                        ? <Image source={{ uri: item.imageUrl }} style={styles.itemImage} />
-                                        : <View style={[styles.itemImage, styles.itemImageFallback]}><Text style={{ opacity: 0.5 }}>🫜</Text></View>}
-                                    <View style={styles.pictureRowInfo}>
-                                        <Text style={styles.itemName} numberOfLines={2}>{item.name ?? `#${item.productId}`}</Text>
-                                        {newProductIds.includes(item.productId) && (
-                                            <View style={styles.newBadge}>
-                                                <Text style={styles.newBadgeText}>{t('basketSession.newBadge')}</Text>
-                                            </View>
-                                        )}
-                                    </View>
+        items == null ? (
+            <View style={{ paddingVertical: 24, alignItems: 'center' }}>
+                <MaterialProgress size="large" color={colors.primary} />
+            </View>
+        ) : items.length === 0 ? (
+            <Text style={styles.emptyText}>
+                {t(target?.kind === 'template' ? 'basketSession.templateEmpty' : 'basketSession.empty')}
+            </Text>
+        ) : (
+            <View>
+                {items.map((item, i) => (
+                    <React.Fragment key={item.id}>
+                        {/* Separator only BETWEEN items — none above the first (it sits under the title). */}
+                        {i > 0 && <View style={styles.sep} />}
+                        <View style={styles.item}>
+                            {/* Image left; right column = one-line name, then the
+                                stepper + trash on the row the 2nd name line used
+                                to occupy. */}
+                            {item.imageUrl
+                                ? <Image source={{ uri: item.imageUrl }} style={styles.itemImage} />
+                                : <View style={[styles.itemImage, styles.itemImageFallback]}><Text style={{ opacity: 0.5 }}>🫜</Text></View>}
+                            <View style={styles.itemBody}>
+                                <View style={styles.nameRow}>
+                                    <Text style={styles.itemName} numberOfLines={1}>{item.name ?? `#${item.productId}`}</Text>
+                                    {newProductIds.includes(item.productId) && (
+                                        <View style={styles.newBadge}>
+                                            <Text style={styles.newBadgeText}>{t('basketSession.newBadge')}</Text>
+                                        </View>
+                                    )}
                                 </View>
-                                {/* Action row: stepper left-aligned, trash right-aligned. */}
                                 <View style={styles.actionRow}>
                                     <AddOrStepper
                                         product={item}
@@ -251,11 +258,11 @@ export function BasketListSheet() {
                                     </TouchableOpacity>
                                 </View>
                             </View>
-                        </React.Fragment>
-                    ))}
-                </View>
-            )}
-        </View>
+                        </View>
+                    </React.Fragment>
+                ))}
+            </View>
+        )
     );
 
     if (!visible) return null;
@@ -266,57 +273,61 @@ export function BasketListSheet() {
             colors={colors}
             onCollapsedClearance={setSessionBarClearance}
             barRow={sessionHeader}
-            barRowHeight={SESSION_H}
+            barRowHeight={barH}
+            // Title bar at the TOP, rising with the sheet; items revealed below it.
+            // (The tab dock renders null while this sheet is visible, so this is
+            // the only bottom dock — it carries the normal constant shadow.)
+            barAtTop
             blockScrollRef={onTabRoot ? browseListRef : null}
-            sheet={{ content: listContent, maxStage: 2, contentContainerStyle: { paddingBottom: spacing.lg } }}
+            sheet={{
+                content: listContent,
+                maxStage: 2,
+                contentContainerStyle: { paddingTop: spacing.xs, paddingBottom: insets.bottom + spacing.lg },
+                // Title grows when a drag SETTLES open (stage 1+) and shrinks
+                // back when it settles collapsed — animated, but only on release.
+                onStageChange: (s) => { titleP.value = withTiming(s > 0 ? 1 : 0, { duration: 200 }); },
+            }}
         />
     );
 }
 
 const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     header: {
-        flex: 1,
+        // No padding and no flex — the row keeps its NATURAL content height
+        // (measured via onLayout) so the dock can size itself to content + peek
+        // on every side. The dock centres it; the peek insets give the edges.
         flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-        paddingHorizontal: spacing.md,
     },
+    // Compact controls, centred in the row — the row is a sheet TITLE bar now,
+    // so the X / Stores chips sit smaller than the row height by design.
     xBtn: {
-        width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center',
+        width: 40, height: 40, borderRadius: 20,
+        alignItems: 'center', justifyContent: 'center',
         backgroundColor: c.surfaceMuted,
     },
+    // fontSize is ANIMATED (16 collapsed → 22, the ScreenHeading size, when the
+    // sheet settles open) — the base here is the collapsed size.
     headerText: { flex: 1, fontSize: 16, fontWeight: '700', color: c.textPrimary },
     basketBtn: {
         flexDirection: 'row', alignItems: 'center', gap: 2,
         backgroundColor: c.primary, borderRadius: radius.pill,
-        paddingLeft: 16, paddingRight: 12, paddingVertical: 10,
+        paddingLeft: 14, paddingRight: 10, paddingVertical: 10,
     },
-    basketBtnText: { color: c.onPrimary, fontSize: 15, fontWeight: '800' },
+    basketBtnText: { color: c.onPrimary, fontSize: 14, fontWeight: '800' },
 
-    bodyScroll: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
-    // Section holding the basket items: SAME transparency as the glass sheet,
-    // just a lighter tint (a low-alpha light overlay lightens the dark glass
-    // without adding opacity or its own blur). No border/shadow.
-    card: {
-        backgroundColor: isDark ? 'rgba(255,255,255,0.09)' : 'rgba(255,255,255,0.45)',
-        borderRadius: radius.lg,
-        paddingHorizontal: spacing.lg,
-        paddingBottom: spacing.sm,
-    },
-    cardHeader: {
-        flexDirection: 'row', alignItems: 'center', gap: 10,
-        paddingVertical: spacing.md,
-    },
-    cardHeaderText: { fontSize: 20, fontWeight: '800', color: c.textPrimary },
-    sep: { height: 1.5, backgroundColor: c.outlineVariant },
+    // The separator starts where the name/stepper column starts (past the
+    // image + gap) and runs to the trash can's right edge — never under the
+    // product picture.
+    sep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem, marginLeft: IMG_W + spacing.md },
     emptyText: { fontSize: 13, color: c.textMuted, textAlign: 'center', paddingVertical: 20 },
 
-    item: { paddingVertical: spacing.md, gap: spacing.sm },
-    // Row 1 — picture + (name over badge). Image top-aligned so a 2-line name
-    // grows downward next to it.
-    pictureRow: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md },
-    pictureRowInfo: { flex: 1, alignItems: 'flex-start', gap: 6, paddingTop: 2 },
-    // Row 2 — stepper pinned left, trash pinned right.
+    // One horizontal row: image | body column (name row over action row).
+    item: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md, paddingVertical: spacing.md },
+    itemBody: { flex: 1, gap: spacing.sm },
+    nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    // Stepper pinned left, trash pinned right — on the old 2nd name line.
     actionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
-    itemImage: { width: 56, height: 56, borderRadius: 8, backgroundColor: c.surfaceMuted },
+    itemImage: { width: IMG_W, height: IMG_W, borderRadius: 8, backgroundColor: c.surfaceMuted },
     itemImageFallback: { alignItems: 'center', justifyContent: 'center' },
     itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
     newBadge: {

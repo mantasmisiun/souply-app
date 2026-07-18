@@ -4,7 +4,8 @@ import { usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
-import { useTheme, spacing, type AppTheme } from '../../constants/theme';
+import { SheetCard } from '../SheetCard';
+import { useTheme, useResolvedScheme, spacing, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { useBasketSession, type ChooserOption } from '../../state/basketSession';
 import { useBasketState } from '../../state/basketState';
 import { applyChooserPick } from '../../utils/basketUtils';
@@ -24,7 +25,8 @@ import { formatDate } from '../../utils/formatCurrency';
 
 export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode; tabsRowHeight: number }) {
     const colors = useTheme();
-    const styles = useMemo(() => makeStyles(colors), [colors]);
+    const isDark = useResolvedScheme() === 'dark';
+    const styles = useMemo(() => makeStyles(colors, isDark), [colors, isDark]);
     const { t } = useTranslation();
     const pathname = usePathname();
     const { setDraftBasketId } = useBasketState();
@@ -33,6 +35,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const barVisible = useBasketSession(s => s.barVisible);
     const dormant = useBasketSession(s => s.dormant);
     const dockOptions = useBasketSession(s => s.dockOptions);
+    const dockTemplates = useBasketSession(s => s.dockTemplates);
     const setCollapseDock = useBasketSession(s => s.setCollapseDock);
     const browseListRef = useBasketSession(s => s.browseListRef);
     const dockExpandRequest = useBasketSession(s => s.dockExpandRequest);
@@ -71,43 +74,82 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
         controls.current?.expand();
     }, [dockExpandRequest, hasSheet]);
 
-    const optionLabel = (o: ChooserOption) =>
-        o.key === 'family' ? t('basketSession.optionFamily')
-        : o.key === 'previous' ? t('basketSession.optionPrevious')
-        : t('basketSession.optionNew');
-    const optionIcon = (o: ChooserOption): keyof typeof Ionicons.glyphMap =>
-        o.key === 'family' ? 'home-outline' : o.key === 'previous' ? 'cart-outline' : 'add-circle-outline';
+    // Phase C: opens the stacked template-creation sheet (name/emoji/cover) →
+    // creates the template and targets it. Stub for now.
+    const onAddTemplate = () => {};
 
-    const chooserRows = (dockOptions ?? []).filter(o => o.key !== 'new');
+    const baskets = (dockOptions ?? []).filter(o => o.key !== 'new');
+    const templates = dockTemplates ?? [];
+
+    // A row's title: family → its label, previous → last-edited date, template →
+    // its name. The date is what disambiguates otherwise-identical draft rows.
+    const rowTitle = (o: ChooserOption): string =>
+        o.key === 'template' ? (o.name || t('basketSession.optionTemplate'))
+        : o.key === 'family' ? t('basketSession.optionFamily')
+        : o.updatedAt ? formatDate(o.updatedAt) : t('basketSession.optionPrevious');
+    // Newest-first names, each capped so ≥3 fit on one line; middle-dot joined.
+    const previewLine = (names: string[]): string =>
+        names.slice(0, 4).map(n => (n.length > 18 ? `${n.slice(0, 17).trimEnd()}…` : n)).join('  ·  ');
+
+    const itemRow = (o: ChooserOption, keyId: string) => (
+        <TouchableOpacity key={keyId} style={styles.row} onPress={() => { applyChooserPick(o, setDraftBasketId).catch(() => {}); }}>
+            <View style={styles.rowIcon}>
+                <Ionicons name={o.key === 'template' ? 'bookmark' : 'cart'} size={20} color={colors.primary} />
+                {o.itemCount > 0 && (
+                    <View style={styles.countBadge}>
+                        <Text style={styles.countBadgeText}>{o.itemCount > 99 ? '99+' : o.itemCount}</Text>
+                    </View>
+                )}
+            </View>
+            <View style={{ flex: 1 }}>
+                <Text style={styles.rowTitle} numberOfLines={1}>{rowTitle(o)}</Text>
+                {o.itemPreview && o.itemPreview.length > 0 && (
+                    <Text style={styles.rowPreview} numberOfLines={1}>{previewLine(o.itemPreview)}</Text>
+                )}
+            </View>
+        </TouchableOpacity>
+    );
+
+    const addNewRow = (keyId: string, onPress: () => void) => (
+        <TouchableOpacity key={keyId} style={styles.row} onPress={onPress}>
+            <View style={[styles.rowIcon, styles.addIcon]}>
+                <Ionicons name="add" size={22} color={colors.onPrimary} />
+            </View>
+            <Text style={styles.addLabel}>{t('basketSession.addNew')}</Text>
+        </TouchableOpacity>
+    );
+
+    const sectionCard = (title: string, rows: ReactNode[]) => (
+        <SheetCard>
+            <Text style={styles.cardTitle}>{title}</Text>
+            {rows}
+        </SheetCard>
+    );
+
+    const withSeps = (nodes: ReactNode[]): ReactNode[] =>
+        nodes.flatMap((n, i) => (i === 0 ? [n] : [<View key={`sep-${i}`} style={styles.sep} />, n]));
+
     const chooserContent = (
         <View style={styles.body}>
-            <View style={styles.header}>
-                <Text style={styles.title}>{t('basketSession.sheetTitle')}</Text>
-                <TouchableOpacity
-                    style={styles.newBtn}
-                    hitSlop={8}
-                    onPress={() => { applyChooserPick({ key: 'new', basketId: null, itemCount: 0 }, setDraftBasketId).catch(() => {}); }}
-                >
-                    <Ionicons name="add" size={28} color={colors.primary} />
-                </TouchableOpacity>
-            </View>
-            {chooserRows.map((o, i) => (
-                <View key={o.basketId ?? o.key}>
-                    <TouchableOpacity style={styles.row} onPress={() => { applyChooserPick(o, setDraftBasketId).catch(() => {}); }}>
-                        <View style={styles.rowIcon}>
-                            <Ionicons name={optionIcon(o)} size={20} color={colors.primary} />
-                        </View>
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.rowLabel}>{optionLabel(o)}</Text>
-                            {o.updatedAt != null && <Text style={styles.rowMeta}>{formatDate(o.updatedAt)}</Text>}
-                        </View>
-                        <Text style={styles.rowCount}>{o.itemCount}</Text>
-                    </TouchableOpacity>
-                    {i < chooserRows.length - 1 && <View style={styles.sep} />}
-                </View>
-            ))}
+            {/* Sheet title (screen-title font) — frames the whole sheet as a
+                destination choice: pick a basket/template or add a new one. */}
+            <Text style={styles.sheetHeading}>{t('basketSession.chooserPrompt')}</Text>
+            {sectionCard(t('basketSession.sheetTitle'), withSeps([
+                addNewRow('add-basket', () => { applyChooserPick({ key: 'new', basketId: null, itemCount: 0 }, setDraftBasketId).catch(() => {}); }),
+                ...baskets.map(o => itemRow(o, o.basketId != null ? `b${o.basketId}` : o.key)),
+            ]))}
+            {sectionCard(t('tabs.templates'), withSeps([
+                addNewRow('add-template', onAddTemplate),
+                ...templates.map(o => itemRow(o, o.templateId != null ? `t${o.templateId}` : 'tpl')),
+            ]))}
         </View>
     );
+
+    // While the session list sheet owns the bottom (active session on a catalog
+    // surface) the tab dock renders NOTHING. The session bar auto-sizes to its
+    // own content, so a same-position dock behind it would poke out as a doubled
+    // edge — and its tab icons would ghost through the transparent glass.
+    if (sessionActive && onSurface) return null;
 
     if (!hasSheet) {
         return <DockedGlassSheet barRow={tabsRow} barRowHeight={tabsRowHeight} colors={colors} onCollapsedClearance={setTabBarClearance} />;
@@ -123,7 +165,10 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
             blockScrollRef={onTabRoot ? browseListRef : null}
             sheet={{
                 content: chooserContent,
-                maxStage: 1,
+                // Full detent so the two sections have room; the shared geometry
+                // keeps the collapsed tab bar symmetric + fixed and docks
+                // edge-to-edge only at full.
+                maxStage: 2,
                 // Collapsed back to the bar with adds still queued and no basket
                 // picked ⇒ the user dismissed the chooser: release those adds so
                 // their Add buttons stop spinning.
@@ -137,26 +182,28 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     );
 }
 
-const makeStyles = (c: AppTheme) => StyleSheet.create({
-    body: { paddingHorizontal: spacing.lg, paddingBottom: spacing.sm },
-    header: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-        paddingTop: spacing.md, paddingBottom: spacing.md,
-    },
-    title: { fontSize: 22, fontWeight: '800', color: c.textPrimary },
-    newBtn: {
-        width: 42, height: 42, borderRadius: 21,
-        backgroundColor: c.primaryMuted ?? c.surfaceMuted,
-        alignItems: 'center', justifyContent: 'center',
-    },
-    row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 12 },
+const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
+    body: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.sm, gap: spacing.md },
+    // Same size as a screen's ScreenHeading title (22/700) — the sheet's own title.
+    sheetHeading: { fontSize: 22, fontWeight: '700', color: c.textPrimary, paddingTop: spacing.xs, paddingBottom: spacing.xs },
+    cardTitle: { fontSize: 20, fontWeight: '800', color: c.textPrimary, paddingVertical: spacing.md },
+    row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 10 },
     rowIcon: {
         width: 40, height: 40, borderRadius: 20,
         backgroundColor: c.primaryMuted ?? c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
     },
-    rowLabel: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
-    rowMeta: { fontSize: 12, color: c.textSecondary, marginTop: 1 },
-    rowCount: { fontSize: 16, fontWeight: '800', color: c.textPrimary, marginLeft: spacing.md },
-    sep: { height: StyleSheet.hairlineWidth, backgroundColor: c.borderSubtle },
+    addIcon: { backgroundColor: c.primary },
+    // Count "dot" badge riding the icon's top-right corner.
+    countBadge: {
+        position: 'absolute', top: -3, right: -5,
+        minWidth: 18, height: 18, borderRadius: 9, paddingHorizontal: 4,
+        backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center',
+        borderWidth: 2, borderColor: isDark ? c.surfaceContainer : c.cardBackground,
+    },
+    countBadgeText: { color: c.onPrimary, fontSize: 9, fontWeight: '800' },
+    addLabel: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
+    rowTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
+    rowPreview: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
+    sep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem },
 });

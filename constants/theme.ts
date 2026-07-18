@@ -36,6 +36,10 @@ const lightTheme = {
   // Surfaces
   pageBackground:  palette.cream as string,
   cardBackground:  '#FFFFFF',
+  // The opaque backdrop a docked sheet fades into at the FULL detent — WHITE, the
+  // same white as the section cards; at stage 3 the sections are set off from it
+  // only by a very soft, gradual shadow (not a colour difference).
+  sheetSurface:    '#FFFFFF',
   surfaceMuted:    '#F3F4F6',
   surfaceSubtle:   '#FAFAFA',
   overlayBackdrop: 'rgba(17, 24, 39, 0.45)',
@@ -76,6 +80,12 @@ const lightTheme = {
   surfaceContainerHigh: '#FBF6F8',              // one elevation step higher
   surfaceTint:          palette.beet as string, // elevation-tint overlay colour
   outlineVariant:       '#E6DDE1',              // tinted hairline divider
+  // The TWO canonical separators (see DIVIDER_ITEM_HEIGHT). `Item` divides rows
+  // inside a section — a clearly-visible gray, readable from a distance/angle.
+  // `Bar` divides the bottom bar from its sheet — very thin, found only if
+  // sought. Use ONLY these two; never invent another divider.
+  dividerItem:          'rgba(60,60,67,0.24)',
+  dividerBar:           'rgba(60,60,67,0.10)',
 
   // Status
   warning:        '#F57C00',
@@ -97,6 +107,9 @@ const darkTheme: typeof lightTheme = {
   // Surfaces
   pageBackground:  '#121214',
   cardBackground:  '#1C1C1E',
+  // Sheet backdrop sits BELOW the cards — near-black so the #1C1C1E cards read
+  // as raised.
+  sheetSurface:    '#0E0E10',
   surfaceMuted:    '#2A2A2C',
   surfaceSubtle:   '#1A1A1C',
   overlayBackdrop: 'rgba(0, 0, 0, 0.6)',
@@ -135,6 +148,10 @@ const darkTheme: typeof lightTheme = {
   surfaceContainerHigh: '#2F2A30',
   surfaceTint:          palette.beet,
   outlineVariant:       '#3A3236',
+  // Dark: item divider is a VERY light gray (visible on the dark card); bar
+  // divider stays whisper-thin. See the light-theme note.
+  dividerItem:          'rgba(255,255,255,0.26)',
+  dividerBar:           'rgba(255,255,255,0.10)',
 
   // Status
   warning:        '#F59E0B',
@@ -256,6 +273,11 @@ export const radius = {
   xl: 28,
   pill: 100,
 } as const;
+
+/** Height of the canonical ITEM separator (theme.dividerItem) — thick enough to
+ *  read a section's rows apart at a glance. The BAR separator (theme.dividerBar)
+ *  is always StyleSheet.hairlineWidth. These two are the ONLY dividers. */
+export const DIVIDER_ITEM_HEIGHT = 1;
 
 /** Icon sizes (Ionicons & co). `xs` for inline meta chips, `md` for standard
  *  action icons. Explicit scale so glyphs stay consistent across screens. */

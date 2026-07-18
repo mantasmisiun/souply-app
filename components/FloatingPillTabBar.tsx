@@ -27,11 +27,15 @@ import {
 const DESTRUCTIVE_COLOR = '#E53E3E';
 
 // Width/height of the Material-3 "active indicator" pill that sits behind the
-// selected tab's icon and slides between tabs.
+// selected tab's icon and slides between tabs. Compact metrics so the whole
+// tab row measures ~40lp — the same bar size as the session list sheet's.
 const INDICATOR_WIDTH = 56;
-const INDICATOR_HEIGHT = 34;
-/** The tab-buttons row height (the collapsed bar). Content: icon 34 + label. */
-const TABS_ROW_H = 64;
+const INDICATOR_HEIGHT = 26;
+const ICON_SIZE = 20;
+/** Fallback row height before the first layout measure. The REAL height is
+ *  MEASURED from the row's natural content (icon + label), so resizing icons
+ *  or labels later auto-adjusts the dock — same scheme as the session bar. */
+export const TABS_ROW_H = 40;
 
 /**
  * Bottom clearance (above the safe-area inset) that screens must pad their
@@ -56,6 +60,9 @@ export const FLOATING_TAB_BAR_CLEARANCE = 80;
 export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
     const colors = useTheme();
     const [innerWidth, setInnerWidth] = useState(0);
+    // Natural content height of the row — measured, so the dock's collapsed
+    // padding stays `peek` on every side whatever the icon/label sizes.
+    const [rowH, setRowH] = useState(TABS_ROW_H);
     const tx = useSharedValue(0);
     const stretch = useSharedValue(1);
 
@@ -90,7 +97,11 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
     const tabsRow = (
         <View
             style={styles.tabsRow}
-            onLayout={(e: LayoutChangeEvent) => setInnerWidth(e.nativeEvent.layout.width - spacing.sm * 2)}
+            onLayout={(e: LayoutChangeEvent) => {
+                setInnerWidth(e.nativeEvent.layout.width);
+                const h = Math.round(e.nativeEvent.layout.height);
+                if (h > 0) setRowH(prev => (prev === h ? prev : h));
+            }}
             pointerEvents="box-none"
         >
             {itemWidth > 0 && !overrideActions && (
@@ -99,7 +110,7 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
                     style={[
                         styles.indicator,
                         {
-                            left: spacing.sm,
+                            left: 0,
                             width: INDICATOR_WIDTH,
                             height: INDICATOR_HEIGHT,
                             borderRadius: radius.pill,
@@ -118,7 +129,7 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
                         focused={false}
                         colors={colors}
                         tintOverride={a.destructive ? DESTRUCTIVE_COLOR : colors.primary}
-                        renderIcon={(color) => <Ionicons name={a.icon} size={24} color={color} />}
+                        renderIcon={(color) => <Ionicons name={a.icon} size={ICON_SIZE} color={color} />}
                         onPress={() => { Haptics.selectionAsync(); a.onPress(); }}
                     />
                 ))
@@ -137,7 +148,7 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
                             label={label}
                             focused={focused}
                             colors={colors}
-                            renderIcon={(color) => options.tabBarIcon?.({ focused, color, size: 24 })}
+                            renderIcon={(color) => options.tabBarIcon?.({ focused, color, size: ICON_SIZE })}
                             onPress={onPress}
                         />
                     );
@@ -145,7 +156,7 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
         </View>
     );
 
-    return <BasketDockSheet tabsRow={tabsRow} tabsRowHeight={TABS_ROW_H} />;
+    return <BasketDockSheet tabsRow={tabsRow} tabsRowHeight={rowH} />;
 }
 
 /**
@@ -191,7 +202,7 @@ function TabItem({
             android_ripple={{
                 color: withAlpha(colors.surfaceTint, stateLayer.pressed),
                 borderless: true,
-                radius: 36,
+                radius: 30,
             }}
             onPress={onPress}
             onPressIn={() => { scale.value = withSpring(0.86, motion.spring); }}
@@ -217,16 +228,16 @@ function TabItem({
 
 const styles = StyleSheet.create({
     tabsRow: {
-        flex: 1,
+        // No padding, no flex, no minHeight — the row keeps its NATURAL content
+        // height (icon + label), which is measured and fed to the dock so its
+        // collapsed padding is `peek` on every side, auto-adjusting to any
+        // future icon/label resize. The DockedGlassSheet centres it.
         flexDirection: 'row',
         alignItems: 'flex-start',
-        paddingTop: spacing.sm,
-        paddingHorizontal: spacing.sm,
-        minHeight: TABS_ROW_H,
     },
     indicator: {
         position: 'absolute',
-        top: spacing.sm,
+        top: 0,
     },
     item: {
         flex: 1,
@@ -241,5 +252,9 @@ const styles = StyleSheet.create({
     },
     label: {
         textAlign: 'center',
+        // Compact: with the 26lp icon wrap + 2 gap this lands the row at ~41lp —
+        // the session bar's size class.
+        fontSize: 11,
+        lineHeight: 13,
     },
 });

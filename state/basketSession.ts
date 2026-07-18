@@ -32,13 +32,23 @@ export const targetKey = (t: SessionTarget): string =>
     t.kind === 'basket' ? `b${t.basketId}` : `t${t.templateId}`;
 
 export interface ChooserOption {
-    key: 'family' | 'previous' | 'new';
+    key: 'family' | 'previous' | 'new' | 'template';
     basketId: number | null; // null = create new
+    /** Set for key 'template' — the session targets a template instead. */
+    templateId?: number | null;
+    /** Template name (key 'template'); baskets are titled by date instead. */
+    name?: string | null;
     label: string;           // resolved by the host at render (i18n)
     itemCount: number;
     /** Basket's last-edit timestamp (row subtitle); null for 'new'. */
     updatedAt: string | null;
+    /** Up to 5 recent product names (newest-first) for the row's preview line. */
+    itemPreview?: string[];
 }
+
+/** Split the API's `~|~`-joined preview into a name list (newest-first). */
+const parsePreview = (raw: unknown): string[] =>
+    typeof raw === 'string' && raw.length > 0 ? raw.split('~|~').filter(Boolean) : [];
 
 interface PendingAdd {
     productId: number;
@@ -65,6 +75,8 @@ interface BasketSessionState {
      *  always-mounted host so the tab-bar dock can render them without its own
      *  discovery pass. null until the first discovery resolves. */
     dockOptions: ChooserOption[] | null;
+    /** Discovered template rows for the chooser's Templates section. */
+    dockTemplates: ChooserOption[] | null;
     /** The Naršyti scroll list's ref, published so the dock's Pan can
      *  `blocksExternalGesture` it — a drag starting on the bar must expand the
      *  sheet, NOT let the list behind it steal the scroll (cross-tree, so it
@@ -96,6 +108,7 @@ interface BasketSessionState {
     setDormant: (d: { count: number } | null) => void;
     setCollapseDock: (fn: (() => void) | null) => void;
     setDockOptions: (o: ChooserOption[] | null) => void;
+    setDockTemplates: (o: ChooserOption[] | null) => void;
     setBrowseListRef: (r: { current: unknown } | null) => void;
     bumpBasketRev: () => void;
     dismissBar: () => void;
@@ -126,6 +139,7 @@ export const useBasketSession = create<BasketSessionState>((set, get) => ({
     dormant: null,
     collapseDock: null,
     dockOptions: null,
+    dockTemplates: null,
     browseListRef: null,
     basketRev: 0,
     newProductIds: [],
@@ -143,6 +157,7 @@ export const useBasketSession = create<BasketSessionState>((set, get) => ({
     setDormant: (d) => set({ dormant: d }),
     setCollapseDock: (fn) => set({ collapseDock: fn }),
     setDockOptions: (o) => set({ dockOptions: o }),
+    setDockTemplates: (o) => set({ dockTemplates: o }),
     setBrowseListRef: (r) => set({ browseListRef: r }),
     bumpBasketRev: () => set(s => ({ basketRev: s.basketRev + 1 })),
     dismissBar: () => set({ barVisible: false }),
@@ -248,11 +263,38 @@ export const discoverOptions = async (): Promise<ChooserOption[] | null> => {
 
     const options: ChooserOption[] = [];
     if (familyBasketId) {
-        options.push({ key: 'family', basketId: familyBasketId, label: '', itemCount: Number(familyRow?.itemCount) || 0, updatedAt: familyRow?.updatedAt ?? null });
+        options.push({ key: 'family', basketId: familyBasketId, label: '', itemCount: Number(familyRow?.itemCount) || 0, updatedAt: familyRow?.updatedAt ?? null, itemPreview: parsePreview(familyRow?.itemPreview) });
     }
     for (const b of recents) {
-        options.push({ key: 'previous', basketId: b.id, label: '', itemCount: Number(b.itemCount) || 0, updatedAt: b.updatedAt ?? null });
+        options.push({ key: 'previous', basketId: b.id, label: '', itemCount: Number(b.itemCount) || 0, updatedAt: b.updatedAt ?? null, itemPreview: parsePreview(b.itemPreview) });
     }
     options.push({ key: 'new', basketId: null, label: '', itemCount: 0, updatedAt: null });
     return options;
+};
+
+/**
+ * Discover the user's templates for the chooser's Templates section — each a
+ * resumable 'template' row (icon+count, name title, product-name preview).
+ * Returns [] on any failure so the section just renders empty.
+ */
+export const discoverTemplates = async (): Promise<ChooserOption[]> => {
+    try {
+        const userId = await getUserId();
+        const res = await fetch(`${API_BASE_URL}/api/basket-templates/user/${userId}`);
+        if (!res.ok) return [];
+        const rows: any[] = await res.json();
+        if (!Array.isArray(rows)) return [];
+        return rows.map(t => ({
+            key: 'template' as const,
+            basketId: null,
+            templateId: Number(t.id),
+            name: t.name ?? null,
+            label: '',
+            itemCount: Number(t.itemCount) || 0,
+            updatedAt: t.updatedAt ?? null,
+            itemPreview: parsePreview(t.itemPreview),
+        }));
+    } catch {
+        return [];
+    }
 };

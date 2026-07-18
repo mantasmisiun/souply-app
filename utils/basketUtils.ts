@@ -130,13 +130,48 @@ export const addProductToBasket = async (
     }
 };
 
-/** The chooser's pick handler: resolve the basket (create when `new`),
- *  set it as the session target and flush every queued add into it. */
+/** The chooser's pick handler: resolve the target (basket OR template — creating
+ *  a basket when `new`), set it as the session target and flush every queued add
+ *  into it. */
 export const applyChooserPick = async (
-    option: { key: 'family' | 'previous' | 'new'; basketId: number | null; itemCount: number },
+    option: {
+        key: 'family' | 'previous' | 'new' | 'template';
+        basketId: number | null;
+        templateId?: number | null;
+        name?: string | null;
+        itemCount: number;
+    },
     setDraftBasketId: (id: number) => void,
 ): Promise<void> => {
     const session = useBasketSession.getState();
+    session.closeChooser();
+    // Collapse the raised chooser sheet — the session continues COLLAPSED (just
+    // the bar) so the user keeps browsing; they pull it up to review.
+    session.collapseDock?.();
+
+    // Template pick → the session targets the template; queued adds flush via the
+    // template API rather than the basket-items endpoint.
+    if (option.key === 'template' && option.templateId != null) {
+        const templateId = option.templateId;
+        session.setTarget({ kind: 'template', templateId, name: option.name ?? undefined }, option.itemCount);
+        for (const add of session.takePending()) {
+            let r: { success: boolean; message: string };
+            try {
+                await addTemplateItem(templateId, { productId: add.productId, quantity: add.quantity });
+                r = { success: true, message: 'Pridėta į šabloną' };
+            } catch {
+                r = { success: false, message: 'Nepavyko pridėti produkto' };
+            }
+            if (r.success) {
+                useBasketSession.getState().bumpCount(1);
+                useBasketSession.getState().markNewProduct(add.productId);
+            }
+            add.resolve(r);
+        }
+        useBasketSession.getState().bumpBasketRev();
+        return;
+    }
+
     let basketId = option.basketId;
     if (basketId == null) {
         // key 'new' → force a brand-new draft (don't reuse the existing one;
@@ -145,10 +180,6 @@ export const applyChooserPick = async (
         basketId = await ensureDraftBasket(null, setDraftBasketId, userId, true);
     }
     session.setTarget({ kind: 'basket', basketId, isFamily: option.key === 'family' }, option.itemCount);
-    session.closeChooser();
-    // Collapse the raised chooser sheet — the session continues COLLAPSED (just
-    // the bar) so the user keeps browsing; they pull it up to review.
-    session.collapseDock?.();
     const pending = session.takePending();
     for (const add of pending) {
         const r = await postBasketItem(basketId, add.productId, add.quantity, add.matchMode);
