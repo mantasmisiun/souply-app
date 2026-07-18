@@ -79,9 +79,19 @@ export default function TabLayout() {
                 freezeOnBlur: true,
                 tabBarActiveTintColor: colors.primary,
                 tabBarInactiveTintColor: colors.textSecondary,
+                // The real bar visuals live in the DockedGlassSheet (glass pill).
+                // React Navigation's own tab-bar container must be a transparent
+                // ABSOLUTE overlay so it floats ABOVE the tab's content — incl.
+                // screens pushed inside a tab's nested native stack. Without
+                // position:absolute the container sits in normal flow and an
+                // Android native-stack push paints over the pill (it vanishes on
+                // catalog sub-screens). Screens already pad for a floating bar via
+                // FLOATING_TAB_BAR_CLEARANCE, so reserving no space is correct.
                 tabBarStyle: {
-                    backgroundColor: colors.cardBackground,
-                    borderTopColor: colors.borderSubtle,
+                    position: 'absolute',
+                    backgroundColor: 'transparent',
+                    borderTopWidth: 0,
+                    elevation: 0,
                 },
                 // Each tab is a folder with its own nested Stack (see
                 // tabStackOptions), which provides the native glass header.

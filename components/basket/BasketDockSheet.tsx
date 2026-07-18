@@ -37,10 +37,16 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const browseListRef = useBasketSession(s => s.browseListRef);
 
     const onTabRoot = pathname === '/catalog';
+    // The whole catalog tree is a session surface, so the swipe-up chooser is
+    // available on every catalog screen (home, L2, discounts, product, search)
+    // — not just the tab root. Without this the dock degrades to a static tab
+    // bar on the sub-screens and you can't pull up the basket sheet.
+    const onSurface = pathname === '/catalog' || pathname.startsWith('/catalog/');
     const sessionActive = target != null && barVisible;
-    // Chooser shows on Naršyti only when a resumable basket exists and no
-    // session is live (a live session is owned by the root BasketListSheet).
-    const hasSheet = onTabRoot && !sessionActive && dormant != null;
+    // Chooser shows whenever a resumable basket exists and no session is live
+    // (a live session is owned by the root BasketListSheet, which already spans
+    // the whole catalog tree).
+    const hasSheet = onSurface && !sessionActive && dormant != null;
 
     const controls = useRef<DockedSheetControls | null>(null);
 
@@ -100,7 +106,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
             colors={colors}
             barRow={tabsRow}
             barRowHeight={tabsRowHeight}
-            blockScrollRef={browseListRef}
+            blockScrollRef={onTabRoot ? browseListRef : null}
             sheet={{ content: chooserContent, maxStage: 1 }}
         />
     );
