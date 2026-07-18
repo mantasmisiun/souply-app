@@ -1,5 +1,5 @@
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { useEffect, useMemo, useRef, type ReactNode } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
@@ -10,6 +10,9 @@ import { useBasketSession, type ChooserOption } from '../../state/basketSession'
 import { useBasketState } from '../../state/basketState';
 import { applyChooserPick } from '../../utils/basketUtils';
 import { formatDate } from '../../utils/formatCurrency';
+import { TemplateCoverEditor, type CoverDraft } from '../TemplateCoverEditor';
+import { createTemplate } from '../../utils/basketTemplatesApi';
+import { getUserId } from '../../config/user';
 
 /**
  * BasketDockSheet — the Naršyti tab bar's basket CHOOSER, rendered inside the
@@ -74,9 +77,29 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
         controls.current?.expand();
     }, [dockExpandRequest, hasSheet]);
 
-    // Phase C: opens the stacked template-creation sheet (name/emoji/cover) →
-    // creates the template and targets it. Stub for now.
-    const onAddTemplate = () => {};
+    // "Add new" template: opens the SAME identity sheet the Templates tab uses
+    // (name/emoji/cover) → creates the template, adds it to the chooser list and
+    // TARGETS it (queued adds flush into it via the normal pick path).
+    const [createOpen, setCreateOpen] = useState(false);
+    const setDockTemplates = useBasketSession(s => s.setDockTemplates);
+    const onAddTemplate = () => setCreateOpen(true);
+    const handleCreateTemplate = async (next: CoverDraft) => {
+        try {
+            const userId = await getUserId();
+            const created = await createTemplate({
+                userId, name: next.name, coverColor: next.coverColor, coverImage: next.coverImage,
+            });
+            setCreateOpen(false);
+            const option: ChooserOption = {
+                key: 'template', templateId: created.id, name: created.name,
+                basketId: null, itemCount: 0, label: created.name, updatedAt: null,
+            };
+            setDockTemplates([...(dockTemplates ?? []), option]);
+            await applyChooserPick(option, setDraftBasketId);
+        } catch {
+            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
+        }
+    };
 
     const baskets = (dockOptions ?? []).filter(o => o.key !== 'new');
     const templates = dockTemplates ?? [];
@@ -151,11 +174,31 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     // edge — and its tab icons would ghost through the transparent glass.
     if (sessionActive && onSurface) return null;
 
+    // The identity sheet is an RN Modal — rendered alongside whichever dock
+    // variant is live so it survives the chooser mounting/unmounting.
+    const createEditor = (
+        <TemplateCoverEditor
+            visible={createOpen}
+            onClose={() => setCreateOpen(false)}
+            name=""
+            coverColor={null}
+            coverImage={null}
+            submitLabel={t('basketTab.templates.createConfirm')}
+            onSubmit={handleCreateTemplate}
+        />
+    );
+
     if (!hasSheet) {
-        return <DockedGlassSheet barRow={tabsRow} barRowHeight={tabsRowHeight} colors={colors} onCollapsedClearance={setTabBarClearance} />;
+        return (
+            <>
+                <DockedGlassSheet barRow={tabsRow} barRowHeight={tabsRowHeight} colors={colors} onCollapsedClearance={setTabBarClearance} />
+                {createEditor}
+            </>
+        );
     }
 
     return (
+        <>
         <DockedGlassSheet
             ref={controls}
             colors={colors}
@@ -179,6 +222,8 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                 },
             }}
         />
+        {createEditor}
+        </>
     );
 }
 
