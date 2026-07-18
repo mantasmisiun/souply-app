@@ -81,6 +81,18 @@ export const createHouseholdInviteUrl = async (): Promise<string> => {
     return `https://souply.lt/join/${r.code}`;
 };
 
+/** Leave the current household (last member leaving dissolves it). */
+export const leaveHousehold = async (): Promise<void> => {
+    const res = await fetch(`${API_BASE_URL}/api/households/mine/membership`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+};
+
+/** Owner-only: remove a member from the own household. */
+export const removeHouseholdMember = async (memberUserId: string): Promise<void> => {
+    const res = await fetch(`${API_BASE_URL}/api/households/mine/members/${encodeURIComponent(memberUserId)}`, { method: 'DELETE' });
+    if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`);
+};
+
 /** Trip invite QR value (web landing + app-link chain), member-gated. */
 export const createTripInviteUrl = async (tripId: number): Promise<string> => {
     const r = await jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/invites`, { method: 'POST' }));

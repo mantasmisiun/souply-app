@@ -19,7 +19,7 @@ import {
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
-import { useMemo, useRef, useState, useCallback } from 'react';
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
@@ -34,13 +34,12 @@ import { useBasketState } from '../../../state/basketState';
 import { useTheme, radius, spacing, type AppTheme } from '../../../constants/theme';
 import { ScalePressable } from '../../../components/ScalePressable';
 import { SkeletonBox } from '../../../components/SkeletonBox';
-import { BrandedQR } from '../../../components/BrandedQR';
 import { formatDate } from '../../../utils/formatCurrency';
-import { DateFilterButton } from '../../../components/DateFilterButton';
+import { useShoppingSheet } from '../../../state/shoppingSheet';
 import { buildReceiptDotMap, parseLooseDate, sameDay } from '../../../utils/receiptDots';
 import {
-    fetchTrips, unarchiveTrip, fetchOwnHousehold, createOwnHousehold,
-    createHouseholdInviteUrl, type TripSummary, type HouseholdInfo,
+    fetchTrips, unarchiveTrip, fetchOwnHousehold,
+    type TripSummary, type HouseholdInfo,
 } from '../../../utils/tripsApi';
 
 const STAGE_ICONS: Record<number, keyof typeof Ionicons.glyphMap> = {
@@ -63,9 +62,6 @@ export default function TripsScreen() {
     const [refreshing, setRefreshing] = useState(false);
     const [pullRefreshing, setPullRefreshing] = useState(false);
     const [archiveOpen, setArchiveOpen] = useState(false);
-    // Household QR sheet: null = closed; 'loading' while the invite mints.
-    const [qrUrl, setQrUrl] = useState<string | null>(null);
-    const [qrOpen, setQrOpen] = useState(false);
     const hasFetchedRef = useRef(false);
 
     const fetchAll = useCallback(async (silent: boolean) => {
@@ -97,18 +93,28 @@ export default function TripsScreen() {
     }, [fetchAll]));
 
     // Calendar filter (spec): dot per trip on its best-known shopping date,
-    // chain-coloured via the trip's slots; ad-hoc trips dot as "Kita".
-    const [selectedDate, setSelectedDate] = useState<Date | null>(null);
+    // chain-coloured via the trip's slots; ad-hoc trips dot as "Kita". The
+    // filter UI lives in the Shopping dock sheet now — state comes from the
+    // shared store (shared/SMART_BASKET_SPEC.md §1).
+    const selectedDate = useShoppingSheet(st => st.selectedDate);
     const tripDotMap = useMemo(() => buildReceiptDotMap(trips.flatMap(tr => {
         const date = parseLooseDate(tr.anchorDate);
         const chains = tr.slots.map(sl => sl.chainName).filter((c): c is string => !!c);
         return (chains.length > 0 ? chains : ['Kita']).map(chainName => ({ date, chainName }));
     })), [trips]);
+    // Publish sheet inputs.
+    useEffect(() => { useShoppingSheet.getState().setDotMap(tripDotMap); }, [tripDotMap]);
+    useEffect(() => {
+        useShoppingSheet.getState().setHousehold(household);
+    }, [household]);
+
+    const selectedStages = useShoppingSheet(st => st.selectedStages);
     const byDate = useCallback((tr: TripSummary) => {
+        if (selectedStages != null && !selectedStages.has(tr.stage)) return false;
         if (!selectedDate) return true;
         const d = parseLooseDate(tr.anchorDate);
         return d != null && sameDay(d, selectedDate);
-    }, [selectedDate]);
+    }, [selectedDate, selectedStages]);
 
     const active = useMemo(() => trips.filter(tr => tr.archivedAt == null && byDate(tr)), [trips, byDate]);
     const archived = useMemo(() => trips.filter(tr => tr.archivedAt != null && byDate(tr)), [trips, byDate]);
@@ -140,21 +146,13 @@ export default function TripsScreen() {
         );
     }, [t, fetchAll]);
 
-    const openHouseholdQr = useCallback(async () => {
-        setQrOpen(true);
-        setQrUrl(null);
-        try {
-            if (!household) {
-                await createOwnHousehold();
-                const hh = await fetchOwnHousehold();
-                setHousehold(hh);
-            }
-            setQrUrl(await createHouseholdInviteUrl());
-        } catch {
-            setQrOpen(false);
-            Alert.alert(t('trips.householdErrorTitle'), t('trips.householdErrorBody'));
-        }
-    }, [household, t]);
+    // Register the dock sheet's refresh callback (household/invites live in
+    // the sheet itself now).
+    useEffect(() => {
+        const st = useShoppingSheet.getState();
+        st.setRefreshTrips(() => { void fetchAll(true); });
+        return () => { st.setRefreshTrips(null); };
+    }, [fetchAll]);
 
     const stageLabel = (s: number) => t(`trips.stage${s}`);
     const stageCta = (s: number) => t(`trips.cta${s}`);
@@ -192,14 +190,6 @@ export default function TripsScreen() {
                 controller={header}
                 pinned={(
                     <>
-                        <View style={styles.filterRow}>
-                            <DateFilterButton
-                                value={selectedDate}
-                                onChange={setSelectedDate}
-                                label={t('receipts.filterDate')}
-                                markedDates={tripDotMap}
-                            />
-                        </View>
                         {refreshing && (
                             <View style={styles.refreshingBanner}>
                                 <MaterialProgress size="small" color={colors.primary} />
@@ -223,23 +213,6 @@ export default function TripsScreen() {
                 }
             >
                 <ScreenHeading title={t('tabs.trips')} />
-                {/* Household card: create-or-invite, always at the top (spec). */}
-                <TouchableOpacity style={styles.householdCard} onPress={openHouseholdQr} activeOpacity={0.85}>
-                    <View style={styles.householdIcon}>
-                        <Ionicons name="home-outline" size={22} color={colors.primary} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                        <Text style={styles.householdTitle}>
-                            {household ? (household.name ?? t('trips.householdCardExisting')) : t('trips.householdCardNew')}
-                        </Text>
-                        <Text style={styles.householdSub}>
-                            {household
-                                ? t('trips.householdMembers', { count: household.members.length })
-                                : t('trips.householdCardNewSub')}
-                        </Text>
-                    </View>
-                    <Ionicons name="qr-code-outline" size={22} color={colors.primary} />
-                </TouchableOpacity>
 
                 {active.length === 0 ? (
                     <View style={styles.centered}>
@@ -301,23 +274,6 @@ export default function TripsScreen() {
                 )}
             </Animated.ScrollView>
 
-            {/* Household invite QR sheet. */}
-            <Modal visible={qrOpen} transparent animationType="fade" onRequestClose={() => setQrOpen(false)}>
-                <TouchableOpacity style={styles.qrBackdrop} activeOpacity={1} onPress={() => setQrOpen(false)}>
-                    <View style={styles.qrCard} onStartShouldSetResponder={() => true}>
-                        <Text style={styles.qrTitle}>{t('trips.householdQrTitle')}</Text>
-                        <Text style={styles.qrBody}>{t('trips.householdQrBody')}</Text>
-                        <View style={styles.qrBox}>
-                            {qrUrl
-                                ? <BrandedQR value={qrUrl} size={200} />
-                                : <MaterialProgress size="large" color={colors.primary} />}
-                        </View>
-                        <TouchableOpacity style={styles.qrClose} onPress={() => setQrOpen(false)}>
-                            <Text style={styles.qrCloseText}>{t('common.gotIt')}</Text>
-                        </TouchableOpacity>
-                    </View>
-                </TouchableOpacity>
-            </Modal>
         </View>
     );
 }

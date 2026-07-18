@@ -11,6 +11,7 @@ import { useBasketState } from '../../state/basketState';
 import { applyChooserPick } from '../../utils/basketUtils';
 import { formatDate } from '../../utils/formatCurrency';
 import { TemplateCoverEditor, type CoverDraft } from '../TemplateCoverEditor';
+import { ShoppingSheet } from './ShoppingSheet';
 import { createTemplate } from '../../utils/basketTemplatesApi';
 import { getUserId } from '../../config/user';
 
@@ -51,11 +52,14 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     // — not just the tab root. Without this the dock degrades to a static tab
     // bar on the sub-screens and you can't pull up the basket sheet.
     const onSurface = pathname === '/catalog' || pathname.startsWith('/catalog/');
+    // Shopping tab root gets its OWN sheet (date filter + family + generate
+    // with AI — shared/SMART_BASKET_SPEC.md §1).
+    const onShoppingRoot = pathname === '/basket';
     const sessionActive = target != null && barVisible;
     // Chooser shows whenever a resumable basket exists and no session is live
     // (a live session is owned by the root BasketListSheet, which already spans
     // the whole catalog tree).
-    const hasSheet = onSurface && !sessionActive && dormant != null;
+    const hasSheet = (onSurface && !sessionActive && dormant != null) || onShoppingRoot;
 
     const controls = useRef<DockedSheetControls | null>(null);
 
@@ -207,8 +211,12 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
             onCollapsedClearance={setTabBarClearance}
             blockScrollRef={onTabRoot ? browseListRef : null}
             sheet={{
-                content: chooserContent,
-                // Full detent so the two sections have room; the shared geometry
+                // Shopping tab root → the shopping sheet (date filter / family /
+                // generate with AI). Catalog surfaces → the basket chooser.
+                content: onShoppingRoot
+                    ? <ShoppingSheet collapse={() => controls.current?.collapse()} />
+                    : chooserContent,
+                // Full detent so the sections have room; the shared geometry
                 // keeps the collapsed tab bar symmetric + fixed and docks
                 // edge-to-edge only at full.
                 maxStage: 2,
@@ -216,7 +224,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                 // picked ⇒ the user dismissed the chooser: release those adds so
                 // their Add buttons stop spinning.
                 onStageChange: (stage) => {
-                    if (stage !== 0) return;
+                    if (stage !== 0 || onShoppingRoot) return;
                     const s = useBasketSession.getState();
                     if (s.target == null && s.pendingAdds.length > 0) cancelPending();
                 },
