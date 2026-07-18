@@ -45,9 +45,19 @@ import { concentricRadius, displayCornerRadius } from '../utils/displayCorners';
  */
 
 const SCREEN_H = Dimensions.get('window').height;
+const SCREEN_W = Dimensions.get('window').width;
 const MEDIUM_FRACTION = 0.5;   // stage-1 detent — the standard medium height.
 const PEEK = 14;               // slim pill strip above the bar row.
 const FLOAT_MARGIN = spacing.lg;
+// Collapsed, the floating dock is a touch NARROWER than when raised — the glass
+// tucks in by COLLAPSED_INSET on each side. Raising it (→ medium) widens the
+// glass back out to FLOAT_MARGIN, WITHOUT moving the bar-row content: the tab
+// icons live in a fixed BAR_CONTENT_W strip centred on screen, so the extra
+// width is added purely as empty glass on the left/right. (Applies to the
+// floating tab-bar / chooser dock; the full-screen session sheet is unaffected.)
+const COLLAPSED_INSET = 18;
+const COLLAPSED_MARGIN = FLOAT_MARGIN + COLLAPSED_INSET;
+const BAR_CONTENT_W = SCREEN_W - 2 * COLLAPSED_MARGIN;
 const PILL_W = 40;
 const PILL_H = 5;
 const SNAP_SPRING = { damping: 30, stiffness: 280, mass: 0.9, overshootClamping: true } as const;
@@ -240,6 +250,15 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         const prev = sn.length > 1 ? sn[sn.length - 2] : last;
         return clamp((h.value - prev) / Math.max(1, last - prev), 0, 1);
     });
+    // 0 collapsed → 1 raised, for the floating tab-bar / chooser dock. Drives the
+    // narrow-collapsed → wide-raised glass tween (the session sheet uses dockP).
+    const raiseP = useDerivedValue(() => {
+        if (dockAtLast) return 0;
+        const sn = snapsSV.value;
+        const lo = sn[0];
+        const hi = sn.length > 1 ? sn[sn.length - 1] : lo;
+        return hi > lo ? clamp((h.value - lo) / (hi - lo), 0, 1) : 0;
+    });
     const cornerR = concentricRadius(insets.bottom, spacing.sm);
     const displayR = displayCornerRadius(insets.bottom);
 
@@ -258,9 +277,36 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
             base.bottom = insets.bottom + spacing.sm * (1 - p);
             base.borderBottomLeftRadius = r;
             base.borderBottomRightRadius = r;
+        } else {
+            // Collapsed the glass is inset by COLLAPSED_INSET on all three free
+            // edges (left/right/bottom); raising grows it back out EQUALLY on the
+            // sides AND downward. The centred, bottom-fixed bar content never
+            // moves (see barRowStyle counter-offsets).
+            const p = raiseP.value;
+            const m = COLLAPSED_MARGIN + (FLOAT_MARGIN - COLLAPSED_MARGIN) * p;
+            base.left = m;
+            base.right = m;
+            base.bottom = insets.bottom + spacing.sm + COLLAPSED_INSET * (1 - p);
         }
         return base;
     });
+    // Bar-row (tab icons) held at a fixed screen box: width BAR_CONTENT_W and a
+    // left/bottom offset that counter-animates the clip's own left/bottom so the
+    // icons' screen x AND y stay constant at every detent — the glass grows
+    // around them. Full-width for the session sheet (dockAtLast).
+    const barRowStyle = useAnimatedStyle(() => {
+        if (dockAtLast) return { left: 0, right: 0, bottom: 0 };
+        const p = raiseP.value;
+        const m = COLLAPSED_MARGIN + (FLOAT_MARGIN - COLLAPSED_MARGIN) * p;
+        return { left: COLLAPSED_MARGIN - m, width: BAR_CONTENT_W, bottom: COLLAPSED_INSET * p };
+    });
+    // The separator + content sit just above the bar row. Because the bar row is
+    // counter-offset (COLLAPSED_INSET·raiseP) to stay screen-fixed while the clip
+    // bottom grows down, they must carry the SAME offset — otherwise they drift
+    // down over the tab icons on drag. So they anchor to the icons, not the clip.
+    const barTopStyle = useAnimatedStyle(() => ({
+        bottom: barRowHeight + (dockAtLast ? 0 : COLLAPSED_INSET * raiseP.value),
+    }));
     const solidStyle = useAnimatedStyle(() => ({ opacity: dockAtLast ? dockP.value : 0 }));
     const sepStyle = useAnimatedStyle(() => {
         const sn = snapsSV.value;
@@ -306,7 +352,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
             {/* CONTENT — Find-My reveal: pinned below the pill, above the bar
                 row; a ScrollView that only scrolls at the full detent. */}
             {hasSheet && (
-                <View style={[styles.contentClip, { top: peek, bottom: barRowHeight }]} pointerEvents="box-none">
+                <Animated.View style={[styles.contentClip, { top: peek }, barTopStyle]} pointerEvents="box-none">
                     <AnimatedScroll
                         ref={scrollRef}
                         style={StyleSheet.absoluteFill}
@@ -320,21 +366,22 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                     >
                         {sheet!.content}
                     </AnimatedScroll>
-                </View>
+                </Animated.View>
             )}
 
             {hasSheet && (
-                <Animated.View pointerEvents="none" style={[styles.separator, { bottom: barRowHeight }, sepStyle]} />
+                <Animated.View pointerEvents="none" style={[styles.separator, barTopStyle, sepStyle]} />
             )}
 
-            {/* BAR ROW — always pinned at the bottom. */}
-            <View
-                style={[styles.barRow, { height: barRowHeight }]}
+            {/* BAR ROW — pinned at the bottom; held to a fixed centred strip so
+                the tab icons don't shift as the glass widens on raise. */}
+            <Animated.View
+                style={[styles.barRow, { height: barRowHeight }, barRowStyle]}
                 onLayout={(e: LayoutChangeEvent) => onBarHeight?.(e.nativeEvent.layout.height)}
                 pointerEvents="box-none"
             >
                 {barRow}
-            </View>
+            </Animated.View>
 
             {/* Grabber pill — rides the clip's top edge. */}
             {hasSheet && (
@@ -386,7 +433,7 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
         position: 'absolute', left: spacing.lg, right: spacing.lg,
         height: StyleSheet.hairlineWidth, backgroundColor: c.outlineVariant,
     },
-    barRow: { position: 'absolute', left: 0, right: 0, bottom: 0, justifyContent: 'center' },
+    barRow: { position: 'absolute', bottom: 0, justifyContent: 'center' },
     pillWrap: {
         position: 'absolute', top: 0, left: 0, right: 0,
         alignItems: 'center', paddingTop: 5,
