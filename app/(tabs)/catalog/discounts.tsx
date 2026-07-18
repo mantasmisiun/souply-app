@@ -4,7 +4,6 @@ import {
 } from 'react-native';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { GlassIconButton } from '@/components/GlassIconButton';
 import { ScreenHeading } from '@/components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '@/components/CollapsingHeader';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -197,12 +196,10 @@ export default function DiscountsScreen() {
     const [openFilter, setOpenFilter] = useState<null | 'l1' | 'l2'>(null);
     const [anchorY, setAnchorY] = useState(0);
     const filterRowRef = useRef<View>(null);
+    /** Filters the in-screen list live (no navigation) via the ALWAYS-VISIBLE
+     *  search pill pinned under the title — keeps React Query's cached data
+     *  and freshness indicator on screen. */
     const [search, setSearch] = useState('');
-    /** When true the nav-bar title flips to a TextInput that filters the
-     *  in-screen list (no navigation). Mirrors the template editor's
-     *  inline-edit pattern; chosen over pushing /search to keep React
-     *  Query's cached data and freshness indicator on screen. */
-    const [searchOpen, setSearchOpen] = useState(false);
     const searchInputRef = useRef<TextInput>(null);
     const [addingIds, setAddingIds] = useState<Set<number>>(() => new Set());
     const [infoOpen, setInfoOpen] = useState(false);
@@ -589,25 +586,20 @@ export default function DiscountsScreen() {
         );
     }, [basketQuantities, addingIds, styles, colors, onNavigate, commitCardQty, isTemplateMode, templateMap, t]);
 
-    const closeSearch = useCallback(() => {
+    const clearSearch = useCallback(() => {
         setSearch('');
-        setSearchOpen(false);
+        searchInputRef.current?.clear();
     }, []);
 
     return (
         <>
-            {/* "Nuolaidos" collapses on scroll; the L2 filter stays pinned. The
-                bar keeps its glass back + search/close buttons; in search mode
-                the input is a pinned field in the body (a TextInput in the bar
-                title strips the iOS-26 glass off the bar buttons). */}
+            {/* "Nuolaidos" collapses on scroll; the search pill + L2 filter stay
+                pinned. The search pill is ALWAYS visible under the title and
+                filters the list live — no toggle icon. */}
             <CollapsingHeader
                 controller={header}
-                background={colors.cardBackground}
                 back
-                right={searchOpen
-                    ? <GlassIconButton icon="close" onPress={closeSearch} />
-                    : <GlassIconButton icon="search" onPress={() => setSearchOpen(true)} />}
-                collapsing={searchOpen ? null : (
+                collapsing={(
                     <ScreenHeading
                         title={t('discounts.title')}
                         trailing={
@@ -621,14 +613,14 @@ export default function DiscountsScreen() {
                         }
                     />
                 )}
-                pinned={(searchOpen || hasFilters) ? (
+                pinned={(
                     <>
-                        {searchOpen && (
-                            <View style={styles.searchFieldWrap}>
+                        <View style={styles.searchFieldWrap}>
+                            <View style={styles.searchPill}>
+                                <Ionicons name="search" size={18} color={colors.textMuted} />
                                 <TextInput
                                     ref={searchInputRef}
-                                    autoFocus
-                                    value={search}
+                                    defaultValue={search}
                                     onChangeText={setSearch}
                                     placeholder={t('catalog.searchPlaceholder')}
                                     placeholderTextColor={colors.textMuted}
@@ -636,8 +628,13 @@ export default function DiscountsScreen() {
                                     onSubmitEditing={() => Keyboard.dismiss()}
                                     style={styles.searchField}
                                 />
+                                {search.length > 0 ? (
+                                    <TouchableOpacity onPress={clearSearch} hitSlop={10}>
+                                        <Ionicons name="close" size={18} color={colors.textMuted} />
+                                    </TouchableOpacity>
+                                ) : null}
                             </View>
-                        )}
+                        </View>
                         {hasFilters && (
                             <View ref={filterRowRef} style={styles.bubblesRow}>
                                 <ScrollView
@@ -675,7 +672,7 @@ export default function DiscountsScreen() {
                             </View>
                         )}
                     </>
-                ) : undefined}
+                )}
             />
             <View style={{ flex: 1 }}>
                 <View style={styles.container}>
@@ -706,7 +703,6 @@ export default function DiscountsScreen() {
                         ) : (
                             <Animated.FlatList
                                 {...header.scroll}
-                                onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
                                 data={products}
                                 keyExtractor={(item: any) => item.id.toString()}
                                 contentContainerStyle={[
@@ -829,19 +825,23 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         color: c.textPrimary,
         padding: 0,
     },
+    // No banner background — the pill floats on the page like the app's other
+    // search fields (solid white + hairline outline + soft lift).
     searchFieldWrap: {
+        paddingHorizontal: 16, paddingTop: 2, paddingBottom: 8,
+    },
+    searchPill: {
+        flexDirection: 'row', alignItems: 'center', gap: 8,
         backgroundColor: c.cardBackground,
-        paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10,
+        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+        borderRadius: radius.pill,
+        paddingHorizontal: 14, height: 44,
+        elevation: 2,
     },
     searchField: {
-        borderWidth: 1, borderColor: c.border, borderRadius: radius.pill,
-        paddingHorizontal: 16, paddingVertical: 10,
-        fontSize: 16, color: c.textPrimary,
+        flex: 1, fontSize: 15, color: c.textPrimary, paddingVertical: 0,
     },
     bubblesRow: {
-        backgroundColor: c.cardBackground,
-        borderBottomWidth: 0.5,
-        borderBottomColor: c.border,
         flexGrow: 0,
         flexShrink: 0,
     },

@@ -1,11 +1,10 @@
-import { View, FlatList, TouchableOpacity, Text, StyleSheet, Switch, Modal } from 'react-native';
+import { View, FlatList, Text, StyleSheet } from 'react-native';
 import { SkeletonBox } from '@/components/SkeletonBox';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSafeBottomTabBarHeight } from '@/hooks/useSafeBottomTabBarHeight';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
-import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '@/config/api';
 import { useBasketState } from '@/state/basketState';
 import { useBasketSession } from '@/state/basketSession';
@@ -22,7 +21,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Toast, type ToastHandle } from '@/components/Toast';
 import { useTranslation } from 'react-i18next';
 import { ScalePressable } from '@/components/ScalePressable';
-import { GlassButton } from '@/components/GlassButton';
 import { GlassIconButton } from '@/components/GlassIconButton';
 import { glassHeaderOptions } from '@/constants/navHeader';
 import { ScreenHeading } from '@/components/ScreenHeading';
@@ -60,7 +58,7 @@ export default function CategoryScreen() {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
     const barClearance = useSafeBottomTabBarHeight();
-    // Collapsing header: category title hides on scroll; mode toggle + L3 filter stay pinned.
+    // Collapsing header: category title hides on scroll; the L3 filter stays pinned.
     const header = useCollapsingHeader();
     const { categoryId, name } = useLocalSearchParams<{ categoryId: string; name: string }>();
     // Template vs basket is driven by the SESSION target now, not a route param —
@@ -87,8 +85,9 @@ export default function CategoryScreen() {
     const [addingIds, setAddingIds] = useState<Set<number>>(() => new Set());
     const toastRef = useRef<ToastHandle>(null);
     const router = useRouter();
-    const { mode, setMode, ready: prefReady } = useDisplayMode();
-    const [helpOpen, setHelpOpen] = useState(false);
+    // Display mode is read-only here now — the in-screen "combine
+    // alternatives" toggle banner was removed; the stored preference decides.
+    const { mode, ready: prefReady } = useDisplayMode();
     // When no draft basket exists but the user has ≥1 compared basket,
     // adding a product opens this modal so they can choose "use existing
     // (revert to draft)" or "create new". Fetched on focus alongside
@@ -100,13 +99,6 @@ export default function CategoryScreen() {
         resolve: (choice: ComparedChoice) => void;
     }>({ visible: false, resolve: () => {} });
 
-    // Pending mode switch: the Switch component optimistically renders the
-    // next position the moment the user taps, but we want to confirm with a
-    // modal first if the basket already has items (basket calc differs
-    // between modes, existing items have to be converted). `pendingMode`
-    // holds the proposed target until the user confirms or cancels.
-    const [pendingMode, setPendingMode] = useState<'base' | 'sku' | null>(null);
-    const [converting, setConverting] = useState(false);
     useEffect(() => {
         // Wait for the display-mode preference to load before firing fetches;
         // otherwise the screen flashes default-mode results before switching.
@@ -223,11 +215,6 @@ export default function CategoryScreen() {
             setBasketItemCount(0);
         }
     }, []));
-
-    // True when the user has any item in their current draft basket.
-    // basketQuantities can hold 0 values after a quantity decrement, so we
-    // check for any strictly-positive entry.
-    const hasBasketItems = Object.values(basketQuantities).some((q) => q > 0);
 
     /**
      * Discriminated resolution for "where does this add go?":
@@ -349,66 +336,6 @@ export default function CategoryScreen() {
             params: { mode: 'products', source: 'catalog' },
         } as any);
     }, [router]);
-
-    const handleModeSwitchRequest = (nextOn: boolean) => {
-        const target: 'base' | 'sku' = nextOn ? 'base' : 'sku';
-        if (target === mode) return;
-        if (!hasBasketItems || !draftBasketId) {
-            // Nothing to convert — flip immediately.
-            setMode(target);
-            return;
-        }
-        // Defer the actual flip until the user confirms. The Switch will
-        // render in its *old* position until then (its `value` prop is
-        // bound to `mode`, not the pending target).
-        setPendingMode(target);
-    };
-
-    const cancelModeSwitch = () => {
-        setPendingMode(null);
-    };
-
-    const confirmModeSwitch = async () => {
-        const target = pendingMode;
-        if (!target || !draftBasketId) {
-            setPendingMode(null);
-            return;
-        }
-        try {
-            setConverting(true);
-            const res = await fetch(
-                `${API_BASE_URL}/api/baskets/${draftBasketId}/convert-mode`,
-                {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ mode: target }),
-                }
-            );
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            // Reload basket quantities — productIds may have changed on
-            // sku→base (items now point at cluster heads), and rows may
-            // have merged (duplicates collapsed into one summed row).
-            const itemsRes = await fetch(
-                `${API_BASE_URL}/api/baskets/${draftBasketId}/items`
-            );
-            if (itemsRes.ok) {
-                const items = await itemsRes.json();
-                if (Array.isArray(items)) {
-                    const quantities: { [productId: number]: number } = {};
-                    items.forEach((item: any) => {
-                        quantities[item.productId] = parseFloat(item.quantity);
-                    });
-                    setBasketQuantities(quantities);
-                }
-            }
-            setMode(target);
-        } catch (e) {
-            console.warn('convert-mode failed:', e);
-        } finally {
-            setConverting(false);
-            setPendingMode(null);
-        }
-    };
 
     const selectL3 = async (l3Id: number | null) => {
         setSelectedL3(l3Id);
@@ -661,36 +588,16 @@ export default function CategoryScreen() {
             {/* Category title collapses on scroll; mode toggle + L3 filter pin. */}
             <CollapsingHeader
                 controller={header}
-                background={colors.cardBackground}
                 back
                 right={<GlassIconButton icon="search" onPress={pushSearch} />}
                 collapsing={<ScreenHeading title={decodeURIComponent(name || '')} />}
                 pinned={
-                    <>
-                        <View style={styles.modeToggleRow}>
-                            <Text style={styles.modeToggleLabel}>{t('catalog.combineAlternatives')}</Text>
-                            <TouchableOpacity
-                                onPress={() => setHelpOpen(true)}
-                                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                            >
-                                <Ionicons name="help-circle-outline" size={18} color={colors.textMuted} />
-                            </TouchableOpacity>
-                            <View style={{ flex: 1 }} />
-                            <Switch
-                                value={mode === 'base'}
-                                onValueChange={handleModeSwitchRequest}
-                                trackColor={{ false: colors.border, true: colors.primary }}
-                                thumbColor={colors.onPrimary}
-                                disabled={converting}
-                            />
-                        </View>
-                        <CategoryBubbles
-                            categories={l3Categories}
-                            selectedId={selectedL3}
-                            onSelect={handleChipSelect}
-                            allLabel={t('catalog.allProducts')}
-                        />
-                    </>
+                    <CategoryBubbles
+                        categories={l3Categories}
+                        selectedId={selectedL3}
+                        onSelect={handleChipSelect}
+                        allLabel={t('catalog.allProducts')}
+                    />
                 }
             />
             <View style={{ flex: 1 }}>
@@ -714,7 +621,6 @@ export default function CategoryScreen() {
                     ) : (
                         <Animated.FlatList
                             {...header.scroll}
-                            onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
                             data={visibleProducts}
                             keyExtractor={(item: any) => item.id.toString()}
                             contentContainerStyle={[
@@ -738,73 +644,6 @@ export default function CategoryScreen() {
             {/* Legacy per-screen basket bar removed — the universal root-level
                 BasketListSheet is the single "collecting items" indicator now. */}
             </View>
-            <Modal
-                visible={pendingMode !== null}
-                transparent
-                animationType="fade"
-                onRequestClose={cancelModeSwitch}
-            >
-                <View style={styles.helpBackdrop}>
-                    <View style={styles.helpCard}>
-                        <Text style={styles.helpTitle}>{t('catalog.modeSwitch.title')}</Text>
-                        <Text style={styles.helpBody}>
-                            {t('catalog.modeSwitch.body')}
-                        </Text>
-                        <View style={styles.helpActionsRow}>
-                            <GlassButton
-                                title={t('common.cancel')}
-                                variant="secondary"
-                                onPress={cancelModeSwitch}
-                                disabled={converting}
-                                flex
-                            />
-                            <GlassButton
-                                title={converting ? '…' : t('catalog.modeSwitch.confirm')}
-                                variant="primary"
-                                onPress={confirmModeSwitch}
-                                disabled={converting}
-                                flex
-                            />
-                        </View>
-                    </View>
-                </View>
-            </Modal>
-            <Modal
-                visible={helpOpen}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setHelpOpen(false)}
-            >
-                <TouchableOpacity
-                    style={styles.helpBackdrop}
-                    activeOpacity={1}
-                    onPress={() => setHelpOpen(false)}
-                >
-                    <TouchableOpacity
-                        style={styles.helpCard}
-                        activeOpacity={1}
-                        onPress={() => {}}
-                    >
-                        <Text style={styles.helpTitle}>
-                            {t('catalog.modeSwitch.helpTitle')}{'  '}
-                            <Text style={styles.helpBadge}>{t('catalog.modeSwitch.experimentalBadge')}</Text>
-                        </Text>
-                        <Text style={styles.helpBody}>
-                            {t('catalog.modeSwitch.explainer')}
-                        </Text>
-                        <Text style={styles.helpBody}>
-                            {t('catalog.modeSwitch.example')}
-                        </Text>
-                        <GlassButton
-                            title={t('catalog.modeSwitch.gotIt')}
-                            variant="primary"
-                            onPress={() => setHelpOpen(false)}
-                            style={{ alignSelf: 'flex-end', marginTop: 4, minWidth: 84 }}
-                        />
-
-                    </TouchableOpacity>
-                </TouchableOpacity>
-            </Modal>
             <ComparedBasketChoiceModal
                 visible={comparedModal.visible}
                 compared={latestCompared}
@@ -820,81 +659,6 @@ export default function CategoryScreen() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
-    modeToggleRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: 16,
-        paddingVertical: 10,
-        gap: 6,
-        backgroundColor: c.cardBackground,
-    },
-    modeToggleLabel: {
-        fontSize: 13,
-        color: c.textPrimary,
-        fontWeight: '600',
-    },
-    helpBackdrop: {
-        flex: 1,
-        backgroundColor: c.overlayBackdrop,
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: 24,
-    },
-    helpCard: {
-        backgroundColor: c.cardBackground,
-        borderRadius: radius.lg,
-        padding: 20,
-        gap: 12,
-        width: '100%',
-        maxWidth: 420,
-    },
-    helpTitle: {
-        fontSize: 17,
-        fontWeight: '700',
-        color: c.textPrimary,
-    },
-    helpBadge: {
-        fontSize: 11,
-        fontWeight: '700',
-        color: c.primary,
-        letterSpacing: 0.5,
-    },
-    helpBody: {
-        fontSize: 14,
-        color: c.textSecondary,
-        lineHeight: 20,
-    },
-    helpClose: {
-        alignSelf: 'flex-end',
-        marginTop: 4,
-        paddingHorizontal: 16,
-        paddingVertical: 8,
-        borderRadius: radius.pill,
-        backgroundColor: c.primary,
-        minWidth: 84,
-        alignItems: 'center',
-    },
-    helpCloseText: {
-        color: c.onPrimary,
-        fontWeight: '600',
-        fontSize: 14,
-    },
-    helpActionsRow: {
-        flexDirection: 'row',
-        justifyContent: 'flex-end',
-        gap: 8,
-        marginTop: 4,
-    },
-    helpCloseSecondary: {
-        backgroundColor: c.cardBackground,
-        borderWidth: 1,
-        borderColor: c.border,
-    },
-    helpCloseSecondaryText: {
-        color: c.textPrimary,
-        fontWeight: '600',
-        fontSize: 14,
-    },
     bubblesRow: {
         backgroundColor: c.cardBackground,
         borderBottomWidth: 0.5,
