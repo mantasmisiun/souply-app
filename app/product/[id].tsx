@@ -25,7 +25,6 @@ import { ChainFilterBar } from '../../components/ChainFilterBar';
 import { ChainLogoStrip } from '../../components/ChainLogoStrip';
 import { getChainMiniLogoUrl } from '../../utils/chainBrandName';
 import { addProductToBasket } from '../../utils/basketUtils';
-import { TemplateReturnBanner } from '../../components/template/TemplateReturnBanner';
 import { useTemplateAddState } from '../../state/templateAddState';
 import { useBasketState } from '../../state/basketState';
 import { useBasketSession } from '../../state/basketSession';
@@ -464,10 +463,12 @@ export default function ProductDetailScreen() {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const { id, templateId: rawTemplateId } =
-        useLocalSearchParams<{ id: string; templateId?: string }>();
-    const templateId = rawTemplateId != null && rawTemplateId.length > 0 ? Number(rawTemplateId) : null;
-    const isTemplateMode = templateId != null && Number.isFinite(templateId);
+    const { id } = useLocalSearchParams<{ id: string }>();
+    // Template vs basket is driven by the SESSION target (not a route param).
+    const sessionTarget = useBasketSession(s => s.target);
+    const templateId = sessionTarget?.kind === 'template' ? sessionTarget.templateId : null;
+    const isTemplateMode = templateId != null;
+    useEffect(() => { if (templateId != null) useTemplateAddState.getState().hydrate(templateId); }, [templateId]);
     const [product, setProduct] = useState<Product | null>(null);
     const [categoryParts, setCategoryParts] = useState<string[]>([]);
     const [storeProducts, setStoreProducts] = useState<StoreProduct[]>([]);
@@ -836,9 +837,6 @@ export default function ProductDetailScreen() {
                         addIcon="albums-outline"
                     />
                 </View>
-            )}
-            {isTemplateMode && templateId != null && (
-                <TemplateReturnBanner templateId={templateId} />
             )}
 
             <Modal

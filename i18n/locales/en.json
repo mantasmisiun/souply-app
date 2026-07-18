@@ -1538,6 +1538,8 @@
     "openBasket": "Basket",
     "openTemplate": "Template",
     "itemsSection": "Basket items",
+    "templateItemsSection": "Template items",
+    "templateEmpty": "The template is empty",
     "add": "Add"
   }
 }

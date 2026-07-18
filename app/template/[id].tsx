@@ -37,6 +37,8 @@ import { StatsHelpModal } from '../../components/StatsHelpModal';
 import { StoreChipBar } from '../../components/StoreChipBar';
 import { authedFetch } from '../../utils/authApi';
 import { useAuthState, DEV_SESSION_TOKEN } from '../../state/authState';
+import { useBasketSession } from '../../state/basketSession';
+import { useTemplateAddState } from '../../state/templateAddState';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import {
@@ -425,7 +427,14 @@ export default function TemplateDetailScreen() {
                         ) : (
                             <TouchableOpacity
                                 style={styles.addItemBtn}
-                                onPress={() => router.push(`/template-add/${template.id}` as any)}
+                                onPress={() => {
+                                    // Build the template through the normal Catalog: point the
+                                    // session at this template, then drop into the tab. Adds land
+                                    // in the template (via addProductToBasket's target branch).
+                                    useTemplateAddState.getState().hydrate(template.id);
+                                    useBasketSession.getState().setTarget({ kind: 'template', templateId: template.id, name: template.name });
+                                    router.navigate('/(tabs)/catalog' as any);
+                                }}
                                 activeOpacity={0.7}
                             >
                                 <Ionicons name="add" size={18} color={colors.primary} />

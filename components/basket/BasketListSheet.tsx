@@ -189,11 +189,23 @@ export function BasketListSheet() {
             ) : (
                 <View style={styles.card}>
                     <View style={styles.cardHeader}>
-                        <Ionicons name="cart-outline" size={24} color={colors.primary} />
-                        <Text style={styles.cardHeaderText}>{t('basketSession.itemsSection')}</Text>
+                        <Ionicons
+                            name={target?.kind === 'template' ? 'bookmark-outline' : 'cart-outline'}
+                            size={24}
+                            color={colors.primary}
+                        />
+                        <Text style={styles.cardHeaderText}>
+                            {t(target?.kind === 'template'
+                                ? 'basketSession.templateItemsSection'
+                                : 'basketSession.itemsSection')}
+                        </Text>
                     </View>
                     {items.length === 0 ? (
-                        <Text style={styles.emptyText}>{t('basketSession.empty')}</Text>
+                        <Text style={styles.emptyText}>
+                            {t(target?.kind === 'template'
+                                ? 'basketSession.templateEmpty'
+                                : 'basketSession.empty')}
+                        </Text>
                     ) : items.map((item, i) => (
                         <React.Fragment key={item.id}>
                             <View style={styles.sep} />

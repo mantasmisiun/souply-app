@@ -32,7 +32,6 @@ import { useTranslation } from 'react-i18next';
 import { useQuery } from '@tanstack/react-query';
 import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '../utils/fetchWithTimeout';
 import { fuzzyMatches } from '../utils/fuzzyMatch';
-import { TemplateReturnBanner } from '../components/template/TemplateReturnBanner';
 import { useTemplateAddState } from '../state/templateAddState';
 
 interface L2Category {
@@ -172,9 +171,11 @@ export default function DiscountsScreen() {
     // Collapsing header: "Nuolaidos" title hides on scroll, L2 filter stays pinned.
     const header = useCollapsingHeader();
     const router = useRouter();
-    const { templateId: rawTemplateId } = useLocalSearchParams<{ templateId?: string }>();
-    const templateId = rawTemplateId != null && rawTemplateId.length > 0 ? Number(rawTemplateId) : null;
-    const isTemplateMode = templateId != null && Number.isFinite(templateId);
+    // Template vs basket is driven by the SESSION target (not a route param).
+    const sessionTarget = useBasketSession(s => s.target);
+    const templateId = sessionTarget?.kind === 'template' ? sessionTarget.templateId : null;
+    const isTemplateMode = templateId != null;
+    useEffect(() => { if (templateId != null) useTemplateAddState.getState().hydrate(templateId); }, [templateId]);
     const templateItems = useTemplateAddState(s => s.items);
     const templateAddFn = useTemplateAddState(s => s.add);
     const templateSetQty = useTemplateAddState(s => s.setQuantity);
@@ -499,10 +500,8 @@ export default function DiscountsScreen() {
     useEffect(() => { commitAddRef.current = commitAdd; }, [commitAdd]);
 
     const onNavigate = useCallback((id: number) => {
-        router.push(isTemplateMode
-            ? `/product/${id}?templateId=${templateId}`
-            : `/product/${id}` as any);
-    }, [router, isTemplateMode, templateId]);
+        router.push(`/product/${id}` as any);
+    }, [router]);
 
     // Fresh add (non-picker path; the weighable/range picker is owned by
     // AddOrStepper and also lands here via onCommit). One canonical step as the
@@ -753,9 +752,6 @@ export default function DiscountsScreen() {
 
                 {/* Legacy per-screen basket bar removed — the universal
                     root-level BasketListSheet is the single indicator now. */}
-                {isTemplateMode && templateId != null && (
-                    <TemplateReturnBanner templateId={templateId} />
-                )}
             </View>
 
             <ComparedBasketChoiceModal

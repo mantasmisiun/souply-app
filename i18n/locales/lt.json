@@ -1515,6 +1515,8 @@
     "openBasket": "Krepšelis",
     "openTemplate": "Šablonas",
     "itemsSection": "Krepšelio prekės",
+    "templateItemsSection": "Šablono prekės",
+    "templateEmpty": "Šablonas tuščias",
     "add": "Į krepšelį"
   }
 }

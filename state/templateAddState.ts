@@ -5,6 +5,21 @@ import {
     getTemplate,
     patchTemplateItem,
 } from '../utils/basketTemplatesApi';
+import { useBasketSession } from './basketSession';
+
+/**
+ * Keep the session bar in sync when THIS template is the active session target:
+ * the cards mutate the template through this store, so the session's item count
+ * + the root list sheet (which re-fetches on basketRev) must follow along.
+ */
+const syncSession = (templateId: number, itemCount: number) => {
+    const s = useBasketSession.getState();
+    if (s.target?.kind === 'template' && s.target.templateId === templateId) {
+        s.setCount(itemCount);
+        s.bumpBasketRev();
+        s.showBar();
+    }
+};
 
 /**
  * Cross-screen state for the "Pridėti į šabloną" flow (template-add
@@ -63,6 +78,7 @@ export const useTemplateAddState = create<State>((set, get) => ({
                 })),
                 loaded: true,
             });
+            syncSession(templateId, get().items.length);
         } catch {
             set({ loaded: true });
         }
@@ -80,6 +96,7 @@ export const useTemplateAddState = create<State>((set, get) => ({
                     i.productId === productId ? { ...i, quantity: next } : i,
                 ),
             }));
+            syncSession(tid, get().items.length);
             return next;
         }
         const result = await addTemplateItem(tid, { productId, quantity });
@@ -89,6 +106,7 @@ export const useTemplateAddState = create<State>((set, get) => ({
                 { itemId: result.id, productId, quantity },
             ],
         }));
+        syncSession(tid, get().items.length);
         return quantity;
     },
 
@@ -100,6 +118,7 @@ export const useTemplateAddState = create<State>((set, get) => ({
         if (quantity <= 0) {
             await deleteTemplateItem(tid, existing.itemId);
             set(s => ({ items: s.items.filter(i => i.productId !== productId) }));
+            syncSession(tid, get().items.length);
             return;
         }
         await patchTemplateItem(tid, existing.itemId, { quantity });
@@ -108,6 +127,7 @@ export const useTemplateAddState = create<State>((set, get) => ({
                 i.productId === productId ? { ...i, quantity } : i,
             ),
         }));
+        syncSession(tid, get().items.length);
     },
 
     remove: async (productId) => {
@@ -117,6 +137,7 @@ export const useTemplateAddState = create<State>((set, get) => ({
         if (!existing) return;
         await deleteTemplateItem(tid, existing.itemId);
         set(s => ({ items: s.items.filter(i => i.productId !== productId) }));
+        syncSession(tid, get().items.length);
     },
 
     clear: () => set({ templateId: null, items: [], loaded: false }),

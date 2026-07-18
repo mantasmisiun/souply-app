@@ -28,7 +28,6 @@ import { useReceiptPickerState , useBasketState } from "../state/basketState";
 import { useBasketSession } from "../state/basketSession";
 import { addProductToBasket } from '../utils/basketUtils';
 import BasketProductCard, { type UnitPriceBadge } from '../components/browse/BasketProductCard';
-import { TemplateReturnBanner } from '../components/template/TemplateReturnBanner';
 import { useTemplateAddState } from '../state/templateAddState';
 import { ProductImage } from "../components/ProductImage";
 import CreateStoreProductModal, {
@@ -120,10 +119,11 @@ export default function SearchScreen() {
         source?: string;
         templateId?: string;
     }>();
-    const templateIdNum = typeof params.templateId === 'string' && params.templateId.length > 0
-        ? Number(params.templateId)
-        : null;
-    const isTemplateMode = templateIdNum != null && Number.isFinite(templateIdNum);
+    // Template vs basket is driven by the SESSION target (not a route param).
+    const sessionTarget = useBasketSession(s => s.target);
+    const templateIdNum = sessionTarget?.kind === 'template' ? sessionTarget.templateId : null;
+    const isTemplateMode = templateIdNum != null;
+    useEffect(() => { if (templateIdNum != null) useTemplateAddState.getState().hydrate(templateIdNum); }, [templateIdNum]);
     const templateItems = useTemplateAddState(s => s.items);
     const templateAdd = useTemplateAddState(s => s.add);
     const templateSetQty = useTemplateAddState(s => s.setQuantity);
@@ -684,11 +684,7 @@ const quantity = basketQuantities[item.id] ?? 0;
                     product={item}
                     quantity={cardQty}
                     addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
-                    onOpen={() => router.push(
-                        isTemplateMode
-                            ? `/product/${item.id}?templateId=${templateIdNum}`
-                            : `/product/${item.id}` as any
-                    )}
+                    onOpen={() => router.push(`/product/${item.id}` as any)}
                     onCommit={(qty) => commitCardQty(item, cardQty, qty)}
                     />
                 );
@@ -700,9 +696,6 @@ const quantity = basketQuantities[item.id] ?? 0;
           BasketListSheet (the "collecting items" session sheet) — the old
           per-screen basketBar here was redundant and fought it on Android
           (elevation z-order), so it's removed. */}
-      {isTemplateMode && templateIdNum != null && (
-        <TemplateReturnBanner templateId={templateIdNum} />
-      )}
       <CreateStoreProductModal
         visible={createModalVisible}
         onClose={() => setCreateModalVisible(false)}

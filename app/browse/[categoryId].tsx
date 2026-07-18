@@ -13,7 +13,6 @@ import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '../../comp
 import BasketProductCard from '../../components/browse/BasketProductCard';
 import type { UnitPriceBadge } from '../../components/browse/BasketProductCard';
 import CategoryBubbles from '../../components/browse/CategoryBubbles';
-import { TemplateReturnBanner } from '../../components/template/TemplateReturnBanner';
 import { useTemplateAddState } from '../../state/templateAddState';
 import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
@@ -61,10 +60,13 @@ export default function CategoryScreen() {
     const { bottom: bottomInset } = useSafeAreaInsets();
     // Collapsing header: category title hides on scroll; mode toggle + L3 filter stay pinned.
     const header = useCollapsingHeader();
-    const { categoryId, name, templateId: rawTemplateId } =
-        useLocalSearchParams<{ categoryId: string; name: string; templateId?: string }>();
-    const templateId = rawTemplateId != null && rawTemplateId.length > 0 ? Number(rawTemplateId) : null;
-    const isTemplateMode = templateId != null && Number.isFinite(templateId);
+    const { categoryId, name } = useLocalSearchParams<{ categoryId: string; name: string }>();
+    // Template vs basket is driven by the SESSION target now, not a route param —
+    // building a template reuses this exact catalog flow.
+    const sessionTarget = useBasketSession(s => s.target);
+    const templateId = sessionTarget?.kind === 'template' ? sessionTarget.templateId : null;
+    const isTemplateMode = templateId != null;
+    useEffect(() => { if (templateId != null) useTemplateAddState.getState().hydrate(templateId); }, [templateId]);
     const [l3Categories, setL3Categories] = useState<Category[]>([]);
     const [products, setProducts] = useState<Product[]>([]);
     // hideId → keepId: products the user personally merged via 'same' swipe verdicts.
@@ -342,11 +344,9 @@ export default function CategoryScreen() {
         lastSearchPushAt.current = now;
         router.push({
             pathname: '/search',
-            params: isTemplateMode
-                ? { mode: 'products', source: 'template-add', templateId: String(templateId) }
-                : { mode: 'products', source: 'browse' },
+            params: { mode: 'products', source: 'catalog' },
         } as any);
-    }, [router, isTemplateMode, templateId]);
+    }, [router]);
 
     const handleModeSwitchRequest = (nextOn: boolean) => {
         const target: 'base' | 'sku' = nextOn ? 'base' : 'sku';
@@ -499,12 +499,8 @@ export default function CategoryScreen() {
     }, [mergedIntoMe, productById]);
 
     const onNavigate = useCallback((id: number) => {
-        if (isTemplateMode) {
-            router.push(`/product/${id}?templateId=${templateId}` as any);
-        } else {
-            router.push(`/product/${id}` as any);
-        }
-    }, [router, isTemplateMode, templateId]);
+        router.push(`/product/${id}` as any);
+    }, [router]);
 
     const templateItems = useTemplateAddState(s => s.items);
     const templateAdd = useTemplateAddState(s => s.add);
@@ -740,9 +736,6 @@ export default function CategoryScreen() {
             </View>
             {/* Legacy per-screen basket bar removed — the universal root-level
                 BasketListSheet is the single "collecting items" indicator now. */}
-            {isTemplateMode && templateId != null && (
-                <TemplateReturnBanner templateId={templateId} />
-            )}
             </View>
             <Modal
                 visible={pendingMode !== null}
