@@ -22,7 +22,7 @@ import { useBasketSession } from '../../state/basketSession';
  * a basket is picked this takes over as the persistent indicator.
  */
 
-const ROUTE_PREFIXES = ['/browse', '/search', '/discounts', '/product'];
+const ROUTE_PREFIXES = ['/catalog', '/browse', '/search', '/discounts', '/product'];
 const SESSION_H = 62;
 
 interface PreviewItem {
@@ -53,7 +53,7 @@ export function BasketListSheet() {
     const setCollapseDock = useBasketSession(s => s.setCollapseDock);
 
     const onSurface = ROUTE_PREFIXES.some(p => pathname === p || pathname.startsWith(`${p}/`));
-    const onTabRoot = pathname === '/browse';
+    const onTabRoot = pathname === '/catalog';
     const sessionActive = target != null && barVisible;
     const visible = onSurface && sessionActive;
 

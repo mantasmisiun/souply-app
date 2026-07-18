@@ -80,8 +80,8 @@ export default function TemplateAddScreen() {
                         >
                             <Text style={styles.discountsIcon}>🔥</Text>
                             <View style={styles.discountsTextWrap}>
-                                <Text style={styles.discountsTitle}>{t('browse.discountsCardTitle')}</Text>
-                                <Text style={styles.discountsSub}>{t('browse.discountsSub')}</Text>
+                                <Text style={styles.discountsTitle}>{t('catalog.discountsCardTitle')}</Text>
+                                <Text style={styles.discountsSub}>{t('catalog.discountsSub')}</Text>
                             </View>
                             <Ionicons name="chevron-forward" size={20} color={colors.onPrimary} />
                         </TouchableOpacity>

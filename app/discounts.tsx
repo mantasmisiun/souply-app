@@ -155,7 +155,7 @@ const DiscountProductCard = memo(({
                 quantity={quantity}
                 onCommit={onCommit}
                 busy={isAdding}
-                addLabel={addLabel ?? t('browse.addToBasket')}
+                addLabel={addLabel ?? t('catalog.addToBasket')}
                 fullWidth
                 noIcon
             />
@@ -513,7 +513,7 @@ export default function DiscountsScreen() {
             if (result.success) {
                 setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
                 setBasketItemCount(prev => prev + 1);
-                toastRef.current?.show(t('browse.addedToast'));
+                toastRef.current?.show(t('catalog.addedToast'));
             }
         }).finally(() => {
             setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
@@ -629,7 +629,7 @@ export default function DiscountsScreen() {
                                     autoFocus
                                     value={search}
                                     onChangeText={setSearch}
-                                    placeholder={t('browse.searchPlaceholder')}
+                                    placeholder={t('catalog.searchPlaceholder')}
                                     placeholderTextColor={colors.textMuted}
                                     returnKeyType="search"
                                     onSubmitEditing={() => Keyboard.dismiss()}
@@ -742,7 +742,7 @@ export default function DiscountsScreen() {
                                 }
                                 ListEmptyComponent={
                                     <Text style={styles.emptyText}>
-                                        {search ? t('browse.noResultsSearch') : t('browse.noResults')}
+                                        {search ? t('catalog.noResultsSearch') : t('catalog.noResults')}
                                     </Text>
                                 }
                                 renderItem={renderItem}

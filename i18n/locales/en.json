@@ -24,7 +24,7 @@
   },
   "tabs": {
     "receipts": "Analyze",
-    "browse": "Browse",
+    "catalog": "Catalog",
     "basket": "Basket",
     "shoppingList": "List",
     "profilis": "Profile",
@@ -586,9 +586,9 @@
     "infoBullet3": "A badge with a store logo shows where the product is cheapest right now — that many percent below its average price elsewhere.",
     "infoBullet4": "The flame shows the store's own advertised discount."
   },
-  "browse": {
+  "catalog": {
     "addToBasket": "Add",
-    "title": "Browse",
+    "title": "Catalog",
     "backToExit": "Swipe back again to exit",
     "discountsCardTitle": "Discounts",
     "discountsTitle": "Discounts",

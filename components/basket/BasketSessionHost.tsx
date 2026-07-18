@@ -21,7 +21,7 @@ import { BasketListSheet } from './BasketListSheet';
  *   · the CHOOSER modal (explicit "switch basket", when triggered).
  */
 
-const ROUTE_PREFIXES = ['/browse', '/search', '/discounts', '/product'];
+const ROUTE_PREFIXES = ['/catalog', '/browse', '/search', '/discounts', '/product'];
 
 export function BasketSessionHost() {
     const colors = useTheme();

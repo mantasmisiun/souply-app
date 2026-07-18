@@ -356,7 +356,7 @@ export default function BasketDetailScreen() {
         // user must re-run the comparison before viewing results again.
         await revertToDraftIfCompared();
         setDraftBasketId(Number(id));
-        router.navigate('/(tabs)/browse' as any);
+        router.navigate('/(tabs)/catalog' as any);
     };
 
     // Changing location/store-count settings while compared is also an edit:

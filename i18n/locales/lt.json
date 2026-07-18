@@ -24,7 +24,7 @@
   },
   "tabs": {
     "receipts": "Analizė",
-    "browse": "Naršyti",
+    "catalog": "Katalogas",
     "basket": "Krepšelis",
     "shoppingList": "Sąrašas",
     "profilis": "Profilis",
@@ -556,9 +556,9 @@
     "infoBullet3": "Ženkliukas su parduotuvės logotipu rodo, kur prekė šiuo metu pigiausia — tiek procentų ji pigesnė už vidutinę savo kainą kitur.",
     "infoBullet4": "Ugnelė rodo pačios parduotuvės skelbiamą nuolaidą."
   },
-  "browse": {
+  "catalog": {
     "addToBasket": "Į krepšelį",
-    "title": "Naršyti",
+    "title": "Katalogas",
     "backToExit": "Braukite atgal dar kartą, kad išeitumėte",
     "discountsCardTitle": "Nuolaidos",
     "discountsTitle": "Akcijos",

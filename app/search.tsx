@@ -218,7 +218,7 @@ export default function SearchScreen() {
                 toastRef.current?.show(result.message);
             } else {
                 setBasketItemCount(prev => prev + 1);
-                toastRef.current?.show(t('browse.addedToast'));
+                toastRef.current?.show(t('catalog.addedToast'));
             }
         });
     }, [draftBasketId, setDraftBasketId, hydrateBasket, t]);
@@ -593,7 +593,7 @@ export default function SearchScreen() {
                   onPress={() => setSelectedCategoryId(null)}
               >
                   <Text style={[styles.bubbleText, selectedCategoryId === null && styles.bubbleTextActive]}>
-                      {t('browse.allProducts')}
+                      {t('catalog.allProducts')}
                   </Text>
               </TouchableOpacity>
               {categoryChips.map(chip => (

@@ -33,7 +33,7 @@ export default function BrowseIndex() {
                 return true;
             }
             lastBackPressAt.current = now;
-            toastRef.current?.show(t('browse.backToExit'));
+            toastRef.current?.show(t('catalog.backToExit'));
             return true;
         });
         return () => sub.remove();
@@ -47,7 +47,7 @@ export default function BrowseIndex() {
         lastSearchPushAt.current = now;
         router.push({
             pathname: '/search',
-            params: { mode: 'products', source: 'browse' },
+            params: { mode: 'products', source: 'catalog' },
         });
     };
 
@@ -70,8 +70,8 @@ export default function BrowseIndex() {
         >
             <Text style={styles.discountsIcon}>🔥</Text>
             <View style={styles.discountsTextWrap}>
-                <Text style={styles.discountsTitle}>{t('browse.discountsCardTitle')}</Text>
-                <Text style={styles.discountsSub}>{t('browse.discountsSub')}</Text>
+                <Text style={styles.discountsTitle}>{t('catalog.discountsCardTitle')}</Text>
+                <Text style={styles.discountsSub}>{t('catalog.discountsSub')}</Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={colors.onPrimary} />
         </TouchableOpacity>
@@ -84,7 +84,7 @@ export default function BrowseIndex() {
                 controller={header}
                 background={colors.cardBackground}
                 right={searchAction}
-                collapsing={<ScreenHeading title={t('browse.title')} />}
+                collapsing={<ScreenHeading title={t('catalog.title')} />}
             />
             <CategoriesList
                 onSelectL2={handleSelectL2}

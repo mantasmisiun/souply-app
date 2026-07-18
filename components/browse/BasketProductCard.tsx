@@ -100,7 +100,7 @@ function BasketProductCard({
                 quantity={quantity}
                 onCommit={onCommit}
                 busy={isAdding}
-                addLabel={addLabel ?? t('browse.addToBasket')}
+                addLabel={addLabel ?? t('catalog.addToBasket')}
                 fullWidth
                 noIcon
             />

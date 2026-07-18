@@ -347,7 +347,7 @@ export default function ReceiptCategoryScreen() {
                             onPress={() => selectL3(null)}
                         >
                             <Text style={[styles.bubbleText, selectedL3 === null && styles.bubbleTextActive]}>
-                                {t('browse.allProducts')}
+                                {t('catalog.allProducts')}
                             </Text>
                         </TouchableOpacity>
                         {l3Categories.map(cat => (

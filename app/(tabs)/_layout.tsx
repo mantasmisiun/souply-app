@@ -1,6 +1,5 @@
 import { Tabs } from 'expo-router';
 import { NativeTabs, Icon, Label, Badge } from 'expo-router/unstable-native-tabs';
-import { Ionicons } from '@expo/vector-icons';
 import { BlurView } from 'expo-blur';
 import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { Platform, View, Text, StyleSheet } from 'react-native';
@@ -11,6 +10,7 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 import { useProfileStore } from '../../state/profileStore';
 import { HapticTab } from '../../components/haptic-tab';
 import { FloatingPillTabBar } from '../../components/FloatingPillTabBar';
+import { BeetrootIcon, BasketGlyph, BookStackGlyph, PersonGlyph } from '../../components/icons/tabGlyphs';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { devLog } from '../../utils/devLog';
 
@@ -90,11 +90,11 @@ export default function TabLayout() {
             }}
         >
             <Tabs.Screen
-                name="browse"
+                name="catalog"
                 options={{
-                    title: t('tabs.browse'),
+                    title: t('tabs.catalog'),
                     tabBarIcon: ({ focused, color, size }) => (
-                        <Ionicons name={focused ? 'search' : 'search-outline'} size={size} color={color} />
+                        <BeetrootIcon size={size} color={color} filled={focused} />
                     ),
                 }}
             />
@@ -102,9 +102,9 @@ export default function TabLayout() {
                 name="basket"
                 options={{
                     title: t('tabs.trips'),
-                    tabBarIcon: ({ focused, color, size }) => (
+                    tabBarIcon: ({ color, size }) => (
                         <View>
-                            <Ionicons name={focused ? 'cart' : 'cart-outline'} size={size} color={color} />
+                            <BasketGlyph size={size} color={color} />
                             <TabBadge count={tripCount} styles={styles} />
                         </View>
                     ),
@@ -114,8 +114,8 @@ export default function TabLayout() {
                 name="templates"
                 options={{
                     title: t('tabs.templates'),
-                    tabBarIcon: ({ focused, color, size }) => (
-                        <Ionicons name={focused ? 'bookmarks' : 'bookmarks-outline'} size={size} color={color} />
+                    tabBarIcon: ({ color, size }) => (
+                        <BookStackGlyph size={size} color={color} />
                     ),
                 }}
             />
@@ -123,9 +123,9 @@ export default function TabLayout() {
                 name="menu"
                 options={{
                     title: t('tabs.profilis'),
-                    tabBarIcon: ({ focused, color, size }) => (
+                    tabBarIcon: ({ color, size }) => (
                         <View>
-                            <Ionicons name={focused ? 'person' : 'person-outline'} size={size} color={color} />
+                            <PersonGlyph size={size} color={color} />
                             {pendingSwipeCount > 0 && <TabBadge count={pendingSwipeCount} styles={styles} />}
                         </View>
                     ),
@@ -142,21 +142,21 @@ export default function TabLayout() {
         return (
             <NativeTabsBoundary fallback={jsTabs}>
                 <NativeTabs tintColor={colors.primary}>
-                    <NativeTabs.Trigger name="browse">
-                        <Icon sf="magnifyingglass" />
-                        <Label>{t('tabs.browse')}</Label>
+                    <NativeTabs.Trigger name="catalog">
+                        <Icon src={require('../../assets/icons/beet-filled.png')} />
+                        <Label>{t('tabs.catalog')}</Label>
                     </NativeTabs.Trigger>
                     <NativeTabs.Trigger name="basket">
-                        <Icon sf={{ default: 'cart', selected: 'cart.fill' }} />
+                        <Icon src={require('../../assets/icons/tab-basket.png')} />
                         <Label>{t('tabs.trips')}</Label>
                         {tripBadge ? <Badge>{tripBadge}</Badge> : null}
                     </NativeTabs.Trigger>
                     <NativeTabs.Trigger name="templates">
-                        <Icon sf={{ default: 'bookmark', selected: 'bookmark.fill' }} />
+                        <Icon src={require('../../assets/icons/tab-books.png')} />
                         <Label>{t('tabs.templates')}</Label>
                     </NativeTabs.Trigger>
                     <NativeTabs.Trigger name="menu">
-                        <Icon sf={{ default: 'person', selected: 'person.fill' }} />
+                        <Icon src={require('../../assets/icons/tab-person.png')} />
                         <Label>{t('tabs.profilis')}</Label>
                         {swipeBadge ? <Badge>{swipeBadge}</Badge> : null}
                     </NativeTabs.Trigger>

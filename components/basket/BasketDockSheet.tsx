@@ -36,7 +36,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const setCollapseDock = useBasketSession(s => s.setCollapseDock);
     const browseListRef = useBasketSession(s => s.browseListRef);
 
-    const onTabRoot = pathname === '/browse';
+    const onTabRoot = pathname === '/catalog';
     const sessionActive = target != null && barVisible;
     // Chooser shows on Naršyti only when a resumable basket exists and no
     // session is live (a live session is owned by the root BasketListSheet).

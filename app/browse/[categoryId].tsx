@@ -302,7 +302,7 @@ export default function CategoryScreen() {
 
     const commitAdd = async (productId: number, quantity: number) => {
         const target = await resolveBasketForAdd();
-        if (target.kind === 'cancel') return { success: false, message: t('browse.cancelled') };
+        if (target.kind === 'cancel') return { success: false, message: t('catalog.cancelled') };
 
         if (target.kind === 'revert') {
             // Reusing a compared basket: flip it back to draft first.
@@ -540,7 +540,7 @@ export default function CategoryScreen() {
             if (result.success) {
                 setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
                 setBasketItemCount(prev => prev + 1);
-                toastRef.current?.show(t('browse.addedToast'));
+                toastRef.current?.show(t('catalog.addedToast'));
             }
         }).finally(() => {
             setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
@@ -670,7 +670,7 @@ export default function CategoryScreen() {
                 pinned={
                     <>
                         <View style={styles.modeToggleRow}>
-                            <Text style={styles.modeToggleLabel}>{t('browse.combineAlternatives')}</Text>
+                            <Text style={styles.modeToggleLabel}>{t('catalog.combineAlternatives')}</Text>
                             <TouchableOpacity
                                 onPress={() => setHelpOpen(true)}
                                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
@@ -690,7 +690,7 @@ export default function CategoryScreen() {
                             categories={l3Categories}
                             selectedId={selectedL3}
                             onSelect={handleChipSelect}
-                            allLabel={t('browse.allProducts')}
+                            allLabel={t('catalog.allProducts')}
                         />
                     </>
                 }
@@ -731,7 +731,7 @@ export default function CategoryScreen() {
                             numColumns={2}
                             columnWrapperStyle={styles.row}
                             ListEmptyComponent={
-                                <Text style={styles.emptyText}>{t('browse.noProducts')}</Text>
+                                <Text style={styles.emptyText}>{t('catalog.noProducts')}</Text>
                             }
                             renderItem={renderItem}
                         />
@@ -752,9 +752,9 @@ export default function CategoryScreen() {
             >
                 <View style={styles.helpBackdrop}>
                     <View style={styles.helpCard}>
-                        <Text style={styles.helpTitle}>{t('browse.modeSwitch.title')}</Text>
+                        <Text style={styles.helpTitle}>{t('catalog.modeSwitch.title')}</Text>
                         <Text style={styles.helpBody}>
-                            {t('browse.modeSwitch.body')}
+                            {t('catalog.modeSwitch.body')}
                         </Text>
                         <View style={styles.helpActionsRow}>
                             <GlassButton
@@ -765,7 +765,7 @@ export default function CategoryScreen() {
                                 flex
                             />
                             <GlassButton
-                                title={converting ? '…' : t('browse.modeSwitch.confirm')}
+                                title={converting ? '…' : t('catalog.modeSwitch.confirm')}
                                 variant="primary"
                                 onPress={confirmModeSwitch}
                                 disabled={converting}
@@ -792,17 +792,17 @@ export default function CategoryScreen() {
                         onPress={() => {}}
                     >
                         <Text style={styles.helpTitle}>
-                            {t('browse.modeSwitch.helpTitle')}{'  '}
-                            <Text style={styles.helpBadge}>{t('browse.modeSwitch.experimentalBadge')}</Text>
+                            {t('catalog.modeSwitch.helpTitle')}{'  '}
+                            <Text style={styles.helpBadge}>{t('catalog.modeSwitch.experimentalBadge')}</Text>
                         </Text>
                         <Text style={styles.helpBody}>
-                            {t('browse.modeSwitch.explainer')}
+                            {t('catalog.modeSwitch.explainer')}
                         </Text>
                         <Text style={styles.helpBody}>
-                            {t('browse.modeSwitch.example')}
+                            {t('catalog.modeSwitch.example')}
                         </Text>
                         <GlassButton
-                            title={t('browse.modeSwitch.gotIt')}
+                            title={t('catalog.modeSwitch.gotIt')}
                             variant="primary"
                             onPress={() => setHelpOpen(false)}
                             style={{ alignSelf: 'flex-end', marginTop: 4, minWidth: 84 }}

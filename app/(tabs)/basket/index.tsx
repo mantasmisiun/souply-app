@@ -247,7 +247,7 @@ export default function TripsScreen() {
                         <Ionicons name="cart-outline" size={56} color={colors.textMuted} />
                         <Text style={styles.emptyText}>{t('trips.empty')}</Text>
                         <Text style={styles.emptySubText}>{t('trips.emptyBody')}</Text>
-                        <ScalePressable style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/browse' as any)}>
+                        <ScalePressable style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/catalog' as any)}>
                             <Text style={styles.emptyButtonText}>{t('basketTab.emptyCta')}</Text>
                         </ScalePressable>
                     </View>
