@@ -85,6 +85,12 @@ interface BasketSessionState {
      *  (not a bool) so it fires even when the value would repeat, and the dock
      *  reacts via an effect once it actually has the sheet mounted. */
     dockExpandRequest: number;
+    /** Collapsed-dock top from the screen bottom, published by the floating
+     *  docks. `tabBar` = the always-present pill bar; `session` = the taller
+     *  session bar (null when no session). useSafeBottomTabBarHeight pads
+     *  screens by whichever is the visible bottom bar. */
+    tabBarClearance: number;
+    sessionBarClearance: number | null;
 
     setTarget: (t: SessionTarget, itemCount?: number) => void;
     setDormant: (d: { count: number } | null) => void;
@@ -106,6 +112,8 @@ interface BasketSessionState {
     markNewProduct: (productId: number) => void;
     /** Ask the tab-bar dock to raise its chooser sheet to medium. */
     requestDockExpand: () => void;
+    setTabBarClearance: (px: number) => void;
+    setSessionBarClearance: (px: number | null) => void;
 }
 
 export const useBasketSession = create<BasketSessionState>((set, get) => ({
@@ -122,6 +130,8 @@ export const useBasketSession = create<BasketSessionState>((set, get) => ({
     basketRev: 0,
     newProductIds: [],
     dockExpandRequest: 0,
+    tabBarClearance: 0,
+    sessionBarClearance: null,
 
     // A fresh target starts a fresh session → the "New" set resets so a
     // resumed basket's pre-existing items don't inherit stale badges.
@@ -160,6 +170,8 @@ export const useBasketSession = create<BasketSessionState>((set, get) => ({
             : { newProductIds: [...s.newProductIds, productId] }
     )),
     requestDockExpand: () => set(s => ({ dockExpandRequest: s.dockExpandRequest + 1 })),
+    setTabBarClearance: (px) => set(s => (s.tabBarClearance === px ? s : { tabBarClearance: px })),
+    setSessionBarClearance: (px) => set(s => (s.sessionBarClearance === px ? s : { sessionBarClearance: px })),
 }));
 
 /** POST one item to a basket; shared by the direct path and the flush. */

@@ -3,6 +3,7 @@ import { SkeletonBox } from '@/components/SkeletonBox';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeBottomTabBarHeight } from '@/hooks/useSafeBottomTabBarHeight';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '@/config/api';
@@ -58,6 +59,7 @@ export default function CategoryScreen() {
     const { t, i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
+    const barClearance = useSafeBottomTabBarHeight();
     // Collapsing header: category title hides on scroll; mode toggle + L3 filter stay pinned.
     const header = useCollapsingHeader();
     const { categoryId, name } = useLocalSearchParams<{ categoryId: string; name: string }>();
@@ -719,10 +721,9 @@ export default function CategoryScreen() {
                                 styles.list,
                                 // + 12 = small gap below the pinned filter (matches product).
                                 { paddingTop: header.paddingTop + 12 },
-                                // Reserve room for the absolute "Šablonas"
-                                // banner so the last row's "Į šabloną" CTA
-                                // isn't hidden under it.
-                                isTemplateMode && { paddingBottom: 96 + bottomInset },
+                                // Clear the floating bottom bar so the last row
+                                // is fully visible (session bar or tab bar).
+                                { paddingBottom: barClearance },
                             ]}
                             numColumns={2}
                             columnWrapperStyle={styles.row}

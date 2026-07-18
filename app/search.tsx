@@ -35,6 +35,7 @@ import CreateStoreProductModal, {
 } from "../components/receipt/CreateStoreProductModal";
 import { useTheme, radius, elevation, type AppTheme } from "../constants/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useSafeBottomTabBarHeight } from "@/hooks/useSafeBottomTabBarHeight";
 import { Toast, type ToastHandle } from '@/components/Toast';
 
 // Pick the first URL from the API's imageUrls (string | array | null) for
@@ -135,6 +136,7 @@ export default function SearchScreen() {
     }, [templateItems, isTemplateMode]);
     const router = useRouter();
     const insets = useSafeAreaInsets();
+    const barClearance = useSafeBottomTabBarHeight();
     const { setPendingPick } = useReceiptPickerState();
     const { draftBasketId, setDraftBasketId } = useBasketState();
     const [basketQuantities, setBasketQuantities] = useState<Record<number, number>>({});
@@ -651,9 +653,8 @@ export default function SearchScreen() {
             keyExtractor={(item, idx) => `p-${item.id}-${idx}`}
             contentContainerStyle={[
               styles.list,
-              // Reserve room for the absolute "Šablonas" banner so the
-              // last row's "Į šabloną" CTA isn't hidden under it.
-              isTemplateMode && { paddingBottom: 96 + insets.bottom },
+              // Clear the floating bottom bar so the last row is fully visible.
+              { paddingBottom: barClearance },
             ]}
             numColumns={2}
             columnWrapperStyle={styles.row}

@@ -3,6 +3,13 @@ import { Platform } from 'react-native';
 import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
 import { FLOATING_TAB_BAR_CLEARANCE } from '../components/FloatingPillTabBar';
+import { useBasketSession } from '../state/basketSession';
+
+// Visual gap kept between a screen's last item and the top of the floating bar
+// (covers the grabber-peek strip + a breathing gap), so padding = published
+// collapsed-clearance + this. A constant gap keeps the distance consistent
+// whether the tab bar or the taller session bar is showing.
+const BAR_TOP_GAP = 24;
 
 // Standard UITabBar item height on iOS. The full clearance is this + the
 // home-indicator inset (49 + 34 = 83).
@@ -29,17 +36,31 @@ const IOS_TAB_BAR_ITEM_HEIGHT = 49;
 export function useSafeBottomTabBarHeight(): number {
     const contextHeight = useContext(BottomTabBarHeightContext);
     const insets = useSafeAreaInsets();
+    // Whichever floating dock is the visible bottom bar publishes its collapsed
+    // clearance: the session bar (taller) wins when a session is live, else the
+    // tab bar. Both values already fold in insets.bottom.
+    const tabBarClearance = useBasketSession(s => s.tabBarClearance);
+    const sessionBarClearance = useBasketSession(s => s.sessionBarClearance);
+    const floatingClearance = sessionBarClearance ?? (tabBarClearance || 0);
+
     // Android uses the floating pill bar (FloatingPillTabBar), which is
     // absolutely positioned and reserves no layout space — so the measured
-    // context height is unreliable. Return its known clearance + the (stable)
-    // Android gesture inset instead.
-    if (Platform.OS === 'android') return FLOATING_TAB_BAR_CLEARANCE + insets.bottom;
-    if (contextHeight != null) return contextHeight;
-    if (Platform.OS === 'ios') {
+    // context height is unreliable. Pad by the ACTUAL published dock clearance
+    // (falls back to the constant estimate until the dock reports).
+    if (Platform.OS === 'android') {
+        const base = floatingClearance > 0 ? floatingClearance : FLOATING_TAB_BAR_CLEARANCE + insets.bottom;
+        return base + BAR_TOP_GAP;
+    }
+    // iOS: the native tab bar height — but if the (floating) session bar is
+    // live, clear whichever is taller.
+    let base: number;
+    if (contextHeight != null) base = contextHeight;
+    else if (Platform.OS === 'ios') {
         // Prefer the stable startup inset; only fall back to the live inset if
         // initial metrics were unavailable (rare; mostly non-iOS).
         const homeInset = initialWindowMetrics?.insets.bottom ?? insets.bottom;
-        return IOS_TAB_BAR_ITEM_HEIGHT + homeInset;
-    }
-    return 0;
+        base = IOS_TAB_BAR_ITEM_HEIGHT + homeInset;
+    } else base = 0;
+    if (sessionBarClearance != null) return Math.max(base, sessionBarClearance + BAR_TOP_GAP);
+    return base;
 }

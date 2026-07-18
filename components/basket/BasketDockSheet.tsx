@@ -37,6 +37,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const browseListRef = useBasketSession(s => s.browseListRef);
     const dockExpandRequest = useBasketSession(s => s.dockExpandRequest);
     const cancelPending = useBasketSession(s => s.cancelPending);
+    const setTabBarClearance = useBasketSession(s => s.setTabBarClearance);
 
     const onTabRoot = pathname === '/catalog';
     // The whole catalog tree is a session surface, so the swipe-up chooser is
@@ -109,7 +110,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     );
 
     if (!hasSheet) {
-        return <DockedGlassSheet barRow={tabsRow} barRowHeight={tabsRowHeight} colors={colors} />;
+        return <DockedGlassSheet barRow={tabsRow} barRowHeight={tabsRowHeight} colors={colors} onCollapsedClearance={setTabBarClearance} />;
     }
 
     return (
@@ -118,6 +119,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
             colors={colors}
             barRow={tabsRow}
             barRowHeight={tabsRowHeight}
+            onCollapsedClearance={setTabBarClearance}
             blockScrollRef={onTabRoot ? browseListRef : null}
             sheet={{
                 content: chooserContent,

@@ -93,12 +93,18 @@ interface Props {
     sheet?: SheetSpec;
     colors?: AppTheme;
     onBarHeight?: (h: number) => void;
+    /** Reports the COLLAPSED dock's top edge as a distance from the screen
+     *  bottom (bottom margin + bar height). Screens pad by this so their last
+     *  item clears the floating bar; it stays correct as the bar height / inset
+     *  change (T2 compact dock, session vs tab bar). Peek is excluded so the
+     *  value doesn't jump when a chooser appears. */
+    onCollapsedClearance?: (px: number) => void;
     /** A scrollable behind the bar whose scroll must yield to this sheet's Pan. */
     blockScrollRef?: { current: unknown } | null;
 }
 
 export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function DockedGlassSheet({
-    barRow, barRowHeight, sheet, colors: colorsProp, onBarHeight, blockScrollRef,
+    barRow, barRowHeight, sheet, colors: colorsProp, onBarHeight, onCollapsedClearance, blockScrollRef,
 }, ref) {
     const themed = useTheme();
     const colors = colorsProp ?? themed;
@@ -115,6 +121,13 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     const collapsedH = barRowHeight + peek;
     const mediumH = Math.max(Math.round(SCREEN_H * MEDIUM_FRACTION), collapsedH + 160);
     const fullH = SCREEN_H - insets.top;
+
+    // Distance from the screen bottom to the TOP of the collapsed dock (bottom
+    // margin + bar height, peek excluded for stability). Published so screens
+    // can pad their scroll content to clear the floating bar.
+    const collapsedClearance =
+        insets.bottom + spacing.sm + (dockAtLast ? 0 : COLLAPSED_INSET) + barRowHeight;
+    useEffect(() => { onCollapsedClearance?.(collapsedClearance); }, [collapsedClearance, onCollapsedClearance]);
     const snaps = useMemo(
         () => (!hasSheet ? [collapsedH]
             : maxStage >= 2 ? [collapsedH, mediumH, fullH]

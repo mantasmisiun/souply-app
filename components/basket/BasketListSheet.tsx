@@ -56,6 +56,7 @@ export function BasketListSheet() {
     const basketRev = useBasketSession(s => s.basketRev);
     const setCollapseDock = useBasketSession(s => s.setCollapseDock);
     const newProductIds = useBasketSession(s => s.newProductIds);
+    const setSessionBarClearance = useBasketSession(s => s.setSessionBarClearance);
 
     const onSurface = ROUTE_PREFIXES.some(p => pathname === p || pathname.startsWith(`${p}/`));
     const onTabRoot = pathname === '/catalog';
@@ -101,6 +102,13 @@ export function BasketListSheet() {
         if (basketRev !== firstRev.current && target != null && visible) loadItems();
         firstRev.current = basketRev;
     }, [basketRev]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // When the session bar isn't the visible bottom bar, clear its published
+    // clearance so screens fall back to the tab-bar clearance.
+    useEffect(() => {
+        if (!visible) setSessionBarClearance(null);
+        return () => setSessionBarClearance(null);
+    }, [visible, setSessionBarClearance]);
 
     // While the session view owns the bottom, page scrolls collapse it.
     useEffect(() => {
@@ -256,6 +264,7 @@ export function BasketListSheet() {
         <DockedGlassSheet
             ref={controls}
             colors={colors}
+            onCollapsedClearance={setSessionBarClearance}
             barRow={sessionHeader}
             barRowHeight={SESSION_H}
             blockScrollRef={onTabRoot ? browseListRef : null}

@@ -8,6 +8,7 @@ import { GlassIconButton } from '@/components/GlassIconButton';
 import { ScreenHeading } from '@/components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '@/components/CollapsingHeader';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeBottomTabBarHeight } from '@/hooks/useSafeBottomTabBarHeight';
 import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { API_BASE_URL } from '@/config/api';
@@ -168,6 +169,7 @@ export default function DiscountsScreen() {
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { bottom: bottomInset } = useSafeAreaInsets();
+    const barClearance = useSafeBottomTabBarHeight();
     // Collapsing header: "Nuolaidos" title hides on scroll, L2 filter stays pinned.
     const header = useCollapsingHeader();
     const router = useRouter();
@@ -712,10 +714,9 @@ export default function DiscountsScreen() {
                                     // + 12 restores the list's natural top padding (styles.list)
                                     // as a small gap below the pinned filter, matching product.
                                     { paddingTop: header.paddingTop + 12 },
-                                    // Reserve space for the absolute "Šablonas"
-                                    // banner so the last row's "Į šabloną" CTA
-                                    // isn't hidden under it.
-                                    isTemplateMode && { paddingBottom: 96 + bottomInset },
+                                    // Clear the floating bottom bar so the last
+                                    // row is fully visible.
+                                    { paddingBottom: barClearance },
                                 ]}
                                 numColumns={2}
                                 columnWrapperStyle={styles.row}
