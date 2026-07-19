@@ -35,6 +35,7 @@ import { ChefToqueGlyph } from '../../components/icons/tabGlyphs';
 import { SheetCard } from '../../components/SheetCard';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { useBasketSession } from '../../state/basketSession';
+import { useShoppingSheet } from '../../state/shoppingSheet';
 import { fetchTrips, createTripInviteUrl } from '../../utils/tripsApi';
 import * as Haptics from 'expo-haptics';
 import { ScalePressable } from '../../components/ScalePressable';
@@ -376,16 +377,24 @@ export default function BasketDetailScreen() {
     // Android alert). Deletes the server row, clears any session targeting
     // it and leaves the screen.
     const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
-    const removeBasket = useCallback(() => setRemoveConfirmOpen(true), []);
+    // Tap Remove → collapse the sheet, THEN raise the confirm modal over it.
+    const removeBasket = useCallback(() => {
+        settingsSheetRef.current?.collapse();
+        setRemoveConfirmOpen(true);
+    }, []);
     const doRemoveBasket = useCallback(async () => {
         setRemoveConfirmOpen(false);
-        await fetch(`${API_BASE_URL}/api/baskets/${id}`, { method: 'DELETE' }).catch(() => {});
+        fetch(`${API_BASE_URL}/api/baskets/${id}`, { method: 'DELETE' }).catch(() => {});
         const sess = useBasketSession.getState();
         if (sess.target?.kind === 'basket' && sess.target.basketId === Number(id)) {
             useBasketSession.setState({ target: null, barVisible: false, itemCount: 0 });
         }
         clearSessionBasket();
         router.back();
+        // Fire the card's exit animation just AFTER the back transition, so the
+        // user is looking at the Shopping list when the card animates away.
+        const removeSignal = useShoppingSheet.getState().removeTripByBasket;
+        setTimeout(() => removeSignal?.(Number(id)), 320);
     }, [id, router, clearSessionBasket]);
 
     // Changing location/store-count settings while compared is also an edit:

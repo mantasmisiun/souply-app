@@ -31,6 +31,10 @@ interface ShoppingSheetState {
     /** Re-fetch trips + household (after create/join/leave/generate). */
     refreshTrips: (() => void) | null;
     setRefreshTrips: (fn: (() => void) | null) => void;
+    /** Optimistically drop the trip that owns this basket (after a Remove) so
+     *  the Shopping card animates out immediately, before the next re-fetch. */
+    removeTripByBasket: ((basketId: number) => void) | null;
+    setRemoveTripByBasket: (fn: ((basketId: number) => void) | null) => void;
 }
 
 export const useShoppingSheet = create<ShoppingSheetState>((set) => ({
@@ -46,4 +50,6 @@ export const useShoppingSheet = create<ShoppingSheetState>((set) => ({
     setHousehold: (h) => set({ household: h }),
     refreshTrips: null,
     setRefreshTrips: (fn) => set({ refreshTrips: fn }),
+    removeTripByBasket: null,
+    setRemoveTripByBasket: (fn) => set({ removeTripByBasket: fn }),
 }));

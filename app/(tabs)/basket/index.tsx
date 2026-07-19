@@ -18,7 +18,7 @@ import {
     Alert,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
-import Animated from 'react-native-reanimated';
+import Animated, { LinearTransition, withTiming, withSequence, Easing } from 'react-native-reanimated';
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { glassHeaderOptions } from '../../../constants/navHeader';
@@ -44,6 +44,26 @@ import {
 } from '../../../utils/tripsApi';
 import { tripStageHref } from '../../../utils/tripStageRoute';
 import { ShoppingFilterChips } from '../../../components/basket/ShoppingFilterChips';
+
+const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
+
+/** Card removal: a brief settle-then-collapse — the card dips in scale, then
+ *  shrinks away as it fades. Fits the app's soft, springy motion language. */
+function cardExit() {
+    'worklet';
+    return {
+        initialValues: { opacity: 1, transform: [{ scale: 1 }] },
+        animations: {
+            opacity: withTiming(0, { duration: 260, easing: Easing.in(Easing.cubic) }),
+            transform: [{
+                scale: withSequence(
+                    withTiming(1.03, { duration: 90 }),
+                    withTiming(0.85, { duration: 240, easing: Easing.in(Easing.cubic) }),
+                ),
+            }],
+        },
+    };
+}
 
 const STAGE_ICONS: Record<number, keyof typeof Ionicons.glyphMap> = {
     1: 'cart-outline', 2: 'storefront-outline', 3: 'list-outline', 4: 'receipt-outline', 5: 'stats-chart-outline',
@@ -119,8 +139,16 @@ export default function TripsScreen() {
         return d != null && sameDay(d, selectedDate);
     }, [selectedDate, selectedStages]);
 
-    const active = useMemo(() => trips.filter(tr => tr.archivedAt == null && byDate(tr)), [trips, byDate]);
-    const archived = useMemo(() => trips.filter(tr => tr.archivedAt != null && byDate(tr)), [trips, byDate]);
+    // Baskets removed via the detail sheet — hidden by a PERSISTENT filter (not
+    // just dropped from `trips`) so the exit animation plays once and the focus
+    // re-fetch can't momentarily re-add the card before the server DELETE lands.
+    const [hiddenBasketIds, setHiddenBasketIds] = useState<Set<number>>(new Set());
+    const notHidden = useCallback(
+        (tr: TripSummary) => !(tr.basket != null && hiddenBasketIds.has(tr.basket.id)),
+        [hiddenBasketIds]);
+
+    const active = useMemo(() => trips.filter(tr => tr.archivedAt == null && byDate(tr) && notHidden(tr)), [trips, byDate, notHidden]);
+    const archived = useMemo(() => trips.filter(tr => tr.archivedAt != null && byDate(tr) && notHidden(tr)), [trips, byDate, notHidden]);
 
     // ONE screen per stage (simplified flow): the card resolves straight to
     // the stage's screen — basket detail / comparison map / closest
@@ -146,11 +174,15 @@ export default function TripsScreen() {
     }, [t, fetchAll]);
 
     // Register the dock sheet's refresh callback (household/invites live in
-    // the sheet itself now).
+    // the sheet itself now) + the optimistic card-removal used by Remove:
+    // drop the trip that owns a basket so its card plays the exit animation.
     useEffect(() => {
         const st = useShoppingSheet.getState();
         st.setRefreshTrips(() => { void fetchAll(true); });
-        return () => { st.setRefreshTrips(null); };
+        st.setRemoveTripByBasket((basketId: number) => {
+            setHiddenBasketIds(prev => new Set(prev).add(basketId));
+        });
+        return () => { st.setRefreshTrips(null); st.setRemoveTripByBasket(null); };
     }, [fetchAll]);
 
     const stageLabel = (s: number) => t(`trips.stage${s}`);
@@ -218,7 +250,14 @@ export default function TripsScreen() {
                     active.map(trip => {
                         const preview = trip.basket?.itemPreview ?? [];
                         return (
-                        <TouchableOpacity key={trip.id} style={styles.card} onPress={() => openTrip(trip)} activeOpacity={0.8}>
+                        <AnimatedTouchable
+                            key={trip.id}
+                            style={styles.card}
+                            onPress={() => openTrip(trip)}
+                            activeOpacity={0.8}
+                            exiting={cardExit}
+                            layout={LinearTransition.springify().damping(18).stiffness(220)}
+                        >
                             <View style={styles.cardMain}>
                                 <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
                                     <View style={styles.cardTop}>
@@ -254,7 +293,7 @@ export default function TripsScreen() {
                             ) : slotLine(trip) ? (
                                 <Text style={styles.cardMeta} numberOfLines={1}>{slotLine(trip)}</Text>
                             ) : null}
-                        </TouchableOpacity>
+                        </AnimatedTouchable>
                         );
                     })
                 )}
