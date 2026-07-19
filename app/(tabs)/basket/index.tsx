@@ -18,7 +18,7 @@ import {
     Alert,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
-import Animated, { LinearTransition, withTiming, withSequence, Easing } from 'react-native-reanimated';
+import Animated, { LinearTransition, withTiming, Easing } from 'react-native-reanimated';
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { glassHeaderOptions } from '../../../constants/navHeader';
@@ -47,20 +47,14 @@ import { ShoppingFilterChips } from '../../../components/basket/ShoppingFilterCh
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
-/** Card removal: a brief settle-then-collapse — the card dips in scale, then
- *  shrinks away as it fades. Fits the app's soft, springy motion language. */
+/** Card removal: a clean, quick fade + slight shrink — no overshoot. */
 function cardExit() {
     'worklet';
     return {
         initialValues: { opacity: 1, transform: [{ scale: 1 }] },
         animations: {
-            opacity: withTiming(0, { duration: 260, easing: Easing.in(Easing.cubic) }),
-            transform: [{
-                scale: withSequence(
-                    withTiming(1.03, { duration: 90 }),
-                    withTiming(0.85, { duration: 240, easing: Easing.in(Easing.cubic) }),
-                ),
-            }],
+            opacity: withTiming(0, { duration: 200, easing: Easing.in(Easing.quad) }),
+            transform: [{ scale: withTiming(0.94, { duration: 200, easing: Easing.in(Easing.quad) }) }],
         },
     };
 }
@@ -256,7 +250,7 @@ export default function TripsScreen() {
                             onPress={() => openTrip(trip)}
                             activeOpacity={0.8}
                             exiting={cardExit}
-                            layout={LinearTransition.springify().damping(18).stiffness(220)}
+                            layout={LinearTransition.duration(240).easing(Easing.out(Easing.cubic))}
                         >
                             <View style={styles.cardMain}>
                                 <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
