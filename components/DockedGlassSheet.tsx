@@ -407,7 +407,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                 the full detent. */}
             <BlurView
                 pointerEvents="none"
-                intensity={isDark ? 40 : 35}
+                intensity={30}
                 tint={isDark ? 'dark' : 'light'}
                 experimentalBlurMethod="dimezisBlurView"
                 style={styles.glassFill}
@@ -520,7 +520,7 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     // share this constant tint — solid only fades in medium→full — so both read
     // as the same, markedly see-through white frosted panel). Dark keeps its
     // tinted container.
-    tint: { backgroundColor: withAlpha(isDark ? c.surfaceContainer : '#FFFFFF', isDark ? 0.62 : 0.08) },
+    tint: { backgroundColor: withAlpha(isDark ? c.surfaceContainer : '#FFFFFF', 0.62) },
     // Opaque surface the glass fades INTO at full — WHITE in light (same as the
     // section cards; a soft card shadow does the separating there).
     solid: { backgroundColor: c.sheetSurface },
