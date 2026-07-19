@@ -1,4 +1,37 @@
 {
+  "tripReceipts": {
+    "title": "Kvitai",
+    "upload": "Įkelti",
+    "view": "Peržiūrėti kvitą",
+    "emptyHint": "Įkelkite šio apsipirkimo kvitą, kad jį užbaigtumėte ir atrakintumėte statistiką.",
+    "wrongTitle": "Ne tas kvitas?",
+    "wrongBody": "Pašalinti šį kvitą iš apsipirkimo? Pats kvitas liks jūsų istorijoje.",
+    "wrongConfirm": "Pašalinti",
+    "wrongClosedTitle": "Nebegalima pašalinti",
+    "wrongClosedBody": "Kvitus galima šalinti tik iš neseniai vykusių apsipirkimų."
+  },
+  "tripMap": {
+    "tab_basket": "Krepšelis",
+    "tab_stores": "Parduotuvės",
+    "tab_list": "Sąrašas",
+    "tab_receipts": "Kvitai",
+    "tab_stats": "Statistika",
+    "tab_options": "Parinktys",
+    "basketTitle": "Prekės: {{count}}",
+    "basketEmpty": "Krepšelis tuščias — pridėkite prekių iš Katalogo.",
+    "storesHint": "Bakstelėkite parduotuvę žemėlapyje, kad palygintumėte ir sukurtumėte sąrašą.",
+    "listTitle": "Pirkinių sąrašas",
+    "listEmpty": "Sąrašo dar nėra — pasirinkite planą Parduotuvėse.",
+    "receiptsTitle": "Kvitai",
+    "receiptPhoto": "Fotografuoti",
+    "receiptUpload": "Įkelti",
+    "receiptPick": "Pasirinkti iš sąrašo",
+    "statsLocked": "Statistika atsirakina įkėlus kvitą ir atlikus jo peržiūras.",
+    "optionsTitle": "Parinktys",
+    "locationSettings": "Vietos ir maršruto nustatymai",
+    "saverMode": "Taupymo režimas",
+    "saverModeSub": "Lyginti ir panašias prekes, parenkant pigiausią"
+  },
   "smartBasket": {
     "sheetTitle": "Apsipirkimai",
     "filterSection": "Filtruoti apsipirkimus",

@@ -41,6 +41,38 @@ async function jsonOrThrow(res: Response): Promise<any> {
     return res.status === 204 ? null : res.json();
 }
 
+export interface TripReceiptItem {
+    lineIdx: number;
+    name: string;
+    price: number | null;
+    quantity: number | null;
+    unit: string | null;
+    matchedName: string | null;
+    storeProductImageUrl: string | null;
+}
+
+export interface TripReceipt {
+    id: number;
+    storeId: number | null;
+    storeName: string | null;
+    storeAddress: string | null;
+    chainName: string | null;
+    chainId: number | null;
+    receiptDate: string | null;
+    processingStatus: string | null;
+    mandatorySwipesRequired: number;
+    mandatorySwipesCompleted: number;
+    items: TripReceiptItem[];
+}
+
+export const fetchTripReceipts = async (tripId: number): Promise<TripReceipt[]> =>
+    jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/receipts`));
+
+/** "Wrong receipt" — detach from the trip (server enforces the time window). */
+export const detachTripReceipt = async (tripId: number, receiptId: number): Promise<void> => {
+    await jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/receipts/${receiptId}`, { method: 'DELETE' }));
+};
+
 export const fetchTrips = async (): Promise<TripSummary[]> =>
     jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips`));
 

@@ -28,16 +28,19 @@ interface SplitListEntry {
 
 export default function UnifiedShoppingListScreen() {
     const colors = useTheme();
-    const { id, basketId, expectedCount } = useLocalSearchParams<{
+    const { id, basketId, expectedCount, tripId } = useLocalSearchParams<{
         id: string;
         basketId?: string;
         expectedCount?: string;
+        /** Trip-scoped open (simplified flow): store tabs come from the
+         *  trip's slots (server truth), ordered nearest→furthest. */
+        tripId?: string;
     }>();
 
     const router = useRouter();
     const { t } = useTranslation();
     const [entries, setEntries] = useState<SplitListEntry[]>([]);
-    const [entriesLoaded, setEntriesLoaded] = useState(!basketId);
+    const [entriesLoaded, setEntriesLoaded] = useState(!basketId && !tripId);
     const [activeListId, setActiveListId] = useState(parseInt(id));
     const [listSummaries, setListSummaries] = useState<Map<number, { itemCount: number; checkedCount: number }>>(new Map());
     // Whole-trip completion confirm (shown only when EVERY store's items are
@@ -47,6 +50,36 @@ export default function UnifiedShoppingListScreen() {
     // Silent advance-to-next-store: once per list, so unticking/reticking an
     // item can't bounce the user between stores.
     const advancedRef = useRef<Set<number>>(new Set());
+
+    // Trip-scoped: build the store-tab entries from the trip's slots —
+    // ordered nearest→furthest from the user (the LAST tab is the furthest
+    // store), matching how the map presented them.
+    useEffect(() => {
+        if (!tripId) return;
+        (async () => {
+            try {
+                const { fetchTrips } = await import('../../utils/tripsApi');
+                const { tryGpsCoords } = await import('../../utils/location');
+                const trips = await fetchTrips();
+                const trip = trips.find(tr => tr.id === Number(tripId));
+                if (!trip) { setEntriesLoaded(true); return; }
+                const gps = await tryGpsCoords().catch(() => null);
+                const dist = (sl: typeof trip.slots[number]) => gps && sl.latitude != null && sl.longitude != null
+                    ? (sl.latitude - gps.lat) ** 2 + (sl.longitude - gps.lng) ** 2
+                    : Number.MAX_VALUE;
+                const ordered = [...trip.slots].sort((a, b) => dist(a) - dist(b));
+                setEntries(ordered.map(sl => ({
+                    storeId: sl.storeId,
+                    storeName: sl.storeName ?? sl.chainName ?? '?',
+                    storeAddress: sl.address ?? undefined,
+                    chainName: sl.chainName ?? '?',
+                    chainLogoUrl: null,
+                    listId: sl.listId,
+                })));
+            } catch {}
+            setEntriesLoaded(true);
+        })();
+    }, [tripId]);  
 
     // Load split basket entries from AsyncStorage (very fast local read)
     useEffect(() => {
@@ -95,6 +128,10 @@ export default function UnifiedShoppingListScreen() {
     }, [entries]);
 
     const isMulti = entries.length > 1;
+    // Trip-scoped opens use the trip completion flow even with ONE store —
+    // finishing must advance to the receipts screen, not the child's own
+    // single-list completion prompt.
+    const tripMode = isMulti || (!!tripId && entries.length > 0);
 
     const chips = useMemo(() => entries.map(e => {
         const summary = listSummaries.get(e.listId);
@@ -142,7 +179,7 @@ export default function UnifiedShoppingListScreen() {
     // one finishes (silent, once per list), and prompt the whole-trip
     // completion only when EVERY store is fully checked.
     useEffect(() => {
-        if (!isMulti || entries.length === 0) return;
+        if (!tripMode || entries.length === 0) return;
         // HOLD while the child's search input is focused: setActiveListId
         // remounts the keyed detail, destroying the focused TextInput —
         // Android closes the IME session ("keyboard hides while typing",
@@ -155,7 +192,7 @@ export default function UnifiedShoppingListScreen() {
             if (tripPromptClaimedRef.current) return;
             tripPromptClaimedRef.current = true;
             (async () => {
-                const key = `sl_prompted_basket_${basketId}`;
+                const key = `sl_prompted_basket_${basketId ?? `trip_${tripId}`}`;
                 const already = await AsyncStorage.getItem(key);
                 if (already === '1') return;
                 await AsyncStorage.setItem(key, '1');
@@ -169,7 +206,7 @@ export default function UnifiedShoppingListScreen() {
             if (next) setActiveListId(next.listId);
         }
          
-    }, [listSummaries, activeListId, entries, isMulti, basketId]);
+    }, [listSummaries, activeListId, entries, tripMode, basketId]);
 
     // Brief loading state only when basketId is provided and entries haven't loaded yet
     if (!entriesLoaded) {
@@ -180,7 +217,8 @@ export default function UnifiedShoppingListScreen() {
         );
     }
 
-    // Confirm: mark EVERY store's sub-list completed, then leave.
+    // Confirm: mark EVERY store's sub-list completed, then progress the
+    // journey — trip-scoped opens land on the Upload-receipt screen.
     const completeWholeTrip = async () => {
         setTripCompleteModal(false);
         await Promise.all(entries.map(e =>
@@ -190,7 +228,8 @@ export default function UnifiedShoppingListScreen() {
                 body: JSON.stringify({ status: 'completed' }),
             }).catch(() => {}),
         ));
-        router.back();
+        if (tripId) router.replace(`/trip/receipts/${tripId}` as any);
+        else router.back();
     };
 
     return (
@@ -199,9 +238,9 @@ export default function UnifiedShoppingListScreen() {
                 key={activeListId}
                 listId={activeListId}
                 expectedCount={expectedCount ? parseInt(expectedCount) : undefined}
-                isPartOfBasket={isMulti}
-                onItemsProgress={isMulti ? handleItemsProgress : undefined}
-                onSearchActiveChange={isMulti ? handleSearchActiveChange : undefined}
+                isPartOfBasket={tripMode}
+                onItemsProgress={tripMode ? handleItemsProgress : undefined}
+                onSearchActiveChange={tripMode ? handleSearchActiveChange : undefined}
                 headerTitle={storeNames}
                 headerSubtitle={storeAddresses}
                 pinnedHeader={isMulti ? (

@@ -1,4 +1,37 @@
 {
+  "tripReceipts": {
+    "title": "Receipts",
+    "upload": "Upload",
+    "view": "View receipt",
+    "emptyHint": "Upload this trip's receipt to finish it and unlock the stats.",
+    "wrongTitle": "Wrong receipt?",
+    "wrongBody": "Remove this receipt from the trip? The receipt itself stays in your history.",
+    "wrongConfirm": "Remove",
+    "wrongClosedTitle": "Can't remove anymore",
+    "wrongClosedBody": "Receipts can only be removed from recent trips."
+  },
+  "tripMap": {
+    "tab_basket": "Basket",
+    "tab_stores": "Stores",
+    "tab_list": "List",
+    "tab_receipts": "Receipts",
+    "tab_stats": "Stats",
+    "tab_options": "Options",
+    "basketTitle": "Items: {{count}}",
+    "basketEmpty": "The basket is empty — add items from the Catalog.",
+    "storesHint": "Tap a store pill on the map to compare and create a list.",
+    "listTitle": "Shopping list",
+    "listEmpty": "No list yet — pick a plan in Stores to create one.",
+    "receiptsTitle": "Receipts",
+    "receiptPhoto": "Take a photo",
+    "receiptUpload": "Upload",
+    "receiptPick": "Select from list",
+    "statsLocked": "Stats unlock after your receipt is uploaded and its swipes are done.",
+    "optionsTitle": "Options",
+    "locationSettings": "Location & route settings",
+    "saverMode": "Saver mode",
+    "saverModeSub": "Also compare similar products and pick the cheapest"
+  },
   "smartBasket": {
     "sheetTitle": "Shopping",
     "filterSection": "Filter trips",
