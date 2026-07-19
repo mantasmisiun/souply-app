@@ -5,9 +5,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { MaterialProgress } from '../MaterialProgress';
 import { SheetCard } from '../SheetCard';
-import { DateFilterButton } from '../DateFilterButton';
-import { FilterPill } from '../FilterPill';
-import { FilterDropdownModal } from '../FilterDropdownModal';
 import { ConfirmModal } from '../ConfirmModal';
 import { BrandedQR } from '../BrandedQR';
 import { useTheme, useResolvedScheme, spacing, radius, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
@@ -51,13 +48,6 @@ interface Preview {
 
 /** The 4 status filter options → trip stage sets (stage2 "Compared" folds
  *  into Forming — the trip is still being put together). */
-const STATUS_OPTIONS: { id: number; i18nKey: string; stages: number[] }[] = [
-    { id: 1, i18nKey: 'smartBasket.statusForming', stages: [1, 2] },
-    { id: 2, i18nKey: 'smartBasket.statusShopping', stages: [3] },
-    { id: 3, i18nKey: 'smartBasket.statusNeedReceipt', stages: [4] },
-    { id: 4, i18nKey: 'smartBasket.statusStats', stages: [5] },
-];
-
 /** Fake AI progress steps — the generation call is fast; this makes the work
  *  legible (and look substantial). Bar eases toward each checkpoint while the
  *  step label rotates; the real response is awaited alongside a minimum
@@ -113,31 +103,11 @@ export function ShoppingSheet({ collapse }: { collapse: () => void }) {
     const styles = useMemo(() => makeStyles(colors, isDark), [colors, isDark]);
     const { t } = useTranslation();
 
-    const selectedDate = useShoppingSheet(s => s.selectedDate);
-    const setSelectedDate = useShoppingSheet(s => s.setSelectedDate);
-    const setSelectedStages = useShoppingSheet(s => s.setSelectedStages);
-    const dotMap = useShoppingSheet(s => s.dotMap);
     const household = useShoppingSheet(s => s.household);
     const refreshTrips = useShoppingSheet(s => s.refreshTrips);
 
     const [myId, setMyId] = useState<string | null>(null);
     useEffect(() => { void getUserId().then(setMyId); }, []);
-
-    // ── Status filter (multi-check, Stores-filter style). The checked set
-    // lives in the STORE — the sheet unmounts on tab switches and the filter
-    // must survive. ──────────────────────────────────────────────────────
-    const statusIds = useShoppingSheet(s => s.statusIds);
-    const setStatusIds = useShoppingSheet(s => s.setStatusIds);
-    const [statusOpen, setStatusOpen] = useState(false);
-    useEffect(() => {
-        if (statusIds == null) { setSelectedStages(null); return; }
-        const stages = new Set<number>();
-        for (const o of STATUS_OPTIONS) if (statusIds.has(o.id)) o.stages.forEach(st => stages.add(st));
-        setSelectedStages(stages);
-    }, [statusIds, setSelectedStages]);
-    const statusLabel = statusIds == null
-        ? t('smartBasket.statusAll')
-        : STATUS_OPTIONS.filter(o => statusIds.has(o.id)).map(o => t(o.i18nKey)).join(', ');
 
     // ── Family section ───────────────────────────────────────────────────
     const [familyOpen, setFamilyOpen] = useState(false);
@@ -287,45 +257,7 @@ export function ShoppingSheet({ collapse }: { collapse: () => void }) {
         <View style={styles.body}>
             <Text style={styles.sheetHeading}>{t('smartBasket.sheetTitle')}</Text>
 
-            {/* ── Filters: directly under the title, no card ──────────── */}
-            <View style={styles.filterRow}>
-                <DateFilterButton
-                    value={selectedDate}
-                    onChange={(d) => { setSelectedDate(d); if (d) collapse(); }}
-                    label={t('receipts.filterDate')}
-                    markedDates={dotMap}
-                />
-                <FilterPill
-                    label={statusLabel}
-                    active={statusIds != null}
-                    onPress={() => setStatusOpen(true)}
-                />
-            </View>
-            <FilterDropdownModal
-                visible={statusOpen}
-                title={t('smartBasket.statusTitle')}
-                options={STATUS_OPTIONS.map(o => ({ id: o.id, label: t(o.i18nKey) }))}
-                onClose={() => setStatusOpen(false)}
-                config={{
-                    mode: 'multi',
-                    isChecked: (id) => statusIds?.has(id) ?? false,
-                    allChecked: statusIds == null,
-                    allLabel: t('smartBasket.statusAll'),
-                    onToggle: (id) => {
-                        const prev = useShoppingSheet.getState().statusIds;
-                        let next: Set<number> | null;
-                        if (prev == null) next = new Set([id]);
-                        else {
-                            next = new Set(prev);
-                            if (next.has(id)) next.delete(id);
-                            else next.add(id);
-                            if (next.size === 0 || next.size === STATUS_OPTIONS.length) next = null;
-                        }
-                        setStatusIds(next);
-                    },
-                    onAll: () => setStatusIds(null),
-                }}
-            />
+
 
             {/* ── Family list ─────────────────────────────────────────── */}
             <SheetCard>
