@@ -12,7 +12,7 @@ import {
 } from 'react-native-gesture-handler';
 import Animated, {
     interpolateColor, runOnJS, useAnimatedScrollHandler, useAnimatedStyle,
-    useDerivedValue, useSharedValue, withSpring,
+    useDerivedValue, useSharedValue, withSpring, useAnimatedReaction,
 } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
@@ -79,6 +79,13 @@ export interface DockedSheetControls {
     /** Snap to an explicit stage index (clamped). */
     snapTo(stage: number): void;
     height(): number;
+    /** Externally-driven live drag (for sheets over a native map, where the
+     *  internal RNGH pan can't win the gesture): set the height directly
+     *  (clamped to the snap range), then snap on release with velocity. */
+    dragTo(px: number): void;
+    dragEnd(velocityY: number): void;
+    /** Collapsed → medium, else → collapsed (tap-to-toggle). */
+    toggle(): void;
 }
 
 interface SheetSpec {
@@ -115,11 +122,25 @@ interface Props {
      *  bottom, content revealed above it). The bar↔content separator is dropped
      *  in this mode. */
     barAtTop?: boolean;
+    /** Disable the internal RNGH pan — the host drives the drag via the
+     *  dragTo/dragEnd controls (used over a native map). */
+    externalPanOnly?: boolean;
+    /** Mirror of the sheet's continuous progress (0 collapsed → 1 full) so a
+     *  host outside the content tree can bind to it (e.g. a growing title). */
+    progressSV?: SharedValue<number>;
+    /** Set true (UI thread) the instant a touch begins on the sheet, false when
+     *  it ends — a host over a native map reads it to disable the map's pan
+     *  with zero JS-thread lag. */
+    dragActiveSV?: SharedValue<boolean>;
+    /** Fired (JS thread) when a touch BEGINS anywhere on the sheet — a host over
+     *  a native map uses it to ignore the map's onPress that leaks through the
+     *  GL surface for the same tap (which would otherwise deselect). */
+    onTouchStart?: () => void;
 }
 
 export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function DockedGlassSheet({
     barRow, barRowHeight, sheet, colors: colorsProp, onBarHeight, onCollapsedClearance, blockScrollRef,
-    progressiveShadow, barAtTop,
+    progressiveShadow, barAtTop, externalPanOnly, progressSV, dragActiveSV, onTouchStart,
 }, ref) {
     const themed = useTheme();
     const colors = colorsProp ?? themed;
@@ -226,17 +247,31 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         collapse: () => { setStageJS(0); springTo(0); },
         snapTo: (idx) => { const i = Math.max(0, Math.min(idx, snaps.length - 1)); setStageJS(i); springTo(i); },
         height: () => h.value,
-    }), [setStageJS, springTo, snaps.length, h]);
+        toggle: () => { const to = stageRef.current === 0 ? 1 : 0; setStageJS(to); springTo(to); },
+        dragTo: (px) => {
+            const sn = snapsSV.value;
+            h.value = Math.max(sn[0], Math.min(sn[sn.length - 1], px));
+        },
+        dragEnd: (velocityY) => {
+            const sn = snapsSV.value;
+            const cur = h.value;
+            let idx = 0, best = Infinity;
+            for (let i = 0; i < sn.length; i++) { const d = Math.abs(sn[i] - cur); if (d < best) { best = d; idx = i; } }
+            if (velocityY < -500 && idx < sn.length - 1) idx++;
+            else if (velocityY > 500 && idx > 0) idx--;
+            setStageJS(idx); springTo(idx);
+        },
+    }), [setStageJS, springTo, snaps.length, h, snapsSV]);
 
     // ── One worklet-driven pan (scroll-aware handoff) ─────────────────────────
     const grabY = useSharedValue(0);
     const grabX = useSharedValue(0);
     const pan = useMemo(() => {
         let g = Gesture.Pan()
-            .enabled(hasSheet)
+            .enabled(hasSheet && !externalPanOnly)
             .manualActivation(true)
             .simultaneousWithExternalGesture(scrollRef)
-            .onBegin((e) => { 'worklet'; grabY.value = e.absoluteY; grabX.value = e.absoluteX; })
+            .onBegin((e) => { 'worklet'; grabY.value = e.absoluteY; grabX.value = e.absoluteX; if (dragActiveSV) dragActiveSV.value = true; if (onTouchStart) runOnJS(onTouchStart)(); })
             .onTouchesMove((e, sm) => {
                 'worklet';
                 if (e.state === State.ACTIVE) return;
@@ -274,13 +309,14 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
             .onEnd((e) => { 'worklet'; snapEnd(e.velocityY); })
             .onFinalize((_e, success) => {
                 'worklet';
+                if (dragActiveSV) dragActiveSV.value = false;
                 if (success) return;
                 draggingSV.value = false;
                 runOnJS(setActiveJS)(false);
             });
         if (blockScrollRef) g = g.blocksExternalGesture(blockScrollRef as never);
         return g;
-    }, [hasSheet, snapEnd, h, startH, snapsSV, scrollY, draggingSV, grabX, grabY, setActiveJS, blockScrollRef]);
+    }, [hasSheet, externalPanOnly, snapEnd, h, startH, snapsSV, scrollY, draggingSV, grabX, grabY, setActiveJS, blockScrollRef, dragActiveSV, onTouchStart]);
 
     // ── ONE progress: 0 collapsed → 1 full (edge-to-edge). Margins, bar-row
     //    counter-offset and content anchor all derive from it, so sides + bottom
@@ -297,6 +333,8 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         const mid = sn[1], hi = sn[sn.length - 1];
         return hi > mid ? clamp((h.value - mid) / (hi - mid), 0, 1) : 0;
     });
+    useAnimatedReaction(() => p.value, (v) => { 'worklet'; if (progressSV) progressSV.value = v; }, [progressSV]);
+
     const cornerR = concentricRadius(insets.bottom, spacing.sm);
     const displayR = displayCornerRadius(insets.bottom);
 

@@ -14,7 +14,8 @@ import React, { useMemo, useState, useCallback, useEffect, useLayoutEffect, useR
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Animated, { FadeIn, useSharedValue, withTiming, useAnimatedStyle } from 'react-native-reanimated';
+import Animated, { FadeIn, useSharedValue } from 'react-native-reanimated';
+import { type GestureType } from 'react-native-gesture-handler';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { useTheme, spacing, radius, elevation, typography, iconSize, type AppTheme } from '../../constants/theme';
@@ -27,16 +28,21 @@ import { type StoreResult, fetchStorePrices } from '../../utils/basketPricing';
 import { getStoreDirectory } from '../../utils/storeDirectory';
 import { buildCandidatePool, type StoreLite } from '../../utils/candidatePool';
 import { orderStopsNearestFirst, orderStopsAlongRoute, buildGoogleMapsRouteUrl } from '../../utils/multiStopRoute';
-import { getPresets, getLocationSettings, saveLocationSettings } from '../../utils/locationStorage';
+import { getPresets, getLocationSettings, saveLocationSettings, haversineKm } from '../../utils/locationStorage';
 import StoreResultsMap, { type MapPin } from '../results/StoreResultsMap';
-import ResultsBottomSheet from '../results/ResultsBottomSheet';
+import StoreOptionsDock from '../results/StoreOptionsDock';
 import { LiquidGlass } from '../LiquidGlass';
 import { buildSplitOptions, TRIP_RADIUS_KM, type SheetOption } from '../../utils/splitOptions';
 import { BrandedQR } from '../BrandedQR';
 import { fetchTrips, createTripInviteUrl } from '../../utils/tripsApi';
+import { formatEuro } from '../../utils/formatCurrency';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
-import { SheetCard } from '../SheetCard';
+import { DockActionCard } from '../dock/DockActionCard';
+import { DockSection } from '../dock/DockSection';
+import { useDockTitleStyle } from '../dock/useDockTitleStyle';
 import LocationSettingsPanel from '../LocationSettingsPanel';
+import { PresetPointPicker } from '../PresetPointPicker';
+import type { PresetKey, LocationPreset } from '../../utils/locationStorage';
 
 // StoreResult / ItemResult now live in utils/basketPricing (shared with the
 // lazy /store-prices fetch) — imported above.
@@ -106,23 +112,71 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // Area-batch pricing: nearest un-priced stores reported by the map + a flag.
     const [visibleUnpriced, setVisibleUnpriced] = useState<number[]>([]);
     const [batchPricing, setBatchPricing] = useState(false);
-    // Current bottom-sheet height (px) — passed to the map so it frames the
-    // selected stores in the area above the sheet.
-    const [sheetHeight, setSheetHeight] = useState(0);
     // Trip options (simplified flow): GPS/route settings, Saver mode and the
     // trip invite live on the MAP dock — the one place they change an outcome.
     const [saverMode, setSaverMode] = useState(false);
     const [inviteUrl, setInviteUrl] = useState<string | null>(null);
     const [inviteOpen, setInviteOpen] = useState(false);
+    // Quiet reprice triggered by a location change inside the dock (place picked
+    // / route completed). Unlike loadResults it does NOT flip global `loading`
+    // (the dock stays open) — just a small spinner in the summary bar. The epoch
+    // ref discards a superseded run if the user changes location again mid-fetch.
+    const [recalcing, setRecalcing] = useState(false);
+    const recalcEpochRef = useRef(0);
+    // How much the store-options dock occludes the map (grows with its stage) so
+    // the tapped store frames above the open sheet.
+    const [storeOcclusion, setStoreOcclusion] = useState(0);
     useEffect(() => { void AsyncStorage.getItem('saverMode').then(v => setSaverMode(v === '1')); }, []);
-    // ── Glass dock (same component as every new screen). Collapsed = a bar
-    // with the "More Prices ›" pill; expanded = a 2-page nav (Actions ↔
-    // Location & Route). ────────────────────────────────────────────────────
+    // ── Glass dock (same component as every new screen). Collapsed = the
+    // price-summary bar; expanded = one scroll: Basket/Invite actions,
+    // Calculation settings, Location & Route. ──────────────────────────────
     const dockRef = useRef<DockedSheetControls>(null);
     const [dockBarH, setDockBarH] = useState(44);
     const [dockClearance, setDockClearance] = useState(120);
-    const [sheetPage, setSheetPage] = useState<'actions' | 'location'>('actions');
+    const [dockExpanded, setDockExpanded] = useState(false);
+    // Sheet-over-Google-Maps (canonical RNGH fix): the map's native pan is
+    // wrapped in a Gesture.Native and its ref handed to the dock, whose own
+    // pan .blocksExternalGesture()s it — so a drag that begins on the bar
+    // blocks the map on the native thread (no state toggles, no frame lag).
+    // Continuous sheet progress (0 collapsed → 1 full), mirrored out of the
+    // dock so the title font can track drag distance on the UI thread (#3).
+    const sheetProgress = useSharedValue(0);
+    // UI-thread flag: true while a touch is on the sheet → the map's pan is
+    // disabled instantly (via useAnimatedProps), so the map can't swallow the
+    // drag's move events. No JS-state lag.
+    const mapPanBlocked = useSharedValue(false);
+    // Reliable map-vs-sheet arbitration: the racy per-touch guards never held,
+    // so instead the map is made NON-INTERACTIVE for as long as a sheet is open
+    // above the collapsed bar. `storeSheetStage` (0 bar → >0 open) is reported by
+    // the store dock; while a sheet is open the map ignores pan AND its leaked
+    // onPress, so dragging the sheet's empty area can't move the map and tapping
+    // an option can't deselect. `sheetOpenSV` mirrors it onto the UI thread for
+    // the map's scrollEnabled animated prop.
+    const [storeSheetStage, setStoreSheetStage] = useState(0);
+    const anySheetOpen = selectedOptionKey != null ? storeSheetStage > 0 : dockExpanded;
+    const sheetOpenSV = useSharedValue(false);
+    useEffect(() => { sheetOpenSV.value = anySheetOpen; }, [anySheetOpen, sheetOpenSV]);
+    // The map's native gesture, handed to both docks so their pan
+    // `.blocksExternalGesture()`s it — a drag that begins on the collapsed bar
+    // holds the map's native pan off on the native thread (wins the first drag,
+    // which scrollEnabled can't since the map reads it at touch-down).
+    const mapNativeGestureRef = useRef<GestureType | undefined>(undefined);
+    // Title grows 15→20 when the sheet opens (like the catalog list sheet).
+    const titleStyle = useDockTitleStyle(sheetProgress);
     const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
+    // "Define a location" — an inline point-picker overlay that takes over the
+    // whole screen (strips the store chrome + dock, shows a centre pin +
+    // search). Back cancels and restores the map + dock to where it was.
+    const [pickingPreset, setPickingPreset] = useState<{ key: PresetKey; label: string; existing: LocationPreset | null } | null>(null);
+    const openPresetPicker = useCallback((key: PresetKey, label: string, existing: LocationPreset | null) => {
+        dockRef.current?.collapse();
+        setPickingPreset({ key, label, existing });
+    }, []);
+    const closePresetPicker = useCallback((saved: boolean) => {
+        setPickingPreset(null);
+        if (saved) setSettingsRefreshKey(k => k + 1);
+        requestAnimationFrame(() => dockRef.current?.snapTo(1));
+    }, []);
     // Basket item count for the "Basket" dock button.
     const [basketItemCount, setBasketItemCount] = useState(0);
     useEffect(() => {
@@ -133,12 +187,11 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             .catch(() => {});
         return () => { alive = false; };
     }, [id]);
-    // Horizontal page slide inside the sheet (Actions ↔ Location & Route):
-    // a two-page row translated by the measured sheet width.
-    const [pageW, setPageW] = useState(() => require('react-native').Dimensions.get('window').width - 64);
-    const pageX = useSharedValue(0);
-    useEffect(() => { pageX.value = withTiming(sheetPage === 'location' ? -pageW : 0, { duration: 280 }); }, [sheetPage, pageW, pageX]);
-    const pagesRowStyle = useAnimatedStyle(() => ({ transform: [{ translateX: pageX.value }] }));
+    // Horizontal page slide (Actions ↔ Location & Route): the pages/row are
+    // sized in PERCENTAGES and translated in percent too, so they track the
+    // sheet's growing width on the UI thread with no JS measurement — the
+    // side gaps stay constant at every drag position (matches the catalog
+    // sheets, whose content tracks the edges via the built-in peek inset).
     const openInvite = useCallback(async () => {
         setInviteOpen(true);
         setInviteUrl(null);
@@ -312,6 +365,84 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         setLocationPromptVisible(true);
     }, [runRecalcWithCoords]);
 
+    // A location change inside the dock (Place picked / Route completed / GPS /
+    // transport) → quietly reprice from that location and refocus the map. The
+    // candidate pool + origin are resolved from the freshly-saved settings
+    // (place → its preset, route → the corridor between endpoints, current →
+    // GPS). Keeps the dock open (no global loading) and never persists a preset
+    // as the cached GPS location.
+    const recalcForLocationChange = useCallback(async () => {
+        const epoch = ++recalcEpochRef.current;
+        setRecalcing(true);
+        setSelectedStoreId(null);
+        setSelectedOptionKey(null);
+        try {
+            const [settings, presets] = await Promise.all([getLocationSettings(), getPresets()]);
+
+            // Route mode → resolve both endpoints for the map's route line.
+            let endpoints: typeof routeEndpoints = null;
+            if (settings.mode === 'route' && settings.routeFrom && settings.routeTo) {
+                const f = presets[settings.routeFrom];
+                const to = presets[settings.routeTo];
+                if (f && to) endpoints = {
+                    from: { latitude: f.lat, longitude: f.lng },
+                    to: { latitude: to.lat, longitude: to.lng },
+                };
+            }
+
+            // Calc origin: place → its preset coords; otherwise cached/GPS. The
+            // real GPS fix is kept separately so only 'current' mode persists it.
+            let coords: { lat: number; lng: number } | null = null;
+            let gpsCoords: UserCoords | null = null;
+            if (settings.mode === 'specific' && settings.specificPreset) {
+                const p = presets[settings.specificPreset];
+                if (p) coords = { lat: p.lat, lng: p.lng };
+            }
+            if (!coords) {
+                gpsCoords = (await loadCachedCoords()) ?? (await tryGpsCoords());
+                coords = gpsCoords;
+            }
+            if (!coords && !endpoints) { if (epoch === recalcEpochRef.current) setRecalcing(false); return; }
+
+            const pool = await buildCandidatePool(coords ?? undefined);
+            const origin = pool.searchCenter
+                ?? (endpoints ? { lat: endpoints.from.latitude, lng: endpoints.from.longitude } : coords!);
+            const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
+            if (pool.storeIds.length > 0) body.storeIds = pool.storeIds;
+
+            const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(body),
+            });
+            const newResults = await res.json();
+            // A newer location change started while we were fetching → drop this
+            // stale result rather than clobbering the fresher one.
+            if (epoch !== recalcEpochRef.current) return;
+
+            await Promise.all([
+                AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults)),
+                AsyncStorage.setItem(`basket_calc_meta_${id}`, JSON.stringify({
+                    storeCount: settings.storeCount,
+                    searchCenter: pool.searchCenter,
+                    settings,
+                })),
+            ]);
+            // Only 'current' mode reflects the user's real position → persist it.
+            // A preset/route origin must NOT overwrite the cached GPS coords.
+            if (settings.mode === 'current' && gpsCoords) await persistCoords(gpsCoords);
+
+            setRouteEndpoints(endpoints);
+            setUserCoords(endpoints ? null : { lat: origin.lat, lng: origin.lng });
+            setResults(newResults as StoreResult[]);
+            setLazyResults([]); // re-priced basket → old lazy prices are stale
+        } catch {
+            // Non-fatal — keep the previous prices/map on a failed reprice.
+        } finally {
+            if (epoch === recalcEpochRef.current) setRecalcing(false);
+        }
+    }, [id]);
+
     const handlePullRefresh = useCallback(async () => {
         setPullRefreshing(true);
         try {
@@ -365,6 +496,14 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // null on ties, which made the "Daugiau" collapse fall through to
     // showing every store.
     const cheapestStoreId: number | null = results[0]?.storeId ?? null;
+    // Collapsed-bar summary: the cheapest basket total + how many stores are
+    // priced (the title that stays at the top of the sheet as it expands).
+    const pricedCount = useMemo(() => {
+        const ids = new Set<number>();
+        for (const r of results) ids.add(r.storeId);
+        for (const r of lazyResults) ids.add(r.storeId);
+        return ids.size;
+    }, [results, lazyResults]);
 
     // Priced stores shown as pills: the top-N results plus any store the user
     // lazily priced by tapping its directory pin (deduped by id). Pins are now
@@ -402,7 +541,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // basket total, or the best in-radius split it's part of (then the pin shows
     // the combo's price). Plus the globally cheapest option's stores = the
     // recommended set (one store if a single wins, 2-3 if a split wins).
-    const { pinPriceByStore, pinComboByStore, recommendedStoreIds, recommendedStores } = useMemo(() => {
+    const { pinPriceByStore, pinComboByStore, recommendedStoreIds, recommendedStores, recommendedTotal } = useMemo(() => {
         const richById = new Map<number, StoreResult>();
         for (const r of results) richById.set(r.storeId, r);
         for (const r of lazyResults) if (!richById.has(r.storeId)) richById.set(r.storeId, r);
@@ -438,8 +577,15 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             pinComboByStore: comboByStore,
             recommendedStoreIds: new Set(best?.ids ?? []),
             recommendedStores: best?.stores ?? [],
+            // The globally cheapest total — a split combo when one beats every
+            // single store, else the cheapest single. Drives the summary bar.
+            recommendedTotal: best?.price ?? null,
         };
     }, [results, lazyResults, combos]);
+
+    // Summary-bar total: the cheapest option overall (combo-aware), not just the
+    // cheapest single store.
+    const cheapestTotal = recommendedTotal;
 
     // Per-store SHARE of the selected split: Σ of the assigned items' line
     // totals at that store — mirrors splitBasketScore's splitTotal sum exactly,
@@ -536,7 +682,22 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         setSelectedOptionKey(null); // default to the best option for this store
     }, []);
     const handleSelectOption = useCallback((key: string) => setSelectedOptionKey(key), []);
-    const closeSheet = useCallback(() => { setSelectedStoreId(null); setSelectedOptionKey(null); }, []);
+    const closeSheet = useCallback(() => { setSelectedStoreId(null); setSelectedOptionKey(null); setStoreSheetStage(0); }, []);
+    // The MapView's native onPress leaks through the GL surface for taps that
+    // land on the floating dock too (no gesture arbitration there). The dock
+    // stamps this on every touch that begins on it; a map-press within the window
+    // is that same leaked tap — ignore it so choosing an option never deselects.
+    // Tap the map to deselect — but ONLY when no sheet is open above the bar.
+    // PRIMARY guard: while a sheet is open the map is non-interactive, so a
+    // leaked onPress from tapping an option (or the sheet's empty area) must
+    // never reach closeSheet. The timestamp stays as a backstop for the brief
+    // open-snap window where the reported stage is still settling.
+    const sheetPressRef = useRef(0);
+    const noteSheetPress = useCallback(() => { sheetPressRef.current = Date.now(); }, []);
+    const handleMapTap = useCallback(() => {
+        if (anySheetOpen || Date.now() - sheetPressRef.current < 400) return;
+        closeSheet();
+    }, [anySheetOpen, closeSheet]);
 
     // Live store-count toggle (1/2/3) on the map. Pure CLIENT re-rank — combos
     // are scored from the already-priced stores, so no server recalc/spinner.
@@ -658,6 +819,19 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         const ordered = orderStopsNearestFirst(origin, stops);
         return origin ? [origin, ...ordered] : ordered;
     }, [selectedOption, userCoords, routeEndpoints]);
+
+    // Total journey distance for the selected option's Navigate button — the sum
+    // of the ordered legs the map draws (origin → stores → [route end]). Same
+    // path as routeCoords, so GPS/place (from current location) and route mode
+    // (start → stores → end) are both covered. null when there's no origin.
+    const journeyKm = useMemo(() => {
+        if (!routeCoords || routeCoords.length < 2) return null;
+        let km = 0;
+        for (let i = 0; i < routeCoords.length - 1; i++) {
+            km += haversineKm(routeCoords[i].latitude, routeCoords[i].longitude, routeCoords[i + 1].latitude, routeCoords[i + 1].longitude);
+        }
+        return km;
+    }, [routeCoords]);
 
     const [creatingList, setCreatingList] = useState(false);
 
@@ -855,7 +1029,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                             recommendedCoords={recommendedCoords}
                             routeEndpoints={routeEndpoints}
                             onSelectStore={handlePinTap}
-                            onMapPress={closeSheet}
+                            onMapPress={handleMapTap}
                             colors={colors}
                             directory={directory}
                             pricedStoreIds={pricedStoreIds}
@@ -863,63 +1037,90 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                             onLazyPrice={handleLazyPrice}
                             routeCoords={routeCoords}
                             onVisibleUnpricedChange={setVisibleUnpriced}
-                            bottomOverlay={selectedOption ? sheetHeight + bottomClearance : Math.max(bottomClearance, embedded ? 0 : dockClearance)}
+                            scrollDisabledSV={mapPanBlocked}
+                            sheetOpenSV={sheetOpenSV}
+                            gesturesEnabled={!anySheetOpen}
+                            nativeGestureRef={mapNativeGestureRef}
+                            bottomOverlay={selectedOption ? Math.max(bottomClearance, storeOcclusion) : Math.max(bottomClearance, embedded ? 0 : dockClearance)}
                         />
                         {/* Full-bleed map → floating back circle, top-left
                             (standalone route only — the embedding host owns
                             its own back button). */}
-                        {!embedded && (
+                        {!embedded && !pickingPreset && (
                             <View style={[styles.mapTopLeft, { top: topInset + 10 }]} pointerEvents="box-none">
                                 <TouchableOpacity style={styles.mapBackShadow} onPress={() => router.back()} activeOpacity={0.8}>
                                     <LiquidGlass style={styles.mapBackBtn} fallback="solid">
                                         <Ionicons name="chevron-back" size={iconSize.lg} color={colors.primary} />
                                     </LiquidGlass>
                                 </TouchableOpacity>
-                                {/* Back-edge: adjust the basket (item edits drop the
-                                    trip back to forming and require a re-compare). */}
-                                <TouchableOpacity style={styles.mapBackShadow} onPress={() => router.push(`/basket/${id}` as any)} activeOpacity={0.8}>
-                                    <LiquidGlass style={styles.mapBackBtn} fallback="solid">
-                                        <Ionicons name="cart-outline" size={iconSize.lg} color={colors.primary} />
-                                    </LiquidGlass>
-                                </TouchableOpacity>
                             </View>
                         )}
                         {/* Top-centre store-count toggle. Instant client re-rank
                             of how the basket is split across 1/2/3 shops. */}
-                        <View style={[styles.mapTopCenter, { top: topInset + 10 }]} pointerEvents="box-none">
-                            <StoreCountToggle value={maxStores} onChange={setStoreCount} />
-                        </View>
+                        {!pickingPreset && (
+                            <View style={[styles.mapTopCenter, { top: topInset + 10 }]} pointerEvents="box-none">
+                                <StoreCountToggle value={maxStores} onChange={setStoreCount} />
+                            </View>
+                        )}
                     </>
                 ) : (
                     <View style={styles.loadingContainer}>
                         <MaterialProgress size="large" color={colors.primary} />
                     </View>
                 )}
-                {/* Tap a pin → the create-list sheet (coexists with the dock:
-                    the dock hides while a store option is selected). */}
-                {!loading && mapMounted && selectedOption ? (
-                    <ResultsBottomSheet
-                        options={selectedOptions}
-                        selectedKey={selectedOption.key}
-                        onSelect={handleSelectOption}
-                        onClose={closeSheet}
-                        onNavigate={handleNavigateSelected}
-                        onCreateList={handleCreateShoppingList}
-                        creatingList={creatingList}
-                        colors={colors}
-                        bottomInset={bottomInset}
-                        onHeightChange={setSheetHeight}
-                    />
-                ) : null}
-            </View>
+            {/* Box-none overlay above the map: the sheet's own views are the
+                touch targets; empty area falls through to the map (the canonical
+                gorhom-over-react-native-maps routing — no scrollEnabled toggles,
+                no gesture arbitration against the GL surface). */}
+            <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+            {/* While the dock is expanded, a transparent scrim over the map
+                (below the dock) makes the sheet reliably interactive and
+                collapses the sheet on any map tap/drag. */}
+            {dockExpanded && !embedded && !selectedOption && !pickingPreset && (
+                <View
+                    style={styles.dockScrim}
+                    onStartShouldSetResponder={() => true}
+                    onResponderGrant={() => dockRef.current?.collapse()}
+                />
+            )}
 
-            {/* The glass dock — collapsed = "More Prices ›" pill; expanded =
-                Actions ↔ Location & Route pages. Hidden while a store option
-                is selected (the create-list sheet takes over). */}
-            {!loading && mapMounted && !embedded && !selectedOption && (
+            {/* Tap a pin → the store-options dock (same glass scaffold as the main
+                dock; replaces it while a store is selected). It lives INSIDE this
+                box-none overlay so its option taps route like the main dock's —
+                otherwise the taps leak to the map's native onPress and deselect
+                the store. Bar = store info; sheet = Navigate/List + the options. */}
+            {!loading && mapMounted && !pickingPreset && selectedOption && (
+                <StoreOptionsDock
+                    options={selectedOptions}
+                    selectedKey={selectedOption.key}
+                    onSelect={handleSelectOption}
+                    onNavigate={handleNavigateSelected}
+                    onCreateList={handleCreateShoppingList}
+                    creatingList={creatingList}
+                    journeyKm={journeyKm}
+                    itemCount={basketItemCount}
+                    colors={colors}
+                    dragActiveSV={mapPanBlocked}
+                    onInteract={noteSheetPress}
+                    onStageChange={setStoreSheetStage}
+                    blockGestureRef={mapNativeGestureRef}
+                    onCollapsedClearance={setDockClearance}
+                    onOcclusionChange={setStoreOcclusion}
+                />
+            )}
+
+            {/* The glass dock — collapsed = price-summary bar; expanded = one
+                scroll of Basket/Invite + Calculation settings + Location &
+                Route. Hidden while a store option is selected (the create-list
+                sheet takes over). */}
+            {!loading && mapMounted && !embedded && !selectedOption && !pickingPreset && (
                 <DockedGlassSheet
                     ref={dockRef}
                     colors={colors}
+                    barAtTop
+                    progressSV={sheetProgress}
+                    dragActiveSV={mapPanBlocked}
+                    blockScrollRef={mapNativeGestureRef}
                     onCollapsedClearance={setDockClearance}
                     barRowHeight={dockBarH}
                     barRow={
@@ -927,109 +1128,89 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                             style={styles.dockBar}
                             onLayout={e => { const h = Math.round(e.nativeEvent.layout.height); if (h > 0) setDockBarH(h); }}
                         >
-                            {visibleUnpriced.length > 0 ? (
+                            <Animated.Text style={[styles.summaryText, titleStyle]} numberOfLines={1}>
+                                {cheapestTotal != null
+                                    ? t('results.mapSummary', { price: formatEuro(cheapestTotal), count: pricedCount })
+                                    : t('results.mapSummaryEmpty')}
+                            </Animated.Text>
+                            {recalcing && <MaterialProgress size="small" color={colors.primary} />}
+                            {visibleUnpriced.length > 0 && (
                                 <TouchableOpacity
-                                    style={styles.morePricesPill}
+                                    style={styles.morePricesGhost}
                                     onPress={handleBatchPrice}
                                     disabled={batchPricing}
-                                    activeOpacity={0.85}
+                                    activeOpacity={0.6}
+                                    hitSlop={8}
                                 >
                                     {batchPricing
-                                        ? <MaterialProgress size="small" color={colors.onPrimary} />
+                                        ? <MaterialProgress size="small" color={colors.primary} />
                                         : <>
-                                            <Text style={styles.morePricesText}>{t('results.morePrices')}</Text>
-                                            <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
+                                            <Ionicons name="add" size={17} color={colors.primary} />
+                                            <Text style={styles.morePricesGhostText}>{t('results.morePrices')}</Text>
                                           </>}
                                 </TouchableOpacity>
-                            ) : (
-                                <Text style={styles.dockHint}>{t('results.tapStore')}</Text>
                             )}
                         </View>
                     }
                     sheet={{
                         maxStage: 2,
-                        onStageChange: (st) => { if (st === 0) setSheetPage('actions'); },
+                        onStageChange: (st) => { setDockExpanded(st > 0); },
                         content: (
-                            <View
-                                style={styles.dockPagesClip}
-                                onLayout={e => { const w = Math.round(e.nativeEvent.layout.width); if (w > 0) setPageW(w); }}
-                            >
-                                <Animated.View style={[styles.dockPagesRow, { width: pageW * 2 }, pagesRowStyle]}>
-                                    {/* Page 1 — Actions. */}
-                                    <View style={{ width: pageW }}>
-                                        <Text style={styles.sheetTitle}>{t('tripMap.actionsTitle')}</Text>
-                                        <View style={styles.bigBtnRow}>
-                                            <TouchableOpacity style={{ flex: 1 }} onPress={() => router.push(`/basket/${id}` as any)} activeOpacity={0.7}>
-                                                <SheetCard style={styles.bigActionCard}>
-                                                    <View style={styles.cartBadge}>
-                                                        <Ionicons name="cart-outline" size={22} color={colors.primary} />
-                                                        {basketItemCount > 0 && (
-                                                            <View style={styles.cartCount}><Text style={styles.cartCountText}>{basketItemCount}</Text></View>
-                                                        )}
-                                                    </View>
-                                                    <Text style={styles.bigActionTitle}>{t('tripMap.basketBtn')}</Text>
-                                                    <Text style={styles.bigActionSub}>{t('tripMap.basketBtnSub')}</Text>
-                                                </SheetCard>
-                                            </TouchableOpacity>
-                                            <TouchableOpacity style={{ flex: 1 }} onPress={() => void openInvite()} activeOpacity={0.7}>
-                                                <SheetCard style={styles.bigActionCard}>
-                                                    <Ionicons name="person-add" size={24} color={colors.primary} />
-                                                    <Text style={styles.bigActionTitle}>{t('basketDetail.inviteTitle')}</Text>
-                                                    <Text style={styles.bigActionSub}>{t('basketDetail.inviteSub')}</Text>
-                                                </SheetCard>
-                                            </TouchableOpacity>
+                            <View style={styles.dockContent}>
+                                <View style={styles.bigBtnRow}>
+                                    <DockActionCard
+                                        colors={colors}
+                                        icon="cart-outline"
+                                        title={t('tripMap.basketBtn')}
+                                        subtitle={t('tripMap.basketBtnSub')}
+                                        onPress={() => router.push(`/basket/${id}` as any)}
+                                        badge={basketItemCount > 0
+                                            ? <View style={styles.cartCount}><Text style={styles.cartCountText}>{basketItemCount}</Text></View>
+                                            : undefined}
+                                    />
+                                    <DockActionCard
+                                        colors={colors}
+                                        icon="person-add"
+                                        title={t('basketDetail.inviteTitle')}
+                                        subtitle={t('basketDetail.inviteSub')}
+                                        onPress={() => void openInvite()}
+                                    />
+                                </View>
+
+                                {/* Location & Route — GPS / Place / Route selection inline. */}
+                                <DockSection colors={colors} icon="navigate-outline" title={t('tripMap.locationRoute')}>
+                                    <LocationSettingsPanel
+                                        compact
+                                        refreshKey={settingsRefreshKey}
+                                        onOpenPresetMap={openPresetPicker}
+                                        onLocationCommit={recalcForLocationChange}
+                                    />
+                                </DockSection>
+
+                                {/* Settings — saver mode. */}
+                                <DockSection colors={colors} icon="settings-outline" title={t('tripMap.settings')}>
+                                    <View style={styles.settingRow}>
+                                        <Ionicons name="pricetags-outline" size={20} color={colors.primary} />
+                                        <View style={{ flex: 1 }}>
+                                            <Text style={styles.settingText}>{t('tripMap.saverMode')}</Text>
+                                            <Text style={styles.settingSub}>{saverMode ? t('tripMap.saverOn') : t('tripMap.saverOff')}</Text>
                                         </View>
-                                        <SheetCard>
-                                            <View style={styles.sectionTitleRow}>
-                                                <Ionicons name="settings" size={20} color={colors.primary} />
-                                                <Text style={styles.sectionTitleText}>{t('tripMap.mapSettings')}</Text>
-                                            </View>
-                                            <View style={styles.sectionSep} />
-                                            <View style={styles.settingRow}>
-                                                <Ionicons name="wallet-outline" size={20} color={colors.primary} />
-                                                <View style={{ flex: 1 }}>
-                                                    <Text style={styles.settingText}>{t('tripMap.saverMode')}</Text>
-                                                    <Text style={styles.settingSub}>{saverMode ? t('tripMap.saverOn') : t('tripMap.saverOff')}</Text>
-                                                </View>
-                                                <Switch
-                                                    value={saverMode}
-                                                    onValueChange={(v) => { setSaverMode(v); void AsyncStorage.setItem('saverMode', v ? '1' : '0'); }}
-                                                    trackColor={{ false: colors.border, true: colors.primary }}
-                                                    thumbColor={colors.onPrimary}
-                                                />
-                                            </View>
-                                            <View style={styles.sectionSep} />
-                                            <TouchableOpacity style={styles.settingRow} onPress={() => { setSettingsRefreshKey(k => k + 1); setSheetPage('location'); }}>
-                                                <Ionicons name="navigate-outline" size={20} color={colors.primary} />
-                                                <Text style={[styles.settingText, { flex: 1 }]}>{t('tripMap.locationRoute')}</Text>
-                                                <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
-                                            </TouchableOpacity>
-                                        </SheetCard>
-                                    </View>
-                                    {/* Page 2 — Location & Route. */}
-                                    <View style={{ width: pageW }}>
-                                        <View style={styles.pageHeader}>
-                                            <TouchableOpacity onPress={() => setSheetPage('actions')} hitSlop={10} style={styles.pageBack}>
-                                                <Ionicons name="chevron-back" size={22} color={colors.primary} />
-                                            </TouchableOpacity>
-                                            <Text style={styles.sheetTitle}>{t('tripMap.locationRoute')}</Text>
-                                        </View>
-                                        <LocationSettingsPanel
-                                            refreshKey={settingsRefreshKey}
-                                            onChanged={() => { setSettingsRefreshKey(k => k + 1); }}
-                                            onOpenPresetMap={(key, label, existing) => {
-                                                router.push(
-                                                    `/preset/${key}/map?label=${encodeURIComponent(label)}${existing ? `&lat=${existing.lat}&lng=${existing.lng}` : ''}` as any,
-                                                );
-                                            }}
+                                        <Switch
+                                            value={saverMode}
+                                            onValueChange={(v) => { setSaverMode(v); void AsyncStorage.setItem('saverMode', v ? '1' : '0'); }}
+                                            trackColor={{ false: colors.border, true: colors.primary }}
+                                            thumbColor={colors.onPrimary}
                                         />
                                     </View>
-                                </Animated.View>
+                                </DockSection>
                             </View>
                         ),
                     }}
                 />
             )}
+            </View>
+            </View>
+
             <Modal visible={inviteOpen} transparent animationType="fade" onRequestClose={() => setInviteOpen(false)}>
                 <TouchableOpacity style={styles.qrBackdrop} activeOpacity={1} onPress={() => setInviteOpen(false)}>
                     <View style={styles.qrCard} onStartShouldSetResponder={() => true}>
@@ -1048,6 +1229,20 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                 }}
                 onCancel={() => setLocationPromptVisible(false)}
             />
+
+            {/* "Define a location" — full-screen inline point picker over the
+                store map. Back cancels + restores the dock (Location page). */}
+            {pickingPreset && (
+                <View style={styles.pickerOverlay}>
+                    <PresetPointPicker
+                        presetKey={pickingPreset.key}
+                        label={pickingPreset.label}
+                        existing={pickingPreset.existing}
+                        onDone={() => closePresetPicker(true)}
+                        onCancel={() => closePresetPicker(false)}
+                    />
+                </View>
+            )}
         </>
     );
 }
@@ -1055,6 +1250,8 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
+    pickerOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: c.pageBackground, zIndex: 30, elevation: 30 },
+    dockScrim: { ...StyleSheet.absoluteFillObject, zIndex: 15, elevation: 15 },
     // Floating map header (map view is full-bleed): back circle + toggle, left.
     mapTopLeft: { position: 'absolute', left: spacing.md, alignItems: 'flex-start', gap: spacing.sm, zIndex: 20 },
     // Glass surfaces clip to their rounded shape (overflow hidden), so the
@@ -1078,32 +1275,19 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     loadingText: { ...typography.body, color: c.textSecondary },
 
     // ── Glass dock ─────────────────────────────────────────────────────────
-    dockBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 4, minHeight: 40 },
-    dockHint: { flex: 1, textAlign: 'center', ...typography.label, color: c.textSecondary },
-    morePricesPill: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
-        backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: 18, paddingVertical: 10,
-    },
-    morePricesText: { fontSize: 15, fontWeight: '700', color: c.onPrimary },
-    dockPagesClip: { overflow: 'hidden', paddingHorizontal: 16 },
-    dockPagesRow: { flexDirection: 'row' },
-    sheetTitle: { fontSize: 22, fontWeight: '700', color: c.textPrimary, marginBottom: 12 },
-    bigBtnRow: { flexDirection: 'row', gap: 14, marginBottom: 14 },
-    bigActionCard: { alignItems: 'flex-start', gap: 2, paddingVertical: 14 },
-    cartBadge: { justifyContent: 'center' },
+    dockBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 40, paddingHorizontal: 16 },
+    summaryText: { flex: 1, fontSize: 15, fontWeight: '700', color: c.textPrimary },
+    morePricesGhost: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4 },
+    morePricesGhostText: { fontSize: 14, fontWeight: '700', color: c.primary },
+    dockContent: { paddingHorizontal: 16, paddingTop: 22, gap: 14 },
+    bigBtnRow: { flexDirection: 'row', gap: 14 },
+    // Item-count pip overlaid on the Basket action card's cart icon.
     cartCount: {
         position: 'absolute', top: -6, right: -10, minWidth: 18, height: 18, borderRadius: 9,
         paddingHorizontal: 4, backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center',
     },
     cartCountText: { color: c.onPrimary, fontSize: 10, fontWeight: '800' },
-    bigActionTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginTop: 6 },
-    bigActionSub: { fontSize: 12, fontWeight: '500', color: c.textSecondary },
-    sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 14 },
-    sectionTitleText: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
-    sectionSep: { height: 1, backgroundColor: c.border },
     settingRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
     settingText: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
     settingSub: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
-    pageHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
-    pageBack: { padding: 2 },
 });

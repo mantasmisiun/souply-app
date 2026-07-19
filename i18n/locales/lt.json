@@ -1,4 +1,11 @@
 {
+  "presetMap": {
+    "confirm": "Patvirtinti vietą",
+    "searchPlaceholder": "Ieškoti adreso...",
+    "dragHint": "Vilkite žemėlapį, kad patikslintumėte vietą",
+    "min3": "Įveskite bent 3 simbolius",
+    "notFound": "Adresas nerastas"
+  },
   "tripReceipts": {
     "title": "Kvitai",
     "upload": "Įkelti",
@@ -15,9 +22,10 @@
     "basketBtn": "Krepšelis",
     "basketBtnSub": "Peržiūrėti",
     "mapSettings": "Žemėlapio nustatymai",
+    "settings": "Nustatymai",
     "locationRoute": "Vieta ir maršrutas",
-    "saverOn": "Lyginti identiškas ir panašias prekes",
-    "saverOff": "Lyginti tik identiškas prekes",
+    "saverOn": "Įtraukia pigesnius pakaitalus",
+    "saverOff": "Tik tikslūs atitikmenys",
     "tab_basket": "Krepšelis",
     "tab_stores": "Parduotuvės",
     "tab_list": "Sąrašas",
@@ -1030,7 +1038,9 @@
     "viewStore": "Parduotuvė"
   },
   "results": {
-    "morePrices": "Daugiau kainų",
+    "mapSummary": "{{price}} pigiausia · {{count}} parduotuvės",
+    "mapSummaryEmpty": "Bakstelėkite parduotuvę, kad matytumėte kainą",
+    "morePrices": "Daugiau",
     "loading": "Skaičiuojamos kainos…",
     "tapStore": "Palieskite parduotuvę",
     "batchCalculating": "Skaičiuojama…",
@@ -1042,10 +1052,12 @@
     "errorCreateList": "Nepavyko sukurti pirkinių sąrašo",
     "sheet": {
       "storesPlural": "{{count}} parduotuvės",
+"stores": "Parduotuvės",
       "onlyHere": "Tik šioje parduotuvėje",
       "savingVsSingle": "Sutaupote {{amount}} vs 1 parduotuvė",
       "navigate": "Vykti",
       "createList": "Pirkinių sąrašas",
+"list": "Sąrašas",
       "creating": "Kuriama…",
       "approxPrice": "Apytikslė kaina",
       "missing": "Trūksta {{count}}",

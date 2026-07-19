@@ -34,11 +34,20 @@ interface Props {
     refreshKey?: number;
     onOpenPresetMap: (key: PresetKey, label: string, existing: LocationPreset | null) => void;
     onChanged?: (next: LocationSettings) => void;
+    /** Fired when the user commits a COMPLETE, actionable location — a place
+     *  with saved coords, or a route with both endpoints set (also GPS mode /
+     *  a transport change while complete). The host reprices + refocuses the
+     *  map from it. NOT fired for incomplete states (e.g. Place with nothing
+     *  picked yet) so a half-set selection never triggers a recalc. */
+    onLocationCommit?: () => void;
+    /** Drop the panel's own title + the store-count block (the host already
+     *  shows those) — start straight at the GPS/Place/Route selection. */
+    compact?: boolean;
 }
 
 const PRESET_KEYS: PresetKey[] = ['home', 'work', 'custom'];
 
-export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onChanged }: Props) {
+export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onChanged, onLocationCommit, compact }: Props) {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -87,19 +96,36 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
                 setSettings(next);
                 onChanged?.(next);
                 void saveLocationSettings(patch);
+                // A freshly-created preset that completes the location → reprice.
+                if (isLocationComplete(next, p)) onLocationCommit?.();
             }
         });
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [refreshKey]);
 
-    const update = async (patch: Partial<LocationSettings>) => {
+    /** A location the host can actually price from: GPS is always ready, a place
+     *  needs a saved preset, a route needs BOTH endpoints saved. */
+    const isLocationComplete = (
+        s: LocationSettings,
+        p: Record<PresetKey, LocationPreset | null> = presets,
+    ): boolean => {
+        if (s.mode === 'current') return true;
+        if (s.mode === 'specific') return !!(s.specificPreset && p[s.specificPreset]);
+        if (s.mode === 'route') return !!(s.routeFrom && s.routeTo && p[s.routeFrom] && p[s.routeTo]);
+        return false;
+    };
+
+    const update = async (patch: Partial<LocationSettings>, commit = false) => {
         const next = { ...settings, ...patch };
         setSettings(next);
         onChanged?.(next);
         await saveLocationSettings(patch);
+        // Reprice ONLY once the change lands on a complete location — never on a
+        // half-set selection (e.g. Place tapped but no place chosen yet).
+        if (commit && isLocationComplete(next)) onLocationCommit?.();
     };
 
-    const handleTransport = (t: TransportMode) => update({ transport: t });
+    const handleTransport = (t: TransportMode) => update({ transport: t }, true);
 
     const handleMode = (m: LocationMode) => {
         const patch: Partial<LocationSettings> = { mode: m };
@@ -108,17 +134,16 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
             patch.routeFrom = null;
             patch.routeTo = null;
         }
-        if (m === 'specific' && !settings.specificPreset) {
-            const first = PRESET_KEYS.find(k => !!presets[k]);
-            if (first) patch.specificPreset = first;
-        }
+        // Place mode starts with NO location selected — the user picks a saved
+        // place explicitly, which is what then refocuses + reprices. (No
+        // auto-select of the first preset.)
         setOpenMenu(null);
-        update(patch);
+        update(patch, true);
     };
 
     const handleSpecificPreset = (key: PresetKey) => {
         if (!presets[key]) return; // not set yet — user must add it first
-        update({ specificPreset: key });
+        update({ specificPreset: key }, true);
     };
 
     /** Pick an endpoint value from a dropdown. The option held by the OTHER
@@ -139,50 +164,53 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
             if (endpoint === 'from') patch.routeTo = null;
             else patch.routeFrom = null;
         }
-        update(patch);
+        update(patch, true);
     };
 
     /** ⇅ — "Iš namų į darbą" becomes "Iš darbo į namus" in one tap. Works
      *  with a half-set route too (the single value hops to the other side). */
     const handleSwap = () => {
         setOpenMenu(null);
-        update({ routeFrom: settings.routeTo, routeTo: settings.routeFrom });
+        update({ routeFrom: settings.routeTo, routeTo: settings.routeFrom }, true);
     };
 
     const availablePresets = PRESET_KEYS.filter(k => !!presets[k]);
 
     return (
         <View>
-            <View style={styles.header}>
-                <Text style={styles.title}>{t('locationSettings.title')}</Text>
-            </View>
-
-            {/* ── Store count — always first ── */}
-            <Text style={styles.sectionLabel}>{t('locationSettings.storeCountLabel')}</Text>
-            <View style={styles.countRow}>
-                {([1, 2, 3] as const).map(n => (
-                    <TouchableOpacity
-                        key={n}
-                        style={[styles.countBtn, settings.storeCount === n && styles.countBtnActive]}
-                        onPress={() => update({ storeCount: n })}
-                    >
-                        <Text style={[styles.countBtnText, settings.storeCount === n && styles.countBtnTextActive]}>
-                            {n}
-                        </Text>
-                    </TouchableOpacity>
-                ))}
-            </View>
-            <Text style={styles.countHint}>
-                {settings.storeCount === 1
-                    ? t('locationSettings.storeCountHint1')
-                    : settings.storeCount === 2
-                    ? t('locationSettings.storeCountHint2')
-                    : t('locationSettings.storeCountHint3')}
-            </Text>
+            {!compact && (
+                <>
+                    <View style={styles.header}>
+                        <Text style={styles.title}>{t('locationSettings.title')}</Text>
+                    </View>
+                    {/* ── Store count — always first ── */}
+                    <Text style={styles.sectionLabel}>{t('locationSettings.storeCountLabel')}</Text>
+                    <View style={styles.countRow}>
+                        {([1, 2, 3] as const).map(n => (
+                            <TouchableOpacity
+                                key={n}
+                                style={[styles.countBtn, settings.storeCount === n && styles.countBtnActive]}
+                                onPress={() => update({ storeCount: n })}
+                            >
+                                <Text style={[styles.countBtnText, settings.storeCount === n && styles.countBtnTextActive]}>
+                                    {n}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                    <Text style={styles.countHint}>
+                        {settings.storeCount === 1
+                            ? t('locationSettings.storeCountHint1')
+                            : settings.storeCount === 2
+                            ? t('locationSettings.storeCountHint2')
+                            : t('locationSettings.storeCountHint3')}
+                    </Text>
+                </>
+            )}
 
             {/* ── Location mode ── */}
-            <Text style={styles.sectionLabel}>{t('locationSettings.modeLabel')}</Text>
-            <View style={styles.segmentRow}>
+            {!compact && <Text style={styles.sectionLabel}>{t('locationSettings.modeLabel')}</Text>}
+            <View style={[styles.segmentRow, compact && styles.segmentRowCompact]}>
                 <SegmentBtn
                     label={t('locationSettings.modeGps')}
                     icon="locate-outline"
@@ -472,6 +500,13 @@ const makeStyles = (c: AppTheme) =>
             flexDirection: 'row',
             gap: 8,
             marginBottom: 18,
+        },
+        // Compact host (the map dock) draws a section title + divider directly
+        // above; give the segmented control breathing room below that divider
+        // (matching the Settings card's row inset) and a small trailing gap.
+        segmentRowCompact: {
+            marginTop: 12,
+            marginBottom: 10,
         },
         segment: {
             flex: 1,

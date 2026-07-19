@@ -1,7 +1,8 @@
 import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, Image, Platform, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
 import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
-import { useSharedValue, type SharedValue } from 'react-native-reanimated';
+import Animated, { useSharedValue, useAnimatedProps, type SharedValue } from 'react-native-reanimated';
+import { Gesture, GestureDetector, type GestureType } from 'react-native-gesture-handler';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Asset } from 'expo-asset';
 import { Ionicons } from '@expo/vector-icons';
@@ -15,6 +16,7 @@ import { formatEuro } from '../../utils/formatCurrency';
 import { type StoreLite } from '../../utils/candidatePool';
 import { clusterByGrid, bucketingKey, type Cluster, type GridRegion } from '../../utils/mapClustering';
 import { LiquidGlass } from '../LiquidGlass';
+const AnimatedMapView = Animated.createAnimatedComponent(MapView);
 
 export type MapPin = {
     storeId: number;
@@ -81,6 +83,22 @@ type Props = {
     /** Reports the nearest un-priced stores currently in view (capped at the
      *  batch limit) so the parent can offer an "price this area" button. */
     onVisibleUnpricedChange?: (storeIds: number[]) => void;
+    /** UI-thread flag: while true the map's pan is disabled (sheet is being
+     *  touched) — driven by the sheet's gesture, no JS-state lag. */
+    scrollDisabledSV?: SharedValue<boolean>;
+    /** UI-thread flag: true while a sheet is open above the collapsed bar. The
+     *  map's pan is disabled for the whole time (not just during a drag), so
+     *  sheet touches can never move the map. */
+    sheetOpenSV?: SharedValue<boolean>;
+    /** Stable gate for the non-animated gestures (zoom): false while a sheet is
+     *  open, so a pinch on the sheet can't zoom the map. */
+    gesturesEnabled?: boolean;
+    /** Ref to the map's own native gesture. The dock's pan
+     *  `.blocksExternalGesture()`s this, so a drag that begins on the bar holds
+     *  the map's native pan off on the native thread — the ONLY way to win the
+     *  first bar-drag (scrollEnabled is read by the map at touch-down, too late
+     *  for a JS flag flipped in onBegin). */
+    nativeGestureRef?: React.MutableRefObject<GestureType | undefined>;
 };
 
 type Styles = ReturnType<typeof makeStyles>;
@@ -509,7 +527,8 @@ const DirectoryLayer = React.memo(function DirectoryLayer({
 function StoreResultsMap({
     pins, userCoords, focusCoords, recommendedCoords, routeEndpoints, onSelectStore, colors,
     directory, pricedStoreIds, pricingStoreId, onLazyPrice, routeCoords, onMapPress,
-    onVisibleUnpricedChange, bottomOverlay = 0,
+    onVisibleUnpricedChange, bottomOverlay = 0, scrollDisabledSV, sheetOpenSV, gesturesEnabled = true,
+    nativeGestureRef,
 }: Props) {
     // How much of the bottom is covered by the sheet (capped so a fully-extended
     // sheet doesn't try to cram everything into a sliver — at that point the map
@@ -519,6 +538,9 @@ function StoreResultsMap({
     occlusionRef.current = occlusion;
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const mapRef = useRef<MapView>(null);
+    const mapAnimatedProps = useAnimatedProps(() => ({
+        scrollEnabled: !((scrollDisabledSV?.value ?? false) || (sheetOpenSV?.value ?? false)),
+    }));
     const isDark = useResolvedScheme() === 'dark';
     const insets = useSafeAreaInsets();
 
@@ -528,6 +550,11 @@ function StoreResultsMap({
     // which read as "tapping a pin does nothing". Record the last marker tap and
     // swallow any map-press within a short window of it.
     const markerPressRef = useRef(0);
+    // The map's native gesture, exposed to RNGH so the dock's pan can block it.
+    const mapNativeGesture = useMemo(() => {
+        const g = Gesture.Native();
+        return nativeGestureRef ? g.withRef(nativeGestureRef) : g;
+    }, [nativeGestureRef]);
     const markMarkerPress = useCallback(() => { markerPressRef.current = Date.now(); }, []);
     const handleStoreTap = useCallback((id: number) => { markMarkerPress(); onSelectStore(id); }, [markMarkerPress, onSelectStore]);
     const handleDirTap = useCallback((id: number) => { markMarkerPress(); onLazyPrice?.(id); }, [markMarkerPress, onLazyPrice]);
@@ -535,6 +562,21 @@ function StoreResultsMap({
     // iOS it hit-tests the tap against the projected pills first.
 
     useEffect(() => { preloadLogos(); }, []);
+
+    // Warm the scrollEnabled binding once the NATIVE map exists (onMapReady).
+    // Reanimated only writes a useAnimatedProps value to a third-party native
+    // component (MapView) on the first CHANGE, and a change requested before the
+    // native view exists is dropped — so the initial `scrollEnabled` never
+    // reaches the map, and the FIRST dock drag pans it (every drag after is fine,
+    // the binding is now live). Toggling here forces that first native write.
+    const warmScroll = useCallback(() => {
+        if (!scrollDisabledSV) return;
+        scrollDisabledSV.value = true;
+        // Two frames so the first native write (scrollEnabled=false) commits
+        // before we restore it — the map has just become ready and the user
+        // isn't dragging yet, so the brief disable is invisible.
+        requestAnimationFrame(() => requestAnimationFrame(() => { scrollDisabledSV.value = false; }));
+    }, [scrollDisabledSV]);
 
     const anySelected = useMemo(() => pins.some(p => p.active), [pins]);
 
@@ -772,22 +814,10 @@ function StoreResultsMap({
         });
     }, []);
 
-    // Default view when nothing is selected: center on the recommended (pink)
-    // store rather than fitting every pin — so load lands on the best option.
-    const recRef = useRef(recommendedCoords);
-    recRef.current = recommendedCoords;
-    const centerDefault = useCallback(() => {
-        const r = recRef.current;
-        if (r && r.length > 1) {
-            mapRef.current?.fitToCoordinates(r, {
-                edgePadding: { top: 110, right: 90, bottom: fitBottomPad(), left: 90 },
-                animated: true,
-            });
-        } else if (r && r.length === 1) {
-            centerOn(r[0].latitude, r[0].longitude, 0.06);
-        } else fitAll();
-         
-    }, [fitAll, centerOn]);
+    // Default view when nothing is selected: the whole AREA (every pin). Open —
+    // and any deselect — always lands on the overview, never zoomed into one
+    // store; nothing about a prior tap survives, so a fresh open shows the area.
+    const centerDefault = useCallback(() => { fitAll(); }, [fitAll]);
 
     const goToUser = useCallback(() => {
         if (!userCoords) return;
@@ -901,16 +931,19 @@ function StoreResultsMap({
 
     return (
         <View style={StyleSheet.absoluteFill}>
-            <MapView
+            <GestureDetector gesture={mapNativeGesture}>
+            <AnimatedMapView
                 ref={mapRef}
+                animatedProps={mapAnimatedProps}
                 style={StyleSheet.absoluteFill}
                 initialRegion={initialRegion}
-                onMapReady={centerDefault}
+                onMapReady={() => { centerDefault(); warmScroll(); }}
                 onPress={handleMapPress}
                 onLayout={(e) => { mapW.value = e.nativeEvent.layout.width; mapH.value = e.nativeEvent.layout.height; }}
                 onRegionChange={Platform.OS === 'ios' ? onRegionLive : undefined}
                 onRegionChangeComplete={onRegionSettle}
                 customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
+                zoomEnabled={gesturesEnabled}
                 rotateEnabled={false}
                 pitchEnabled={false}
                 toolbarEnabled={false}
@@ -986,7 +1019,8 @@ function StoreResultsMap({
                         />
                     );
                 })}
-            </MapView>
+            </AnimatedMapView>
+            </GestureDetector>
 
             {/* iOS: directory (cluster bubbles + un-priced logos) as a projected
                 overlay — plain RN views, so the zoom re-bucketing churn never

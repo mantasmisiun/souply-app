@@ -1,4 +1,11 @@
 {
+  "presetMap": {
+    "confirm": "Confirm location",
+    "searchPlaceholder": "Search address...",
+    "dragHint": "Drag the map to fine-tune the spot",
+    "min3": "Enter at least 3 characters",
+    "notFound": "Address not found"
+  },
   "tripReceipts": {
     "title": "Receipts",
     "upload": "Upload",
@@ -15,9 +22,10 @@
     "basketBtn": "Basket",
     "basketBtnSub": "View",
     "mapSettings": "Map settings",
+    "settings": "Settings",
     "locationRoute": "Location & Route",
-    "saverOn": "Compare identical and similar products",
-    "saverOff": "Compare only identical products",
+    "saverOn": "Includes cheaper substitutes",
+    "saverOff": "Exact product matches only",
     "tab_basket": "Basket",
     "tab_stores": "Stores",
     "tab_list": "List",
@@ -1058,7 +1066,9 @@
     "viewStore": "Store"
   },
   "results": {
-    "morePrices": "More prices",
+    "mapSummary": "{{price}} cheapest · {{count}} stores",
+    "mapSummaryEmpty": "Tap a store to see its price",
+    "morePrices": "More",
     "loading": "Calculating prices…",
     "tapStore": "Tap a store",
     "batchCalculating": "Calculating…",
@@ -1070,10 +1080,12 @@
     "errorCreateList": "Couldn't create shopping list",
     "sheet": {
       "storesPlural": "{{count}} stores",
+"stores": "Stores",
       "onlyHere": "Only at this store",
       "savingVsSingle": "Save {{amount}} vs 1 store",
-      "navigate": "Go",
+      "navigate": "Navigate",
       "createList": "Shopping list",
+"list": "List",
       "creating": "Creating…",
       "approxPrice": "Approx. price",
       "missing": "Missing {{count}}",
