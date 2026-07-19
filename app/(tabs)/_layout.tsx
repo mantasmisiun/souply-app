@@ -10,7 +10,7 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 import { useProfileStore } from '../../state/profileStore';
 import { HapticTab } from '../../components/haptic-tab';
 import { FloatingPillTabBar } from '../../components/FloatingPillTabBar';
-import { BeetrootIcon, BasketGlyph, BookStackGlyph, PersonGlyph } from '../../components/icons/tabGlyphs';
+import { BeetrootIcon, BasketGlyph, ChefToqueGlyph, PersonGlyph } from '../../components/icons/tabGlyphs';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { devLog } from '../../utils/devLog';
 
@@ -125,7 +125,7 @@ export default function TabLayout() {
                 options={{
                     title: t('tabs.templates'),
                     tabBarIcon: ({ color, size }) => (
-                        <BookStackGlyph size={size} color={color} />
+                        <ChefToqueGlyph size={size} color={color} />
                     ),
                 }}
             />
@@ -162,7 +162,7 @@ export default function TabLayout() {
                         {tripBadge ? <Badge>{tripBadge}</Badge> : null}
                     </NativeTabs.Trigger>
                     <NativeTabs.Trigger name="templates">
-                        <Icon src={require('../../assets/icons/tab-books.png')} />
+                        <Icon src={require('../../assets/icons/tab-chef.png')} />
                         <Label>{t('tabs.templates')}</Label>
                     </NativeTabs.Trigger>
                     <NativeTabs.Trigger name="menu">
