@@ -188,17 +188,7 @@ export default function TripsScreen() {
         <View style={styles.container}>
             <CollapsingHeader
                 controller={header}
-                pinned={(
-                    <>
-                        <ShoppingFilterChips />
-                        {refreshing && (
-                            <View style={styles.refreshingBanner}>
-                                <MaterialProgress size="small" color={colors.primary} />
-                                <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
-                            </View>
-                        )}
-                    </>
-                )}
+                pinned={<ShoppingFilterChips />}
             />
             <Animated.ScrollView
                 {...header.scroll}
@@ -378,11 +368,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     emptyButton: { marginTop: 20, backgroundColor: c.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: radius.pill },
     emptyButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 14 },
 
-    refreshingBanner: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        gap: 6, paddingVertical: 4, backgroundColor: c.surfaceSubtle,
-    },
-    refreshingText: { fontSize: 11, color: c.textSecondary, fontWeight: '500' },
 
     qrBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', padding: 28 },
     qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: 22, gap: 10, alignItems: 'center', maxWidth: 380, width: '100%' },
