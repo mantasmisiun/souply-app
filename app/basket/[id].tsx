@@ -25,7 +25,7 @@ import { ScreenBackButton } from '../../components/ScreenBackButton';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../../config/api';
 import { ProductImage } from '../../components/ProductImage';
-import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
+import { useTheme, radius, elevation, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { useBasketState } from '../../state/basketState';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import LocationPromptModal from '../../components/LocationPromptModal';
@@ -33,6 +33,7 @@ import { DockedGlassSheet, type DockedSheetControls } from '../../components/Doc
 import { AddOrStepper } from '../../components/AddOrStepper';
 import { BrandedQR } from '../../components/BrandedQR';
 import { ChefToqueGlyph } from '../../components/icons/tabGlyphs';
+import { SheetCard } from '../../components/SheetCard';
 import { useBasketSession } from '../../state/basketSession';
 import { fetchTrips, createTripInviteUrl } from '../../utils/tripsApi';
 import * as Haptics from 'expo-haptics';
@@ -835,31 +836,48 @@ export default function BasketDetailScreen() {
                             content: (
                                 <View style={styles.sheetPanelContent}>
                                     <Text style={styles.sheetTitle}>{t('basketDetail.actionsTitle')}</Text>
-                                    {/* iOS-style big actions, two per row. */}
+                                    {/* iOS-style big actions, two per row — SheetCards,
+                                        the same surface as the Settings section. */}
                                     <View style={styles.bigBtnRow}>
                                         {!fromTemplate && (
-                                            <TouchableOpacity style={styles.bigActionBtn} onPress={() => setSaveTplVisible(true)} activeOpacity={0.7}>
-                                                <ChefToqueGlyph size={24} color={colors.primary} />
-                                                <Text style={styles.bigActionTitle}>{t('basketDetail.saveTitle')}</Text>
-                                                <Text style={styles.bigActionSub}>{t('basketDetail.saveSub')}</Text>
+                                            <TouchableOpacity style={{ flex: 1 }} onPress={() => setSaveTplVisible(true)} activeOpacity={0.7}>
+                                                <SheetCard style={styles.bigActionCard}>
+                                                    <ChefToqueGlyph size={24} color={colors.primary} />
+                                                    <Text style={styles.bigActionTitle}>{t('basketDetail.saveTitle')}</Text>
+                                                    <Text style={styles.bigActionSub}>{t('basketDetail.saveSub')}</Text>
+                                                </SheetCard>
                                             </TouchableOpacity>
                                         )}
-                                        <TouchableOpacity style={styles.bigActionBtn} onPress={() => void openInvite()} activeOpacity={0.7}>
-                                            <Ionicons name="person-add" size={24} color={colors.primary} />
-                                            <Text style={styles.bigActionTitle}>{t('basketDetail.inviteTitle')}</Text>
-                                            <Text style={styles.bigActionSub}>{t('basketDetail.inviteSub')}</Text>
+                                        <TouchableOpacity style={{ flex: 1 }} onPress={() => void openInvite()} activeOpacity={0.7}>
+                                            <SheetCard style={styles.bigActionCard}>
+                                                <Ionicons name="person-add" size={24} color={colors.primary} />
+                                                <Text style={styles.bigActionTitle}>{t('basketDetail.inviteTitle')}</Text>
+                                                <Text style={styles.bigActionSub}>{t('basketDetail.inviteSub')}</Text>
+                                            </SheetCard>
                                         </TouchableOpacity>
                                     </View>
-                                    {/* Settings section. */}
-                                    <TouchableOpacity style={styles.sheetRow} onPress={() => router.push('/settings' as any)}>
-                                        <Ionicons name="settings-outline" size={20} color={colors.primary} />
-                                        <Text style={[styles.sheetRowText, { flex: 1 }]}>{t('basketDetail.settings')}</Text>
-                                        <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
-                                    </TouchableOpacity>
-                                    <View style={styles.sectionSep} />
-                                    <TouchableOpacity style={styles.sheetRow} onPress={removeBasket}>
-                                        <Text style={[styles.sheetRowTextRegular, { color: colors.error }]}>{t('basketDetail.removeBasket')}</Text>
-                                    </TouchableOpacity>
+                                    {/* Settings section — same SheetCard system as the
+                                        catalog chooser's sections; the row with the gear
+                                        is the section TITLE, not an action. */}
+                                    <SheetCard>
+                                        <View style={styles.sectionTitleRow}>
+                                            <Ionicons name="settings" size={20} color={colors.primary} />
+                                            <Text style={styles.sectionTitleText}>{t('basketDetail.settings')}</Text>
+                                        </View>
+                                        <View style={styles.sectionSep} />
+                                        <TouchableOpacity
+                                            style={styles.sheetRow}
+                                            onPress={() => {
+                                                settingsSheetRef.current?.collapse();
+                                                setEditingName(true);
+                                            }}
+                                        >
+                                            <Text style={[styles.sheetRowTextRegular, { color: colors.textPrimary }]}>{t('basketDetail.renameBasket')}</Text>
+                                        </TouchableOpacity>
+                                        <TouchableOpacity style={styles.sheetRow} onPress={removeBasket}>
+                                            <Text style={[styles.sheetRowTextRegular, { color: colors.error }]}>{t('basketDetail.removeBasket')}</Text>
+                                        </TouchableOpacity>
+                                    </SheetCard>
                                 </View>
                             ),
                         } : undefined}
@@ -1012,23 +1030,24 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // Separator: from the title start (past the image) to the trash end.
     rowSep: { height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginLeft: 56 + 12 },
     sheetRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
-    bigBtnRow: { flexDirection: 'row', gap: 12, marginBottom: 4 },
-    bigActionBtn: {
-        flex: 1, alignItems: 'flex-start', gap: 2,
-        backgroundColor: c.surfaceMuted, borderRadius: radius.lg,
-        paddingHorizontal: 14, paddingVertical: 14,
-    },
+    bigBtnRow: { flexDirection: 'row', gap: 14 },
+    bigActionCard: { alignItems: 'flex-start', gap: 2, paddingVertical: 14 },
     bigActionTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginTop: 6 },
     bigActionSub: { fontSize: 12, fontWeight: '500', color: c.textSecondary },
     sheetRowText: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
     sheetRowTextRegular: { fontSize: 15, fontWeight: '400' },
-    sheetTitle: { fontSize: 22, fontWeight: '700', color: c.textPrimary, paddingBottom: 12 },
-    sectionSep: { height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginVertical: 4 },
+    sheetTitle: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
+    sectionSep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem },
+    sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 14 },
+    sectionTitleText: { fontSize: 20, fontWeight: '800', color: c.textPrimary },
     qrBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
     qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: 24, alignItems: 'center', gap: 16 },
     sheetPanelContent: {
         paddingHorizontal: 16,
         paddingBottom: 8,
+        // ONE gap: between the Save|Invite cards, and between that row and
+        // the Settings section below.
+        gap: 14,
     },
     showResultsButton: {
         flex: 1,

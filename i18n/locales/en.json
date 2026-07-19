@@ -1011,6 +1011,7 @@
     "saveAsTemplate": "Save to Recipe"
   },
   "basketDetail": {
+    "renameBasket": "Rename basket",
     "actionsTitle": "Actions",
     "settings": "Settings",
     "removeBasket": "Remove",

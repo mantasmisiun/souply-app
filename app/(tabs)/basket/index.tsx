@@ -157,7 +157,8 @@ export default function TripsScreen() {
     const stageCta = (s: number) => t(`trips.cta${s}`);
 
     const tripTitle = (trip: TripSummary) =>
-        trip.name ?? (trip.isAdHoc ? t('trips.adHocName') : formatDayDate(trip.anchorDate, i18n.language));
+        trip.name ?? trip.basket?.name
+        ?? (trip.isAdHoc ? t('trips.adHocName') : formatDayDate(trip.anchorDate, i18n.language));
 
     const slotLine = (trip: TripSummary) => {
         if (trip.slots.length === 0) {

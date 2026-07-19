@@ -983,6 +983,7 @@
     "saveAsTemplate": "Įrašyti kaip receptą"
   },
   "basketDetail": {
+    "renameBasket": "Pervadinti krepšelį",
     "actionsTitle": "Veiksmai",
     "settings": "Nustatymai",
     "removeBasket": "Pašalinti",

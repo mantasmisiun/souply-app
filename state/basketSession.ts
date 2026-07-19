@@ -41,7 +41,8 @@ export interface ChooserOption {
     basketId: number | null; // null = create new
     /** Set for key 'template' — the session targets a template instead. */
     templateId?: number | null;
-    /** Template name (key 'template'); baskets are titled by date instead. */
+    /** Template name (key 'template') or a user-given basket name — a
+     *  rename wins over the date title on chooser rows. */
     name?: string | null;
     label: string;           // resolved by the host at render (i18n)
     itemCount: number;
@@ -268,10 +269,10 @@ export const discoverOptions = async (): Promise<ChooserOption[] | null> => {
 
     const options: ChooserOption[] = [];
     if (familyBasketId) {
-        options.push({ key: 'family', basketId: familyBasketId, label: '', itemCount: Number(familyRow?.itemCount) || 0, updatedAt: familyRow?.updatedAt ?? null, itemPreview: parsePreview(familyRow?.itemPreview) });
+        options.push({ key: 'family', basketId: familyBasketId, label: '', name: familyRow?.name ?? null, itemCount: Number(familyRow?.itemCount) || 0, updatedAt: familyRow?.updatedAt ?? null, itemPreview: parsePreview(familyRow?.itemPreview) });
     }
     for (const b of recents) {
-        options.push({ key: 'previous', basketId: b.id, label: '', itemCount: Number(b.itemCount) || 0, updatedAt: b.updatedAt ?? null, itemPreview: parsePreview(b.itemPreview) });
+        options.push({ key: 'previous', basketId: b.id, label: '', name: b.name ?? null, itemCount: Number(b.itemCount) || 0, updatedAt: b.updatedAt ?? null, itemPreview: parsePreview(b.itemPreview) });
     }
     options.push({ key: 'new', basketId: null, label: '', itemCount: 0, updatedAt: null });
     return options;

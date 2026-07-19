@@ -114,6 +114,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const rowTitle = (o: ChooserOption): string =>
         o.key === 'template' ? (o.name || t('basketSession.optionTemplate'))
         : o.key === 'family' ? t('basketSession.optionFamily')
+        : o.name ? o.name
         : o.updatedAt ? formatDayDate(o.updatedAt, i18n.language) : t('basketSession.optionPrevious');
     // Newest-first names, each capped so ≥3 fit on one line; middle-dot joined.
     const previewLine = (names: string[]): string =>

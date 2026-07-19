@@ -33,6 +33,8 @@ export interface TripSummary {
     anchorDate: string;
     basket: {
         id: number; status: string; itemCount: number;
+        /** User-given basket name (renames replace the date title). */
+        name?: string | null;
         /** Newest-first item-name preview (max 5). */
         itemPreview?: string[];
     } | null;
