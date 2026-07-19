@@ -10,7 +10,7 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 import { useProfileStore } from '../../state/profileStore';
 import { HapticTab } from '../../components/haptic-tab';
 import { FloatingPillTabBar } from '../../components/FloatingPillTabBar';
-import { BeetrootIcon, BasketGlyph, ChefToqueGlyph, IdCardGlyph } from '../../components/icons/tabGlyphs';
+import { BeetrootIcon, BasketGlyph, ChefToqueGlyph, PiggyBankGlyph } from '../../components/icons/tabGlyphs';
 import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { devLog } from '../../utils/devLog';
 
@@ -135,7 +135,7 @@ export default function TabLayout() {
                     title: t('tabs.profilis'),
                     tabBarIcon: ({ color, size }) => (
                         <View>
-                            <IdCardGlyph size={size} color={color} />
+                            <PiggyBankGlyph size={size} color={color} />
                             {pendingSwipeCount > 0 && <TabBadge count={pendingSwipeCount} styles={styles} />}
                         </View>
                     ),
@@ -166,7 +166,7 @@ export default function TabLayout() {
                         <Label>{t('tabs.templates')}</Label>
                     </NativeTabs.Trigger>
                     <NativeTabs.Trigger name="menu">
-                        <Icon src={require('../../assets/icons/tab-idcard.png')} />
+                        <Icon src={require('../../assets/icons/tab-piggy.png')} />
                         <Label>{t('tabs.profilis')}</Label>
                         {swipeBadge ? <Badge>{swipeBadge}</Badge> : null}
                     </NativeTabs.Trigger>
