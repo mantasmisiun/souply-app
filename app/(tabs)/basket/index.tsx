@@ -202,7 +202,7 @@ export default function TripsScreen() {
             <Animated.ScrollView
                 {...header.scroll}
                 contentInsetAdjustmentBehavior="never"
-                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
+                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop, paddingBottom: tabBarHeight + 24 }]}
                 refreshControl={
                     <RefreshControl
                         refreshing={pullRefreshing}
@@ -228,39 +228,41 @@ export default function TripsScreen() {
                         const preview = trip.basket?.itemPreview ?? [];
                         return (
                         <TouchableOpacity key={trip.id} style={styles.card} onPress={() => openTrip(trip)} activeOpacity={0.8}>
-                            <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
-                                <View style={styles.cardTop}>
-                                    <View style={styles.cartChip}>
-                                        <Ionicons name="cart-outline" size={14} color={colors.primary} />
-                                        <Text style={styles.cartChipText}>{trip.basket?.itemCount ?? 0}</Text>
-                                    </View>
-                                    {trip.memberCount > 1 && (
-                                        <View style={styles.membersChip}>
-                                            <Ionicons name="people-outline" size={12} color={colors.textSecondary} />
-                                            <Text style={styles.membersChipText}>{trip.memberCount}</Text>
+                            <View style={styles.cardMain}>
+                                <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                                    <View style={styles.cardTop}>
+                                        <View style={styles.cartChip}>
+                                            <Ionicons name="cart-outline" size={14} color={colors.primary} />
+                                            <Text style={styles.cartChipText}>{trip.basket?.itemCount ?? 0}</Text>
                                         </View>
-                                    )}
-                                </View>
-                                <Text style={styles.cardTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
-                                {preview.length > 0 ? (
-                                    // Newest items first — each name caps and ellipsises so
-                                    // at least three fit on the row.
-                                    <View style={styles.previewRow}>
-                                        {preview.slice(0, 3).map((name, i) => (
-                                            <React.Fragment key={i}>
-                                                {i > 0 && <Text style={styles.previewDot}>·</Text>}
-                                                <Text style={styles.previewName} numberOfLines={1}>{name}</Text>
-                                            </React.Fragment>
-                                        ))}
+                                        {trip.memberCount > 1 && (
+                                            <View style={styles.membersChip}>
+                                                <Ionicons name="people-outline" size={12} color={colors.textSecondary} />
+                                                <Text style={styles.membersChipText}>{trip.memberCount}</Text>
+                                            </View>
+                                        )}
                                     </View>
-                                ) : slotLine(trip) ? (
-                                    <Text style={styles.cardMeta} numberOfLines={1}>{slotLine(trip)}</Text>
-                                ) : null}
+                                    <Text style={styles.cardTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
+                                </View>
+                                <View style={styles.ctaBtn}>
+                                    <Text style={styles.ctaText}>{stageCta(trip.stage)}</Text>
+                                    <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+                                </View>
                             </View>
-                            <View style={styles.ctaBtn}>
-                                <Text style={styles.ctaText}>{stageCta(trip.stage)}</Text>
-                                <Ionicons name="chevron-forward" size={16} color={colors.primary} />
-                            </View>
+                            {preview.length > 0 ? (
+                                // Newest items first, spanning the FULL card width —
+                                // each name caps and ellipsises so 3+ fit.
+                                <View style={styles.previewRow}>
+                                    {preview.slice(0, 3).map((name, i) => (
+                                        <React.Fragment key={i}>
+                                            {i > 0 && <Text style={styles.previewDot}>·</Text>}
+                                            <Text style={styles.previewName} numberOfLines={1}>{name}</Text>
+                                        </React.Fragment>
+                                    ))}
+                                </View>
+                            ) : slotLine(trip) ? (
+                                <Text style={styles.cardMeta} numberOfLines={1}>{slotLine(trip)}</Text>
+                            ) : null}
                         </TouchableOpacity>
                         );
                     })
@@ -297,7 +299,7 @@ export default function TripsScreen() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { alignItems: 'center', justifyContent: 'center', padding: 32 },
-    list: { padding: 16 },
+    list: { paddingHorizontal: 16, paddingBottom: 16 },
 
     filterRow: {
         flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8,
@@ -320,8 +322,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     card: {
         backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: 14, marginBottom: 10,
         borderWidth: 3, borderColor: 'transparent', borderLeftColor: c.primary,
-        flexDirection: 'row', alignItems: 'center', gap: 10,
+        gap: 6,
     },
+    cardMain: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     cartChip: {
         flexDirection: 'row', alignItems: 'center', gap: 4,
         backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderRadius: radius.pill,

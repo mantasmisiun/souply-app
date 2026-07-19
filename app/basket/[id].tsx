@@ -845,7 +845,7 @@ export default function BasketDetailScreen() {
                                             </TouchableOpacity>
                                         )}
                                         <TouchableOpacity style={styles.bigActionBtn} onPress={() => void openInvite()} activeOpacity={0.7}>
-                                            <Ionicons name="person-add-outline" size={24} color={colors.primary} />
+                                            <Ionicons name="person-add" size={24} color={colors.primary} />
                                             <Text style={styles.bigActionTitle}>{t('basketDetail.inviteTitle')}</Text>
                                             <Text style={styles.bigActionSub}>{t('basketDetail.inviteSub')}</Text>
                                         </TouchableOpacity>
