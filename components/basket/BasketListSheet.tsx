@@ -196,11 +196,22 @@ export function BasketListSheet() {
             </Animated.Text>
             <TouchableOpacity
                 style={styles.basketBtn}
-                onPress={() => {
+                onPress={async () => {
                     if (!target) return;
-                    router.push((target.kind === 'template'
-                        ? `/template/${target.templateId}`
-                        : `/basket/${target.basketId}`) as any);
+                    if (target.kind === 'template') {
+                        router.push(`/template/${target.templateId}` as any);
+                        return;
+                    }
+                    // Stores ›: resolve the basket's trip and land on the map's
+                    // Stores tab (pills + prices, sheet at medium). Falls back
+                    // to the legacy basket page if the trip isn't found.
+                    try {
+                        const { fetchTrips } = await import('../../utils/tripsApi');
+                        const trips = await fetchTrips();
+                        const trip = trips.find(tr => tr.basket?.id === target.basketId);
+                        if (trip) { router.push(`/trip/${trip.id}?tab=stores` as any); return; }
+                    } catch {}
+                    router.push(`/basket/${target.basketId}` as any);
                 }}
                 activeOpacity={0.85}
             >

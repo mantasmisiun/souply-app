@@ -41,6 +41,7 @@ import {
     fetchTrips, unarchiveTrip, fetchOwnHousehold,
     type TripSummary, type HouseholdInfo,
 } from '../../../utils/tripsApi';
+import { tripStageHref } from '../../../utils/tripStageRoute';
 
 const STAGE_ICONS: Record<number, keyof typeof Ionicons.glyphMap> = {
     1: 'cart-outline', 2: 'storefront-outline', 3: 'list-outline', 4: 'receipt-outline', 5: 'stats-chart-outline',
@@ -119,15 +120,11 @@ export default function TripsScreen() {
     const active = useMemo(() => trips.filter(tr => tr.archivedAt == null && byDate(tr)), [trips, byDate]);
     const archived = useMemo(() => trips.filter(tr => tr.archivedAt != null && byDate(tr)), [trips, byDate]);
 
-    // Stage CTA → the existing surface that continues the journey.
+    // ONE screen per stage (simplified flow): the card resolves straight to
+    // the stage's screen — basket detail / comparison map / closest
+    // unfinished list / receipts / stats. No trip container in between.
     const openTrip = useCallback((trip: TripSummary) => {
-        if (trip.stage <= 1) {
-            if (trip.basket) router.push(`/basket/${trip.basket.id}` as any);
-            return;
-        }
-        // Stages 2+ live on the trip-map surface (zero-decision search,
-        // slots, invites, receipts).
-        router.push(`/trip/${trip.id}` as any);
+        void tripStageHref(trip).then(href => router.push(href as any)).catch(() => {});
     }, [router]);
 
     const onArchivedTap = useCallback((trip: TripSummary) => {
