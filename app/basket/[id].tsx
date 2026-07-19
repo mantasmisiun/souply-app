@@ -32,6 +32,7 @@ import LocationPromptModal from '../../components/LocationPromptModal';
 import { DockedGlassSheet, type DockedSheetControls } from '../../components/DockedGlassSheet';
 import { AddOrStepper } from '../../components/AddOrStepper';
 import { BrandedQR } from '../../components/BrandedQR';
+import { ChefToqueGlyph } from '../../components/icons/tabGlyphs';
 import { useBasketSession } from '../../state/basketSession';
 import { fetchTrips, createTripInviteUrl } from '../../utils/tripsApi';
 import * as Haptics from 'expo-haptics';
@@ -370,22 +371,26 @@ export default function BasketDetailScreen() {
         } catch { setInviteOpen(false); }
     }, [id]);
 
-    // Clear basket: remove every line (confirm first) — the basket survives.
-    const clearBasket = useCallback(() => {
-        Alert.alert(t('basketDetail.clearTitle'), t('basketDetail.clearBody'), [
+    // Remove the whole basket (confirm first) — deletes the server row and
+    // leaves the screen; any session targeting it is cleared.
+    const removeBasket = useCallback(() => {
+        Alert.alert(t('basketDetail.removeTitle'), t('basketDetail.removeBody'), [
             { text: t('common.cancel'), style: 'cancel' },
             {
-                text: t('basketDetail.clearConfirm'),
+                text: t('basketDetail.removeConfirm'),
                 style: 'destructive',
                 onPress: async () => {
-                    await revertToDraftIfCompared();
-                    await Promise.all(items.map((it: any) =>
-                        fetch(`${API_BASE_URL}/api/basket-items/${it.id}`, { method: 'DELETE' }).catch(() => {})));
-                    await fetchBasket();
+                    await fetch(`${API_BASE_URL}/api/baskets/${id}`, { method: 'DELETE' }).catch(() => {});
+                    const sess = useBasketSession.getState();
+                    if (sess.target?.kind === 'basket' && sess.target.basketId === Number(id)) {
+                        useBasketSession.setState({ target: null, barVisible: false, itemCount: 0 });
+                    }
+                    clearSessionBasket();
+                    router.back();
                 },
             },
         ]);
-    }, [items, t]);  // eslint-disable-line react-hooks/exhaustive-deps
+    }, [id, t, router, clearSessionBasket]);
 
     // Changing location/store-count settings while compared is also an edit:
     // drop back to draft so the bottom button retargets to "Rasti parduotuves".
@@ -829,24 +834,31 @@ export default function BasketDetailScreen() {
                             maxStage: 2,
                             content: (
                                 <View style={styles.sheetPanelContent}>
+                                    <Text style={styles.sheetTitle}>{t('basketDetail.actionsTitle')}</Text>
                                     {/* iOS-style big actions, two per row. */}
                                     <View style={styles.bigBtnRow}>
                                         {!fromTemplate && (
                                             <TouchableOpacity style={styles.bigActionBtn} onPress={() => setSaveTplVisible(true)} activeOpacity={0.7}>
-                                                <Ionicons name="bookmark-outline" size={24} color={colors.primary} />
+                                                <ChefToqueGlyph size={24} color={colors.primary} />
                                                 <Text style={styles.bigActionTitle}>{t('basketDetail.saveTitle')}</Text>
                                                 <Text style={styles.bigActionSub}>{t('basketDetail.saveSub')}</Text>
                                             </TouchableOpacity>
                                         )}
                                         <TouchableOpacity style={styles.bigActionBtn} onPress={() => void openInvite()} activeOpacity={0.7}>
-                                            <Ionicons name="qr-code-outline" size={24} color={colors.primary} />
+                                            <Ionicons name="person-add-outline" size={24} color={colors.primary} />
                                             <Text style={styles.bigActionTitle}>{t('basketDetail.inviteTitle')}</Text>
                                             <Text style={styles.bigActionSub}>{t('basketDetail.inviteSub')}</Text>
                                         </TouchableOpacity>
                                     </View>
-                                    <TouchableOpacity style={styles.sheetRow} onPress={clearBasket}>
-                                        <Ionicons name="trash-outline" size={20} color={colors.error} />
-                                        <Text style={[styles.sheetRowText, { flex: 1, color: colors.error }]}>{t('basketDetail.clearBasket')}</Text>
+                                    {/* Settings section. */}
+                                    <TouchableOpacity style={styles.sheetRow} onPress={() => router.push('/settings' as any)}>
+                                        <Ionicons name="settings-outline" size={20} color={colors.primary} />
+                                        <Text style={[styles.sheetRowText, { flex: 1 }]}>{t('basketDetail.settings')}</Text>
+                                        <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                                    </TouchableOpacity>
+                                    <View style={styles.sectionSep} />
+                                    <TouchableOpacity style={styles.sheetRow} onPress={removeBasket}>
+                                        <Text style={[styles.sheetRowTextRegular, { color: colors.error }]}>{t('basketDetail.removeBasket')}</Text>
                                     </TouchableOpacity>
                                 </View>
                             ),
@@ -1009,6 +1021,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     bigActionTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginTop: 6 },
     bigActionSub: { fontSize: 12, fontWeight: '500', color: c.textSecondary },
     sheetRowText: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+    sheetRowTextRegular: { fontSize: 15, fontWeight: '400' },
+    sheetTitle: { fontSize: 22, fontWeight: '700', color: c.textPrimary, paddingBottom: 12 },
+    sectionSep: { height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginVertical: 4 },
     qrBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
     qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: 24, alignItems: 'center', gap: 16 },
     sheetPanelContent: {

@@ -101,7 +101,7 @@
     "catalog": "Catalog",
     "basket": "Basket",
     "shoppingList": "List",
-    "profilis": "Profile",
+    "profilis": "My",
     "trips": "Shopping",
     "templates": "Recipes"
   },
@@ -1011,12 +1011,18 @@
     "saveAsTemplate": "Save to Recipe"
   },
   "basketDetail": {
+    "actionsTitle": "Actions",
+    "settings": "Settings",
+    "removeBasket": "Remove",
+    "removeTitle": "Remove basket?",
+    "removeBody": "This deletes the basket and its items.",
+    "removeConfirm": "Remove",
     "saveTitle": "Save",
     "saveSub": "as Recipe",
     "inviteTitle": "Invite",
     "inviteSub": "QR · link · email",
     "shareLink": "Share link",
-    "addMore": "Add more",
+    "addMore": "Add items",
     "stores": "Stores",
     "saveAsTemplate": "Save as recipe",
     "clearBasket": "Clear basket",

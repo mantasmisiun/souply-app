@@ -101,7 +101,7 @@
     "catalog": "Katalogas",
     "basket": "Krepšelis",
     "shoppingList": "Sąrašas",
-    "profilis": "Profilis",
+    "profilis": "Mano",
     "trips": "Apsipirkimai",
     "templates": "Receptai"
   },
@@ -983,12 +983,18 @@
     "saveAsTemplate": "Įrašyti kaip receptą"
   },
   "basketDetail": {
+    "actionsTitle": "Veiksmai",
+    "settings": "Nustatymai",
+    "removeBasket": "Pašalinti",
+    "removeTitle": "Pašalinti krepšelį?",
+    "removeBody": "Krepšelis ir jo prekės bus ištrinti.",
+    "removeConfirm": "Pašalinti",
     "saveTitle": "Išsaugoti",
     "saveSub": "kaip receptą",
     "inviteTitle": "Pakviesti",
     "inviteSub": "QR · nuoroda · el. paštas",
     "shareLink": "Dalintis nuoroda",
-    "addMore": "Pridėti daugiau",
+    "addMore": "Pridėti prekių",
     "stores": "Parduotuvės",
     "saveAsTemplate": "Išsaugoti kaip receptą",
     "clearBasket": "Išvalyti krepšelį",
