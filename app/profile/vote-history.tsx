@@ -2,7 +2,7 @@ import {
     View,
     Text,
     StyleSheet,
-    FlatList,
+    SectionList,
     ScrollView,
     TouchableOpacity,
     Modal,
@@ -76,6 +76,8 @@ function voteColor(vote: VoteValue, colors: AppTheme): string {
 function formatDate(iso: string): string {
     return formatLocalisedDate(iso, { year: 'numeric', month: 'short', day: 'numeric' });
 }
+
+const AnimatedSectionList = Animated.createAnimatedComponent(SectionList as typeof SectionList<VoteRow>);
 
 export default function VoteHistoryScreen() {
     const colors = useTheme();
@@ -224,6 +226,7 @@ export default function VoteHistoryScreen() {
             <CollapsingHeader
                 controller={header}
                 back
+                smallTitle={t('screens.voteHistory')}
                 right={
                     <GlassIconButton
                         icon="help-circle-outline"
@@ -232,59 +235,60 @@ export default function VoteHistoryScreen() {
                         onPress={() => setShowHelp(true)}
                     />
                 }
-                pinned={
-                    <>
-                        <View style={styles.searchRow}>
-                            <Ionicons name="search-outline" size={18} color={colors.textMuted} style={styles.searchIcon} />
-                            <TextInput
-                                style={styles.searchInput}
-                                placeholder={t('voteHistory.searchPlaceholder')}
-                                placeholderTextColor={colors.textMuted}
-                                value={search}
-                                onChangeText={setSearch}
-                                returnKeyType="search"
-                                clearButtonMode="while-editing"
-                            />
-                        </View>
-                        <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            style={styles.bubblesRow}
-                            contentContainerStyle={styles.bubblesContainer}
-                        >
-                            {FILTERS.map(f => (
-                                <TouchableOpacity
-                                    key={f.key}
-                                    style={[styles.bubble, filter === f.key && styles.bubbleActive]}
-                                    onPress={() => setFilter(f.key)}
-                                >
-                                    <Text style={[styles.bubbleText, filter === f.key && styles.bubbleTextActive]}>
-                                        {f.label}
-                                    </Text>
-                                </TouchableOpacity>
-                            ))}
-                        </ScrollView>
-                    </>
-                }
             />
 
             {loading ? (
-                <MaterialProgress color={colors.primary} style={{ marginTop: header.paddingTop + 48 }} />
+                <MaterialProgress color={colors.primary} style={{ marginTop: 48 }} />
             ) : votes.length === 0 ? (
-                <View style={[styles.empty, { paddingTop: header.paddingTop }]}>
+                <View style={[styles.empty, { paddingTop: 24 }]}>
                     <Ionicons name="layers-outline" size={48} color={colors.textMuted} />
                     <Text style={styles.emptyText}>
                         {debouncedSearch || filter !== 'all' ? t('voteHistory.emptyFiltered') : t('voteHistory.emptyNone')}
                     </Text>
                 </View>
             ) : (
-                <Animated.FlatList
+                <AnimatedSectionList
                     {...header.scroll}
-                    ListHeaderComponent={<ScreenHeading title={t('screens.voteHistory')} />}
-                    data={votes}
+                    ListHeaderComponent={<ScreenHeading title={t('screens.voteHistory')} onLayout={header.onTitleLayout} />}
+                    sections={[{ data: votes }]}
                     keyExtractor={(v: any) => `${v.spIdA}-${v.spIdB}`}
+                    stickySectionHeadersEnabled
+                    renderSectionHeader={() => (
+                        <View style={{ backgroundColor: colors.pageBackground, marginHorizontal: -16 }}>
+                            <View style={styles.searchRow}>
+                                <Ionicons name="search-outline" size={18} color={colors.textMuted} style={styles.searchIcon} />
+                                <TextInput
+                                    style={styles.searchInput}
+                                    placeholder={t('voteHistory.searchPlaceholder')}
+                                    placeholderTextColor={colors.textMuted}
+                                    value={search}
+                                    onChangeText={setSearch}
+                                    returnKeyType="search"
+                                    clearButtonMode="while-editing"
+                                />
+                            </View>
+                            <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                style={styles.bubblesRow}
+                                contentContainerStyle={styles.bubblesContainer}
+                            >
+                                {FILTERS.map(f => (
+                                    <TouchableOpacity
+                                        key={f.key}
+                                        style={[styles.bubble, filter === f.key && styles.bubbleActive]}
+                                        onPress={() => setFilter(f.key)}
+                                    >
+                                        <Text style={[styles.bubbleText, filter === f.key && styles.bubbleTextActive]}>
+                                            {f.label}
+                                        </Text>
+                                    </TouchableOpacity>
+                                ))}
+                            </ScrollView>
+                        </View>
+                    )}
                     renderItem={renderItem}
-                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12 }]}
+                    contentContainerStyle={[styles.list, { paddingTop: 0 }]}
                     onEndReached={loadMore}
                     onEndReachedThreshold={0.3}
                     ListFooterComponent={listFooter}

@@ -16,11 +16,9 @@ import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Stack, useRouter, useFocusEffect } from 'expo-router';
-import { glassHeaderOptions } from '../../../constants/navHeader';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
@@ -47,7 +45,6 @@ export default function TemplatesScreen() {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
     const header = useCollapsingHeader();
-    const insets = useSafeAreaInsets();
     const tabBarHeight = useSafeBottomTabBarHeight();
     const authUsername = useAuthState((s: any) => s.user?.username ?? null);
 
@@ -159,9 +156,9 @@ export default function TemplatesScreen() {
 
     if (loading) return (
         <View style={styles.container}>
-            <Stack.Screen options={glassHeaderOptions()} />
-            <ScreenHeading title={t('tabs.templates')} topInset={insets.top} />
+            <CollapsingHeader controller={header} smallTitle={t('tabs.templates')} />
             <View style={{ padding: 16, gap: 12 }}>
+                <ScreenHeading title={t('tabs.templates')} />
                 {Array.from({ length: 4 }).map((_, i) => (
                     <SkeletonBox key={i} width="100%" height={64} borderRadius={10} />
                 ))}
@@ -171,21 +168,14 @@ export default function TemplatesScreen() {
 
     return (
         <View style={styles.container}>
-            <CollapsingHeader
-                controller={header}
-                pinned={refreshing ? (
-                    <View style={styles.refreshingBanner}>
-                        <MaterialProgress size="small" color={colors.primary} />
-                        <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
-                    </View>
-                ) : null}
-            />
+            <CollapsingHeader controller={header} smallTitle={t('tabs.templates')} />
             <Animated.FlatList
                 {...header.scroll}
+                style={styles.container}
                 data={templates}
                 keyExtractor={(item: any) => `t-${item.id}`}
                 contentInsetAdjustmentBehavior="never"
-                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
+                contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: tabBarHeight + 24 }]}
                 refreshControl={
                     <RefreshControl
                         refreshing={pullRefreshing}
@@ -196,7 +186,13 @@ export default function TemplatesScreen() {
                 }
                 ListHeaderComponent={
                     <>
-                    <ScreenHeading title={t('tabs.templates')} />
+                    <ScreenHeading title={t('tabs.templates')} bleedX={16} onLayout={header.onTitleLayout} />
+                    {refreshing && (
+                        <View style={styles.refreshingBanner}>
+                            <MaterialProgress size="small" color={colors.primary} />
+                            <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
+                        </View>
+                    )}
                     {// "Įkelkite kvitus, kad gautumėte savo šabloną" lives here —
                     // this is where the auto-generated template lands, so the
                     // prompt to earn it belongs on this tab.

@@ -304,6 +304,9 @@ export const typography = {
   title:           { fontSize: 24, lineHeight: 30, fontWeight: '700' as const },
   heading:         { fontSize: 20, lineHeight: 26, fontWeight: '600' as const },
   subheading:      { fontSize: 18, lineHeight: 24, fontWeight: '700' as const },
+  // Collapsed nav-bar title (iOS-26 size) — the small title that fades into the
+  // top row when the large ScreenHeading scrolls off.
+  barTitle:        { fontSize: 17, lineHeight: 22, fontWeight: '600' as const },
   body:            { fontSize: 16, lineHeight: 22, fontWeight: '400' as const },
   bodyStrong:      { fontSize: 16, lineHeight: 22, fontWeight: '600' as const },
   bodySmall:       { fontSize: 14, lineHeight: 20, fontWeight: '400' as const },

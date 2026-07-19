@@ -2,7 +2,7 @@ import {
     View,
     Text,
     StyleSheet,
-    FlatList,
+    SectionList,
     TouchableOpacity,
     Alert,
     Image,
@@ -57,6 +57,8 @@ const REVERTABLE_ACTIONS = new Set([
     'image_admin_upload',
     'image_remove',
 ]);
+
+const AnimatedSectionList = Animated.createAnimatedComponent(SectionList as typeof SectionList<AuditLogRow>);
 
 export default function AuditLogScreen() {
     const colors = useTheme();
@@ -116,51 +118,49 @@ export default function AuditLogScreen() {
 
     return (
         <View style={styles.page}>
-            <CollapsingHeader
-                controller={header}
-                back
-                pinned={
-                    <View style={styles.chipsSurface}>
-                        <ScrollView
-                            horizontal
-                            showsHorizontalScrollIndicator={false}
-                            contentContainerStyle={styles.chipsRow}
-                        >
-                            {FAMILY_ORDER.map(key => {
-                                const selected = family === key;
-                                return (
-                                    <TouchableOpacity
-                                        key={key}
-                                        style={[styles.chip, selected && styles.chipSelected]}
-                                        onPress={() => setFamily(key)}
-                                    >
-                                        <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
-                                            {t(`admin.audit.filter.${key}`)}
-                                        </Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </ScrollView>
-                    </View>
-                }
-            />
+            <CollapsingHeader controller={header} back smallTitle={t('admin.auditLogTitle')} />
 
             {loading && rows.length === 0 ? (
-                <View style={[styles.centered, { paddingTop: header.paddingTop }]}>
+                <View style={[styles.centered, { paddingTop: 24 }]}>
                     <MaterialProgress size="large" color={colors.primary} />
                 </View>
             ) : rows.length === 0 ? (
-                <View style={[styles.centered, { paddingTop: header.paddingTop }]}>
+                <View style={[styles.centered, { paddingTop: 24 }]}>
                     <Ionicons name="document-text-outline" size={48} color={colors.textMuted} />
                     <Text style={styles.emptyText}>{t('admin.audit.empty')}</Text>
                 </View>
             ) : (
-                <Animated.FlatList
+                <AnimatedSectionList
                     {...header.scroll}
-                    ListHeaderComponent={<ScreenHeading title={t('admin.auditLogTitle')} />}
-                    data={rows}
+                    ListHeaderComponent={<ScreenHeading title={t('admin.auditLogTitle')} onLayout={header.onTitleLayout} />}
+                    sections={[{ data: rows }]}
                     keyExtractor={(r: any) => String(r.id)}
-                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12 }]}
+                    stickySectionHeadersEnabled
+                    renderSectionHeader={() => (
+                        <View style={[styles.chipsSurface, { marginHorizontal: -12 }]}>
+                            <ScrollView
+                                horizontal
+                                showsHorizontalScrollIndicator={false}
+                                contentContainerStyle={styles.chipsRow}
+                            >
+                                {FAMILY_ORDER.map(key => {
+                                    const selected = family === key;
+                                    return (
+                                        <TouchableOpacity
+                                            key={key}
+                                            style={[styles.chip, selected && styles.chipSelected]}
+                                            onPress={() => setFamily(key)}
+                                        >
+                                            <Text style={[styles.chipText, selected && styles.chipTextSelected]}>
+                                                {t(`admin.audit.filter.${key}`)}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </ScrollView>
+                        </View>
+                    )}
+                    contentContainerStyle={[styles.list, { paddingTop: 0 }]}
                     onEndReachedThreshold={0.4}
                     onEndReached={() => {
                         if (done || loading) return;

@@ -2167,20 +2167,16 @@ export default function ProcessReceiptScreen() {
 
   return (
     <>
-      <CollapsingHeader
-        controller={headerCtl}
-        back
-        // Segmented control stays pinned below the collapsing title so tabs are
-        // always reachable while the body scrolls.
-        pinned={
-          <SegmentedControl
-            active={activeTab}
-            onChange={switchTab}
-            productCount={products.length}
-            styles={styles}
-            colors={colors}
-          />
-        }
+      <CollapsingHeader controller={headerCtl} back smallTitle={headerShopLine} />
+
+      {/* Segmented control — an always-pinned REAL element under the bar (the tab
+          switcher must stay reachable; it must not scroll away). */}
+      <SegmentedControl
+        active={activeTab}
+        onChange={switchTab}
+        productCount={products.length}
+        styles={styles}
+        colors={colors}
       />
 
       {/* ───── TAB: Suvestinė ───── */}
@@ -2188,9 +2184,9 @@ export default function ProcessReceiptScreen() {
       <Animated.ScrollView
         {...headerCtl.scroll}
         style={styles.container}
-        contentContainerStyle={{ paddingTop: headerCtl.paddingTop }}
+        contentContainerStyle={{ paddingTop: 0 }}
       >
-        <ScreenHeading title={headerShopLine} subtitle={headerSubtitle} />
+        <ScreenHeading title={headerShopLine} subtitle={headerSubtitle} onLayout={headerCtl.onTitleLayout} />
         {showLoadSkeleton ? (
           <View style={styles.sectionCard}>
             <SkeletonBox width="55%" height={16} borderRadius={6} />
@@ -2286,9 +2282,9 @@ export default function ProcessReceiptScreen() {
       <Animated.ScrollView
         {...headerCtl.scroll}
         style={styles.container}
-        contentContainerStyle={{ paddingTop: headerCtl.paddingTop }}
+        contentContainerStyle={{ paddingTop: 0 }}
       >
-        <ScreenHeading title={headerShopLine} subtitle={headerSubtitle} />
+        <ScreenHeading title={headerShopLine} subtitle={headerSubtitle} onLayout={headerCtl.onTitleLayout} />
         {showLoadSkeleton ? (
           <View style={styles.sectionCard}>
             <SkeletonBox width="40%" height={16} borderRadius={6} />
@@ -2580,9 +2576,9 @@ export default function ProcessReceiptScreen() {
       <Animated.ScrollView
         {...headerCtl.scroll}
         style={styles.container}
-        contentContainerStyle={{ paddingTop: headerCtl.paddingTop }}
+        contentContainerStyle={{ paddingTop: 0 }}
       >
-        <ScreenHeading title={headerShopLine} subtitle={headerSubtitle} />
+        <ScreenHeading title={headerShopLine} subtitle={headerSubtitle} onLayout={headerCtl.onTitleLayout} />
         {showLoadSkeleton ? (
           <View style={styles.sectionCard}>
             <SkeletonBox width="35%" height={16} borderRadius={6} />

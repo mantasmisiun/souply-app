@@ -81,14 +81,14 @@ export default function BrowseIndex() {
         <View style={{ flex: 1 }}>
             {/* Static chrome only; the TITLE is list content (scrolls natively
                 with the items — iOS 26 large-title model). */}
-            <CollapsingHeader controller={header} right={searchAction} />
+            <CollapsingHeader controller={header} right={searchAction} smallTitle={t('catalog.title')} />
             <CategoriesList
                 onSelectL2={handleSelectL2}
                 scroll={header.scroll}
-                contentPaddingTop={header.paddingTop}
+                contentPaddingTop={0}
                 header={(
                     <>
-                        <ScreenHeading title={t('catalog.title')} />
+                        <ScreenHeading title={t('catalog.title')} bleedX={16} onLayout={header.onTitleLayout} />
                         {discountsHeader}
                     </>
                 )}

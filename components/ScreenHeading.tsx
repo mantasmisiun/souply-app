@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react';
-import { View, Text, StyleSheet } from 'react-native';
+import { View, Text, StyleSheet, type LayoutChangeEvent } from 'react-native';
 import { useTheme } from '../constants/theme';
 
 /**
@@ -20,6 +20,8 @@ export function ScreenHeading({
     trailing,
     topInset,
     bleed,
+    bleedX,
+    onLayout,
 }: {
     title: string;
     /** Optional second line — a plain string or custom JSX (e.g. a breadcrumb). */
@@ -35,15 +37,26 @@ export function ScreenHeading({
      * Omit for the normal fixed-header placement (outside the scroll).
      */
     bleed?: number;
+    /** HORIZONTAL-only bleed (marginHorizontal). Use in the new collapsing-bar
+     *  pattern when the title sits inside a horizontally-padded scroll but must
+     *  align full-width — unlike `bleed`, it never shifts marginTop (which would
+     *  pull the title under the bar now that content paddingTop is 0). */
+    bleedX?: number;
+    /** Reports the heading's measured height — the collapsing bar uses it to
+     *  time the small-title fade (fade in once the large title has scrolled by
+     *  this height). Wire to `header.onTitleLayout`. */
+    onLayout?: (e: LayoutChangeEvent) => void;
 }) {
     const colors = useTheme();
     return (
         <View
+            onLayout={onLayout}
             style={[
                 styles.wrap,
                 // No background — the heading sits directly on the page; the
                 // top-of-screen fade (CollapsingHeader) handles scroll-out.
                 bleed ? { marginHorizontal: -bleed, marginTop: -bleed } : null,
+                bleedX ? { marginHorizontal: -bleedX } : null,
                 topInset ? { paddingTop: topInset + 6 } : null,
             ]}
         >

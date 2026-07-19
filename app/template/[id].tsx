@@ -351,28 +351,31 @@ export default function TemplateDetailScreen() {
                         </View>
                     ),
                 }}
-                pinned={authedUser && !isDefault ? (
-                    <View style={[styles.tabBar, { backgroundColor: colors.cardBackground }]}>
-                        <StoreChipBar
-                            chips={[
-                                { id: 'items', label: t('basketTab.templates.tabItems') },
-                                { id: 'stats', label: t('basketTab.templates.tabStats') },
-                            ]}
-                            selectedId={tab}
-                            onSelect={id => { if (id != null) setTab(id as 'items' | 'stats'); }}
-                        />
-                        {tab === 'stats' && (
-                            <TouchableOpacity
-                                onPress={() => setStatsHelpOpen(true)}
-                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                style={styles.tabHelpBtn}
-                            >
-                                <Ionicons name="help-circle-outline" size={22} color={colors.textMuted} />
-                            </TouchableOpacity>
-                        )}
-                    </View>
-                ) : undefined}
             />
+
+            {/* Items/Stats switcher — always-pinned real element under the native
+                bar (a tab switcher must not scroll away). */}
+            {authedUser && !isDefault && (
+                <View style={[styles.tabBar, { backgroundColor: colors.cardBackground }]}>
+                    <StoreChipBar
+                        chips={[
+                            { id: 'items', label: t('basketTab.templates.tabItems') },
+                            { id: 'stats', label: t('basketTab.templates.tabStats') },
+                        ]}
+                        selectedId={tab}
+                        onSelect={id => { if (id != null) setTab(id as 'items' | 'stats'); }}
+                    />
+                    {tab === 'stats' && (
+                        <TouchableOpacity
+                            onPress={() => setStatsHelpOpen(true)}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            style={styles.tabHelpBtn}
+                        >
+                            <Ionicons name="help-circle-outline" size={22} color={colors.textMuted} />
+                        </TouchableOpacity>
+                    )}
+                </View>
+            )}
 
             <View style={styles.container}>
                 {!(authedUser && tab === 'stats') ? (
@@ -382,7 +385,7 @@ export default function TemplateDetailScreen() {
                     style={{ flex: 1 }}
                     data={template.items}
                     keyExtractor={(item: any) => `i-${item.id}`}
-                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12 }]}
+                    contentContainerStyle={[styles.list, { paddingTop: 0 }]}
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
@@ -510,7 +513,7 @@ export default function TemplateDetailScreen() {
                     // Statistika — real creator metrics. Same data the website
                     // shows on the template card. Only reachable when signed in
                     // (tabs are hidden otherwise).
-                    <Animated.ScrollView {...header.scroll} contentContainerStyle={[styles.statsScroll, { paddingTop: header.paddingTop + 16 }]}>
+                    <Animated.ScrollView {...header.scroll} style={{ flex: 1 }} contentContainerStyle={[styles.statsScroll, { paddingTop: 0 }]}>
                         {<TouchableOpacity
                         onPress={isDefault ? undefined : () => setCoverEditorOpen(true)}
                         activeOpacity={isDefault ? 1 : 0.7}

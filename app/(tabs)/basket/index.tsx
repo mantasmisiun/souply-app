@@ -20,11 +20,9 @@ import {
 import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated, { LinearTransition, withTiming, Easing } from 'react-native-reanimated';
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
-import { Stack, useRouter, useFocusEffect } from 'expo-router';
-import { glassHeaderOptions } from '../../../constants/navHeader';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
@@ -69,7 +67,6 @@ export default function TripsScreen() {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
     const header = useCollapsingHeader();
-    const insets = useSafeAreaInsets();
     const tabBarHeight = useSafeBottomTabBarHeight();
     const { setDraftBasketId } = useBasketState();
 
@@ -200,9 +197,9 @@ export default function TripsScreen() {
 
     if (loading) return (
         <View style={styles.container}>
-            <Stack.Screen options={glassHeaderOptions()} />
-            <ScreenHeading title={t('tabs.trips')} topInset={insets.top} />
+            <CollapsingHeader controller={header} smallTitle={t('tabs.trips')} />
             <View style={{ padding: 16, gap: 12 }}>
+                <ScreenHeading title={t('tabs.trips')} />
                 {Array.from({ length: 4 }).map((_, i) => (
                     <SkeletonBox key={i} width="100%" height={84} borderRadius={14} />
                 ))}
@@ -212,14 +209,13 @@ export default function TripsScreen() {
 
     return (
         <View style={styles.container}>
-            <CollapsingHeader
-                controller={header}
-                pinned={<ShoppingFilterChips />}
-            />
+            <CollapsingHeader controller={header} smallTitle={t('tabs.trips')} />
             <Animated.ScrollView
                 {...header.scroll}
+                style={styles.container}
                 contentInsetAdjustmentBehavior="never"
-                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop, paddingBottom: tabBarHeight + 24 }]}
+                stickyHeaderIndices={[1]}
+                contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: tabBarHeight + 24 }]}
                 refreshControl={
                     <RefreshControl
                         refreshing={pullRefreshing}
@@ -229,8 +225,12 @@ export default function TripsScreen() {
                     />
                 }
             >
-                <ScreenHeading title={t('tabs.trips')} />
-
+                {/* index 0: large title (scrolls away) */}
+                <ScreenHeading title={t('tabs.trips')} onLayout={header.onTitleLayout} />
+                {/* index 1: filter chips — native sticky, pin under the bar */}
+                <View style={{ backgroundColor: colors.pageBackground }}>
+                    <ShoppingFilterChips />
+                </View>
                 {active.length === 0 ? (
                     <View style={styles.centered}>
                         <Ionicons name="cart-outline" size={56} color={colors.textMuted} />
@@ -323,7 +323,9 @@ export default function TripsScreen() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { alignItems: 'center', justifyContent: 'center', padding: 32 },
-    list: { paddingHorizontal: 16, paddingBottom: 16 },
+    // No horizontal pad here: the title + sticky chips span full width; the
+    // cards carry their own side margin (see `card` / `archiveSection`).
+    list: { paddingBottom: 16 },
 
     filterRow: {
         flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8,
@@ -345,6 +347,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
 
     card: {
         backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: 14, marginBottom: 10,
+        marginHorizontal: 16,
         borderWidth: 3, borderColor: 'transparent', borderLeftColor: c.primary,
         gap: 6,
     },
@@ -378,7 +381,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     ctaText: { fontSize: 13, fontWeight: '700', color: c.primary },
 
     archiveSection: {
-        marginTop: 12, borderRadius: radius.lg, overflow: 'hidden',
+        marginTop: 12, marginHorizontal: 16, borderRadius: radius.lg, overflow: 'hidden',
         borderWidth: 1, borderColor: c.border, backgroundColor: c.cardBackground,
     },
     archiveHeader: {

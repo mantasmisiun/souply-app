@@ -1,8 +1,8 @@
 import {
-    View, FlatList, ScrollView, TouchableOpacity, Text, TextInput,
+    View, SectionList, ScrollView, TouchableOpacity, Text, TextInput,
     StyleSheet, ActivityIndicator, RefreshControl, Keyboard, Modal, Pressable
 } from 'react-native';
-import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef, memo, Fragment } from 'react';
 import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ScreenHeading } from '@/components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '@/components/CollapsingHeader';
@@ -164,6 +164,11 @@ const DiscountProductCard = memo(({
     );
 });
 DiscountProductCard.displayName = 'DiscountProductCard';
+
+// SectionList (not FlatList) gives us a NATIVE sticky section header for the
+// search/filter chips while the large title scrolls away above it. Reanimated
+// has no prebuilt animated SectionList, so wrap it once.
+const AnimatedSectionList = Animated.createAnimatedComponent(SectionList as typeof SectionList<DiscountedProduct[]>);
 
 export default function DiscountsScreen() {
     const colors = useTheme();
@@ -353,6 +358,14 @@ export default function DiscountsScreen() {
         }
         return list;
     }, [allProducts, selectedChainIds, availableChainIds, selectedL1, selectedL2, l2ToL1, search]);
+
+    // 2-up rows for the SectionList (no numColumns) — pair up the filtered
+    // products; a lone last item renders half-width (the card is flex:1/50%).
+    const rows = useMemo(() => {
+        const out: DiscountedProduct[][] = [];
+        for (let i = 0; i < products.length; i += 2) out.push(products.slice(i, i + 2));
+        return out;
+    }, [products]);
 
     const toggleChain = useCallback((id: number) => {
         setSelectedChainIds(prev => {
@@ -548,7 +561,7 @@ export default function DiscountsScreen() {
         onSetQuantity(item, qty);
     }, [isTemplateMode, templateMap, templateSetQty, commitTemplateAdd, removeFromBasket, addToBasket, onSetQuantity]);
 
-    const renderItem = useCallback(({ item }: { item: DiscountedProduct }) => {
+    const renderCard = useCallback(({ item }: { item: DiscountedProduct }) => {
         const quantity = isTemplateMode
             ? (templateMap[item.id]?.quantity ?? 0)
             : (basketQuantities[item.id] ?? 0);
@@ -571,81 +584,82 @@ export default function DiscountsScreen() {
         searchInputRef.current?.clear();
     }, []);
 
+    // The search pill + filter bubbles — now the SectionList's NATIVE sticky
+    // section header (scrolls up with the list, then pins under the bar). Opaque
+    // page background so rows disappear behind it as they scroll under.
+    const filterChips = (
+        <View style={{ backgroundColor: colors.pageBackground }}>
+            <View style={styles.searchFieldWrap}>
+                <View style={styles.searchPill}>
+                    <Ionicons name="search" size={18} color={colors.textMuted} />
+                    <TextInput
+                        ref={searchInputRef}
+                        defaultValue={search}
+                        onChangeText={setSearch}
+                        placeholder={t('catalog.searchPlaceholder')}
+                        placeholderTextColor={colors.textMuted}
+                        returnKeyType="search"
+                        onSubmitEditing={() => Keyboard.dismiss()}
+                        style={styles.searchField}
+                    />
+                    {search.length > 0 ? (
+                        <TouchableOpacity onPress={clearSearch} hitSlop={10}>
+                            <Ionicons name="close" size={18} color={colors.textMuted} />
+                        </TouchableOpacity>
+                    ) : null}
+                </View>
+            </View>
+            {hasFilters && (
+                <View ref={filterRowRef} style={styles.bubblesRow}>
+                    <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.bubblesContainer}
+                    >
+                        {storeOptions.length > 1 && (
+                            <StoreFilterButton
+                                storeOptions={storeOptions}
+                                selectedIds={selectedChainIds}
+                                onToggle={toggleChain}
+                                onAll={selectAllStores}
+                                logoUrlById={chainLogoUrlById}
+                                label={t('discounts.filterStores')}
+                                allLabel={t('discounts.filterAllStores')}
+                                title={t('discounts.filterStores')}
+                            />
+                        )}
+                        {l1Options.length > 0 && (
+                            <FilterChip
+                                styles={styles} colors={colors}
+                                label={l1Label} active={selectedL1 != null}
+                                onPress={() => openDropdown('l1')}
+                            />
+                        )}
+                        {selectedL1 != null && l2Options.length > 0 && (
+                            <FilterChip
+                                styles={styles} colors={colors}
+                                label={l2Label} active={selectedL2 != null}
+                                onPress={() => openDropdown('l2')}
+                            />
+                        )}
+                    </ScrollView>
+                </View>
+            )}
+        </View>
+    );
+
     return (
         <>
             {/* "Nuolaidos" collapses on scroll; the search pill + L2 filter stay
                 pinned. The search pill is ALWAYS visible under the title and
                 filters the list live — no toggle icon. */}
-            <CollapsingHeader
-                controller={header}
-                back
-                pinned={(
-                    <>
-                        <View style={styles.searchFieldWrap}>
-                            <View style={styles.searchPill}>
-                                <Ionicons name="search" size={18} color={colors.textMuted} />
-                                <TextInput
-                                    ref={searchInputRef}
-                                    defaultValue={search}
-                                    onChangeText={setSearch}
-                                    placeholder={t('catalog.searchPlaceholder')}
-                                    placeholderTextColor={colors.textMuted}
-                                    returnKeyType="search"
-                                    onSubmitEditing={() => Keyboard.dismiss()}
-                                    style={styles.searchField}
-                                />
-                                {search.length > 0 ? (
-                                    <TouchableOpacity onPress={clearSearch} hitSlop={10}>
-                                        <Ionicons name="close" size={18} color={colors.textMuted} />
-                                    </TouchableOpacity>
-                                ) : null}
-                            </View>
-                        </View>
-                        {hasFilters && (
-                            <View ref={filterRowRef} style={styles.bubblesRow}>
-                                <ScrollView
-                                    horizontal
-                                    showsHorizontalScrollIndicator={false}
-                                    contentContainerStyle={styles.bubblesContainer}
-                                >
-                                    {storeOptions.length > 1 && (
-                                        <StoreFilterButton
-                                            storeOptions={storeOptions}
-                                            selectedIds={selectedChainIds}
-                                            onToggle={toggleChain}
-                                            onAll={selectAllStores}
-                                            logoUrlById={chainLogoUrlById}
-                                            label={t('discounts.filterStores')}
-                                            allLabel={t('discounts.filterAllStores')}
-                                            title={t('discounts.filterStores')}
-                                        />
-                                    )}
-                                    {l1Options.length > 0 && (
-                                        <FilterChip
-                                            styles={styles} colors={colors}
-                                            label={l1Label} active={selectedL1 != null}
-                                            onPress={() => openDropdown('l1')}
-                                        />
-                                    )}
-                                    {selectedL1 != null && l2Options.length > 0 && (
-                                        <FilterChip
-                                            styles={styles} colors={colors}
-                                            label={l2Label} active={selectedL2 != null}
-                                            onPress={() => openDropdown('l2')}
-                                        />
-                                    )}
-                                </ScrollView>
-                            </View>
-                        )}
-                    </>
-                )}
-            />
+            <CollapsingHeader controller={header} back smallTitle={t('discounts.title')} />
             <View style={{ flex: 1 }}>
                 <View style={styles.container}>
                     <View style={{ flex: 1 }}>
                         {isLoading ? (
-                            <View style={{ flex: 1, padding: 12, gap: 12, paddingTop: header.paddingTop + 12 }}>
-                                <ScreenHeading title={t('discounts.title')} bleed={12} />
+                            <View style={{ flex: 1, padding: 12, gap: 12 }}>
+                                <ScreenHeading title={t('discounts.title')} bleedX={12} />
                                 {Array.from({ length: 6 }).map((_, i) => (
                                     <View key={i} style={{ flexDirection: 'row', gap: 12 }}>
                                         {[0, 1].map(j => (
@@ -660,7 +674,7 @@ export default function DiscountsScreen() {
                                 ))}
                             </View>
                         ) : isError && allProducts.length === 0 ? (
-                            <View style={[styles.coldError, { paddingTop: header.paddingTop }]}>
+                            <View style={[styles.coldError, { paddingTop: 24 }]}>
                                 <Ionicons name="cloud-offline-outline" size={48} color={colors.textMuted} />
                                 <Text style={styles.coldErrorTitle}>{t('discounts.loadFailed')}</Text>
                                 <ScalePressable style={styles.coldErrorButton} onPress={() => refetch()}>
@@ -668,27 +682,18 @@ export default function DiscountsScreen() {
                                 </ScalePressable>
                             </View>
                         ) : (
-                            <Animated.FlatList
+                            <AnimatedSectionList
                                 {...header.scroll}
-                                data={products}
-                                keyExtractor={(item: any) => item.id.toString()}
-                                contentContainerStyle={[
-                                    styles.list,
-                                    // + 12 restores the list's natural top padding (styles.list)
-                                    // as a small gap below the pinned filter, matching product.
-                                    { paddingTop: header.paddingTop + 12 },
-                                    // Clear the floating bottom bar so the last
-                                    // row is fully visible.
-                                    { paddingBottom: barClearance },
-                                ]}
-                                numColumns={2}
-                                columnWrapperStyle={styles.row}
+                                sections={[{ data: rows }]}
+                                keyExtractor={(_row, i) => `r-${i}`}
+                                stickySectionHeadersEnabled
+                                contentContainerStyle={{ paddingTop: 0, paddingBottom: barClearance }}
                                 keyboardDismissMode="on-drag"
                                 ListHeaderComponent={
                                     <>
                                         <ScreenHeading
                                             title={t('discounts.title')}
-                                            bleed={12}
+                                            onLayout={header.onTitleLayout}
                                             trailing={
                                                 <TouchableOpacity
                                                     onPress={() => setInfoOpen(true)}
@@ -710,6 +715,7 @@ export default function DiscountsScreen() {
                                     ) : null}
                                     </>
                                 }
+                                renderSectionHeader={() => filterChips}
                                 refreshControl={
                                     <RefreshControl
                                         refreshing={refreshing}
@@ -723,7 +729,13 @@ export default function DiscountsScreen() {
                                         {search ? t('catalog.noResultsSearch') : t('catalog.noResults')}
                                     </Text>
                                 }
-                                renderItem={renderItem}
+                                renderItem={({ item: pair }) => (
+                                    <View style={styles.row}>
+                                        {pair.map(p => (
+                                            <Fragment key={p.id}>{renderCard({ item: p })}</Fragment>
+                                        ))}
+                                    </View>
+                                )}
                             />
                         )}
                     </View>
@@ -900,7 +912,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     infoButtonText: { color: c.onPrimary, fontSize: 15, fontWeight: '600' },
     list: { padding: 12 },
-    row: { gap: 12, marginBottom: 12 },
+    row: { flexDirection: 'row', gap: 12, marginBottom: 12, paddingHorizontal: 12 },
     productCard: {
         backgroundColor: c.cardBackground,
         borderRadius: radius.lg,

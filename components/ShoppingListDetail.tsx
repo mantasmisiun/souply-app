@@ -670,10 +670,10 @@ export function ShoppingListDetail({
             <CollapsingHeader
                 controller={header}
                 back
-                pinned={pinnedHeader}
+                smallTitle={headerTitle ?? t('shoppingListDetail.fallbackTitle')}
             />
-            <View style={[styles.container, { paddingTop: header.paddingTop + spacing.lg, paddingHorizontal: spacing.lg, gap: spacing.sm }]}>
-                <ScreenHeading title={headerTitle ?? t('shoppingListDetail.fallbackTitle')} subtitle={headerSubtitle} bleed={spacing.lg} />
+            <View style={[styles.container, { paddingTop: spacing.lg, paddingHorizontal: spacing.lg, gap: spacing.sm }]}>
+                <ScreenHeading title={headerTitle ?? t('shoppingListDetail.fallbackTitle')} subtitle={headerSubtitle} bleedX={spacing.lg} />
                 {Array.from({ length: 8 }).map((_, i) => (
                     <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: spacing.lg, flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
                         <SkeletonBox width={22} height={22} borderRadius={6} />
@@ -705,6 +705,7 @@ export function ShoppingListDetail({
     <CollapsingHeader
                     controller={header}
                     back
+                    smallTitle={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
                     right={
                         list?.status === 'active' ? (
                             <GlassIconButton icon="share-social-outline" color={colors.textPrimary} onPress={openShare} />
@@ -712,24 +713,13 @@ export function ShoppingListDetail({
                             <GlassIconButton icon="ellipsis-vertical" color={colors.textMuted} onPress={() => setMenuVisible(true)} />
                         ) : undefined
                     }
-                    pinned={
-                        <>
-                            {pinnedHeader}
-                            <View style={styles.progressContainer}>
-                                <View style={styles.progressBar}>
-                                    <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
-                                </View>
-                                <Text style={styles.progressText}>{t('shoppingListDetail.progress', { checked: checkedCount, total: totalCount })}</Text>
-                            </View>
-                        </>
-                    }
                 />
 
                     {/* ALWAYS MOUNTED (opacity toggle): the toast unmounting on the
                         3s expiry re-render removed a native sibling above the focused
                         search input — delete an item, start typing, keyboard dies. */}
                     <View
-                        style={[styles.undoToastWrap, { top: header.paddingTop, opacity: pendingDeleteRef.current ? 1 : 0 }]}
+                        style={[styles.undoToastWrap, { top: spacing.sm, opacity: pendingDeleteRef.current ? 1 : 0 }]}
                         pointerEvents={pendingDeleteRef.current ? 'box-none' : 'none'}
                     >
                         <TouchableOpacity style={styles.undoToast} onPress={undoItemDelete} activeOpacity={0.85}>
@@ -741,12 +731,23 @@ export function ShoppingListDetail({
                     <Animated.ScrollView
                         {...header.scroll}
                         style={{ flex: 1 }}
-                        contentContainerStyle={[styles.scrollContent, { paddingTop: header.paddingTop }]}
+                        stickyHeaderIndices={[1]}
+                        contentContainerStyle={[styles.scrollContent, { paddingTop: 0 }]}
                     >
                         <ScreenHeading
                             title={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
                             subtitle={headerSubtitle ?? (formatStoreStreet(list?.address) || list?.storeName || undefined)}
+                            onLayout={header.onTitleLayout}
                         />
+                        <View style={{ backgroundColor: colors.pageBackground }}>
+                            {pinnedHeader}
+                            <View style={styles.progressContainer}>
+                                <View style={styles.progressBar}>
+                                    <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
+                                </View>
+                                <Text style={styles.progressText}>{t('shoppingListDetail.progress', { checked: checkedCount, total: totalCount })}</Text>
+                            </View>
+                        </View>
                         <View style={styles.listInner}>
                         {uncheckedGroups.map(group => (
                             <View key={group.name ?? '__no_category__'}>

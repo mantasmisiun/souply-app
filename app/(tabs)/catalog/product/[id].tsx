@@ -646,20 +646,10 @@ export default function ProductDetailScreen() {
             {/* Same chrome as the loaded page: floating back chip, a chips-
                 skeleton row pinned where the store filter lands, and the
                 title + breadcrumb + SP-card skeletons as page content. */}
-            <CollapsingHeader
-                controller={header}
-                back
-                pinned={
-                    <View style={{ flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 10, gap: 8 }}>
-                        {[92, 64].map((w, i) => (
-                            <SkeletonBox key={i} width={w} height={34} borderRadius={20} />
-                        ))}
-                    </View>
-                }
-            />
+            <CollapsingHeader controller={header} back smallTitle="" />
             <ScrollView
                 style={styles.container}
-                contentContainerStyle={{ paddingTop: header.paddingTop, paddingBottom: 32 }}
+                contentContainerStyle={{ paddingTop: 0, paddingBottom: 32 }}
             >
                 <View style={{ paddingHorizontal: 16, gap: 8 }}>
                     <SkeletonBox width={260} height={26} borderRadius={7} />
@@ -695,6 +685,7 @@ export default function ProductDetailScreen() {
             <CollapsingHeader
                 controller={header}
                 back
+                smallTitle={product.name}
                 right={!isTemplateMode && product ? (
                     <AddOrStepper
                         product={product}
@@ -705,26 +696,17 @@ export default function ProductDetailScreen() {
                         style={styles.headerStepper}
                     />
                 ) : undefined}
-                pinned={
-                    <ChainFilterBar
-                        chains={chains}
-                        selectedId={selectedChainId}
-                        onSelect={setSelectedChainId}
-                        allLabel={t('product.allStores')}
-                    />
-                }
             />
-            {/* Only the SP list scrolls / rubber-bands; paddingTop reserves the
-                overlay's space (the opaque overlay hides the brief measure jump). */}
             <Animated.ScrollView
                 {...header.scroll}
                 style={styles.container}
-                contentContainerStyle={{ paddingTop: header.paddingTop, paddingBottom: BAR_HEIGHT + 16 }}
+                stickyHeaderIndices={[1]}
+                contentContainerStyle={{ paddingTop: 0, paddingBottom: BAR_HEIGHT + 16 }}
             >
-                {/* Title + breadcrumb: LIST CONTENT — scrolls natively with the
-                    page (iOS 26 large-title model). */}
+                {/* index 0: title + breadcrumb — scrolls away (iOS-26 large title). */}
                 <ScreenHeading
                     title={product.name}
+                    onLayout={header.onTitleLayout}
                     subtitle={categoryParts.length > 0 ? (
                         <View style={styles.breadcrumbRow}>
                             {categoryParts.map((part, i) => (
@@ -736,6 +718,15 @@ export default function ProductDetailScreen() {
                         </View>
                     ) : undefined}
                 />
+                {/* index 1: store filter — native sticky, pins under the bar. */}
+                <View style={{ backgroundColor: colors.pageBackground }}>
+                    <ChainFilterBar
+                        chains={chains}
+                        selectedId={selectedChainId}
+                        onSelect={setSelectedChainId}
+                        allLabel={t('product.allStores')}
+                    />
+                </View>
                 {/* Add ⇄ stepper now lives at the TOP-RIGHT of the header
                     (see CollapsingHeader `right` below); the body is just the
                     SP list. Template mode keeps its sticky bottom bar. */}

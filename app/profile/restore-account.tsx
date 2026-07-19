@@ -169,9 +169,10 @@ export default function RestoreAccountScreen() {
             <CollapsingHeader
                 controller={header}
                 back
+                smallTitle={t('restore.title')}
             />
-            <Animated.ScrollView {...header.scroll} contentContainerStyle={[styles.scroll, { paddingTop: header.paddingTop + 20 }]}>
-                <ScreenHeading title={t('restore.title')} />
+            <Animated.ScrollView {...header.scroll} style={{ flex: 1 }} contentContainerStyle={[styles.scroll, { paddingTop: 0 }]}>
+                <ScreenHeading title={t('restore.title')} onLayout={header.onTitleLayout} />
                 <Text style={styles.intro}>{t('restore.intro')}</Text>
 
                 {slots.map((slot, idx) => (

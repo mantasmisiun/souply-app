@@ -627,6 +627,7 @@ export default function BasketDetailScreen() {
             <CollapsingHeader
                 controller={header}
                 back
+                smallTitle={titleText}
                 right={fromTemplate && items.length > 0
                     ? <GlassIconButton icon="ellipsis-horizontal" onPress={() => setActionsOpen(true)} />
                     : undefined}
@@ -637,9 +638,9 @@ export default function BasketDetailScreen() {
                     style={{ flex: 1 }}
                     data={items}
                     keyExtractor={(item: any) => item.id.toString()}
-                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: dockClearance + 28 }]}
+                    contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: dockClearance + 28 }]}
                     ListHeaderComponent={
-                        <>
+                        <View onLayout={header.onTitleLayout}>
                         {fromTemplate ? (
                         <View style={styles.titleRow}>
                             <View style={[styles.titleEmoji, {
@@ -704,7 +705,7 @@ export default function BasketDetailScreen() {
                             </Text>
                         </TouchableOpacity>
                     )}
-                        </>
+                        </View>
                     }
                     ListEmptyComponent={
                         <View style={styles.centered}>

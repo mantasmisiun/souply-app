@@ -194,7 +194,7 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
 
     if (loading) {
         return (
-            <View style={[styles.container, { padding: 16, gap: 10, paddingTop: contentPaddingTop + 16 }]}>
+            <View style={[styles.container, { padding: 16, gap: 10, paddingTop: contentPaddingTop + (header ? 0 : 16) }]}>
                 {header}
                 {Array.from({ length: 8 }).map((_, i) => (
                     <View
@@ -223,7 +223,7 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
             data={l1Categories}
             keyExtractor={(item: any) => item.id.toString()}
             contentInsetAdjustmentBehavior="never"
-            contentContainerStyle={[styles.list, { paddingTop: contentPaddingTop + 16, paddingBottom: listPadBottom }]}
+            contentContainerStyle={[styles.list, { paddingTop: contentPaddingTop + (header ? 0 : 16), paddingBottom: listPadBottom }]}
             scrollIndicatorInsets={{ bottom: tabBarHeight }}
             ListHeaderComponent={header ?? undefined}
             renderItem={({ item }) => (

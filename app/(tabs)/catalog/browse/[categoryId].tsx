@@ -1,7 +1,7 @@
-import { View, FlatList, Text, StyleSheet } from 'react-native';
+import { View, SectionList, Text, StyleSheet } from 'react-native';
 import { SkeletonBox } from '@/components/SkeletonBox';
 import { useBasketQuantities } from '@/hooks/useBasketQuantities';
-import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
+import { useEffect, useMemo, useState, useCallback, useRef, memo, Fragment } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useSafeBottomTabBarHeight } from '@/hooks/useSafeBottomTabBarHeight';
@@ -51,6 +51,8 @@ interface Product {
 }
 
 
+
+const AnimatedSectionList = Animated.createAnimatedComponent(SectionList as typeof SectionList<Product[]>);
 
 export default function CategoryScreen() {
     const colors = useTheme();
@@ -369,6 +371,13 @@ export default function CategoryScreen() {
         [products, userMergeMap]
     );
 
+    // 2-up rows for the SectionList (no numColumns) — pair up the products.
+    const productRows = useMemo(() => {
+        const out: Product[][] = [];
+        for (let i = 0; i < visibleProducts.length; i += 2) out.push(visibleProducts.slice(i, i + 2));
+        return out;
+    }, [visibleProducts]);
+
     const productById = useMemo(() => {
         const m = new Map<number, Product>();
         for (const p of products) m.set(p.id, p);
@@ -479,7 +488,7 @@ export default function CategoryScreen() {
         onSetQuantity(item, qty);
     }, [isTemplateMode, templateMap, templateSetQty, commitTemplateAdd, removeFromBasket, addToBasket, onSetQuantity]);
 
-    const renderItem = useCallback(({ item }: { item: Product }) => {
+    const renderCard = useCallback(({ item }: { item: Product }) => {
         const mergedQty = (mergedIntoMe[item.id] ?? [])
             .reduce((sum, hid) => sum + (basketQuantities[hid] ?? 0), 0);
         const quantity = (basketQuantities[item.id] ?? 0) + mergedQty;
@@ -520,18 +529,8 @@ export default function CategoryScreen() {
         {/* Same static chrome as the loaded screen (no native bar, no banner
             backgrounds): floating back chip + a transparent chips-skeleton row
             pinned under it; title + card skeletons on the page. */}
-        <CollapsingHeader
-            controller={header}
-            back
-            pinned={
-                <View style={{ flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 10, gap: 8 }}>
-                    {[72, 58, 84, 66].map((w, i) => (
-                        <SkeletonBox key={i} width={w} height={30} borderRadius={20} />
-                    ))}
-                </View>
-            }
-        />
-        <View style={[styles.container, { paddingTop: header.paddingTop }]}>
+        <CollapsingHeader controller={header} back smallTitle={decodeURIComponent((name as string) || '')} />
+        <View style={[styles.container, { paddingTop: 0 }]}>
             <ScreenHeading title={decodeURIComponent((name as string) || '')} />
             <View style={{ padding: 12 }}>
                 {Array.from({ length: 3 }).map((_, row) => (
@@ -558,22 +557,15 @@ export default function CategoryScreen() {
             <CollapsingHeader
                 controller={header}
                 back
+                smallTitle={decodeURIComponent(name || '')}
                 right={<GlassIconButton icon="search" onPress={pushSearch} />}
-                pinned={
-                    <CategoryBubbles
-                        categories={l3Categories}
-                        selectedId={selectedL3}
-                        onSelect={handleChipSelect}
-                        allLabel={t('catalog.allProducts')}
-                    />
-                }
             />
             <View style={{ flex: 1 }}>
             <View style={styles.container}>
                 <View style={{ flex: 1 }}>
                     {loadingProducts ? (
-                        <View style={{ padding: 12, paddingTop: header.paddingTop + 12 }}>
-                            <ScreenHeading title={decodeURIComponent(name || '')} bleed={12} />
+                        <View style={{ padding: 12, paddingTop: 0 }}>
+                            <ScreenHeading title={decodeURIComponent(name || '')} bleedX={12} />
                             {Array.from({ length: 3 }).map((_, row) => (
                                 <View key={row} style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
                                     {[0, 1].map(col => (
@@ -588,27 +580,35 @@ export default function CategoryScreen() {
                             ))}
                         </View>
                     ) : (
-                        <Animated.FlatList
+                        <AnimatedSectionList
                             {...header.scroll}
-                            data={visibleProducts}
-                            keyExtractor={(item: any) => item.id.toString()}
-                            contentContainerStyle={[
-                                styles.list,
-                                // + 12 = small gap below the pinned filter (matches product).
-                                { paddingTop: header.paddingTop + 12 },
-                                // Clear the floating bottom bar so the last row
-                                // is fully visible (session bar or tab bar).
-                                { paddingBottom: barClearance },
-                            ]}
-                            numColumns={2}
-                            columnWrapperStyle={styles.row}
+                            sections={[{ data: productRows }]}
+                            keyExtractor={(_row, i) => `r-${i}`}
+                            stickySectionHeadersEnabled
+                            contentContainerStyle={{ paddingTop: 0, paddingBottom: barClearance }}
                             ListHeaderComponent={
-                                <ScreenHeading title={decodeURIComponent(name || '')} bleed={12} />
+                                <ScreenHeading title={decodeURIComponent(name || '')} onLayout={header.onTitleLayout} />
                             }
+                            renderSectionHeader={() => (
+                                <View style={{ backgroundColor: colors.pageBackground }}>
+                                    <CategoryBubbles
+                                        categories={l3Categories}
+                                        selectedId={selectedL3}
+                                        onSelect={handleChipSelect}
+                                        allLabel={t('catalog.allProducts')}
+                                    />
+                                </View>
+                            )}
                             ListEmptyComponent={
                                 <Text style={styles.emptyText}>{t('catalog.noProducts')}</Text>
                             }
-                            renderItem={renderItem}
+                            renderItem={({ item: pair }) => (
+                                <View style={styles.row}>
+                                    {pair.map(p => (
+                                        <Fragment key={p.id}>{renderCard({ item: p })}</Fragment>
+                                    ))}
+                                </View>
+                            )}
                         />
                     )}
                 </View>
@@ -668,8 +668,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         padding: 12,
     },
     row: {
+        flexDirection: 'row',
         gap: 12,
         marginBottom: 12,
+        paddingHorizontal: 12,
     },
     emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: c.textSecondary },
     productRow: {

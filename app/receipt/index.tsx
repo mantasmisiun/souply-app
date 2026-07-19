@@ -2,8 +2,7 @@ import {
     Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
 import * as FileSystem from "expo-file-system/legacy";
-import { Stack,
-    useFocusEffect,
+import { useFocusEffect,
     useRouter } from "expo-router";
 import { StoreFilterButton } from "../../components/StoreFilterButton";
 import { DateFilterButton } from "../../components/DateFilterButton";
@@ -20,7 +19,7 @@ import { useReceiptQueueStore,
 import {
     ActivityIndicator,
     Alert,
-    FlatList,
+    SectionList,
     Modal,
     Platform,
     Pressable,
@@ -37,7 +36,6 @@ import { getUserId } from "../../config/user";
 import { useTheme, spacing, radius, elevation, iconSize, typography, type AppTheme } from "../../constants/theme";
 import Animated from "react-native-reanimated";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { glassHeaderOptions } from "../../constants/navHeader";
 import { ScreenHeading } from "../../components/ScreenHeading";
 import { useCollapsingHeader, CollapsingHeader } from "../../components/CollapsingHeader";
 import { chainBrandName, chainIdByName } from "../../utils/chainBrandName";
@@ -148,6 +146,10 @@ const hasPendingSwipes = (item: Receipt) =>
   item.processingStatus === "completed" &&
   (item.mandatorySwipesRequired ?? 0) > 0 &&
   (item.mandatorySwipesCompleted ?? 0) < (item.mandatorySwipesRequired ?? 0);
+
+// SectionList gives a native sticky section header for the filter chips while
+// the large title scrolls away above it (reanimated has no prebuilt one).
+const AnimatedSectionList = Animated.createAnimatedComponent(SectionList as typeof SectionList<ListItem>);
 
 export default function ReceiptsScreen() {
   const colors = useTheme();
@@ -584,7 +586,7 @@ export default function ReceiptsScreen() {
   if (loading) {
     return (
       <View style={styles.container}>
-        <Stack.Screen options={glassHeaderOptions({ back: true })} />
+        <CollapsingHeader controller={header} back smallTitle={t('tabs.receipts')} />
         <ScreenHeading title={t('tabs.receipts')} />
         <View style={{
           backgroundColor: colors.cardBackground,
@@ -849,50 +851,50 @@ export default function ReceiptsScreen() {
 
   return (
     <View style={styles.container}>
-      <CollapsingHeader
-        controller={header}
-        back
-        pinned={(storeOptions.length > 1 || receipts.length > 0) ? (
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={styles.filterRow}
-          >
-            {storeOptions.length > 1 && (
-              <StoreFilterButton
-                storeOptions={storeOptions}
-                selectedIds={selectedChainIds}
-                onToggle={toggleStore}
-                onAll={selectAllStores}
-                logoUrlById={logoUrlById}
-                label={t('receipts.filterStores')}
-                allLabel={t('receipts.filterAllStores')}
-                title={t('receipts.filterStores')}
-              />
-            )}
-            <DateFilterButton
-              value={selectedDate}
-              onChange={setSelectedDate}
-              label={t('receipts.filterDate')}
-              markedDates={receiptDots}
-            />
-          </ScrollView>
-        ) : undefined}
-      />
-      <Animated.FlatList
+      <CollapsingHeader controller={header} back smallTitle={t('tabs.receipts')} />
+      <AnimatedSectionList
         {...header.scroll}
-        data={listData}
+        sections={[{ data: listData }]}
         keyExtractor={(it: any) =>
           it.kind === "queue" ? `q-${it.data.id}` :
           it.kind === "section" ? it.id :
           `r-${it.data.id}`
         }
+        stickySectionHeadersEnabled
         contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
+        contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: tabBarHeight + 24 }]}
+        renderSectionHeader={() => (storeOptions.length > 1 || receipts.length > 0) ? (
+          <View style={{ backgroundColor: colors.pageBackground, marginHorizontal: -spacing.lg }}>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={styles.filterRow}
+            >
+              {storeOptions.length > 1 && (
+                <StoreFilterButton
+                  storeOptions={storeOptions}
+                  selectedIds={selectedChainIds}
+                  onToggle={toggleStore}
+                  onAll={selectAllStores}
+                  logoUrlById={logoUrlById}
+                  label={t('receipts.filterStores')}
+                  allLabel={t('receipts.filterAllStores')}
+                  title={t('receipts.filterStores')}
+                />
+              )}
+              <DateFilterButton
+                value={selectedDate}
+                onChange={setSelectedDate}
+                label={t('receipts.filterDate')}
+                markedDates={receiptDots}
+              />
+            </ScrollView>
+          </View>
+        ) : null}
         ListHeaderComponent={
           <>
-            <ScreenHeading title={t('tabs.receipts')} />
+            <ScreenHeading title={t('tabs.receipts')} onLayout={header.onTitleLayout} />
             {liveScanVisible ? renderLiveScanCard() : null}
             {showBanner ? (
               <PendingSwipesBanner
