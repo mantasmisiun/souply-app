@@ -159,6 +159,95 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
     return <BasketDockSheet tabsRow={tabsRow} tabsRowHeight={rowH} />;
 }
 
+/** A generic dock tab item (for docks other than the root tab bar). */
+export interface DockTab {
+    key: string;
+    label: string;
+    icon: keyof typeof Ionicons.glyphMap;
+}
+
+/**
+ * Reusable dock TAB ROW — the exact visual system of the root tab bar
+ * (M3 indicator, icon+label cells, expressive press morphs) for other
+ * dock surfaces (e.g. the trip-map six-tab bar). Render it as the
+ * `barRow` of a DockedGlassSheet and feed the measured height back via
+ * onHeight (same auto-sizing contract as the root bar).
+ */
+export function DockTabsRow({
+    tabs,
+    activeKey,
+    onSelect,
+    onHeight,
+}: {
+    tabs: DockTab[];
+    activeKey: string;
+    onSelect: (key: string) => void;
+    onHeight?: (h: number) => void;
+}) {
+    const colors = useTheme();
+    const [innerWidth, setInnerWidth] = useState(0);
+    const tx = useSharedValue(0);
+    const stretch = useSharedValue(1);
+    const activeIndex = Math.max(0, tabs.findIndex(t => t.key === activeKey));
+    const itemWidth = innerWidth > 0 ? innerWidth / tabs.length : 0;
+
+    useEffect(() => {
+        if (itemWidth <= 0) return;
+        const target = activeIndex * itemWidth + (itemWidth - INDICATOR_WIDTH) / 2;
+        tx.value = withSpring(target, motion.spring);
+        stretch.value = withSequence(
+            withTiming(1.55, {
+                duration: motion.duration.fast,
+                easing: Easing.bezier(...motion.easing.emphasized),
+            }),
+            withSpring(1, motion.springExpressive),
+        );
+    }, [activeIndex, itemWidth, tx, stretch]);
+
+    const indicatorStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: tx.value }, { scaleX: stretch.value }],
+    }));
+
+    return (
+        <View
+            style={styles.tabsRow}
+            onLayout={(e: LayoutChangeEvent) => {
+                setInnerWidth(e.nativeEvent.layout.width);
+                const h = Math.round(e.nativeEvent.layout.height);
+                if (h > 0) onHeight?.(h);
+            }}
+            pointerEvents="box-none"
+        >
+            {itemWidth > 0 && (
+                <Animated.View
+                    pointerEvents="none"
+                    style={[
+                        styles.indicator,
+                        {
+                            left: 0,
+                            width: INDICATOR_WIDTH,
+                            height: INDICATOR_HEIGHT,
+                            borderRadius: radius.pill,
+                            backgroundColor: colors.secondaryContainer,
+                        },
+                        indicatorStyle,
+                    ]}
+                />
+            )}
+            {tabs.map((tab) => (
+                <TabItem
+                    key={tab.key}
+                    label={tab.label}
+                    focused={tab.key === activeKey}
+                    colors={colors}
+                    renderIcon={(color) => <Ionicons name={tab.icon} size={ICON_SIZE} color={color} />}
+                    onPress={() => { Haptics.selectionAsync(); onSelect(tab.key); }}
+                />
+            ))}
+        </View>
+    );
+}
+
 /**
  * One tab cell — owns its own icon-scale spring so a press shrinks the icon
  * (state-layer feedback) and becoming-active gives it a brief bounce
