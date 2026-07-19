@@ -25,12 +25,15 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../../config/api';
 import { ProductImage } from '../../components/ProductImage';
 import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
-import ProductLineCard from '../../components/ProductLineCard';
 import { useBasketState } from '../../state/basketState';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import LocationPromptModal from '../../components/LocationPromptModal';
 import LocationSettingsPanel from '../../components/LocationSettingsPanel';
-import { GlassStageSheet, SHEET_HANDLE_H, type GlassStageSheetRef } from '../../components/GlassStageSheet';
+import { DockedGlassSheet, type DockedSheetControls } from '../../components/DockedGlassSheet';
+import { AddOrStepper } from '../../components/AddOrStepper';
+import { BrandedQR } from '../../components/BrandedQR';
+import { useBasketSession } from '../../state/basketSession';
+import { fetchTrips, createTripInviteUrl } from '../../utils/tripsApi';
 import * as Haptics from 'expo-haptics';
 import { ScalePressable } from '../../components/ScalePressable';
 import { formatDate } from '../../utils/formatCurrency';
@@ -103,7 +106,6 @@ export default function BasketDetailScreen() {
     const [basket, setBasket] = useState<Basket | null>(null);
     const [items, setItems] = useState<BasketItem[]>([]);
     const [loading, setLoading] = useState(true);
-    const [quantityInputs, setQuantityInputs] = useState<{[key: number]: string}>({});
     const [basketName, setBasketName] = useState('');
     const [editingName, setEditingName] = useState(false);
     const nameInputRef = useRef<any>(null);
@@ -142,10 +144,14 @@ export default function BasketDetailScreen() {
     // stage 1 = the expanded settings panel. The settings squircle toggles it;
     // dragging the pill does the same. Bar/panel heights are measured by the
     // sheet and drive the snap points.
-    const settingsSheetRef = useRef<GlassStageSheetRef>(null);
-    const sheetStageRef = useRef(0);
-    const [barH, setBarH] = useState(74);
-    const [panelH, setPanelH] = useState(0);
+    const settingsSheetRef = useRef<DockedSheetControls>(null);
+    const [barRowH, setBarRowH] = useState(44);
+    const [dockClearance, setDockClearance] = useState(120);
+    // List-sheet parity: tap a long name to reveal the full name.
+    const [expandedNames, setExpandedNames] = useState<Set<number>>(new Set());
+    // Invite-to-trip QR (resolved via the basket's trip).
+    const [inviteOpen, setInviteOpen] = useState(false);
+    const [inviteUrl, setInviteUrl] = useState<string | null>(null);
     // Save-as-template flow: bookmark icon in the nav bar opens a name
     // prompt → POST /api/basket-templates/from-basket/:id → toast.
     // Save-as-template: the bookmark opens the shared identity sheet
@@ -242,14 +248,6 @@ export default function BasketDetailScreen() {
                 isWeighable: Number(item.isWeighable) === 1,
             })) : [];
             setItems(parsedItems);
-
-            const inputs: {[key: number]: string} = {};
-            parsedItems.forEach((item: any) => {
-                inputs[item.id] = parseFloat(item.quantity) % 1 === 0
-                    ? String(parseInt(item.quantity))
-                    : parseFloat(item.quantity).toFixed(1);
-            });
-            setQuantityInputs(inputs);
         } catch (error) {
             console.error('Failed to fetch basket:', error);
         } finally {
@@ -356,8 +354,41 @@ export default function BasketDetailScreen() {
         // user must re-run the comparison before viewing results again.
         await revertToDraftIfCompared();
         setDraftBasketId(Number(id));
+        // Target the SESSION at this basket too, so every catalog surface
+        // (cards, list sheet) reads and writes THIS basket.
+        useBasketSession.getState().setTarget({ kind: 'basket', basketId: Number(id), isFamily: false }, items.length);
         router.navigate('/(tabs)/catalog' as any);
     };
+
+    // Invite a friend: baskets belong to trips — resolve the trip and show
+    // its invite QR (same join flow as everywhere else).
+    const openInvite = useCallback(async () => {
+        setInviteOpen(true);
+        setInviteUrl(null);
+        try {
+            const trips = await fetchTrips();
+            const trip = trips.find(tr => tr.basket?.id === Number(id));
+            if (!trip) { setInviteOpen(false); return; }
+            setInviteUrl(await createTripInviteUrl(trip.id));
+        } catch { setInviteOpen(false); }
+    }, [id]);
+
+    // Clear basket: remove every line (confirm first) — the basket survives.
+    const clearBasket = useCallback(() => {
+        Alert.alert(t('basketDetail.clearTitle'), t('basketDetail.clearBody'), [
+            { text: t('common.cancel'), style: 'cancel' },
+            {
+                text: t('basketDetail.clearConfirm'),
+                style: 'destructive',
+                onPress: async () => {
+                    await revertToDraftIfCompared();
+                    await Promise.all(items.map((it: any) =>
+                        fetch(`${API_BASE_URL}/api/basket-items/${it.id}`, { method: 'DELETE' }).catch(() => {})));
+                    await fetchBasket();
+                },
+            },
+        ]);
+    }, [items, t]);  // eslint-disable-line react-hooks/exhaustive-deps
 
     // Changing location/store-count settings while compared is also an edit:
     // drop back to draft so the bottom button retargets to "Rasti parduotuves".
@@ -390,11 +421,9 @@ export default function BasketDetailScreen() {
 
         // Optimistic update + rollback on failure.
         const previousQty = existing.quantity;
-        const previousInput = quantityInputs[itemId];
         setItems(prev => prev.map(item =>
             item.id === itemId ? { ...item, quantity: rounded } : item
         ));
-        setQuantityInputs(prev => ({ ...prev, [itemId]: String(rounded) }));
 
         try {
             await revertToDraftIfCompared();
@@ -411,7 +440,6 @@ export default function BasketDetailScreen() {
             setItems(prev => prev.map(item =>
                 item.id === itemId ? { ...item, quantity: previousQty } : item
             ));
-            setQuantityInputs(prev => ({ ...prev, [itemId]: previousInput }));
             Alert.alert('Klaida', 'Nepavyko atnaujinti kiekio');
         }
     };
@@ -517,18 +545,9 @@ export default function BasketDetailScreen() {
         && (!activeSettings.routeFrom || !activeSettings.routeTo);
 
     // Bar-sheet snap points: collapsed = pill + action bar; expanded = the
-    // settings panel, content-sized and capped so the list stays visible
-    // behind the float. Read-only baskets get a fixed bar (no expansion).
+    // settings live INSIDE the expanded dock now. Read-only baskets keep a
+    // bar-only dock (no sheet).
     const sheetExpandable = basket?.status !== 'inProgress' && basket?.status !== 'completed';
-    const sheetSnaps = useMemo(() => {
-        const bar = SHEET_HANDLE_H + barH;
-        if (!sheetExpandable || panelH <= 0) return [bar];
-        const expanded = Math.min(bar + panelH, Dimensions.get('window').height * 0.62);
-        return expanded > bar + 40 ? [bar, expanded] : [bar];
-    }, [barH, panelH, sheetExpandable]);
-    const toggleSettingsSheet = () => {
-        settingsSheetRef.current?.snapTo(sheetStageRef.current > 0 ? 0 : 1);
-    };
 
     const handleCalculate = async () => {
         if (calcInFlight.current || calcing) return;
@@ -565,28 +584,16 @@ export default function BasketDetailScreen() {
         <View style={styles.container}>
             {/* Match the loaded header: white bg + pink back chevron + an
                 emoji-tile/name placeholder, so nothing flashes on load. */}
-            <Stack.Screen options={{
-                headerStyle: { backgroundColor: colors.cardBackground },
-                headerShadowVisible: false,
-                headerLeft: () => <ScreenBackButton />,
-                headerTitle: () => (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                        <SkeletonBox width={34} height={34} borderRadius={10} />
-                        <SkeletonBox width={120} height={15} borderRadius={6} />
-                    </View>
-                ),
-            }} />
-            <View style={styles.list}>
+            <Stack.Screen options={{ headerShown: false }} />
+            <View style={{ paddingTop: 54, paddingHorizontal: 16 }}>
+                <View style={{ marginBottom: 16 }}><ScreenBackButton /></View>
+                <SkeletonBox width={200} height={24} borderRadius={7} />
                 {Array.from({ length: 5 }).map((_, i) => (
-                    <View key={i} style={styles.card}>
+                    <View key={i} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12 }}>
                         <SkeletonBox width={56} height={56} borderRadius={8} />
-                        <View style={{ flex: 1, marginLeft: 12, gap: 10 }}>
-                            <SkeletonBox width={150} height={14} borderRadius={6} />
-                            <View style={{ flexDirection: 'row', gap: 8, marginTop: 2, alignItems: 'center' }}>
-                                <SkeletonBox width={28} height={28} borderRadius={14} />
-                                <SkeletonBox width={40} height={24} borderRadius={6} />
-                                <SkeletonBox width={28} height={28} borderRadius={14} />
-                            </View>
+                        <View style={{ flex: 1, gap: 8 }}>
+                            <SkeletonBox width={170} height={14} borderRadius={6} />
+                            <SkeletonBox width={140} height={30} borderRadius={15} />
                         </View>
                     </View>
                 ))}
@@ -619,40 +626,10 @@ export default function BasketDetailScreen() {
         <>
             <CollapsingHeader
                 controller={header}
-                background={headerColor}
                 back
-                headerOptions={{
-                    headerShown: true,
-                    title: '',
-                    headerTitle: () => null,
-                    headerStyle: { backgroundColor: headerColor },
-                    headerTintColor: onCover,
-                    headerShadowVisible: false,
-                    headerLeft: () => <ScreenBackButton color={fromTemplate && basket?.templateCoverColor ? '#FFFFFF' : colors.primary} />,
-                    // Bookmark icon → save-as-template modal. Only meaningful
-                    // when the basket has at least one item; hide otherwise
-                    // so the user isn't prompted to save an empty template.
-                    // Template-derived baskets get a 3-dots menu (copy / copy
-                    // original); manual + plain baskets keep the save-as-template
-                    // bookmark.
-                    headerRight: items.length === 0
-                        ? undefined
-                        : fromTemplate
-                        ? () => (
-                            <GlassIconButton
-                                icon="ellipsis-horizontal"
-                                color={onCover}
-                                onPress={() => setActionsOpen(true)}
-                            />
-                        )
-                        : () => (
-                            <GlassIconButton
-                                icon="bookmark-outline"
-                                color={onCover}
-                                onPress={() => setSaveTplVisible(true)}
-                            />
-                        ),
-                }}
+                right={fromTemplate && items.length > 0
+                    ? <GlassIconButton icon="ellipsis-horizontal" onPress={() => setActionsOpen(true)} />
+                    : undefined}
             />
             <View style={styles.container}>
                 <Animated.FlatList
@@ -660,7 +637,7 @@ export default function BasketDetailScreen() {
                     style={{ flex: 1 }}
                     data={items}
                     keyExtractor={(item: any) => item.id.toString()}
-                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: sheetSnaps[0] + 28 }]}
+                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: dockClearance + 28 }]}
                     ListHeaderComponent={
                         <>
                         {fromTemplate ? (
@@ -727,16 +704,6 @@ export default function BasketDetailScreen() {
                             </Text>
                         </TouchableOpacity>
                     )}
-                        {isEditable ? (
-                            <TouchableOpacity
-                                style={styles.addItemBtn}
-                                onPress={handleAddItem}
-                                activeOpacity={0.7}
-                            >
-                                <Ionicons name="add" size={18} color={colors.primary} />
-                                <Text style={styles.addItemBtnText}>{t('basketDetail.addItem')}</Text>
-                            </TouchableOpacity>
-                        ) : null}
                         </>
                     }
                     ListEmptyComponent={
@@ -745,206 +712,168 @@ export default function BasketDetailScreen() {
                             <Text style={styles.emptySubText}>{t('basketDetail.emptyBody')}</Text>
                         </View>
                     }
+                    ItemSeparatorComponent={() => <View style={styles.rowSep} />}
                     renderItem={({ item }) => {
-                        // inProgress/completed = read-only: user is shopping or
-                        // done, basket is locked. compared = editable but edits
-                        // auto-revert to draft. draft = freely editable.
+                        // inProgress/completed = read-only (locked while
+                        // shopping / after the trip).
                         const readOnly = basket?.status === 'inProgress' || basket?.status === 'completed';
                         const weighable = isWeighableItem(item);
-                        // Measured items label by the product's CANONICAL unit —
-                        // fluids are litres, not the old hardcoded kg.
-                        // Localised: fluids = litres, other measured = kg, count
-                        // = pcs/vnt (t('units.*')) — never a hardcoded 'vnt.'.
-                        const measuredUnit = item.canonicalUnit === 'l' ? t('units.l') : t('units.kg');
-                        const countUnit = t('units.vnt');
-                        const step = weighable ? 0.1 : 1;
-                        const inputValueDefault = weighable
-                            ? Number(item.quantity).toFixed(1).replace('.', ',')
-                            : String(item.quantity);
                         return (
-                            <ProductLineCard
-                                name={item.productName}
-                                imageUrls={item.imageUrls}
-                                readOnly={readOnly}
-                                readOnlyQtyText={`${item.quantity} ${weighable ? measuredUnit : countUnit}`}
-                                quantityText={quantityInputs[item.id] ?? inputValueDefault}
-                                unit={weighable ? measuredUnit : countUnit}
-                                weighable={weighable}
-                                onChangeQuantity={(v) => {
-                                    if (!weighable && (v.includes('.') || v.includes(','))) return;
-                                    const dotIndex = v.indexOf('.');
-                                    const commaIndex = v.indexOf(',');
-                                    const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
-                                    if (separatorIndex !== -1 && v.length - separatorIndex > 2) return;
-                                    setQuantityInputs(prev => ({ ...prev, [item.id]: v }));
-                                }}
-                                onCommitQuantity={async (text) => {
-                                    const val = parseFloat(text.replace(',', '.'));
-                                    if (!val || val <= 0) { removeItem(item.id); return; }
-                                    await updateQuantity(item.id, val);
-                                    setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
-                                }}
-                                onDecrement={() => updateQuantity(item.id, Number(item.quantity) - step)}
-                                onIncrement={() => updateQuantity(item.id, Number(item.quantity) + step)}
-                                onRemove={() => removeItem(item.id)}
-                            />
+                            <View style={styles.itemRow}>
+                                <ProductImage
+                                    uris={item.imageUrls}
+                                    imageStyle={styles.itemImage}
+                                    placeholderStyle={styles.itemImage}
+                                    emojiStyle={{ fontSize: 22 }}
+                                />
+                                <View style={{ flex: 1, gap: 6 }}>
+                                    <Text
+                                        style={styles.itemName}
+                                        numberOfLines={expandedNames.has(item.id) ? undefined : 1}
+                                        suppressHighlighting
+                                        onPress={() => setExpandedNames(prev => {
+                                            const next = new Set(prev);
+                                            if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+                                            return next;
+                                        })}
+                                    >
+                                        {item.productName}
+                                    </Text>
+                                    <View style={styles.itemActionRow}>
+                                        {readOnly ? (
+                                            <Text style={styles.itemQtyText}>
+                                                {item.quantity} {weighable ? (item.canonicalUnit === 'l' ? t('units.l') : t('units.kg')) : t('units.vnt')}
+                                            </Text>
+                                        ) : (
+                                            <>
+                                                <AddOrStepper
+                                                    product={{
+                                                        id: item.productId,
+                                                        name: item.productName,
+                                                        canonicalUnit: item.canonicalUnit,
+                                                        canonicalStep: item.canonicalStep,
+                                                        canonicalFamily: item.canonicalFamily,
+                                                        isWeighable: weighable,
+                                                    }}
+                                                    quantity={Number(item.quantity) || 0}
+                                                    onCommit={(qty) => {
+                                                        if (qty <= 0) { removeItem(item.id); return; }
+                                                        void updateQuantity(item.id, qty);
+                                                    }}
+                                                    style={styles.itemStepper}
+                                                />
+                                                <TouchableOpacity onPress={() => removeItem(item.id)} hitSlop={8}>
+                                                    <Ionicons name="trash-outline" size={22} color={colors.textMuted} />
+                                                </TouchableOpacity>
+                                            </>
+                                        )}
+                                    </View>
+                                </View>
+                            </View>
                         );
                     }}
                 />
 
                 {calcError && (
-                    <View style={[styles.errorBanner, { marginBottom: sheetSnaps[0] + 16 }]}>
+                    <View style={[styles.errorBanner, { marginBottom: dockClearance + 16 }]}>
                         <Ionicons name="alert-circle" size={16} color={colors.error} />
                         <Text style={styles.errorBannerText}>{calcError}</Text>
                     </View>
                 )}
 
-                {items.length > 0 && (
-                    <GlassStageSheet
+                {basket != null && (
+                    <DockedGlassSheet
                         ref={settingsSheetRef}
-                        snaps={sheetSnaps}
                         colors={colors}
-                        bottomInset={bottomInset}
-                        onStageChange={(st) => { sheetStageRef.current = st; }}
-                        onBarHeight={setBarH}
-                        onContentHeight={setPanelH}
-                        contentContainerStyle={styles.sheetPanelContent}
-                        bar={
-                    <View style={styles.barRow}>
-                        {basket?.status === 'inProgress' || basket?.status === 'completed' ? (
-                            // Read-only states: basket is locked because the
-                            // user is actively shopping (inProgress) or the
-                            // trip is done (completed). Only affordance is
-                            // viewing the calculated store comparison.
-                            <ScalePressable
-                                style={styles.showResultsButton}
-                                onPress={() => router.push(`/basket/results/${id}`)}
+                        onCollapsedClearance={setDockClearance}
+                        barRowHeight={barRowH}
+                        barRow={
+                            <View
+                                style={styles.barRow}
+                                onLayout={e => { const h = Math.round(e.nativeEvent.layout.height); if (h > 0) setBarRowH(h); }}
                             >
-                                <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
-                                <Text style={styles.showResultsText}>
-                                    {basket?.status === 'inProgress' ? t('basketDetail.viewInProgress') : t('basketDetail.viewCompleted')}
-                                </Text>
-                            </ScalePressable>
-                        ) : basket?.status === 'compared' ? (
-                            <>
-                                {/* Settings squircle stays available while compared
-                                    so the user can tweak storeCount / location
-                                    and have the main button retarget to "Rasti
-                                    parduotuves" (re-find). Without this, there'd
-                                    be no surface to change the inputs. */}
-                                <ScalePressable
-                                    style={[
-                                        styles.settingsSquircle,
-                                        activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
-                                            && styles.settingsSquircleActive,
-                                    ]}
-                                    onPress={toggleSettingsSheet}
-                                    disabled={busy}
-                                    scaleTo={0.92}
-                                >
-                                    <Ionicons
-                                        name={
-                                            activeSettings?.mode === 'specific' ? 'location-outline'
-                                            : activeSettings?.mode === 'route' ? 'git-commit-outline'
-                                            : 'locate-outline'
-                                        }
-                                        size={20}
-                                        color={
-                                            activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
-                                                ? colors.primary
-                                                : colors.textSecondary
-                                        }
-                                    />
-                                    {activeSettings && (routeIncomplete || activeSettings.storeCount > 1) && (
-                                        <View style={[styles.settingsBadge, routeIncomplete && styles.settingsBadgeAlert]}>
-                                            <Text style={styles.settingsBadgeText}>
-                                                {routeIncomplete ? '!' : activeSettings.storeCount}
-                                            </Text>
-                                        </View>
-                                    )}
-                                </ScalePressable>
-                                <ScalePressable
-                                    style={styles.showResultsButton}
-                                    onPress={() => router.push(`/basket/results/${id}`)}
-                                >
-                                    <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
-                                    <Text style={styles.showResultsText}>
-                                        {t((activeSettings?.storeCount ?? 1) > 1 ? 'basketDetail.viewStores' : 'basketDetail.viewStore')}
-                                    </Text>
-                                </ScalePressable>
-                            </>
-                        ) : (
-                            <>
-                                <ScalePressable
-                                    style={[
-                                        styles.settingsSquircle,
-                                        activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
-                                            && styles.settingsSquircleActive,
-                                    ]}
-                                    onPress={toggleSettingsSheet}
-                                    disabled={busy}
-                                    scaleTo={0.92}
-                                >
-                                    <Ionicons
-                                        name={
-                                            activeSettings?.mode === 'specific' ? 'location-outline'
-                                            : activeSettings?.mode === 'route' ? 'git-commit-outline'
-                                            : 'locate-outline'
-                                        }
-                                        size={20}
-                                        color={
-                                            activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
-                                                ? colors.primary
-                                                : colors.textSecondary
-                                        }
-                                    />
-                                    {activeSettings && (routeIncomplete || activeSettings.storeCount > 1) && (
-                                        <View style={[styles.settingsBadge, routeIncomplete && styles.settingsBadgeAlert]}>
-                                            <Text style={styles.settingsBadgeText}>
-                                                {routeIncomplete ? '!' : activeSettings.storeCount}
-                                            </Text>
-                                        </View>
-                                    )}
-                                </ScalePressable>
-                                <ScalePressable
-                                    style={[styles.showResultsButton, busy && styles.buttonCalcing, routeIncomplete && styles.buttonDisabled]}
-                                    onPress={handleCalculate}
-                                    disabled={busy || routeIncomplete}
-                                    scaleTo={busy || routeIncomplete ? 1 : 0.95}
-                                >
-                                    {busy ? (
-                                        <>
-                                            <MaterialProgress size="small" color={colors.onPrimary} />
-                                            <Text style={styles.showResultsText}>{t('basketDetail.calculating')}</Text>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
-                                            <Text style={styles.showResultsText}>
-                                                {t((activeSettings?.storeCount ?? 1) > 1 ? 'basketDetail.findStores' : 'basketDetail.findStore')}
-                                            </Text>
-                                        </>
-                                    )}
-                                </ScalePressable>
-                            </>
-                        )}
-                    </View>
+                                {basket?.status === 'inProgress' || basket?.status === 'completed' ? (
+                                    <ScalePressable
+                                        style={[styles.storesPill, { flex: 1 }]}
+                                        onPress={() => router.push(`/basket/results/${id}`)}
+                                    >
+                                        <Text style={styles.storesPillText}>
+                                            {basket?.status === 'inProgress' ? t('basketDetail.viewInProgress') : t('basketDetail.viewCompleted')}
+                                        </Text>
+                                    </ScalePressable>
+                                ) : (
+                                    <>
+                                        <TouchableOpacity style={styles.addMoreBtn} onPress={handleAddItem} activeOpacity={0.7}>
+                                            <Ionicons name="add" size={20} color={colors.primary} />
+                                            <Text style={styles.addMoreText}>{t('basketDetail.addMore')}</Text>
+                                        </TouchableOpacity>
+                                        <ScalePressable
+                                            style={[styles.storesPill, busy && styles.buttonCalcing, (routeIncomplete || items.length === 0) && styles.buttonDisabled]}
+                                            onPress={basket?.status === 'compared'
+                                                ? () => router.push(`/basket/results/${id}`)
+                                                : handleCalculate}
+                                            disabled={busy || routeIncomplete || items.length === 0}
+                                            scaleTo={busy || routeIncomplete ? 1 : 0.95}
+                                        >
+                                            {busy
+                                                ? <MaterialProgress size="small" color={colors.onPrimary} />
+                                                : (
+                                                    <>
+                                                        <Text style={styles.storesPillText}>{t('basketDetail.stores')}</Text>
+                                                        <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
+                                                    </>
+                                                )}
+                                        </ScalePressable>
+                                    </>
+                                )}
+                            </View>
                         }
-                    >
-                        <LocationSettingsPanel
-                            refreshKey={settingsRefreshKey}
-                            onChanged={setActiveSettings}
-                            onOpenPresetMap={(key, label, existing) => {
-                                // The sheet stays mounted (and expanded) through
-                                // the push; the focus effect's refreshKey bump
-                                // reloads presets on return.
-                                router.push(
-                                    `/preset/${key}/map?label=${encodeURIComponent(label)}${existing ? `&lat=${existing.lat}&lng=${existing.lng}` : ''}` as any,
-                                );
-                            }}
-                        />
-                    </GlassStageSheet>
+                        sheet={sheetExpandable ? {
+                            maxStage: 2,
+                            content: (
+                                <View style={styles.sheetPanelContent}>
+                                    <TouchableOpacity style={styles.sheetRow} onPress={() => void openInvite()}>
+                                        <Ionicons name="qr-code-outline" size={20} color={colors.primary} />
+                                        <Text style={[styles.sheetRowText, { flex: 1 }]}>{t('trips.invite')}</Text>
+                                        <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                                    </TouchableOpacity>
+                                    {!fromTemplate && (
+                                        <TouchableOpacity style={styles.sheetRow} onPress={() => setSaveTplVisible(true)}>
+                                            <Ionicons name="bookmark-outline" size={20} color={colors.primary} />
+                                            <Text style={[styles.sheetRowText, { flex: 1 }]}>{t('basketDetail.saveAsTemplate')}</Text>
+                                            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                                        </TouchableOpacity>
+                                    )}
+                                    <TouchableOpacity style={styles.sheetRow} onPress={clearBasket}>
+                                        <Ionicons name="trash-outline" size={20} color={colors.error} />
+                                        <Text style={[styles.sheetRowText, { flex: 1, color: colors.error }]}>{t('basketDetail.clearBasket')}</Text>
+                                    </TouchableOpacity>
+                                    <LocationSettingsPanel
+                                        refreshKey={settingsRefreshKey}
+                                        onChanged={setActiveSettings}
+                                        onOpenPresetMap={(key, label, existing) => {
+                                            router.push(
+                                                `/preset/${key}/map?label=${encodeURIComponent(label)}${existing ? `&lat=${existing.lat}&lng=${existing.lng}` : ''}` as any,
+                                            );
+                                        }}
+                                    />
+                                </View>
+                            ),
+                        } : undefined}
+                    />
                 )}
+
+                {/* Trip invite QR. */}
+                <Modal visible={inviteOpen} transparent animationType="fade" onRequestClose={() => setInviteOpen(false)}>
+                    <TouchableOpacity style={styles.qrBackdrop} activeOpacity={1} onPress={() => setInviteOpen(false)}>
+                        <View style={styles.qrCard} onStartShouldSetResponder={() => true}>
+                            <Text style={styles.sheetRowText}>{t('trips.tripQrTitle')}</Text>
+                            {inviteUrl
+                                ? <BrandedQR value={inviteUrl} size={200} />
+                                : <MaterialProgress size="large" color={colors.primary} />}
+                        </View>
+                    </TouchableOpacity>
+                </Modal>
 
                 {calcing && (
                     <View style={styles.calcProgressOverlay} pointerEvents="none">
@@ -1013,12 +942,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     titleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10 },
     titleEmoji: { width: 40, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
     titleText: { fontSize: 22, fontWeight: '700' },
-    addItemBtn: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        gap: 6, paddingVertical: 12, borderRadius: radius.lg, marginBottom: 12,
-        borderWidth: 1, borderColor: c.primary, borderStyle: 'dashed',
-    },
-    addItemBtnText: { fontSize: 14, fontWeight: '600', color: c.primary },
     controlButton: {
         width: 28, height: 28, borderRadius: 14,
         borderWidth: 1, borderColor: c.primary,
@@ -1057,11 +980,29 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // Action row inside the floating glass bar-sheet (the sheet owns the
     // surface, pill and radii — this is just the row layout).
     barRow: {
-        flexDirection: 'row',
-        gap: 10,
-        paddingHorizontal: 12,
-        paddingBottom: 12,
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        gap: 12, paddingHorizontal: 4,
     },
+    addMoreBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 8, paddingHorizontal: 6 },
+    addMoreText: { fontSize: 15, fontWeight: '700', color: c.primary },
+    storesPill: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+        backgroundColor: c.primary, borderRadius: radius.pill,
+        paddingHorizontal: 20, paddingVertical: 10,
+    },
+    storesPillText: { fontSize: 15, fontWeight: '700', color: c.onPrimary },
+    itemRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 10 },
+    itemImage: { width: 56, height: 56, borderRadius: 8, backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center' },
+    itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
+    itemActionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    itemQtyText: { fontSize: 14, fontWeight: '600', color: c.textSecondary },
+    itemStepper: { alignSelf: 'flex-start', minWidth: 150 },
+    // Separator: from the title start (past the image) to the trash end.
+    rowSep: { height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginLeft: 56 + 12 },
+    sheetRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+    sheetRowText: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+    qrBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
+    qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: 24, alignItems: 'center', gap: 16 },
     sheetPanelContent: {
         paddingHorizontal: 16,
         paddingBottom: 8,
@@ -1186,7 +1127,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         opacity: 0.4,
     },
     cardContent: { flex: 1, justifyContent: 'space-between' },
-    itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
     controls: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
     removeButton: {
         width: 36,
