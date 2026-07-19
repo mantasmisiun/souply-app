@@ -72,6 +72,16 @@ export function BasketListSheet() {
     // Items load only when the BASKET changes — never on navigation, so the
     // sheet stays visually stable as you move between shopping screens.
     const [items, setItems] = useState<PreviewItem[] | null>(null);
+    // Long names are single-line (ellipsised); a tap on the name toggles the
+    // full multi-line name open/closed.
+    const [expandedNames, setExpandedNames] = useState<Set<number>>(new Set());
+    const toggleName = useCallback((id: number) => {
+        setExpandedNames(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            return next;
+        });
+    }, []);
     const tKey = target ? targetKey(target) : null;
     const loadItems = useCallback(async () => {
         if (!target) return;
@@ -236,7 +246,13 @@ export function BasketListSheet() {
             </Text>
         ) : (
             <View>
-                {items.map((item, i) => (
+                {[...items].sort((a, b) => {
+                    const ai = newProductIds.indexOf(a.productId);
+                    const bi = newProductIds.indexOf(b.productId);
+                    if ((ai >= 0) !== (bi >= 0)) return ai >= 0 ? -1 : 1;
+                    if (ai >= 0 && bi >= 0) return bi - ai; // latest add on top
+                    return 0;
+                }).map((item, i) => (
                     <React.Fragment key={item.id}>
                         {/* Separator only BETWEEN items — none above the first (it sits under the title). */}
                         {i > 0 && <View style={styles.sep} />}
@@ -249,7 +265,14 @@ export function BasketListSheet() {
                                 : <View style={[styles.itemImage, styles.itemImageFallback]}><Text style={{ opacity: 0.5 }}>🫜</Text></View>}
                             <View style={styles.itemBody}>
                                 <View style={styles.nameRow}>
-                                    <Text style={styles.itemName} numberOfLines={1}>{item.name ?? `#${item.productId}`}</Text>
+                                    <Text
+                                        style={styles.itemName}
+                                        numberOfLines={expandedNames.has(item.id) ? undefined : 1}
+                                        onPress={() => toggleName(item.id)}
+                                        suppressHighlighting
+                                    >
+                                        {item.name ?? `#${item.productId}`}
+                                    </Text>
                                     {newProductIds.includes(item.productId) && (
                                         <View style={styles.newBadge}>
                                             <Text style={styles.newBadgeText}>{t('basketSession.newBadge')}</Text>
@@ -335,12 +358,12 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     // One horizontal row: image | body column (name row over action row).
     item: { flexDirection: 'row', alignItems: 'flex-start', gap: spacing.md, paddingVertical: spacing.md },
     itemBody: { flex: 1, gap: spacing.sm },
-    nameRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    nameRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 6 },
     // Stepper pinned left, trash pinned right — on the old 2nd name line.
     actionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
     itemImage: { width: IMG_W, height: IMG_W, borderRadius: 8, backgroundColor: c.surfaceMuted },
     itemImageFallback: { alignItems: 'center', justifyContent: 'center' },
-    itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
+    itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary, flex: 1 },
     newBadge: {
         backgroundColor: c.primary, borderRadius: radius.pill,
         paddingHorizontal: 8, paddingVertical: 2,
