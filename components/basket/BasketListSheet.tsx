@@ -127,10 +127,16 @@ export function BasketListSheet() {
         return () => setSessionBarClearance(null);
     }, [visible, setSessionBarClearance]);
 
+    // Current detent — at FULL the list behind is covered, so an up-drag on the
+    // sheet that hands off to it must NOT collapse (else the sheet closes on
+    // drag-up at full); at medium the list is visible so collapse-on-scroll
+    // stays valid.
+    const stageRef = useRef(0);
+
     // While the session view owns the bottom, page scrolls collapse it.
     useEffect(() => {
         if (!visible) return;
-        setCollapseDock(() => controls.current?.collapse());
+        setCollapseDock(() => { if (stageRef.current >= 2) return; controls.current?.collapse(); });
         return () => setCollapseDock(null);
     }, [visible, setCollapseDock]);
 
@@ -345,7 +351,7 @@ export function BasketListSheet() {
                 contentContainerStyle: { paddingTop: spacing.xs, paddingBottom: insets.bottom + spacing.lg },
                 // Title grows when a drag SETTLES open (stage 1+) and shrinks
                 // back when it settles collapsed — animated, but only on release.
-                onStageChange: (s) => { titleP.value = withTiming(s > 0 ? 1 : 0, { duration: 200 }); },
+                onStageChange: (s) => { stageRef.current = s; titleP.value = withTiming(s > 0 ? 1 : 0, { duration: 200 }); },
             }}
         />
     );

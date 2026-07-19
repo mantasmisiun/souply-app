@@ -63,12 +63,19 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const hasSheet = (onSurface && !sessionActive && dormant != null) || onShoppingRoot;
 
     const controls = useRef<DockedSheetControls | null>(null);
+    // Current detent (0 collapsed → last = full). At FULL the sheet is
+    // edge-to-edge and the list behind it is covered, so a "list scroll" there
+    // is really the sheet's own up-drag handing off — collapseDock must ignore
+    // it (else dragging the sheet up at full closes it). At medium the list is
+    // visible, so collapse-on-scroll stays valid.
+    const stageRef = useRef(0);
+    const atFull = () => stageRef.current >= 2;
 
     // External collapse (browse scroll / L1 toggle) — only while the chooser
     // owns the dock; the active-session List sheet registers its own.
     useEffect(() => {
         if (!hasSheet) return;
-        setCollapseDock(() => controls.current?.collapse());
+        setCollapseDock(() => { if (atFull()) return; controls.current?.collapse(); });
         return () => setCollapseDock(null);
     }, [hasSheet, setCollapseDock]);
 
@@ -226,6 +233,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                 // picked ⇒ the user dismissed the chooser: release those adds so
                 // their Add buttons stop spinning.
                 onStageChange: (stage) => {
+                    stageRef.current = stage;
                     if (stage !== 0 || onShoppingRoot) return;
                     const s = useBasketSession.getState();
                     if (s.target == null && s.pendingAdds.length > 0) cancelPending();
