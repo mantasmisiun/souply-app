@@ -25,11 +25,16 @@ import { getUserId } from '../config/user';
  */
 export type SessionTarget =
     | { kind: 'basket'; basketId: number; isFamily: boolean }
-    | { kind: 'template'; templateId: number; name?: string };
+    | { kind: 'template'; templateId: number; name?: string }
+    /** LAZY basket (industry-standard cart semantics): "Add new" picked but
+     *  nothing added yet — NO server row exists. The first successful add
+     *  mints the real basket and swaps the target to it; abandoning the
+     *  session leaves zero ghosts (the sentinel dies with the process). */
+    | { kind: 'pending-new' };
 
 /** Stable identity for a target across renders (kind + id). */
 export const targetKey = (t: SessionTarget): string =>
-    t.kind === 'basket' ? `b${t.basketId}` : `t${t.templateId}`;
+    t.kind === 'basket' ? `b${t.basketId}` : t.kind === 'template' ? `t${t.templateId}` : 'new';
 
 export interface ChooserOption {
     key: 'family' | 'previous' | 'new' | 'template';

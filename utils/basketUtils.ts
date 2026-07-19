@@ -77,6 +77,20 @@ export const addProductToBasket = async (
         if (session.target) {
             const t = session.target;
             let r: { success: boolean; message: string };
+            if (t.kind === 'pending-new') {
+                // Lazy cart: the first real add mints the basket.
+                const userId = await getUserId();
+                const basketId = await ensureDraftBasket(null, setDraftBasketId, userId, true);
+                r = await postBasketItem(basketId, productId, quantity, matchMode);
+                if (r.success) {
+                    session.setTarget({ kind: 'basket', basketId, isFamily: false }, 0);
+                    session.bumpCount(1);
+                    session.markNewProduct(productId);
+                    session.bumpBasketRev();
+                    session.showBar();
+                }
+                return r;
+            }
             if (t.kind === 'template') {
                 try {
                     await addTemplateItem(t.templateId, { productId, quantity });
@@ -179,8 +193,15 @@ export const applyChooserPick = async (
 
     let basketId = option.basketId;
     if (basketId == null) {
-        // key 'new' → force a brand-new draft (don't reuse the existing one;
-        // the previous basket stays available as its own chooser row).
+        if (pending.length === 0) {
+            // key 'new' picked with NOTHING queued: defer creation (lazy cart
+            // — Shopify/Amazon semantics). The session targets a sentinel; the
+            // first successful add mints the basket. Abandoning leaves no row.
+            session.setTarget({ kind: 'pending-new' }, 0);
+            useBasketSession.getState().bumpBasketRev();
+            return;
+        }
+        // Adds already queued → the basket is non-empty from birth; create it.
         const userId = await getUserId();
         basketId = await ensureDraftBasket(null, setDraftBasketId, userId, true);
     }

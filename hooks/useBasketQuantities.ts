@@ -22,9 +22,11 @@ export function useBasketQuantities() {
     const target = useBasketSession(s => s.target);
     const basketRev = useBasketSession(s => s.basketRev);
     const draftBasketId = useBasketState(s => s.draftBasketId);
-    const basketId = target?.kind === 'basket' ? target.basketId
-        : target?.kind === 'template' ? null
-        : draftBasketId;
+    // No session → legacy draft; basket session → that basket; template or
+    // pending-new (lazy, no server row yet) → no basket quantities.
+    const basketId = target == null ? draftBasketId
+        : target.kind === 'basket' ? target.basketId
+        : null;
 
     const [quantities, setQuantities] = useState<Record<number, number>>({});
     const [itemCount, setItemCount] = useState(0);
