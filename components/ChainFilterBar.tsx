@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { View, ScrollView, TouchableOpacity, Text, Image, StyleSheet } from 'react-native';
 import { useTheme, type AppTheme } from '../constants/theme';
+import { PinnedChipsBar } from './PinnedChipsBar';
 import { chainBrandName, chainBrandColorById, getChainMiniLogoUrl } from '../utils/chainBrandName';
 
 export interface ChainFilterItem {
@@ -21,7 +22,7 @@ export function ChainFilterBar({ chains, selectedId, onSelect, allLabel }: Props
     const styles = useMemo(() => makeStyles(colors), [colors]);
 
     return (
-        <View style={styles.filterBar}>
+        <PinnedChipsBar>
             <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -59,18 +60,11 @@ export function ChainFilterBar({ chains, selectedId, onSelect, allLabel }: Props
                     );
                 })}
             </ScrollView>
-        </View>
+        </PinnedChipsBar>
     );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    filterBar: {
-        backgroundColor: c.cardBackground,
-        borderBottomWidth: 0.5,
-        borderBottomColor: c.border,
-        flexGrow: 0,
-        flexShrink: 0,
-    },
     filterScroll: {
         paddingHorizontal: 12,
         paddingVertical: 10,

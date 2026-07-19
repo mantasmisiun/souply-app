@@ -1,6 +1,7 @@
 import { memo, useMemo } from 'react';
 import { ScrollView, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { PinnedChipsBar } from '../PinnedChipsBar';
 
 interface Category {
     id: number;
@@ -21,6 +22,7 @@ function CategoryBubbles({ categories, selectedId, onSelect, allLabel }: Props) 
     if (categories.length === 0) return null;
 
     return (
+        <PinnedChipsBar>
         <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -47,6 +49,7 @@ function CategoryBubbles({ categories, selectedId, onSelect, allLabel }: Props) 
                 </TouchableOpacity>
             ))}
         </ScrollView>
+        </PinnedChipsBar>
     );
 }
 

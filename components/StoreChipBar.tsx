@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { ScrollView, TouchableOpacity, Text, StyleSheet, View } from 'react-native';
 import { useTheme, type AppTheme } from '../constants/theme';
+import { PinnedChipsBar } from './PinnedChipsBar';
 import { chainIdByName } from '../utils/chainBrandName';
 import { ChainLogoChip } from './ChainLogoChip';
 
@@ -26,7 +27,7 @@ export function StoreChipBar({ chips, selectedId, onSelect, allLabel }: Props) {
     const hasAll = allLabel !== undefined;
 
     return (
-        <View style={styles.bar}>
+        <PinnedChipsBar>
             <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -67,18 +68,11 @@ export function StoreChipBar({ chips, selectedId, onSelect, allLabel }: Props) {
                     );
                 })}
             </ScrollView>
-        </View>
+        </PinnedChipsBar>
     );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    bar: {
-        backgroundColor: c.cardBackground,
-        borderBottomWidth: 0.5,
-        borderBottomColor: c.border,
-        flexGrow: 0,
-        flexShrink: 0,
-    },
     scroll: { paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
     chip: {
         flexDirection: 'row', alignItems: 'center', gap: 6,
