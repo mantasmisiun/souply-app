@@ -432,7 +432,6 @@ export default function CategoryScreen() {
         commitAddRef.current(item.id, qty).then(result => {
             if (result.success) {
                 setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
-                toastRef.current?.show(t('catalog.addedToast'));
             }
         }).finally(() => {
             setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });

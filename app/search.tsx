@@ -210,7 +210,6 @@ export default function SearchScreen() {
                 void hydrateBasket();
                 toastRef.current?.show(result.message);
             } else {
-                toastRef.current?.show(t('catalog.addedToast'));
             }
         });
     }, [draftBasketId, setDraftBasketId, hydrateBasket, t]);

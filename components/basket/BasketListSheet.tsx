@@ -1,5 +1,5 @@
 import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming, withDelay, interpolateColor, FadeInDown } from 'react-native-reanimated';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -87,7 +87,10 @@ export function BasketListSheet() {
         if (!target) return;
         try {
             let raw: any[];
-            if (target.kind === 'template') {
+            if (target.kind === 'pending-new') {
+                // Lazy cart: no server row yet — an empty preview.
+                raw = [];
+            } else if (target.kind === 'template') {
                 const tpl = await getTemplate(target.templateId);
                 raw = Array.isArray(tpl.items) ? tpl.items : [];
             } else {
@@ -196,18 +199,41 @@ export function BasketListSheet() {
         if (h > 0) setBarH(prev => (prev === h ? prev : h));
     }, []);
 
+    // Add feedback WITHOUT a toast: the count flips in (keyed entering
+    // animation) in souply pink and settles back to the regular colour.
+    const countFlash = useSharedValue(0);
+    const prevCountRef = useRef(itemCount);
+    useEffect(() => {
+        if (itemCount === prevCountRef.current) return;
+        prevCountRef.current = itemCount;
+        countFlash.value = 1;
+        countFlash.value = withDelay(650, withTiming(0, { duration: 450 }));
+    }, [itemCount, countFlash]);
+    const countColorStyle = useAnimatedStyle(() => ({
+        color: interpolateColor(countFlash.value, [0, 1], [colors.textPrimary, colors.primary]),
+    }));
+
     const sessionHeader = (
         <View style={styles.header} onLayout={onHeaderLayout}>
             <TouchableOpacity onPress={() => dismissBar()} hitSlop={8} style={styles.xBtn}>
                 <Ionicons name="close" size={22} color={colors.textPrimary} />
             </TouchableOpacity>
-            <Animated.Text style={[styles.headerText, titleAnimStyle]} numberOfLines={1}>
-                {t('basketSession.itemsCount', { count: itemCount })}
-            </Animated.Text>
+            <View style={styles.headerTitleRow}>
+                <Animated.Text style={[styles.headerText, titleAnimStyle]} numberOfLines={1}>
+                    {t('basketSession.itemsLabel')}
+                </Animated.Text>
+                <Animated.Text
+                    key={itemCount}
+                    entering={FadeInDown.duration(220)}
+                    style={[styles.headerText, titleAnimStyle, countColorStyle]}
+                >
+                    {' '}{itemCount}
+                </Animated.Text>
+            </View>
             <TouchableOpacity
                 style={styles.basketBtn}
                 onPress={async () => {
-                    if (!target) return;
+                    if (!target || target.kind === 'pending-new') return;
                     if (target.kind === 'template') {
                         router.push(`/template/${target.templateId}` as any);
                         return;
@@ -341,7 +367,8 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     },
     // fontSize is ANIMATED (16 collapsed → 22, the ScreenHeading size, when the
     // sheet settles open) — the base here is the collapsed size.
-    headerText: { flex: 1, fontSize: 16, fontWeight: '700', color: c.textPrimary },
+    headerTitleRow: { flex: 1, flexDirection: 'row', alignItems: 'baseline' },
+    headerText: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
     basketBtn: {
         flexDirection: 'row', alignItems: 'center', gap: 2,
         backgroundColor: c.primary, borderRadius: radius.pill,
