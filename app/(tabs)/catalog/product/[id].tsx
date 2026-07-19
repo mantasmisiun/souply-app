@@ -643,21 +643,50 @@ export default function ProductDetailScreen() {
     }, [product, templateId, templateQuantity, templateAdd, templateSetQty]);
 
     if (loading) return (
-        <ScrollView style={styles.container} contentContainerStyle={{ padding: 16, gap: 10 }}>
-            <View style={{ backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: 16, gap: 10 }}>
-                {Array.from({ length: 4 }).map((_, i) => (
-                    <View key={i} style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
+        <>
+            {/* Same chrome as the loaded page: floating back chip, a chips-
+                skeleton row pinned where the store filter lands, and the
+                title + breadcrumb + SP-card skeletons as page content. */}
+            <CollapsingHeader
+                controller={header}
+                back
+                pinned={
+                    <View style={{ flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 10, gap: 8 }}>
+                        {[92, 64].map((w, i) => (
+                            <SkeletonBox key={i} width={w} height={34} borderRadius={20} />
+                        ))}
+                    </View>
+                }
+            />
+            <ScrollView
+                style={styles.container}
+                contentContainerStyle={{ paddingTop: header.paddingTop, paddingBottom: 32 }}
+            >
+                <View style={{ paddingHorizontal: 16, gap: 8 }}>
+                    <SkeletonBox width={260} height={26} borderRadius={7} />
+                    <SkeletonBox width={200} height={26} borderRadius={7} />
+                    <SkeletonBox width={220} height={12} borderRadius={5} />
+                </View>
+                {Array.from({ length: 3 }).map((_, i) => (
+                    <View
+                        key={i}
+                        style={{
+                            flexDirection: 'row', alignItems: 'center', gap: 12,
+                            backgroundColor: colors.cardBackground, borderRadius: radius.lg,
+                            marginHorizontal: 16, marginTop: 10, padding: 12,
+                        }}
+                    >
                         <SkeletonBox width={52} height={52} borderRadius={8} />
                         <View style={{ flex: 1, gap: 6 }}>
-                            <SkeletonBox width={140} height={12} borderRadius={5} />
-                            <SkeletonBox width={80} height={11} borderRadius={5} />
-                            <SkeletonBox width={60} height={13} borderRadius={5} />
+                            <SkeletonBox width={150} height={13} borderRadius={5} />
+                            <SkeletonBox width={90} height={11} borderRadius={5} />
+                            <SkeletonBox width={70} height={13} borderRadius={5} />
                         </View>
                         <SkeletonBox width={MINI_CHART_WIDTH} height={MINI_CHART_HEIGHT} borderRadius={6} />
                     </View>
                 ))}
-            </View>
-        </ScrollView>
+            </ScrollView>
+        </>
     );
     if (!product) return <Text style={styles.centered}>Produktas nerastas</Text>;
 
