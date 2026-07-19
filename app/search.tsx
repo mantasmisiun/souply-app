@@ -725,8 +725,9 @@ export default function SearchScreen() {
                 if (!Number.isFinite(item.id) || item.id <= 0 || !Number.isFinite(item.categoryId) || !item.name?.trim()) return null;
 const quantity = basketQuantities[item.id] ?? 0;
 
-                const bigUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
-                const smallUnit = item.canonicalUnit === 'l' ? 'ml' : 'g';
+                const isVolume = item.unit === 'ml' || item.canonicalUnit === 'l';
+                const bigUnit = isVolume ? 'l' : 'kg';
+                const smallUnit = isVolume ? 'ml' : 'g';
                 const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
                 const amountText = item.minAmount != null && item.maxAmount != null
                     ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()

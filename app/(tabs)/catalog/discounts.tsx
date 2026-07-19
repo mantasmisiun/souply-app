@@ -121,8 +121,9 @@ const DiscountProductCard = memo(({
     // Re-label as l/ml for fluid Products whose canonical unit is l, since
     // kg ≈ l in the canonical-unit transitional simplification — same
     // numeric value, different label.
-    const bigUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
-    const smallUnit = item.canonicalUnit === 'l' ? 'ml' : 'g';
+    const isVolume = item.unit === 'ml' || item.canonicalUnit === 'l';
+    const bigUnit = isVolume ? 'l' : 'kg';
+    const smallUnit = isVolume ? 'ml' : 'g';
     const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
     const amountText = item.minAmount != null && item.maxAmount != null
         ? (() => { const min = Number(item.minAmount); const max = Number(item.maxAmount); return min === max ? fmt(min) : `${fmt(min)} - ${fmt(max)}`; })()

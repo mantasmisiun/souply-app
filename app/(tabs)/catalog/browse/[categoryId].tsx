@@ -517,8 +517,12 @@ export default function CategoryScreen() {
         const mergedQty = (mergedIntoMe[item.id] ?? [])
             .reduce((sum, hid) => sum + (basketQuantities[hid] ?? 0), 0);
         const quantity = (basketQuantities[item.id] ?? 0) + mergedQty;
-        const bigUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
-        const smallUnit = item.canonicalUnit === 'l' ? 'ml' : 'g';
+        // Size-line dimension comes from the listing's `unit` ('ml' when the
+        // product's SPs are volume) — canonicalUnit alone misses single-pack
+        // liquids reclassified to 'vnt' (they'd print "1 kg" for a 1 l pack).
+        const isVolume = item.unit === 'ml' || item.canonicalUnit === 'l';
+        const bigUnit = isVolume ? 'l' : 'kg';
+        const smallUnit = isVolume ? 'ml' : 'g';
         const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
         const amountText = item.minAmount != null && item.maxAmount != null
             ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
