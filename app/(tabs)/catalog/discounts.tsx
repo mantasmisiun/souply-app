@@ -23,6 +23,7 @@ import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '@/componen
 import { Toast, type ToastHandle } from '@/components/Toast';
 import { ScalePressable } from '@/components/ScalePressable';
 import { SkeletonBox } from '@/components/SkeletonBox';
+import { useBasketQuantities } from '@/hooks/useBasketQuantities';
 import { ChainLogoStrip } from '@/components/ChainLogoStrip';
 import { ChainLogoChip } from '@/components/ChainLogoChip';
 import { FilterDropdownModal, type FilterOption } from '@/components/FilterDropdownModal';
@@ -391,8 +392,8 @@ export default function DiscountsScreen() {
     const hasFilters = storeOptions.length > 1 || l1Options.length > 0;
 
     const { draftBasketId, setDraftBasketId, sessionBasketId, clearSessionBasket } = useBasketState();
-    const [basketQuantities, setBasketQuantities] = useState<Record<number, number>>({});
-    const [basketItemCount, setBasketItemCount] = useState(0);
+    // ONE target-aware source (session basket → draft fallback, basketRev-reactive).
+    const { basketId: targetBasketId, quantities: basketQuantities, setQuantities: setBasketQuantities, refresh: refreshBasketQuantities } = useBasketQuantities();
     const [latestCompared, setLatestCompared] = useState<ComparedBasketChoice | null>(null);
     type ComparedChoice = 'use-existing' | 'new' | 'cancel';
     const [comparedModal, setComparedModal] = useState<{
@@ -407,30 +408,9 @@ export default function DiscountsScreen() {
     }, []);
 
     useFocusEffect(useCallback(() => {
-        const loadBasket = async () => {
-            if (!draftBasketId) await useBasketState.getState().initDraftBasket();
-            const { draftBasketId: draft, sessionBasketId: session } = useBasketState.getState();
-            const bid = session;
-            if (!bid) {
-                setBasketItemCount(0);
-                setBasketQuantities({});
-                return;
-            }
-            try {
-                const res = await fetch(`${API_BASE_URL}/api/baskets/${bid}/items`);
-                const items = await res.json();
-                if (Array.isArray(items)) {
-                    if (draft === bid) {
-                        const q: Record<number, number> = {};
-                        items.forEach((i: any) => { q[i.productId] = parseFloat(i.quantity); });
-                        setBasketQuantities(q);
-                    }
-                    setBasketItemCount(items.filter((i: any) => parseFloat(i.quantity) > 0).length);
-                }
-            } catch {}
-        };
-        loadBasket();
-    }, [draftBasketId]));
+        if (!draftBasketId) void useBasketState.getState().initDraftBasket();
+        void refreshBasketQuantities();
+    }, [draftBasketId, refreshBasketQuantities]));
 
     useEffect(() => {
         if (draftBasketId) { setLatestCompared(null); return; }
@@ -496,6 +476,8 @@ export default function DiscountsScreen() {
 
     const draftBasketIdRef = useRef(draftBasketId);
     useEffect(() => { draftBasketIdRef.current = draftBasketId; }, [draftBasketId]);
+    const targetBasketIdRef = useRef(targetBasketId);
+    useEffect(() => { targetBasketIdRef.current = targetBasketId; }, [targetBasketId]);
     const commitAddRef = useRef(commitAdd);
     useEffect(() => { commitAddRef.current = commitAdd; }, [commitAdd]);
 
@@ -511,7 +493,6 @@ export default function DiscountsScreen() {
         commitAddRef.current(item.id, qty).then(result => {
             if (result.success) {
                 setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
-                setBasketItemCount(prev => prev + 1);
                 toastRef.current?.show(t('catalog.addedToast'));
             }
         }).finally(() => {
@@ -532,9 +513,8 @@ export default function DiscountsScreen() {
     // Remove the whole line (below one step, or explicit 0); tear the draft
     // basket down when it was the last item.
     const removeFromBasket = useCallback((item: DiscountedProduct) => {
-        const bid = draftBasketIdRef.current;
+        const bid = targetBasketIdRef.current ?? draftBasketIdRef.current;
         setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
-        setBasketItemCount(prev => Math.max(0, prev - 1));
         if (!bid) return;
         fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async allItems => {
             const bi = Array.isArray(allItems) ? allItems.find((i: any) => i.productId === item.id) : null;
@@ -545,7 +525,7 @@ export default function DiscountsScreen() {
     }, [clearSessionBasket]);
 
     const onSetQuantity = useCallback((item: DiscountedProduct, newQty: number) => {
-        const bid = draftBasketIdRef.current;
+        const bid = targetBasketIdRef.current ?? draftBasketIdRef.current;
         setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
         if (!bid) return;
         fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async items2 => {

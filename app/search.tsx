@@ -25,6 +25,7 @@ import {
 } from "react-native";
 import { LiquidGlass } from "@/components/LiquidGlass";
 import { MaterialProgress } from '@/components/MaterialProgress';
+import { useBasketQuantities } from '@/hooks/useBasketQuantities';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
 import { API_BASE_URL } from "../config/api";
 import { useReceiptPickerState , useBasketState } from "../state/basketState";
@@ -142,7 +143,8 @@ export default function SearchScreen() {
     const barClearance = useSafeBottomTabBarHeight();
     const { setPendingPick } = useReceiptPickerState();
     const { draftBasketId, setDraftBasketId } = useBasketState();
-    const [basketQuantities, setBasketQuantities] = useState<Record<number, number>>({});
+    // ONE target-aware source (session basket → draft fallback, basketRev-reactive).
+    const { basketId: targetBasketId, quantities: basketQuantities, setQuantities: setBasketQuantities, refresh: refreshBasketQuantities } = useBasketQuantities();
     const chainId =
         typeof params.chainId === "string" ? Number(params.chainId) : NaN;
     const productIndex =
@@ -155,7 +157,6 @@ export default function SearchScreen() {
         typeof params.ocrName === "string" ? params.ocrName : "",
     ).trim();
     const [createModalVisible, setCreateModalVisible] = useState(false);
-    const [basketItemCount, setBasketItemCount] = useState(0);
     const toastRef = useRef<ToastHandle>(null);
 
     // BROWSE PARITY: hydrate quantities from the draft basket on every focus.
@@ -170,21 +171,9 @@ export default function SearchScreen() {
             if (!useBasketState.getState().draftBasketId) {
                 await useBasketState.getState().initDraftBasket();
             }
-            const currentDraftId = useBasketState.getState().draftBasketId;
-            if (!currentDraftId) {
-                setBasketQuantities({});
-                setBasketItemCount(0);
-                return;
-            }
-            const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
-            const items = await res.json();
-            if (!Array.isArray(items)) return;
-            const quantities: { [productId: number]: number } = {};
-            items.forEach((item: any) => { quantities[item.productId] = parseFloat(item.quantity); });
-            setBasketQuantities(quantities);
-            setBasketItemCount(items.filter((i: any) => parseFloat(i.quantity) > 0).length);
+            await refreshBasketQuantities();
         } catch {}
-    }, []);
+    }, [refreshBasketQuantities]);
     useFocusEffect(useCallback(() => { void hydrateBasket(); }, [hydrateBasket]));
 
     // Absolute quantity set for an already-added product — used by the amount
@@ -193,7 +182,7 @@ export default function SearchScreen() {
     const setBasketQtyAbsolute = useCallback(async (productId: number, newQty: number) => {
         setBasketQuantities(prev => ({ ...prev, [productId]: Math.max(0, newQty) }));
         try {
-            const currentDraftId = useBasketState.getState().draftBasketId;
+            const currentDraftId = targetBasketId ?? useBasketState.getState().draftBasketId;
             if (!currentDraftId) return;
             const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
             const items = await res.json();
@@ -201,7 +190,6 @@ export default function SearchScreen() {
             if (!basketItem) return;
             if (newQty <= 0) {
                 await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
-                setBasketItemCount(prev => Math.max(0, prev - 1));
                 return;
             }
             await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
@@ -210,7 +198,7 @@ export default function SearchScreen() {
                 body: JSON.stringify({ quantity: newQty }),
             });
         } catch {}
-    }, []);
+    }, [targetBasketId, setBasketQuantities]);
 
     // Fresh add (non-picker path; the weighable/range picker is owned by
     // AddOrStepper and also lands here via onCommit). Adopts server truth on
@@ -222,7 +210,6 @@ export default function SearchScreen() {
                 void hydrateBasket();
                 toastRef.current?.show(result.message);
             } else {
-                setBasketItemCount(prev => prev + 1);
                 toastRef.current?.show(t('catalog.addedToast'));
             }
         });

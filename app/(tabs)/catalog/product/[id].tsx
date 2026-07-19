@@ -9,6 +9,7 @@ import {
  Animated as RNAnimated } from "react-native";
 import Animated from 'react-native-reanimated';
 import { useCollapsingHeader, CollapsingHeader } from '@/components/CollapsingHeader';
+import { useBasketQuantities } from '@/hooks/useBasketQuantities';
 import { SkeletonBox } from '@/components/SkeletonBox';
 import { ProductImage } from '@/components/ProductImage';
 import React, { useEffect, useLayoutEffect, useState, useMemo, useRef, useCallback } from 'react';
@@ -478,7 +479,14 @@ export default function ProductDetailScreen() {
     const [priceCache, setPriceCache] = useState<{ [key: string]: PricePoint[] }>({});
     const [chartModalSp, setChartModalSp] = useState<StoreProduct | null>(null);
     const [isAdding, setIsAdding] = useState(false);
-    const [basketQuantity, setBasketQuantity] = useState(0);
+    // Target-aware quantity (session basket → draft fallback); local override
+    // keeps the header stepper optimistic between commits.
+    const { basketId: targetBasketId, quantities: targetQuantities, refresh: refreshBasketQuantities } = useBasketQuantities();
+    const [qtyOverride, setQtyOverride] = useState<number | null>(null);
+    const basketQuantity = qtyOverride ?? targetQuantities[Number(id)] ?? 0;
+    const setBasketQuantity = setQtyOverride;
+    // Switching the target basket invalidates any optimistic override.
+    useEffect(() => { setQtyOverride(null); }, [targetBasketId]);
     const { mode, ready: prefReady } = useDisplayMode();
     const { draftBasketId, setDraftBasketId } = useBasketState();
     const templateItems = useTemplateAddState(s => s.items);
@@ -584,20 +592,11 @@ export default function ProductDetailScreen() {
     // final SP card isn't hidden under the stack.
     const BAR_HEIGHT = isTemplateMode ? 132 : 84; // basket mode: session-bar clearance
 
-    const fetchBasketQty = useCallback(() => {
-        const bid = useBasketState.getState().draftBasketId;
-        if (!bid) { setBasketQuantity(0); return; }
-        fetch(`${API_BASE_URL}/api/baskets/${bid}/items`)
-            .then(r => r.json())
-            .then((items: any[]) => {
-                if (!Array.isArray(items)) return;
-                const found = items.find((i: any) => i.productId === Number(id));
-                setBasketQuantity(found ? parseFloat(found.quantity) : 0);
-            })
-            .catch(() => {});
-    }, [id]);
-
-    useFocusEffect(useCallback(() => { fetchBasketQty(); }, [fetchBasketQty]));
+    // Focus refresh drops the optimistic override back onto server truth.
+    useFocusEffect(useCallback(() => {
+        setQtyOverride(null);
+        void refreshBasketQuantities();
+    }, [refreshBasketQuantities]));
 
     // One commit for the header AddOrStepper (basket mode): add (session-aware),
     // update or remove the draft-basket line. qty 0 = remove (and drop the
@@ -613,7 +612,7 @@ export default function ProductDetailScreen() {
             return;
         }
         setBasketQuantity(qty);
-        const bid = draftBasketIdRef.current;
+        const bid = targetBasketId ?? draftBasketIdRef.current;
         if (!bid) return;
         const all = await fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).catch(() => []);
         const found = Array.isArray(all) ? all.find((i: any) => i.productId === product.id) : null;
@@ -631,7 +630,7 @@ export default function ProductDetailScreen() {
                 body: JSON.stringify({ quantity: qty }),
             });
         }
-    }, [product, basketQuantity, draftBasketId, setDraftBasketId, mode]);
+    }, [product, basketQuantity, draftBasketId, setDraftBasketId, mode, targetBasketId]);
 
     // Template-mode commit (the sticky bottom AddOrStepper): the picker/stepper
     // set the absolute quantity (0 = remove).

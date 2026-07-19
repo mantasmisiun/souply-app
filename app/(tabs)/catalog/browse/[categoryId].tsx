@@ -1,5 +1,6 @@
 import { View, FlatList, Text, StyleSheet } from 'react-native';
 import { SkeletonBox } from '@/components/SkeletonBox';
+import { useBasketQuantities } from '@/hooks/useBasketQuantities';
 import { useEffect, useMemo, useState, useCallback, useRef, memo } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -76,8 +77,9 @@ export default function CategoryScreen() {
     const [loading, setLoading] = useState(true);
     const [loadingProducts, setLoadingProducts] = useState(false);
     const { draftBasketId, setDraftBasketId } = useBasketState();
-    const [basketQuantities, setBasketQuantities] = useState<{[productId: number]: number}>({});
-    const [basketItemCount, setBasketItemCount] = useState(0);
+    // ONE target-aware source: session basket (X → chooser switch included),
+    // draft fallback; re-fetches on basketRev.
+    const { basketId: targetBasketId, quantities: basketQuantities, setQuantities: setBasketQuantities, refresh: refreshBasketQuantities } = useBasketQuantities();
     // Products whose "Į krepšelį" POST is currently in flight. Prevents
     // rapid double-taps from firing a second add before the first lands
     // and paints the quantity control over the button.
@@ -135,28 +137,9 @@ export default function CategoryScreen() {
         // when the language changes (or on first hydration) so the chips
         // don't lag behind the rest of the UI.
     }, [categoryId, mode, prefReady, i18n.language]);
+    // Draft init still happens once so the no-session fallback has a basket.
     useEffect(() => {
-        const loadBasketQuantities = async () => {
-            if (!draftBasketId) {
-                await useBasketState.getState().initDraftBasket();
-            }
-            const currentDraftId = useBasketState.getState().draftBasketId;
-            if (!currentDraftId) return;
-
-            try {
-                const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
-                const items = await res.json();
-                if (Array.isArray(items)) {
-                    const quantities: {[productId: number]: number} = {};
-                    items.forEach((item: any) => {
-                        quantities[item.productId] = parseFloat(item.quantity);
-                    });
-                    setBasketQuantities(quantities);
-                    setBasketItemCount(items.filter((i: any) => parseFloat(i.quantity) > 0).length);
-                }
-            } catch {}
-        };
-        loadBasketQuantities();
+        if (!draftBasketId) void useBasketState.getState().initDraftBasket();
     }, [draftBasketId]);
 
     // Fetch the user's most recent compared basket for the add-to-basket
@@ -194,26 +177,7 @@ export default function CategoryScreen() {
     // and makes space for the basket bar that appears when items are added.
     // Also refreshes basket quantities on every focus so that deletions made
     // on the basket screen are reflected here immediately on return.
-    useFocusEffect(useCallback(() => {
-        const currentDraftId = useBasketState.getState().draftBasketId;
-        if (currentDraftId) {
-            fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`)
-                .then(r => r.json())
-                .then(items => {
-                    if (!Array.isArray(items)) return;
-                    const quantities: { [productId: number]: number } = {};
-                    items.forEach((item: any) => {
-                        quantities[item.productId] = parseFloat(item.quantity);
-                    });
-                    setBasketQuantities(quantities);
-                    setBasketItemCount(items.filter((i: any) => parseFloat(i.quantity) > 0).length);
-                })
-                .catch(() => {});
-        } else {
-            setBasketQuantities({});
-            setBasketItemCount(0);
-        }
-    }, []));
+    useFocusEffect(useCallback(() => { void refreshBasketQuantities(); }, [refreshBasketQuantities]));
 
     /**
      * Discriminated resolution for "where does this add go?":
@@ -321,6 +285,11 @@ export default function CategoryScreen() {
 
     const draftBasketIdRef = useRef(draftBasketId);
     useEffect(() => { draftBasketIdRef.current = draftBasketId; }, [draftBasketId]);
+    // Set/remove must hit the basket the cards DISPLAY (session target first) —
+    // writing to the draft while a session targets another basket silently
+    // edited the wrong basket.
+    const targetBasketIdRef = useRef(targetBasketId);
+    useEffect(() => { targetBasketIdRef.current = targetBasketId; }, [targetBasketId]);
     const commitAddRef = useRef(commitAdd);
     useEffect(() => { commitAddRef.current = commitAdd; }, [commitAdd]);
 
@@ -463,7 +432,6 @@ export default function CategoryScreen() {
         commitAddRef.current(item.id, qty).then(result => {
             if (result.success) {
                 setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
-                setBasketItemCount(prev => prev + 1);
                 toastRef.current?.show(t('catalog.addedToast'));
             }
         }).finally(() => {
@@ -474,9 +442,8 @@ export default function CategoryScreen() {
     // Remove the whole line (stepping below one step, or an explicit 0). When it
     // was the basket's last item the draft basket itself is torn down.
     const removeFromBasket = useCallback((item: Product) => {
-        const bid = draftBasketIdRef.current;
+        const bid = targetBasketIdRef.current ?? draftBasketIdRef.current;
         setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
-        setBasketItemCount(prev => Math.max(0, prev - 1));
         if (!bid) return;
         fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (allItems: any) => {
             const basketItem = Array.isArray(allItems) ? allItems.find((i: any) => i.productId === item.id) : null;
@@ -488,7 +455,7 @@ export default function CategoryScreen() {
 
     // Absolute set — the +/- stepper and the picker's edit-reopen both land here.
     const onSetQuantity = useCallback((item: Product, newQty: number) => {
-        const bid = draftBasketIdRef.current;
+        const bid = targetBasketIdRef.current ?? draftBasketIdRef.current;
         setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
         if (!bid) return;
         fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (items2: any) => {
