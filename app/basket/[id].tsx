@@ -12,7 +12,6 @@ import {
     Share,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
-import { SkeletonBox } from '../../components/SkeletonBox';
 import { isWeighableDisplay } from '../../utils/weighable';
 import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
@@ -34,6 +33,7 @@ import { AddOrStepper } from '../../components/AddOrStepper';
 import { BrandedQR } from '../../components/BrandedQR';
 import { ChefToqueGlyph } from '../../components/icons/tabGlyphs';
 import { SheetCard } from '../../components/SheetCard';
+import { ConfirmModal } from '../../components/ConfirmModal';
 import { useBasketSession } from '../../state/basketSession';
 import { fetchTrips, createTripInviteUrl } from '../../utils/tripsApi';
 import * as Haptics from 'expo-haptics';
@@ -372,26 +372,21 @@ export default function BasketDetailScreen() {
         } catch { setInviteOpen(false); }
     }, [id]);
 
-    // Remove the whole basket (confirm first) — deletes the server row and
-    // leaves the screen; any session targeting it is cleared.
-    const removeBasket = useCallback(() => {
-        Alert.alert(t('basketDetail.removeTitle'), t('basketDetail.removeBody'), [
-            { text: t('common.cancel'), style: 'cancel' },
-            {
-                text: t('basketDetail.removeConfirm'),
-                style: 'destructive',
-                onPress: async () => {
-                    await fetch(`${API_BASE_URL}/api/baskets/${id}`, { method: 'DELETE' }).catch(() => {});
-                    const sess = useBasketSession.getState();
-                    if (sess.target?.kind === 'basket' && sess.target.basketId === Number(id)) {
-                        useBasketSession.setState({ target: null, barVisible: false, itemCount: 0 });
-                    }
-                    clearSessionBasket();
-                    router.back();
-                },
-            },
-        ]);
-    }, [id, t, router, clearSessionBasket]);
+    // Remove the whole basket — a souply-styled confirm (not the stock
+    // Android alert). Deletes the server row, clears any session targeting
+    // it and leaves the screen.
+    const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
+    const removeBasket = useCallback(() => setRemoveConfirmOpen(true), []);
+    const doRemoveBasket = useCallback(async () => {
+        setRemoveConfirmOpen(false);
+        await fetch(`${API_BASE_URL}/api/baskets/${id}`, { method: 'DELETE' }).catch(() => {});
+        const sess = useBasketSession.getState();
+        if (sess.target?.kind === 'basket' && sess.target.basketId === Number(id)) {
+            useBasketSession.setState({ target: null, barVisible: false, itemCount: 0 });
+        }
+        clearSessionBasket();
+        router.back();
+    }, [id, router, clearSessionBasket]);
 
     // Changing location/store-count settings while compared is also an edit:
     // drop back to draft so the bottom button retargets to "Rasti parduotuves".
@@ -585,21 +580,14 @@ export default function BasketDetailScreen() {
 
     if (loading) return (
         <View style={styles.container}>
-            {/* Match the loaded header: white bg + pink back chevron + an
-                emoji-tile/name placeholder, so nothing flashes on load. */}
+            {/* A plain centered spinner on the page background — no boxed
+                placeholders (the skeleton read as a floating "loading card"). */}
             <Stack.Screen options={{ headerShown: false }} />
             <View style={{ paddingTop: 54, paddingHorizontal: 16 }}>
-                <View style={{ marginBottom: 16 }}><ScreenBackButton /></View>
-                <SkeletonBox width={200} height={24} borderRadius={7} />
-                {Array.from({ length: 5 }).map((_, i) => (
-                    <View key={i} style={{ flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 12 }}>
-                        <SkeletonBox width={56} height={56} borderRadius={8} />
-                        <View style={{ flex: 1, gap: 8 }}>
-                            <SkeletonBox width={170} height={14} borderRadius={6} />
-                            <SkeletonBox width={140} height={30} borderRadius={15} />
-                        </View>
-                    </View>
-                ))}
+                <ScreenBackButton />
+            </View>
+            <View style={styles.centered}>
+                <MaterialProgress size="large" color={colors.primary} />
             </View>
         </View>
     );
@@ -874,6 +862,7 @@ export default function BasketDetailScreen() {
                                         >
                                             <Text style={[styles.sheetRowTextRegular, { color: colors.textPrimary }]}>{t('basketDetail.renameBasket')}</Text>
                                         </TouchableOpacity>
+                                        <View style={styles.sectionSep} />
                                         <TouchableOpacity style={styles.sheetRow} onPress={removeBasket}>
                                             <Text style={[styles.sheetRowTextRegular, { color: colors.error }]}>{t('basketDetail.removeBasket')}</Text>
                                         </TouchableOpacity>
@@ -959,6 +948,16 @@ export default function BasketDetailScreen() {
                 onCancel={() => setLocationPromptVisible(false)}
             />
 
+            <ConfirmModal
+                visible={removeConfirmOpen}
+                title={t('basketDetail.removeTitle')}
+                body={t('basketDetail.removeBody')}
+                confirmLabel={t('basketDetail.removeConfirm')}
+                cancelLabel={t('common.cancel')}
+                destructive
+                onConfirm={doRemoveBasket}
+                onClose={() => setRemoveConfirmOpen(false)}
+            />
 
             <Toast ref={toastRef} />
         </>
@@ -1039,7 +1038,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     sheetTitle: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
     sectionSep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem },
     sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 14 },
-    sectionTitleText: { fontSize: 20, fontWeight: '800', color: c.textPrimary },
+    sectionTitleText: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
     qrBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
     qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: 24, alignItems: 'center', gap: 16 },
     sheetPanelContent: {
