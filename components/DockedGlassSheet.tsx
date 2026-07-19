@@ -499,6 +499,9 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     // making the side gaps wider than the bottom.
     wrap: {
         position: 'absolute', left: 0, right: 0, bottom: 0,
+        // Above screen chrome (CollapsingHeader overlay = 10): an expanded
+        // sheet must cover floating back/search chips, not slide under them.
+        zIndex: 20, elevation: 20,
     },
     clip: {
         position: 'absolute',

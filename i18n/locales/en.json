@@ -1011,6 +1011,11 @@
     "saveAsTemplate": "Save to Recipe"
   },
   "basketDetail": {
+    "saveTitle": "Save",
+    "saveSub": "as Recipe",
+    "inviteTitle": "Invite",
+    "inviteSub": "QR · link · email",
+    "shareLink": "Share link",
     "addMore": "Add more",
     "stores": "Stores",
     "saveAsTemplate": "Save as recipe",
@@ -1605,6 +1610,7 @@
     "rit": "rolls"
   },
   "basketSession": {
+    "itemsLabel": "Items:",
     "bar": "Items: {{count}} · Basket",
     "familyBar": "Family basket · Items: {{count}}",
     "switch": "Switch basket",

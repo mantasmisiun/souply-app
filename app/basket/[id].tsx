@@ -9,6 +9,7 @@ import {
     Modal,
     Platform,
     Dimensions,
+    Share,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { SkeletonBox } from '../../components/SkeletonBox';
@@ -28,7 +29,6 @@ import { useTheme, radius, elevation, type AppTheme } from '../../constants/them
 import { useBasketState } from '../../state/basketState';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import LocationPromptModal from '../../components/LocationPromptModal';
-import LocationSettingsPanel from '../../components/LocationSettingsPanel';
 import { DockedGlassSheet, type DockedSheetControls } from '../../components/DockedGlassSheet';
 import { AddOrStepper } from '../../components/AddOrStepper';
 import { BrandedQR } from '../../components/BrandedQR';
@@ -209,7 +209,6 @@ export default function BasketDetailScreen() {
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorInstantiate'));
         }
     }, [basket?.sourceTemplateId, router, t]);
-    const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
     const [activeSettings, setActiveSettings] = useState<LocationSettings | null>(null);
     // Snapshot of the settings used at the time of the most recent calculation.
     // Loaded from AsyncStorage `basket_calc_meta_${id}` whenever the basket
@@ -278,11 +277,9 @@ export default function BasketDetailScreen() {
 
     useFocusEffect(useCallback(() => {
         fetchBasket();
-        setSettingsRefreshKey(k => k + 1);
+        // Store-search settings moved to the MAP surface — this screen only
+        // reads them (storeCount / route completeness gate the Stores pill).
         getLocationSettings().then(setActiveSettings);
-        // Returning from the preset map: the sheet stayed mounted (and
-        // expanded) through the push — the refreshKey bump above reloads the
-        // presets, so the new address is already in the panel.
         // Hydrate the calc-time settings snapshot for the
         // "settings changed" branch. Missing key → leave null and the
         // button falls back to "Rodyti parduotuves".
@@ -832,31 +829,25 @@ export default function BasketDetailScreen() {
                             maxStage: 2,
                             content: (
                                 <View style={styles.sheetPanelContent}>
-                                    <TouchableOpacity style={styles.sheetRow} onPress={() => void openInvite()}>
-                                        <Ionicons name="qr-code-outline" size={20} color={colors.primary} />
-                                        <Text style={[styles.sheetRowText, { flex: 1 }]}>{t('trips.invite')}</Text>
-                                        <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
-                                    </TouchableOpacity>
-                                    {!fromTemplate && (
-                                        <TouchableOpacity style={styles.sheetRow} onPress={() => setSaveTplVisible(true)}>
-                                            <Ionicons name="bookmark-outline" size={20} color={colors.primary} />
-                                            <Text style={[styles.sheetRowText, { flex: 1 }]}>{t('basketDetail.saveAsTemplate')}</Text>
-                                            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                                    {/* iOS-style big actions, two per row. */}
+                                    <View style={styles.bigBtnRow}>
+                                        {!fromTemplate && (
+                                            <TouchableOpacity style={styles.bigActionBtn} onPress={() => setSaveTplVisible(true)} activeOpacity={0.7}>
+                                                <Ionicons name="bookmark-outline" size={24} color={colors.primary} />
+                                                <Text style={styles.bigActionTitle}>{t('basketDetail.saveTitle')}</Text>
+                                                <Text style={styles.bigActionSub}>{t('basketDetail.saveSub')}</Text>
+                                            </TouchableOpacity>
+                                        )}
+                                        <TouchableOpacity style={styles.bigActionBtn} onPress={() => void openInvite()} activeOpacity={0.7}>
+                                            <Ionicons name="qr-code-outline" size={24} color={colors.primary} />
+                                            <Text style={styles.bigActionTitle}>{t('basketDetail.inviteTitle')}</Text>
+                                            <Text style={styles.bigActionSub}>{t('basketDetail.inviteSub')}</Text>
                                         </TouchableOpacity>
-                                    )}
+                                    </View>
                                     <TouchableOpacity style={styles.sheetRow} onPress={clearBasket}>
                                         <Ionicons name="trash-outline" size={20} color={colors.error} />
                                         <Text style={[styles.sheetRowText, { flex: 1, color: colors.error }]}>{t('basketDetail.clearBasket')}</Text>
                                     </TouchableOpacity>
-                                    <LocationSettingsPanel
-                                        refreshKey={settingsRefreshKey}
-                                        onChanged={setActiveSettings}
-                                        onOpenPresetMap={(key, label, existing) => {
-                                            router.push(
-                                                `/preset/${key}/map?label=${encodeURIComponent(label)}${existing ? `&lat=${existing.lat}&lng=${existing.lng}` : ''}` as any,
-                                            );
-                                        }}
-                                    />
                                 </View>
                             ),
                         } : undefined}
@@ -871,6 +862,15 @@ export default function BasketDetailScreen() {
                             {inviteUrl
                                 ? <BrandedQR value={inviteUrl} size={200} />
                                 : <MaterialProgress size="large" color={colors.primary} />}
+                            {inviteUrl && (
+                                <TouchableOpacity
+                                    style={styles.storesPill}
+                                    onPress={() => { void Share.share({ message: inviteUrl }); }}
+                                >
+                                    <Ionicons name="share-outline" size={18} color={colors.onPrimary} />
+                                    <Text style={styles.storesPillText}>{t('basketDetail.shareLink')}</Text>
+                                </TouchableOpacity>
+                            )}
                         </View>
                     </TouchableOpacity>
                 </Modal>
@@ -1000,6 +1000,14 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // Separator: from the title start (past the image) to the trash end.
     rowSep: { height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginLeft: 56 + 12 },
     sheetRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+    bigBtnRow: { flexDirection: 'row', gap: 12, marginBottom: 4 },
+    bigActionBtn: {
+        flex: 1, alignItems: 'flex-start', gap: 2,
+        backgroundColor: c.surfaceMuted, borderRadius: radius.lg,
+        paddingHorizontal: 14, paddingVertical: 14,
+    },
+    bigActionTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginTop: 6 },
+    bigActionSub: { fontSize: 12, fontWeight: '500', color: c.textSecondary },
     sheetRowText: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
     qrBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
     qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: 24, alignItems: 'center', gap: 16 },
