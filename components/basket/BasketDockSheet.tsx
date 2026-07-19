@@ -10,6 +10,7 @@ import { useBasketSession, type ChooserOption } from '../../state/basketSession'
 import { useBasketState } from '../../state/basketState';
 import { applyChooserPick } from '../../utils/basketUtils';
 import { formatDate } from '../../utils/formatCurrency';
+import { formatDayDate } from '../../utils/formatDayDate';
 import { TemplateCoverEditor, type CoverDraft } from '../TemplateCoverEditor';
 import { ShoppingSheet } from './ShoppingSheet';
 import { createTemplate } from '../../utils/basketTemplatesApi';
@@ -31,7 +32,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const colors = useTheme();
     const isDark = useResolvedScheme() === 'dark';
     const styles = useMemo(() => makeStyles(colors, isDark), [colors, isDark]);
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const pathname = usePathname();
     const { setDraftBasketId } = useBasketState();
 
@@ -113,7 +114,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const rowTitle = (o: ChooserOption): string =>
         o.key === 'template' ? (o.name || t('basketSession.optionTemplate'))
         : o.key === 'family' ? t('basketSession.optionFamily')
-        : o.updatedAt ? formatDate(o.updatedAt) : t('basketSession.optionPrevious');
+        : o.updatedAt ? formatDayDate(o.updatedAt, i18n.language) : t('basketSession.optionPrevious');
     // Newest-first names, each capped so ≥3 fit on one line; middle-dot joined.
     const previewLine = (names: string[]): string =>
         names.slice(0, 4).map(n => (n.length > 18 ? `${n.slice(0, 17).trimEnd()}…` : n)).join('  ·  ');

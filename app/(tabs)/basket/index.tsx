@@ -19,7 +19,7 @@ import {
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { Stack, useRouter, useFocusEffect } from 'expo-router';
 import { glassHeaderOptions } from '../../../constants/navHeader';
 import { ScreenHeading } from '../../../components/ScreenHeading';
@@ -35,6 +35,7 @@ import { useTheme, radius, spacing, type AppTheme } from '../../../constants/the
 import { ScalePressable } from '../../../components/ScalePressable';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatDate } from '../../../utils/formatCurrency';
+import { formatDayDate } from '../../../utils/formatDayDate';
 import { useShoppingSheet } from '../../../state/shoppingSheet';
 import { buildReceiptDotMap, parseLooseDate, sameDay } from '../../../utils/receiptDots';
 import {
@@ -42,6 +43,7 @@ import {
     type TripSummary, type HouseholdInfo,
 } from '../../../utils/tripsApi';
 import { tripStageHref } from '../../../utils/tripStageRoute';
+import { ShoppingFilterChips } from '../../../components/basket/ShoppingFilterChips';
 
 const STAGE_ICONS: Record<number, keyof typeof Ionicons.glyphMap> = {
     1: 'cart-outline', 2: 'storefront-outline', 3: 'list-outline', 4: 'receipt-outline', 5: 'stats-chart-outline',
@@ -49,7 +51,7 @@ const STAGE_ICONS: Record<number, keyof typeof Ionicons.glyphMap> = {
 
 export default function TripsScreen() {
     const colors = useTheme();
-    const { t } = useTranslation();
+    const { t, i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
     const header = useCollapsingHeader();
@@ -155,7 +157,7 @@ export default function TripsScreen() {
     const stageCta = (s: number) => t(`trips.cta${s}`);
 
     const tripTitle = (trip: TripSummary) =>
-        trip.name ?? (trip.isAdHoc ? t('trips.adHocName') : formatDate(trip.anchorDate));
+        trip.name ?? (trip.isAdHoc ? t('trips.adHocName') : formatDayDate(trip.anchorDate, i18n.language));
 
     const slotLine = (trip: TripSummary) => {
         if (trip.slots.length === 0) {
@@ -187,6 +189,7 @@ export default function TripsScreen() {
                 controller={header}
                 pinned={(
                     <>
+                        <ShoppingFilterChips />
                         {refreshing && (
                             <View style={styles.refreshingBanner}>
                                 <MaterialProgress size="small" color={colors.primary} />
@@ -221,30 +224,46 @@ export default function TripsScreen() {
                         </ScalePressable>
                     </View>
                 ) : (
-                    active.map(trip => (
+                    active.map(trip => {
+                        const preview = trip.basket?.itemPreview ?? [];
+                        return (
                         <TouchableOpacity key={trip.id} style={styles.card} onPress={() => openTrip(trip)} activeOpacity={0.8}>
-                            <View style={styles.cardTop}>
-                                <View style={styles.stageChip}>
-                                    <Ionicons name={STAGE_ICONS[trip.stage]} size={12} color={colors.primary} />
-                                    <Text style={styles.stageChipText}>{stageLabel(trip.stage)}</Text>
-                                </View>
-                                {trip.memberCount > 1 && (
-                                    <View style={styles.membersChip}>
-                                        <Ionicons name="people-outline" size={12} color={colors.textSecondary} />
-                                        <Text style={styles.membersChipText}>{trip.memberCount}</Text>
+                            <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                                <View style={styles.cardTop}>
+                                    <View style={styles.cartChip}>
+                                        <Ionicons name="cart-outline" size={14} color={colors.primary} />
+                                        <Text style={styles.cartChipText}>{trip.basket?.itemCount ?? 0}</Text>
                                     </View>
-                                )}
+                                    {trip.memberCount > 1 && (
+                                        <View style={styles.membersChip}>
+                                            <Ionicons name="people-outline" size={12} color={colors.textSecondary} />
+                                            <Text style={styles.membersChipText}>{trip.memberCount}</Text>
+                                        </View>
+                                    )}
+                                </View>
+                                <Text style={styles.cardTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
+                                {preview.length > 0 ? (
+                                    // Newest items first — each name caps and ellipsises so
+                                    // at least three fit on the row.
+                                    <View style={styles.previewRow}>
+                                        {preview.slice(0, 3).map((name, i) => (
+                                            <React.Fragment key={i}>
+                                                {i > 0 && <Text style={styles.previewDot}>·</Text>}
+                                                <Text style={styles.previewName} numberOfLines={1}>{name}</Text>
+                                            </React.Fragment>
+                                        ))}
+                                    </View>
+                                ) : slotLine(trip) ? (
+                                    <Text style={styles.cardMeta} numberOfLines={1}>{slotLine(trip)}</Text>
+                                ) : null}
                             </View>
-                            <Text style={styles.cardTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
-                            {slotLine(trip) ? (
-                                <Text style={styles.cardMeta} numberOfLines={1}>{slotLine(trip)}</Text>
-                            ) : null}
-                            <View style={styles.ctaRow}>
+                            <View style={styles.ctaBtn}>
                                 <Text style={styles.ctaText}>{stageCta(trip.stage)}</Text>
                                 <Ionicons name="chevron-forward" size={16} color={colors.primary} />
                             </View>
                         </TouchableOpacity>
-                    ))
+                        );
+                    })
                 )}
 
                 {/* Archyvas — collapsed by default; tap a row = explicit resume. */}
@@ -301,7 +320,18 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     card: {
         backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: 14, marginBottom: 10,
         borderWidth: 3, borderColor: 'transparent', borderLeftColor: c.primary,
+        flexDirection: 'row', alignItems: 'center', gap: 10,
     },
+    cartChip: {
+        flexDirection: 'row', alignItems: 'center', gap: 4,
+        backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderRadius: radius.pill,
+        paddingHorizontal: 10, paddingVertical: 4,
+    },
+    cartChipText: { fontSize: 13, fontWeight: '800', color: c.primary },
+    previewRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    previewName: { flexShrink: 1, fontSize: 12, color: c.textSecondary, maxWidth: '38%' },
+    previewDot: { fontSize: 12, color: c.textMuted },
+    ctaBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingLeft: 4 },
     cardTop: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
     stageChip: {
         flexDirection: 'row', alignItems: 'center', gap: 4,

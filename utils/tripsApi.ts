@@ -31,7 +31,11 @@ export interface TripSummary {
     stage: 1 | 2 | 3 | 4 | 5;
     memberCount: number;
     anchorDate: string;
-    basket: { id: number; status: string; itemCount: number } | null;
+    basket: {
+        id: number; status: string; itemCount: number;
+        /** Newest-first item-name preview (max 5). */
+        itemPreview?: string[];
+    } | null;
     slots: TripSlot[];
     receiptCount: number;
 }
