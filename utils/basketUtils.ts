@@ -144,6 +144,11 @@ export const applyChooserPick = async (
     setDraftBasketId: (id: number) => void,
 ): Promise<void> => {
     const session = useBasketSession.getState();
+    // CLAIM the queued adds BEFORE collapsing: collapse SYNCHRONOUSLY fires the
+    // dock's stage-0 handler, whose "chooser dismissed without a pick" guard
+    // (target==null && pending) would cancel-and-clear the queue we are about
+    // to flush — the add would silently vanish (bug: pick applied, item lost).
+    const pending = session.takePending();
     session.closeChooser();
     // Collapse the raised chooser sheet — the session continues COLLAPSED (just
     // the bar) so the user keeps browsing; they pull it up to review.
@@ -154,7 +159,7 @@ export const applyChooserPick = async (
     if (option.key === 'template' && option.templateId != null) {
         const templateId = option.templateId;
         session.setTarget({ kind: 'template', templateId, name: option.name ?? undefined }, option.itemCount);
-        for (const add of session.takePending()) {
+        for (const add of pending) {
             let r: { success: boolean; message: string };
             try {
                 await addTemplateItem(templateId, { productId: add.productId, quantity: add.quantity });
@@ -180,7 +185,6 @@ export const applyChooserPick = async (
         basketId = await ensureDraftBasket(null, setDraftBasketId, userId, true);
     }
     session.setTarget({ kind: 'basket', basketId, isFamily: option.key === 'family' }, option.itemCount);
-    const pending = session.takePending();
     for (const add of pending) {
         const r = await postBasketItem(basketId, add.productId, add.quantity, add.matchMode);
         if (r.success) {
