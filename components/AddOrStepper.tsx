@@ -127,6 +127,7 @@ export function AddOrStepper({
                 <AmountPickerModal
                     visible={pickerOpen}
                     productName={product.name ?? ''}
+                    productId={product.id}
                     canonicalUnit={product.canonicalUnit}
                     canonicalStep={product.canonicalStep}
                     canonicalFamily={product.canonicalFamily}

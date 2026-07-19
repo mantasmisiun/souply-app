@@ -595,7 +595,7 @@
     "weighable": "Parduodama pagal svorį",
     "packages_one": "Pakuotė: {{value}} {{unit}}",
     "packages_other": "Pakuotės: {{min}} – {{max}} {{unit}}",
-    "label": "Kiek jums reikia?",
+    "custom": "Kita",
     "hintWeighable": "Kiekis bus pasvertas parduotuvėje",
     "hintPackages": "Kiekis bus suapvalintas pagal pakuotės dydį",
     "add": "Pridėti",

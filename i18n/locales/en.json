@@ -626,7 +626,7 @@
     "weighable": "Sold by weight",
     "packages_one": "Package: {{value}} {{unit}}",
     "packages_other": "Packages: {{min}} – {{max}} {{unit}}",
-    "label": "How much do you need?",
+    "custom": "Custom",
     "hintWeighable": "Amount will be weighed at the store",
     "hintPackages": "Amount will be rounded to package size",
     "add": "Add",
