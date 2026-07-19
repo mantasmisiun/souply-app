@@ -11,6 +11,13 @@
     "wrongClosedBody": "Receipts can only be removed from recent trips."
   },
   "tripMap": {
+    "actionsTitle": "Actions",
+    "basketBtn": "Basket",
+    "basketBtnSub": "View",
+    "mapSettings": "Map settings",
+    "locationRoute": "Location & Route",
+    "saverOn": "Compare identical and similar products",
+    "saverOff": "Compare only identical products",
     "tab_basket": "Basket",
     "tab_stores": "Stores",
     "tab_list": "List",
@@ -1011,9 +1018,9 @@
     "saveAsTemplate": "Save to Recipe"
   },
   "basketDetail": {
-    "renameBasket": "Rename basket",
+    "renameBasket": "Rename",
     "actionsTitle": "Actions",
-    "settings": "Settings",
+    "settings": "Basket settings",
     "removeBasket": "Remove",
     "removeTitle": "Remove basket?",
     "removeBody": "This deletes the basket and its items.",
@@ -1051,6 +1058,7 @@
     "viewStore": "Store"
   },
   "results": {
+    "morePrices": "More prices",
     "loading": "Calculating prices…",
     "tapStore": "Tap a store",
     "batchCalculating": "Calculating…",

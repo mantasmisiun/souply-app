@@ -34,6 +34,9 @@ import { LiquidGlass } from '../LiquidGlass';
 import { buildSplitOptions, TRIP_RADIUS_KM, type SheetOption } from '../../utils/splitOptions';
 import { BrandedQR } from '../BrandedQR';
 import { fetchTrips, createTripInviteUrl } from '../../utils/tripsApi';
+import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
+import { SheetCard } from '../SheetCard';
+import LocationSettingsPanel from '../LocationSettingsPanel';
 
 // StoreResult / ItemResult now live in utils/basketPricing (shared with the
 // lazy /store-prices fetch) — imported above.
@@ -107,12 +110,35 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // selected stores in the area above the sheet.
     const [sheetHeight, setSheetHeight] = useState(0);
     // Trip options (simplified flow): GPS/route settings, Saver mode and the
-    // trip invite live on the MAP — the one place they change an outcome.
-    const [optionsOpen, setOptionsOpen] = useState(false);
+    // trip invite live on the MAP dock — the one place they change an outcome.
     const [saverMode, setSaverMode] = useState(false);
     const [inviteUrl, setInviteUrl] = useState<string | null>(null);
     const [inviteOpen, setInviteOpen] = useState(false);
     useEffect(() => { void AsyncStorage.getItem('saverMode').then(v => setSaverMode(v === '1')); }, []);
+    // ── Glass dock (same component as every new screen). Collapsed = a bar
+    // with the "More Prices ›" pill; expanded = a 2-page nav (Actions ↔
+    // Location & Route). ────────────────────────────────────────────────────
+    const dockRef = useRef<DockedSheetControls>(null);
+    const [dockBarH, setDockBarH] = useState(44);
+    const [dockClearance, setDockClearance] = useState(120);
+    const [sheetPage, setSheetPage] = useState<'actions' | 'location'>('actions');
+    const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
+    // Basket item count for the "Basket" dock button.
+    const [basketItemCount, setBasketItemCount] = useState(0);
+    useEffect(() => {
+        let alive = true;
+        fetch(`${API_BASE_URL}/api/baskets/${id}/items`)
+            .then(r => (r.ok ? r.json() : []))
+            .then(rows => { if (alive) setBasketItemCount(Array.isArray(rows) ? rows.length : 0); })
+            .catch(() => {});
+        return () => { alive = false; };
+    }, [id]);
+    // Horizontal page slide inside the sheet (Actions ↔ Location & Route):
+    // a two-page row translated by the measured sheet width.
+    const [pageW, setPageW] = useState(() => require('react-native').Dimensions.get('window').width - 64);
+    const pageX = useSharedValue(0);
+    useEffect(() => { pageX.value = withTiming(sheetPage === 'location' ? -pageW : 0, { duration: 280 }); }, [sheetPage, pageW, pageX]);
+    const pagesRowStyle = useAnimatedStyle(() => ({ transform: [{ translateX: pageX.value }] }));
     const openInvite = useCallback(async () => {
         setInviteOpen(true);
         setInviteUrl(null);
@@ -837,7 +863,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                             onLazyPrice={handleLazyPrice}
                             routeCoords={routeCoords}
                             onVisibleUnpricedChange={setVisibleUnpriced}
-                            bottomOverlay={selectedOption ? sheetHeight + bottomClearance : bottomClearance}
+                            bottomOverlay={selectedOption ? sheetHeight + bottomClearance : Math.max(bottomClearance, embedded ? 0 : dockClearance)}
                         />
                         {/* Full-bleed map → floating back circle, top-left
                             (standalone route only — the embedding host owns
@@ -858,14 +884,6 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                                 </TouchableOpacity>
                             </View>
                         )}
-                        {/* Trip options — floating button, top-right column. */}
-                        <View style={[styles.mapTopRight, { top: topInset + 64 }]} pointerEvents="box-none">
-                            <TouchableOpacity style={styles.mapBackShadow} onPress={() => setOptionsOpen(true)} activeOpacity={0.8}>
-                                <LiquidGlass style={styles.mapBackBtn} fallback="solid">
-                                    <Ionicons name="options-outline" size={iconSize.lg} color={colors.primary} />
-                                </LiquidGlass>
-                            </TouchableOpacity>
-                        </View>
                         {/* Top-centre store-count toggle. Instant client re-rank
                             of how the basket is split across 1/2/3 shops. */}
                         <View style={[styles.mapTopCenter, { top: topInset + 10 }]} pointerEvents="box-none">
@@ -877,78 +895,141 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                         <MaterialProgress size="large" color={colors.primary} />
                     </View>
                 )}
-                {/* Tap a pin → options sheet; nothing selected → a subtle hint. */}
-                {!loading && mapMounted ? (
-                    selectedOption ? (
-                        <ResultsBottomSheet
-                            options={selectedOptions}
-                            selectedKey={selectedOption.key}
-                            onSelect={handleSelectOption}
-                            onClose={closeSheet}
-                            onNavigate={handleNavigateSelected}
-                            onCreateList={handleCreateShoppingList}
-                            creatingList={creatingList}
-                            colors={colors}
-                            bottomInset={bottomInset}
-                            onHeightChange={setSheetHeight}
-                        />
-                    ) : visibleUnpriced.length > 0 ? (
-                        // Un-priced stores in view → one-tap "price this area".
-                        <View style={[styles.hintWrap, { bottom: spacing.xl + bottomInset }]} pointerEvents="box-none">
-                            <TouchableOpacity
-                                style={styles.batchBtn}
-                                onPress={handleBatchPrice}
-                                disabled={batchPricing}
-                                activeOpacity={0.85}
-                            >
-                                {batchPricing
-                                    ? <MaterialProgress size="small" color={colors.onPrimary} />
-                                    : <Ionicons name="pricetags-outline" size={iconSize.sm} color={colors.onPrimary} />}
-                                <Text style={styles.batchBtnText}>
-                                    {batchPricing ? t('results.batchCalculating') : t('results.batchMore', { count: visibleUnpriced.length })}
-                                </Text>
-                            </TouchableOpacity>
-                        </View>
-                    ) : (
-                        <View style={[styles.hintWrap, { bottom: spacing.xl + bottomInset }]} pointerEvents="none">
-                            <LiquidGlass style={styles.hintPill} fallback="solid" interactive={false}>
-                                <Ionicons name="hand-left-outline" size={iconSize.sm} color={colors.textSecondary} />
-                                <Text style={styles.hintText}>{t('results.tapStore')}</Text>
-                            </LiquidGlass>
-                        </View>
-                    )
+                {/* Tap a pin → the create-list sheet (coexists with the dock:
+                    the dock hides while a store option is selected). */}
+                {!loading && mapMounted && selectedOption ? (
+                    <ResultsBottomSheet
+                        options={selectedOptions}
+                        selectedKey={selectedOption.key}
+                        onSelect={handleSelectOption}
+                        onClose={closeSheet}
+                        onNavigate={handleNavigateSelected}
+                        onCreateList={handleCreateShoppingList}
+                        creatingList={creatingList}
+                        colors={colors}
+                        bottomInset={bottomInset}
+                        onHeightChange={setSheetHeight}
+                    />
                 ) : null}
             </View>
-            {/* Trip options: location/route settings, Saver mode, invite. */}
-            <Modal visible={optionsOpen} transparent animationType="slide" onRequestClose={() => setOptionsOpen(false)}>
-                <TouchableOpacity style={styles.optBackdrop} activeOpacity={1} onPress={() => setOptionsOpen(false)}>
-                    <View style={[styles.optCard, { paddingBottom: safeBottomInset + spacing.lg }]} onStartShouldSetResponder={() => true}>
-                        <TouchableOpacity style={styles.optRow} onPress={() => { setOptionsOpen(false); router.push('/settings' as any); }}>
-                            <Ionicons name="location-outline" size={20} color={colors.primary} />
-                            <Text style={[styles.optText, { flex: 1 }]}>{t('tripMap.locationSettings')}</Text>
-                            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
-                        </TouchableOpacity>
-                        <View style={styles.optRow}>
-                            <Ionicons name="wallet-outline" size={20} color={colors.primary} />
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.optText}>{t('tripMap.saverMode')}</Text>
-                                <Text style={styles.optSub}>{t('tripMap.saverModeSub')}</Text>
-                            </View>
-                            <Switch
-                                value={saverMode}
-                                onValueChange={(v) => { setSaverMode(v); void AsyncStorage.setItem('saverMode', v ? '1' : '0'); }}
-                                trackColor={{ false: colors.border, true: colors.primary }}
-                                thumbColor={colors.onPrimary}
-                            />
+
+            {/* The glass dock — collapsed = "More Prices ›" pill; expanded =
+                Actions ↔ Location & Route pages. Hidden while a store option
+                is selected (the create-list sheet takes over). */}
+            {!loading && mapMounted && !embedded && !selectedOption && (
+                <DockedGlassSheet
+                    ref={dockRef}
+                    colors={colors}
+                    onCollapsedClearance={setDockClearance}
+                    barRowHeight={dockBarH}
+                    barRow={
+                        <View
+                            style={styles.dockBar}
+                            onLayout={e => { const h = Math.round(e.nativeEvent.layout.height); if (h > 0) setDockBarH(h); }}
+                        >
+                            {visibleUnpriced.length > 0 ? (
+                                <TouchableOpacity
+                                    style={styles.morePricesPill}
+                                    onPress={handleBatchPrice}
+                                    disabled={batchPricing}
+                                    activeOpacity={0.85}
+                                >
+                                    {batchPricing
+                                        ? <MaterialProgress size="small" color={colors.onPrimary} />
+                                        : <>
+                                            <Text style={styles.morePricesText}>{t('results.morePrices')}</Text>
+                                            <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
+                                          </>}
+                                </TouchableOpacity>
+                            ) : (
+                                <Text style={styles.dockHint}>{t('results.tapStore')}</Text>
+                            )}
                         </View>
-                        <TouchableOpacity style={styles.optRow} onPress={() => { setOptionsOpen(false); void openInvite(); }}>
-                            <Ionicons name="qr-code-outline" size={20} color={colors.primary} />
-                            <Text style={[styles.optText, { flex: 1 }]}>{t('trips.invite')}</Text>
-                            <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
-                        </TouchableOpacity>
-                    </View>
-                </TouchableOpacity>
-            </Modal>
+                    }
+                    sheet={{
+                        maxStage: 2,
+                        onStageChange: (st) => { if (st === 0) setSheetPage('actions'); },
+                        content: (
+                            <View
+                                style={styles.dockPagesClip}
+                                onLayout={e => { const w = Math.round(e.nativeEvent.layout.width); if (w > 0) setPageW(w); }}
+                            >
+                                <Animated.View style={[styles.dockPagesRow, { width: pageW * 2 }, pagesRowStyle]}>
+                                    {/* Page 1 — Actions. */}
+                                    <View style={{ width: pageW }}>
+                                        <Text style={styles.sheetTitle}>{t('tripMap.actionsTitle')}</Text>
+                                        <View style={styles.bigBtnRow}>
+                                            <TouchableOpacity style={{ flex: 1 }} onPress={() => router.push(`/basket/${id}` as any)} activeOpacity={0.7}>
+                                                <SheetCard style={styles.bigActionCard}>
+                                                    <View style={styles.cartBadge}>
+                                                        <Ionicons name="cart-outline" size={22} color={colors.primary} />
+                                                        {basketItemCount > 0 && (
+                                                            <View style={styles.cartCount}><Text style={styles.cartCountText}>{basketItemCount}</Text></View>
+                                                        )}
+                                                    </View>
+                                                    <Text style={styles.bigActionTitle}>{t('tripMap.basketBtn')}</Text>
+                                                    <Text style={styles.bigActionSub}>{t('tripMap.basketBtnSub')}</Text>
+                                                </SheetCard>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity style={{ flex: 1 }} onPress={() => void openInvite()} activeOpacity={0.7}>
+                                                <SheetCard style={styles.bigActionCard}>
+                                                    <Ionicons name="person-add" size={24} color={colors.primary} />
+                                                    <Text style={styles.bigActionTitle}>{t('basketDetail.inviteTitle')}</Text>
+                                                    <Text style={styles.bigActionSub}>{t('basketDetail.inviteSub')}</Text>
+                                                </SheetCard>
+                                            </TouchableOpacity>
+                                        </View>
+                                        <SheetCard>
+                                            <View style={styles.sectionTitleRow}>
+                                                <Ionicons name="settings" size={20} color={colors.primary} />
+                                                <Text style={styles.sectionTitleText}>{t('tripMap.mapSettings')}</Text>
+                                            </View>
+                                            <View style={styles.sectionSep} />
+                                            <View style={styles.settingRow}>
+                                                <Ionicons name="wallet-outline" size={20} color={colors.primary} />
+                                                <View style={{ flex: 1 }}>
+                                                    <Text style={styles.settingText}>{t('tripMap.saverMode')}</Text>
+                                                    <Text style={styles.settingSub}>{saverMode ? t('tripMap.saverOn') : t('tripMap.saverOff')}</Text>
+                                                </View>
+                                                <Switch
+                                                    value={saverMode}
+                                                    onValueChange={(v) => { setSaverMode(v); void AsyncStorage.setItem('saverMode', v ? '1' : '0'); }}
+                                                    trackColor={{ false: colors.border, true: colors.primary }}
+                                                    thumbColor={colors.onPrimary}
+                                                />
+                                            </View>
+                                            <View style={styles.sectionSep} />
+                                            <TouchableOpacity style={styles.settingRow} onPress={() => { setSettingsRefreshKey(k => k + 1); setSheetPage('location'); }}>
+                                                <Ionicons name="navigate-outline" size={20} color={colors.primary} />
+                                                <Text style={[styles.settingText, { flex: 1 }]}>{t('tripMap.locationRoute')}</Text>
+                                                <Ionicons name="chevron-forward" size={16} color={colors.textSecondary} />
+                                            </TouchableOpacity>
+                                        </SheetCard>
+                                    </View>
+                                    {/* Page 2 — Location & Route. */}
+                                    <View style={{ width: pageW }}>
+                                        <View style={styles.pageHeader}>
+                                            <TouchableOpacity onPress={() => setSheetPage('actions')} hitSlop={10} style={styles.pageBack}>
+                                                <Ionicons name="chevron-back" size={22} color={colors.primary} />
+                                            </TouchableOpacity>
+                                            <Text style={styles.sheetTitle}>{t('tripMap.locationRoute')}</Text>
+                                        </View>
+                                        <LocationSettingsPanel
+                                            refreshKey={settingsRefreshKey}
+                                            onChanged={() => { setSettingsRefreshKey(k => k + 1); }}
+                                            onOpenPresetMap={(key, label, existing) => {
+                                                router.push(
+                                                    `/preset/${key}/map?label=${encodeURIComponent(label)}${existing ? `&lat=${existing.lat}&lng=${existing.lng}` : ''}` as any,
+                                                );
+                                            }}
+                                        />
+                                    </View>
+                                </Animated.View>
+                            </View>
+                        ),
+                    }}
+                />
+            )}
             <Modal visible={inviteOpen} transparent animationType="fade" onRequestClose={() => setInviteOpen(false)}>
                 <TouchableOpacity style={styles.qrBackdrop} activeOpacity={1} onPress={() => setInviteOpen(false)}>
                     <View style={styles.qrCard} onStartShouldSetResponder={() => true}>
@@ -990,33 +1071,39 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     // Top-centre store-count segmented toggle (1·2·3).
     mapTopCenter: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 20 },
-    mapTopRight: { position: 'absolute', right: spacing.md, alignItems: 'flex-end', zIndex: 20 },
-    optBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-    optCard: {
-        backgroundColor: c.cardBackground, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,
-        paddingHorizontal: spacing.lg, paddingTop: spacing.lg, gap: spacing.sm,
-    },
-    optRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.md },
     optText: { ...typography.bodyStrong, color: c.textPrimary },
-    optSub: { ...typography.caption, color: c.textSecondary },
     qrBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
     qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: spacing.xl, alignItems: 'center', gap: spacing.lg },
     loadingContainer: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.lg, backgroundColor: c.pageBackground },
     loadingText: { ...typography.body, color: c.textSecondary },
-    hintWrap: { position: 'absolute', left: 0, right: 0, alignItems: 'center' },
-    hintPill: {
-        flexDirection: 'row', alignItems: 'center', gap: 6, overflow: 'hidden',
-        backgroundColor: c.cardBackground, borderRadius: radius.pill,
-        paddingHorizontal: spacing.md, paddingVertical: spacing.sm,
-        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+
+    // ── Glass dock ─────────────────────────────────────────────────────────
+    dockBar: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', paddingHorizontal: 4, minHeight: 40 },
+    dockHint: { flex: 1, textAlign: 'center', ...typography.label, color: c.textSecondary },
+    morePricesPill: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+        backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: 18, paddingVertical: 10,
     },
-    hintText: { ...typography.label, color: c.textSecondary },
-    // Area-batch "price this area" button (pink pill, bottom-center).
-    batchBtn: {
-        flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-        backgroundColor: c.primary, borderRadius: radius.pill,
-        paddingHorizontal: spacing.lg, paddingVertical: spacing.md,
-        ...elevation.level3,
+    morePricesText: { fontSize: 15, fontWeight: '700', color: c.onPrimary },
+    dockPagesClip: { overflow: 'hidden', paddingHorizontal: 16 },
+    dockPagesRow: { flexDirection: 'row' },
+    sheetTitle: { fontSize: 22, fontWeight: '700', color: c.textPrimary, marginBottom: 12 },
+    bigBtnRow: { flexDirection: 'row', gap: 14, marginBottom: 14 },
+    bigActionCard: { alignItems: 'flex-start', gap: 2, paddingVertical: 14 },
+    cartBadge: { justifyContent: 'center' },
+    cartCount: {
+        position: 'absolute', top: -6, right: -10, minWidth: 18, height: 18, borderRadius: 9,
+        paddingHorizontal: 4, backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center',
     },
-    batchBtnText: { ...typography.bodyStrong, fontWeight: '700', color: c.onPrimary },
+    cartCountText: { color: c.onPrimary, fontSize: 10, fontWeight: '800' },
+    bigActionTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginTop: 6 },
+    bigActionSub: { fontSize: 12, fontWeight: '500', color: c.textSecondary },
+    sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 14 },
+    sectionTitleText: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
+    sectionSep: { height: 1, backgroundColor: c.border },
+    settingRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+    settingText: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+    settingSub: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
+    pageHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 12 },
+    pageBack: { padding: 2 },
 });

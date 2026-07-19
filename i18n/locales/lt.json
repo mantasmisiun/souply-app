@@ -11,6 +11,13 @@
     "wrongClosedBody": "Kvitus galima šalinti tik iš neseniai vykusių apsipirkimų."
   },
   "tripMap": {
+    "actionsTitle": "Veiksmai",
+    "basketBtn": "Krepšelis",
+    "basketBtnSub": "Peržiūrėti",
+    "mapSettings": "Žemėlapio nustatymai",
+    "locationRoute": "Vieta ir maršrutas",
+    "saverOn": "Lyginti identiškas ir panašias prekes",
+    "saverOff": "Lyginti tik identiškas prekes",
     "tab_basket": "Krepšelis",
     "tab_stores": "Parduotuvės",
     "tab_list": "Sąrašas",
@@ -983,9 +990,9 @@
     "saveAsTemplate": "Įrašyti kaip receptą"
   },
   "basketDetail": {
-    "renameBasket": "Pervadinti krepšelį",
+    "renameBasket": "Pervadinti",
     "actionsTitle": "Veiksmai",
-    "settings": "Nustatymai",
+    "settings": "Krepšelio nustatymai",
     "removeBasket": "Pašalinti",
     "removeTitle": "Pašalinti krepšelį?",
     "removeBody": "Krepšelis ir jo prekės bus ištrinti.",
@@ -1023,6 +1030,7 @@
     "viewStore": "Parduotuvė"
   },
   "results": {
+    "morePrices": "Daugiau kainų",
     "loading": "Skaičiuojamos kainos…",
     "tapStore": "Palieskite parduotuvę",
     "batchCalculating": "Skaičiuojama…",
