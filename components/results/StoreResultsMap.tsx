@@ -1,21 +1,20 @@
 import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { View, Text, Image, Platform, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
+import { View, Text, Image, Platform, StyleSheet, TouchableOpacity, Dimensions, Keyboard } from 'react-native';
 import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
-import Animated, { useSharedValue, type SharedValue } from 'react-native-reanimated';
+import { useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Asset } from 'expo-asset';
 import { Ionicons } from '@expo/vector-icons';
-import { spacing, radius, elevation, iconSize, useResolvedScheme, type AppTheme } from '../../constants/theme';
+import { spacing, radius, elevation, iconSize, type AppTheme } from '../../constants/theme';
 import { chainBrandColorById } from '../../utils/chainBrandName';
 import { chainPinImage, chainBadgeImage } from '../../utils/chainLogoAssets';
 import { useBakedPills, useBakedClusters, MapPillMarker, MapClusterMarker, type MapPillSpec, type MapPillVariant, type MapClusterSpec } from '../map/MapPill';
 import { MapPillOverlay, MapDirectoryOverlay, projectPillRect, clusterBubbleSize, type OverlayPillSpec, type OverlayClusterSpec, type OverlaySingleSpec, type OverlayGhostSpec } from '../map/MapPillOverlay';
-import { DARK_MAP_STYLE } from '../../constants/darkMapStyle';
+import { MapCanvas } from '../map/MapCanvas';
 import { formatEuro } from '../../utils/formatCurrency';
 import { type StoreLite } from '../../utils/candidatePool';
 import { clusterByGrid, bucketingKey, type Cluster, type GridRegion } from '../../utils/mapClustering';
 import { LiquidGlass } from '../LiquidGlass';
-const AnimatedMapView = Animated.createAnimatedComponent(MapView);
 
 export type MapPin = {
     storeId: number;
@@ -60,6 +59,9 @@ type Props = {
     /** Route mode: the two trip endpoints (start/end) — drawn as markers and
      *  used as the route line's ends instead of the user dot. */
     routeEndpoints?: { from: LatLng; to: LatLng } | null;
+    /** Place mode: a pin marking the chosen starting area (a saved preset used as
+     *  the search origin). Null in GPS mode (blue dot) and route mode (endpoints). */
+    originPin?: LatLng | null;
     onSelectStore: (storeId: number) => void;
     colors: AppTheme;
     /** Every store in Lithuania (un-priced) — the background directory layer.
@@ -86,6 +88,17 @@ type Props = {
     /** Reports the nearest un-priced stores currently in view (capped at the
      *  batch limit) so the parent can offer an "price this area" button. */
     onVisibleUnpricedChange?: (storeIds: number[]) => void;
+    /** Point-pick mode: suppress every marker/overlay/control and disable
+     *  map-press selection, so the caller can run a centre-pin location pick
+     *  (PresetPickChrome) directly on THIS map — the map still pans/zooms. */
+    pickMode?: boolean;
+    /** Optional external ref to the underlying MapView (lets the caller read the
+     *  camera / drive it during a pick). Falls back to an internal ref. */
+    mapRef?: React.RefObject<MapView | null>;
+    /** Pick mode: the pin's coordinate after an INTENTIONAL move — a tap, a POI
+     *  tap, or a real user drag. NOT fired for programmatic/residual settles
+     *  (entry animation, mapPadding recalc), which used to hijack the address. */
+    onPickTarget?: (lat: number, lng: number) => void;
 };
 
 type Styles = ReturnType<typeof makeStyles>;
@@ -512,9 +525,9 @@ const DirectoryLayer = React.memo(function DirectoryLayer({
 });
 
 function StoreResultsMap({
-    pins, userCoords, focusCoords, recommendedCoords, routeEndpoints, onSelectStore, colors,
+    pins, userCoords, focusCoords, recommendedCoords, routeEndpoints, originPin, onSelectStore, colors,
     directory, pricedStoreIds, pricingStoreId, onLazyPrice, routeCoords, onMapPress,
-    onVisibleUnpricedChange, bottomOverlay = 0,
+    onVisibleUnpricedChange, bottomOverlay = 0, pickMode, mapRef: mapRefProp, onPickTarget,
 }: Props) {
     // How much of the bottom is covered by the sheet (capped so a fully-extended
     // sheet doesn't try to cram everything into a sliver — at that point the map
@@ -523,8 +536,11 @@ function StoreResultsMap({
     const occlusionRef = useRef(occlusion);
     occlusionRef.current = occlusion;
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const mapRef = useRef<MapView>(null);
-    const isDark = useResolvedScheme() === 'dark';
+    // The caller may own the MapView ref (to read its camera during a pick);
+    // otherwise use our own. Same underlying object either way — every internal
+    // mapRef.current call is unaffected.
+    const internalMapRef = useRef<MapView>(null);
+    const mapRef = mapRefProp ?? internalMapRef;
     const insets = useSafeAreaInsets();
 
     // react-native-maps fires the map's onPress right after a marker's onPress
@@ -716,12 +732,20 @@ function StoreResultsMap({
     const dirRegionSetterRef = useRef<((r: GridRegion, live: boolean) => void) | null>(null);
     const registerDirRegionSetter = useCallback((fn: (r: GridRegion, live: boolean) => void) => { dirRegionSetterRef.current = fn; }, []);
 
-    const onRegionSettle = useCallback((r: GridRegion) => {
+    const onRegionSettle = useCallback((r: GridRegion, details?: { isGesture?: boolean }) => {
         lastBucketKeyRef.current = bucketingKey(r.longitudeDelta);
         lastCommitCenterRef.current = { lat: r.latitude, lng: r.longitude };
+        // Pick mode: report the pin ONLY when this settle came from a real user
+        // drag (isGesture on Android, the onPanDrag flag elsewhere) — never from a
+        // programmatic entry animation or a mapPadding recalc, which used to
+        // hijack the address with the previous location.
+        if (pickMode) {
+            if (details?.isGesture || pickDraggingRef.current) onPickTarget?.(r.latitude, r.longitude);
+            pickDraggingRef.current = false;
+        }
         if (Platform.OS === 'ios') dirRegionSetterRef.current?.(r, false);
         else setRegion(r);
-    }, []);
+    }, [pickMode, onPickTarget]);
 
     // ANDROID ONLY: report the nearest un-priced stores in view (iOS reports
     // from inside DirectoryLayer).
@@ -901,45 +925,132 @@ function StoreResultsMap({
         onMapPress?.();
     }, [onMapPress, liveRegion, mapW, mapH, handleDirTap, onClusterPress]);
 
+    // Pick mode only: glide a point under the centre pin at the current zoom.
+    // Pick has zero sheet occlusion, so screen centre == pin.
+    const centerUnderPin = useCallback((lat: number, lng: number) => {
+        const cur = Platform.OS === 'ios' ? liveRegion.value : region;
+        mapRef.current?.animateToRegion({
+            latitude: lat, longitude: lng,
+            latitudeDelta: cur.latitudeDelta, longitudeDelta: cur.longitudeDelta,
+        }, 300);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [region, liveRegion]);
+    // Tap empty map → recentre on the tapped coordinate AND report it as the new
+    // pin target (the programmatic settle that follows is NOT reported).
+    const handlePickTap = useCallback((e?: { nativeEvent?: { coordinate?: { latitude: number; longitude: number } } }) => {
+        const c = e?.nativeEvent?.coordinate;
+        if (!c) return;
+        centerUnderPin(c.latitude, c.longitude);
+        onPickTarget?.(c.latitude, c.longitude);
+    }, [centerUnderPin, onPickTarget]);
+    // Tap a native map POI (a store icon in the Google tiles) → recentre + report.
+    const handlePickPoi = useCallback((e?: { nativeEvent?: { coordinate?: { latitude: number; longitude: number } } }) => {
+        const c = e?.nativeEvent?.coordinate;
+        if (!c) return;
+        centerUnderPin(c.latitude, c.longitude);
+        onPickTarget?.(c.latitude, c.longitude);
+    }, [centerUnderPin, onPickTarget]);
+    // A real user drag sets this; the following settle then reports its target.
+    // (isGesture is Google-only, so onPanDrag covers iOS.)
+    const pickDraggingRef = useRef(false);
+    const handlePickPanDrag = useCallback(() => { pickDraggingRef.current = true; }, []);
+
+    // OVER-map layer (outside the MapView): iOS projected directory + pills, the
+    // off-screen bakeries, and the floating controls. Handed to MapCanvas's
+    // `overlay` slot so the markers stay the MapView's children.
+    const mapOverlay = (
+        <>
+            {/* iOS: directory (cluster bubbles + un-priced logos) as a projected
+                overlay — plain RN views, so the zoom re-bucketing churn never
+                touches the native marker system (the nil-insert crash surface). */}
+            {Platform.OS === 'ios' && (
+                <DirectoryLayer
+                    directoryPts={directoryPts}
+                    initialRegion={initialRegion}
+                    registerRegionSetter={registerDirRegionSetter}
+                    liveRegion={liveRegion}
+                    mapW={mapW}
+                    mapH={mapH}
+                    cardBackground={colors.cardBackground}
+                    primary={colors.primary}
+                    pricingStoreId={pricingStoreId}
+                    onVisibleUnpricedChange={onVisibleUnpricedChange}
+                    hitRef={dirHitRef}
+                />
+            )}
+            {/* iOS: the pills as a PROJECTED REACT OVERLAY — plain views above the
+                map; taps arrive via the map's onPress (hit-test in handleMapPress). */}
+            {Platform.OS === 'ios' && (
+                <MapPillOverlay pills={overlayPills} region={liveRegion} mapW={mapW} mapH={mapH} />
+            )}
+
+            {/* OFF-SCREEN price-pill bakery (shared MapPill baker). */}
+            {bakery}
+            {clusterBakery}
+
+            {/* Floating controls — top-right, clear of the status bar. */}
+            <View style={[styles.controls, { top: insets.top + spacing.md }]} pointerEvents="box-none">
+                <TouchableOpacity onPress={() => fitAll()} activeOpacity={0.8}>
+                    <LiquidGlass style={styles.ctrlBtn} fallback="solid">
+                        <Ionicons name="scan-outline" size={iconSize.md} color={colors.textPrimary} />
+                    </LiquidGlass>
+                </TouchableOpacity>
+                {userCoords && (
+                    <TouchableOpacity onPress={goToUser} activeOpacity={0.8}>
+                        <LiquidGlass style={styles.ctrlBtn} fallback="solid">
+                            <Ionicons name="locate" size={iconSize.md} color={colors.primary} />
+                        </LiquidGlass>
+                    </TouchableOpacity>
+                )}
+            </View>
+        </>
+    );
+
     return (
         // FULL-BLEED map, always — it renders behind the glass sheet (no bg gap,
         // no resize jank). Touch safety needs no geometry: the sheet's
         // pointerEvents-auto panel natively consumes every touch that begins on
         // it (ReactViewGroup.onTouchEvent returns true), so the map only ever
         // receives touches that start on its visible area.
-        <View style={StyleSheet.absoluteFill}>
-            <AnimatedMapView
-                ref={mapRef}
-                style={StyleSheet.absoluteFill}
-                initialRegion={initialRegion}
-                // The Google-Maps-app camera pattern: the sheet's settled
-                // occlusion becomes viewport padding (GoogleMap.setPadding on
-                // Android — camera math against the visible strip, logo rides
-                // up; cheap, no relayout). Updated per settled detent only,
-                // never per-frame. On iOS (Apple provider) this is decorative;
-                // fits/centerOn compensate there instead.
-                mapPadding={{ top: 0, right: 0, bottom: occlusion, left: 0 }}
-                // Frame the area INSTANTLY on first ready — an animated fit here
-                // is still running when the map first paints, and a bar-drag
-                // right then interrupts the camera animation and pans the map
-                // instead of opening the sheet (the "first drag" bug). Later
-                // deselects still animate via centerDefault.
-                onMapReady={() => fitAll(false)}
-                onPress={handleMapPress}
-                onLayout={(e) => { mapW.value = e.nativeEvent.layout.width; mapH.value = e.nativeEvent.layout.height; }}
-                onRegionChange={Platform.OS === 'ios' ? onRegionLive : undefined}
-                onRegionChangeComplete={onRegionSettle}
-                customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
-                scrollEnabled={true}
-                zoomEnabled={true}
-                rotateEnabled={false}
-                pitchEnabled={false}
-                toolbarEnabled={false}
-                moveOnMarkerPress={false}
-                showsCompass={false}
-                showsMyLocationButton={false}
-                showsUserLocation={true}
-            >
+        <MapCanvas
+            mapRef={mapRef}
+            style={StyleSheet.absoluteFill}
+            initialRegion={initialRegion}
+            // Google-Maps-app camera pattern: the sheet's settled occlusion
+            // becomes viewport padding (GoogleMap.setPadding on Android — camera
+            // math against the visible strip; cheap, no relayout). Per settled
+            // detent only. iOS (Apple) ignores it; fits/centerOn compensate.
+            mapPadding={{ top: 0, right: 0, bottom: occlusion, left: 0 }}
+            // Frame the area INSTANTLY on first ready — an animated fit here is
+            // still running when the map first paints, and a bar-drag right then
+            // interrupts the camera animation (the "first drag" bug). Later
+            // deselects still animate via centerDefault.
+            onMapReady={() => fitAll(false)}
+            // Pick mode: a tap glides that point under the centre pin (no store
+            // selection); a POI tap also prefills the address. Normal mode: the
+            // usual marker/deselect hit-test, POIs left inert.
+            onPress={pickMode ? handlePickTap : handleMapPress}
+            onPoiClick={pickMode ? handlePickPoi : undefined}
+            onPanDrag={pickMode ? handlePickPanDrag : undefined}
+            // Pick mode: touching the map commits the name edit — dismiss the
+            // keyboard (the field blurs, keeping whatever was typed) and hand
+            // focus back to the map.
+            onTouchStart={pickMode ? Keyboard.dismiss : undefined}
+            onLayout={(e) => { mapW.value = e.nativeEvent.layout.width; mapH.value = e.nativeEvent.layout.height; }}
+            onRegionChange={Platform.OS === 'ios' ? onRegionLive : undefined}
+            onRegionChangeComplete={onRegionSettle}
+            scrollEnabled={true}
+            zoomEnabled={true}
+            rotateEnabled={false}
+            pitchEnabled={false}
+            showsCompass={false}
+            showsMyLocationButton={false}
+            showsUserLocation={true}
+            // Pick mode hides the priced pills / directory / controls so only the
+            // caller's centre pin shows over a clean map.
+            overlay={pickMode ? null : mapOverlay}
+        >
+                {!pickMode && (<>
                 {/* Split-combo route line (user → stops), under the markers. */}
                 {routeCoords && routeCoords.length >= 2 && (
                     <Polyline
@@ -980,6 +1091,10 @@ function StoreResultsMap({
                         <Marker coordinate={routeEndpoints.to} pinColor={colors.primary} zIndex={5} />
                     </>
                 )}
+                {/* Place mode: a native pin marking the chosen starting area. */}
+                {originPin && (
+                    <Marker coordinate={originPin} pinColor={colors.primary} zIndex={4} />
+                )}
                 {/* ANDROID ONLY: native image-prop pill markers (Google Maps renders +
                     stacks them correctly; remount keys are safe there). iOS pills render
                     in the PROJECTED OVERLAY below the map — instrumented runs proved the
@@ -1007,64 +1122,8 @@ function StoreResultsMap({
                         />
                     );
                 })}
-            </AnimatedMapView>
-
-            {/* iOS: directory (cluster bubbles + un-priced logos) as a projected
-                overlay — plain RN views, so the zoom re-bucketing churn never
-                touches the native marker system (the nil-insert crash surface).
-                Rendered BELOW the pills overlay; owns its own region state so
-                live reclustering re-renders only its small subtree. */}
-            {Platform.OS === 'ios' && (
-                <DirectoryLayer
-                    directoryPts={directoryPts}
-                    initialRegion={initialRegion}
-                    registerRegionSetter={registerDirRegionSetter}
-                    liveRegion={liveRegion}
-                    mapW={mapW}
-                    mapH={mapH}
-                    cardBackground={colors.cardBackground}
-                    primary={colors.primary}
-                    pricingStoreId={pricingStoreId}
-                    onVisibleUnpricedChange={onVisibleUnpricedChange}
-                    hitRef={dirHitRef}
-                />
-            )}
-            {/* iOS: the pills as a PROJECTED REACT OVERLAY — plain views above the map,
-                positioned by Mercator math from the live region. The layer takes NO
-                touches (pans starting on a pill move the MAP); taps arrive via the
-                map's onPress and are routed by the hit-test in handleMapPress. */}
-            {Platform.OS === 'ios' && (
-                <MapPillOverlay
-                    pills={overlayPills}
-                    region={liveRegion}
-                    mapW={mapW}
-                    mapH={mapH}
-                />
-            )}
-
-            {/* OFF-SCREEN price-pill bakery (shared MapPill baker) — snapshots each priced pin's
-                (logo + price) row to an image the marker can use natively. */}
-            {bakery}
-            {clusterBakery}
-
-            {/* Floating controls — top-right, clear of the status bar. */}
-            {/* Same liquid-glass treatment as the store-count switcher up top
-                (LiquidGlass, solid fallback = the previous look on Android/old iOS). */}
-            <View style={[styles.controls, { top: insets.top + spacing.md }]} pointerEvents="box-none">
-                <TouchableOpacity onPress={() => fitAll()} activeOpacity={0.8}>
-                    <LiquidGlass style={styles.ctrlBtn} fallback="solid">
-                        <Ionicons name="scan-outline" size={iconSize.md} color={colors.textPrimary} />
-                    </LiquidGlass>
-                </TouchableOpacity>
-                {userCoords && (
-                    <TouchableOpacity onPress={goToUser} activeOpacity={0.8}>
-                        <LiquidGlass style={styles.ctrlBtn} fallback="solid">
-                            <Ionicons name="locate" size={iconSize.md} color={colors.primary} />
-                        </LiquidGlass>
-                    </TouchableOpacity>
-                )}
-            </View>
-        </View>
+                </>)}
+            </MapCanvas>
     );
 }
 

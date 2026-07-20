@@ -69,6 +69,8 @@ export function PresetPointPicker({ presetKey, label, existing, onDone, onCancel
         if (!result) { setSearchError(t('presetMap.notFound')); return; }
         setCenterCoords({ lat: result.lat, lng: result.lng });
         animateTo(result.lat, result.lng);
+        // Weak match (no exact house number / wrong city) → approximate notice.
+        setSearchError(result.precise ? null : t('presetMap.approx'));
     };
 
     const handleConfirm = async () => {
@@ -77,7 +79,9 @@ export function PresetPointPicker({ presetKey, label, existing, onDone, onCancel
         let address = searchText.trim() || undefined;
         if (!address) {
             const rev = await reverseGeocode(centerCoords.lat, centerCoords.lng);
-            address = rev?.split(',')[0].trim() || undefined;
+            // Keep the known-good existing address if reverse-geocode fails (free
+            // Nominatim rate-limits / 403s) — never wipe it to a blank label.
+            address = rev?.split(',')[0].trim() || existing?.address || undefined;
         }
         await setPreset(presetKey, {
             label: name.trim() || (label ?? ''),

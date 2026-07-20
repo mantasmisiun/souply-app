@@ -40,8 +40,10 @@ import { DockActionCard } from '../dock/DockActionCard';
 import { DockSection } from '../dock/DockSection';
 import { useDockTitleStyle } from '../dock/useDockTitleStyle';
 import LocationSettingsPanel from '../LocationSettingsPanel';
-import { PresetPointPicker } from '../PresetPointPicker';
+import { PresetPickChrome } from '../PresetPickChrome';
+import { MapBackButton } from '../map/MapBackButton';
 import type { PresetKey, LocationPreset } from '../../utils/locationStorage';
+import type MapView from 'react-native-maps';
 
 // StoreResult / ItemResult now live in utils/basketPricing (shared with the
 // lazy /store-prices fetch) — imported above.
@@ -103,6 +105,10 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         from: { latitude: number; longitude: number };
         to: { latitude: number; longitude: number };
     } | null>(null);
+    // Place mode (a saved preset chosen as origin) → a pin marking the starting
+    // area on the map. Null in GPS mode (the blue dot shows it) and route mode
+    // (the from/to markers do).
+    const [originPin, setOriginPin] = useState<{ latitude: number; longitude: number } | null>(null);
     // All-Lithuania store directory (un-priced background layer) + on-demand
     // prices for stores the user taps outside the precomputed top-N.
     const [directory, setDirectory] = useState<StoreLite[]>([]);
@@ -127,6 +133,9 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // price-summary bar; expanded = one scroll: Basket/Invite actions,
     // Calculation settings, Location & Route. ──────────────────────────────
     const dockRef = useRef<DockedSheetControls>(null);
+    // The store map's MapView — shared with the preset point-pick so it reads/
+    // drives THIS map's camera instead of mounting a second map.
+    const resultsMapRef = useRef<MapView>(null);
     const [dockBarH, setDockBarH] = useState(44);
     const [dockClearance, setDockClearance] = useState(120);
     const [dockExpanded, setDockExpanded] = useState(false);
@@ -150,10 +159,22 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // "Define a location" — an inline point-picker overlay that takes over the
     // whole screen (strips the store chrome + dock, shows a centre pin +
     // search). Back cancels and restores the map + dock to where it was.
-    const [pickingPreset, setPickingPreset] = useState<{ key: PresetKey; label: string; existing: LocationPreset | null } | null>(null);
+    const [pickingPreset, setPickingPreset] = useState<{ key: PresetKey; label: string; existing: LocationPreset | null; seq: number } | null>(null);
+    // Bumped every open → keys PresetPickChrome so each open is a fresh mount
+    // (no state/coords bleed from the previously-edited preset).
+    const pickSeq = useRef(0);
+    // The pin's target from an INTENTIONAL move during a preset pick (tap / POI /
+    // real drag) → PresetPickChrome reverse-geocodes it into the live address.
+    const [pickTarget, setPickTarget] = useState<{ lat: number; lng: number } | null>(null);
+    // Stable so StoreResultsMap's React.memo isn't broken by an inline prop.
+    const handlePickTarget = useCallback((lat: number, lng: number) => {
+        setPickTarget({ lat, lng });
+    }, []);
     const openPresetPicker = useCallback((key: PresetKey, label: string, existing: LocationPreset | null) => {
         dockRef.current?.collapse();
-        setPickingPreset({ key, label, existing });
+        setPickTarget(null);   // don't inherit a location from a previous pick
+        pickSeq.current += 1;
+        setPickingPreset({ key, label, existing, seq: pickSeq.current });
     }, []);
     const closePresetPicker = useCallback((saved: boolean) => {
         setPickingPreset(null);
@@ -268,12 +289,14 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         // focus effect then falls back to cached GPS coords.)
         let center: { lat: number; lng: number } | null = null;
         let endpoints: typeof routeEndpoints = null;
+        let placeMode = false;
         try {
             const meta = metaRaw ? JSON.parse(metaRaw) : null;
             const c = meta?.searchCenter;
             if (c && Number.isFinite(c.lat) && Number.isFinite(c.lng)) center = { lat: c.lat, lng: c.lng };
             // Route mode → resolve the two endpoint presets to coordinates.
             const s = meta?.settings;
+            placeMode = s?.mode === 'specific';
             if (s?.mode === 'route' && s.routeFrom && s.routeTo) {
                 const presets = await getPresets();
                 const f = presets[s.routeFrom as 'home' | 'work' | 'custom'];
@@ -287,6 +310,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             }
         } catch { /* ignore — fall back to single-origin behaviour */ }
         setRouteEndpoints(endpoints);
+        setOriginPin(placeMode && center ? { latitude: center.lat, longitude: center.lng } : null);
         if (center) {
             setUserCoords(center);
         } else if (!endpoints) {
@@ -330,6 +354,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             ]);
             await persistCoords(coords);
             setUserCoords({ lat: origin.lat, lng: origin.lng });
+            setOriginPin(settings.mode === 'specific' ? { latitude: origin.lat, longitude: origin.lng } : null);
             setResults(newResults);
             setSelectedOptionKey(null);
             setLazyResults([]); // re-priced basket → old lazy prices are stale
@@ -417,6 +442,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
 
             setRouteEndpoints(endpoints);
             setUserCoords(endpoints ? null : { lat: origin.lat, lng: origin.lng });
+            setOriginPin(settings.mode === 'specific' ? { latitude: origin.lat, longitude: origin.lng } : null);
             setResults(newResults as StoreResult[]);
             setLazyResults([]); // re-priced basket → old lazy prices are stale
         } catch {
@@ -1013,11 +1039,15 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                     // deferred a frame past entry so the screen paints instantly.
                     <>
                         <StoreResultsMap
+                            mapRef={resultsMapRef}
+                            pickMode={!!pickingPreset}
+                            onPickTarget={handlePickTarget}
                             pins={pins}
                             userCoords={userCoords}
                             focusCoords={focusCoords}
                             recommendedCoords={recommendedCoords}
                             routeEndpoints={routeEndpoints}
+                            originPin={originPin}
                             onSelectStore={handlePinTap}
                             onMapPress={handleMapTap}
                             colors={colors}
@@ -1029,18 +1059,16 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                             onVisibleUnpricedChange={setVisibleUnpriced}
                             // Settled sheet occlusion → camera-only (mapPadding /
                             // iOS fit padding). The map itself stays full-bleed.
-                            bottomOverlay={embedded ? 0 : sheetOcclusion}
+                            // During a pick the dock is gone → no occlusion, so the
+                            // camera centre == screen centre == the pin.
+                            bottomOverlay={embedded || pickingPreset ? 0 : sheetOcclusion}
                         />
                         {/* Full-bleed map → floating back circle, top-left
                             (standalone route only — the embedding host owns
                             its own back button). */}
                         {!embedded && !pickingPreset && (
                             <View style={[styles.mapTopLeft, { top: topInset + 10 }]} pointerEvents="box-none">
-                                <TouchableOpacity style={styles.mapBackShadow} onPress={() => router.back()} activeOpacity={0.8}>
-                                    <LiquidGlass style={styles.mapBackBtn} fallback="solid">
-                                        <Ionicons name="chevron-back" size={iconSize.lg} color={colors.primary} />
-                                    </LiquidGlass>
-                                </TouchableOpacity>
+                                <MapBackButton onPress={() => router.back()} />
                             </View>
                         )}
                         {/* Top-centre store-count toggle. Instant client re-rank
@@ -1210,14 +1238,23 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                 onCancel={() => setLocationPromptVisible(false)}
             />
 
-            {/* "Define a location" — full-screen inline point picker over the
-                store map. Back cancels + restores the dock (Location page). */}
+            {/* "Define a location" — centre-pin pick ON the existing store map
+                (no second map): the map runs in pickMode (markers hidden, still
+                pans), this transparent box-none layer adds the pin + glass chrome,
+                and the dock morphs into the confirm bar. Back cancels + restores
+                the dock (Location page). */}
             {pickingPreset && (
-                <View style={styles.pickerOverlay}>
-                    <PresetPointPicker
+                <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
+                    {/* Key by the open sequence → every open remounts (fresh name/
+                        address state + re-run entry animation), never reusing the
+                        previously-edited preset's instance. */}
+                    <PresetPickChrome
+                        key={pickingPreset.seq}
+                        mapRef={resultsMapRef}
                         presetKey={pickingPreset.key}
                         label={pickingPreset.label}
                         existing={pickingPreset.existing}
+                        pickTarget={pickTarget}
                         onDone={() => closePresetPicker(true)}
                         onCancel={() => closePresetPicker(false)}
                     />
@@ -1230,21 +1267,8 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
-    pickerOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: c.pageBackground, zIndex: 30, elevation: 30 },
     // Floating map header (map view is full-bleed): back circle + toggle, left.
     mapTopLeft: { position: 'absolute', left: spacing.md, alignItems: 'flex-start', gap: spacing.sm, zIndex: 20 },
-    // Glass surfaces clip to their rounded shape (overflow hidden), so the
-    // drop shadow lives on an outer wrapper — a clipped view can't cast one.
-    mapBackShadow: {
-        borderRadius: radius.pill,
-        ...elevation.level2,
-    },
-    mapBackBtn: {
-        width: 42, height: 42, borderRadius: radius.pill, overflow: 'hidden',
-        backgroundColor: c.cardBackground,
-        alignItems: 'center', justifyContent: 'center',
-        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
-    },
     // Top-centre store-count segmented toggle (1·2·3).
     mapTopCenter: { position: 'absolute', left: 0, right: 0, alignItems: 'center', zIndex: 20 },
     optText: { ...typography.bodyStrong, color: c.textPrimary },

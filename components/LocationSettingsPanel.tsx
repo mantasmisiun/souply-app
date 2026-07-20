@@ -239,7 +239,7 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
 
             {/* ── Specific location — preset picker ── */}
             {settings.mode === 'specific' && (
-                <Reanimated.View style={styles.presetBlock} entering={FadeInDown.duration(220)} layout={LinearTransition.duration(200)}>
+                <Reanimated.View style={styles.presetBlock} entering={FadeInDown.duration(220)}>
                     {PRESET_KEYS.map(key => (
                         <PresetRow
                             key={key}
@@ -262,7 +262,7 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
 
             {/* ── Route — two dropdown fields + swap (Google-Maps-style) ── */}
             {settings.mode === 'route' && (
-                <Reanimated.View style={styles.presetBlock} entering={FadeInDown.duration(220)} layout={LinearTransition.duration(200)}>
+                <Reanimated.View style={styles.presetBlock} entering={FadeInDown.duration(220)}>
                     <View style={styles.routeFieldsRow}>
                         <View style={styles.routeFieldsCol}>
                             <RouteField
@@ -449,10 +449,12 @@ function PresetRow({
             </View>
 
             <View style={styles.presetRowContent}>
-                <Text style={styles.presetRowLabel}>{label}</Text>
+                {/* Show the user's saved name when set; fall back to the default
+                    translated label (Namai/Darbas/Kita) for unnamed/unset rows. */}
+                <Text style={styles.presetRowLabel}>{preset?.label?.trim() || label}</Text>
                 {preset ? (
                     <Text style={styles.presetRowSub} numberOfLines={1}>
-                        {preset.address ?? preset.label}
+                        {preset.address ?? label}
                     </Text>
                 ) : (
                     <Text style={styles.presetRowAdd}>{t('locationSettings.add')}</Text>
