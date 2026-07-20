@@ -1,10 +1,8 @@
-import { ReactNode, RefObject, useMemo } from 'react';
-import { View, StyleSheet, Platform, Keyboard } from 'react-native';
+import { ReactNode, RefObject } from 'react';
+import { Platform, Keyboard } from 'react-native';
 import MapView, { type Region } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { MaterialProgress } from '@/components/MaterialProgress';
-import { DARK_MAP_STYLE } from '../../constants/darkMapStyle';
-import { useTheme, useResolvedScheme, type AppTheme } from '../../constants/theme';
+import { MapCanvas } from './MapCanvas';
 import { MapPickChrome } from './MapPickChrome';
 import { GlassIconButton } from '../GlassIconButton';
 
@@ -38,6 +36,10 @@ export interface MapPickSession {
     confirmLabel: string;
     confirmEnabled: boolean;
     confirmLoading?: boolean;
+    /** Keep the confirm pill mounted while disabled (default true — point picks
+     *  always show it). Store picks pass false → it appears only once a store is
+     *  tapped (confirmEnabled). */
+    confirmAlwaysVisible?: boolean;
     onConfirm: () => void;
     onCancel: () => void;
     /** Address search in the chrome — omit to hide the field (store picks
@@ -90,91 +92,67 @@ export interface MapHostProps {
 }
 
 export function MapHost(props: MapHostProps) {
-    const colors = useTheme();
-    const styles = useMemo(() => makeStyles(colors), [colors]);
-    const isDark = useResolvedScheme() === 'dark';
     const { top: topInset } = useSafeAreaInsets();
     const pick = props.pick ?? null;
 
     return (
-        <View style={styles.root}>
-            {props.mountMap !== false && (
-                <MapView
-                    ref={props.mapRef}
-                    style={StyleSheet.absoluteFillObject}
-                    initialRegion={props.initialRegion}
-                    onMapReady={props.onMapReady}
-                    onRegionChangeComplete={props.onRegionChangeComplete}
-                    onRegionChange={props.onRegionChange}
-                    onPress={props.onMapPress}
-                    // Android default (true) pans the camera to ANY tapped marker —
-                    // it fights drill-down zooms and makes "empty" taps that hit an
-                    // invisible marker recentre the map. All camera moves on the
-                    // one-map surface are explicit animateToRegion calls.
-                    moveOnMarkerPress={false}
-                    showsUserLocation={props.showsUserLocation ?? true}
-                    customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
-                    toolbarEnabled={false}
-                    // Android: Google's My Location button anchors to the map's top
-                    // edge — full-bleed that's UNDER the status bar and the floating
-                    // chrome. Pad the map's UI area below them.
-                    mapPadding={Platform.OS === 'android'
-                        ? { top: topInset + (props.androidTopPad ?? 110), right: 0, bottom: 0, left: 0 }
-                        : undefined}
-                    // Any touch on the map (tap OR drag start) closes the keyboard —
-                    // a native MapView never dismisses it on its own.
-                    onTouchStart={Keyboard.dismiss}
-                >
-                    {props.children}
-                </MapView>
-            )}
-
-            {/* Base-mode companions — hidden during a pick session so the pick
-                chrome has the stage (the caller's sheet rides persistentOverlay). */}
-            {pick == null ? props.baseOverlay : null}
-            {props.persistentOverlay}
-
-            {/* Pick session: Cancel + title + optional search float on top;
-                the session's own overlay (centre pin etc.) under them. */}
-            {pick != null && (
+        <MapCanvas
+            mapRef={props.mapRef}
+            initialRegion={props.initialRegion}
+            onMapReady={props.onMapReady}
+            onRegionChangeComplete={props.onRegionChangeComplete}
+            onRegionChange={props.onRegionChange}
+            onPress={props.onMapPress}
+            showsUserLocation={props.showsUserLocation ?? true}
+            // Any touch on the map (tap OR drag start) closes the keyboard — a
+            // native MapView never dismisses it on its own.
+            onTouchStart={Keyboard.dismiss}
+            // Android: Google's My Location button anchors to the map's top edge
+            // (full-bleed, under the status bar + floating chrome) — pad below.
+            mapPadding={Platform.OS === 'android'
+                ? { top: topInset + (props.androidTopPad ?? 110), right: 0, bottom: 0, left: 0 }
+                : undefined}
+            mountMap={props.mountMap}
+            mapReady={props.mapReady}
+            overlay={
                 <>
-                    {pick.overlay}
-                    <MapPickChrome
-                        searchText={pick.search?.text ?? ''}
-                        onSearchTextChange={pick.search?.onChangeText ?? (() => {})}
-                        onSearch={pick.search?.onSubmit ?? (() => {})}
-                        searching={pick.search?.searching}
-                        searchError={pick.search?.error}
-                        searchPlaceholder={pick.search?.placeholder ?? ''}
-                        hideSearch={pick.search == null}
-                        confirmLabel={pick.confirmLabel}
-                        confirmEnabled={pick.confirmEnabled}
-                        confirmLoading={pick.confirmLoading}
-                        onConfirm={pick.onConfirm}
-                        title={pick.title}
-                        titleNode={pick.titleNode}
-                        headerLeft={pick.headerLeft ?? <CancelButton onPress={pick.onCancel} />}
-                        confirmAlwaysVisible
-                    />
-                </>
-            )}
+                    {/* Base-mode companions — hidden during a pick session so the
+                        pick chrome has the stage (the sheet rides persistentOverlay). */}
+                    {pick == null ? props.baseOverlay : null}
+                    {props.persistentOverlay}
 
-            {props.mapReady === false && (
-                <View style={[StyleSheet.absoluteFillObject, styles.mapCover]}>
-                    <MaterialProgress size="large" color={colors.primary} />
-                </View>
-            )}
-        </View>
+                    {/* Pick session: Cancel + title + optional search on top; the
+                        session's own overlay (centre pin etc.) under them. */}
+                    {pick != null && (
+                        <>
+                            {pick.overlay}
+                            <MapPickChrome
+                                searchText={pick.search?.text ?? ''}
+                                onSearchTextChange={pick.search?.onChangeText ?? (() => {})}
+                                onSearch={pick.search?.onSubmit ?? (() => {})}
+                                searching={pick.search?.searching}
+                                searchError={pick.search?.error}
+                                searchPlaceholder={pick.search?.placeholder ?? ''}
+                                hideSearch={pick.search == null}
+                                confirmLabel={pick.confirmLabel}
+                                confirmEnabled={pick.confirmEnabled}
+                                confirmLoading={pick.confirmLoading}
+                                onConfirm={pick.onConfirm}
+                                title={pick.title}
+                                titleNode={pick.titleNode}
+                                headerLeft={pick.headerLeft ?? <CancelButton onPress={pick.onCancel} />}
+                                confirmAlwaysVisible={pick.confirmAlwaysVisible ?? true}
+                            />
+                        </>
+                    )}
+                </>
+            }
+        >
+            {props.children}
+        </MapCanvas>
     );
 }
 
 function CancelButton({ onPress }: { onPress: () => void }) {
     return <GlassIconButton icon="close" glass solid onPress={onPress} size={22} />;
 }
-
-const makeStyles = (c: AppTheme) => StyleSheet.create({
-    root: { flex: 1 },
-    // Opaque themed cover over the MapView until onMapReady — hides the raw
-    // white GL surface + marker pop-in during native init.
-    mapCover: { backgroundColor: c.pageBackground, alignItems: 'center', justifyContent: 'center' },
-});

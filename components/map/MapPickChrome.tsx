@@ -16,10 +16,9 @@ import { useTheme, spacing, radius, typography, elevation, type AppTheme } from 
 /**
  * Floating pick-mode chrome — the liquid-glass top cluster (back chevron +
  * title chip + search field + error toast) and the floating confirm pill,
- * WITHOUT the map. Extracted from MapPickerScaffold's glassChrome branch so
- * the 2.0 unified map host can overlay the same chrome onto a map it owns
- * (point-pick / store-resolution modes), while MapPickerScaffold keeps using
- * it for the standalone screens.
+ * WITHOUT the map. The 2.0 unified map host (MapHost) overlays this chrome onto
+ * the map it owns (point-pick / store-resolution modes) — the single glass
+ * pick-chrome now that MapPickerScaffold is gone.
  *
  * Renders two absolutely-positioned clusters — the parent must be the map's
  * positioning context (typically the full-bleed map root view).
@@ -44,6 +43,12 @@ export interface MapPickChromeProps {
     /** Custom content INSIDE the title chip instead of the plain `title` text
      *  (e.g. the preset picker's tap-to-rename title). Wins over `title`. */
     titleNode?: ReactNode;
+    /** Second line under the title — the picked location's live address. When
+     *  set, the title renders as a two-line CARD (name + address) instead of a
+     *  single pill. */
+    subtitle?: string;
+    /** Show a spinner in the subtitle slot while the address is resolving. */
+    subtitleLoading?: boolean;
     /** Keep the floating confirm pill mounted even while `confirmEnabled` is
      *  false (rendered disabled). Default (off) hides it until enabled — the
      *  store-resolution behaviour. */
@@ -65,11 +70,30 @@ export function MapPickChrome(props: MapPickChromeProps) {
                 <View style={styles.glassTopRow} pointerEvents="box-none">
                     {props.headerLeft}
                     {(props.titleNode != null || props.title != null) && (
-                        <LiquidGlass fallback={chromeFallback} style={styles.titleChip}>
-                            {props.titleNode ?? (
-                                <Text style={styles.titleChipText} numberOfLines={1}>{props.title}</Text>
-                            )}
-                        </LiquidGlass>
+                        props.subtitle !== undefined ? (
+                            // Two-line card: editable name (titleNode) + live address.
+                            <LiquidGlass fallback={chromeFallback} style={styles.titleCard}>
+                                <View style={styles.titleCardName}>
+                                    {props.titleNode ?? (
+                                        <Text style={styles.titleChipText} numberOfLines={1}>{props.title}</Text>
+                                    )}
+                                </View>
+                                <View style={styles.titleCardAddrRow}>
+                                    {props.subtitleLoading && (
+                                        <MaterialProgress size="small" color={colors.textMuted} />
+                                    )}
+                                    <Text style={styles.titleCardAddr} numberOfLines={2}>
+                                        {props.subtitle || '—'}
+                                    </Text>
+                                </View>
+                            </LiquidGlass>
+                        ) : (
+                            <LiquidGlass fallback={chromeFallback} style={styles.titleChip}>
+                                {props.titleNode ?? (
+                                    <Text style={styles.titleChipText} numberOfLines={1}>{props.title}</Text>
+                                )}
+                            </LiquidGlass>
+                        )
                     )}
                 </View>
                 {!props.hideSearch && (
@@ -141,6 +165,19 @@ const makeStyles = (c: AppTheme) =>
             paddingHorizontal: spacing.lg, height: 40, justifyContent: 'center',
         },
         titleChipText: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
+        // Two-line variant: name + live address. Hugs its content (flexShrink,
+        // no grow) so the glass background is only as wide as the name/address
+        // need — shrinks + wraps the address if it would overrun the row.
+        titleCard: {
+            flexShrink: 1, alignSelf: 'center', overflow: 'hidden', borderRadius: radius.lg,
+            ...(Platform.OS === 'android'
+                ? { backgroundColor: c.cardBackground, elevation: 3 }
+                : null),
+            paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, gap: 2,
+        },
+        titleCardName: { flexDirection: 'row', alignItems: 'center' },
+        titleCardAddrRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+        titleCardAddr: { ...typography.bodySmall, color: c.textSecondary, flexShrink: 1 },
         // Glass search field floating below the title row.
         glassSearchWrap: {
             overflow: 'hidden', borderRadius: radius.lg, height: 48,
