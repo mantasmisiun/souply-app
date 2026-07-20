@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Dimensions } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import Animated, { useSharedValue } from 'react-native-reanimated';
+import { useSharedValue } from 'react-native-reanimated';
 import { spacing, radius, typography, iconSize, avatarSize, type AppTheme } from '../../constants/theme';
 import { type SheetOption } from '../../utils/splitOptions';
 import { ChainLogoChip } from '../ChainLogoChip';
@@ -13,7 +13,6 @@ import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet'
 import { SheetCard } from '../SheetCard';
 import { DockActionCard } from '../dock/DockActionCard';
 import { dockBarBase, dockContentBase } from '../dock/dockLayout';
-import { useDockTitleStyle } from '../dock/useDockTitleStyle';
 
 const SCREEN_H = Dimensions.get('window').height;
 
@@ -27,8 +26,7 @@ type Styles = ReturnType<typeof makeStyles>;
 /**
  * Store-tap dock — the SAME DockedGlassSheet scaffold as the map's main dock
  * (see components/dock/*), reskinned for a selected store:
- *   • bar   → an INFO bar for the current option (chain/stores + price); the
- *             title grows with the sheet exactly like the main dock's.
+ *   • bar   → X (dismiss) · the option's chain LOGOS (spread, no names) · price.
  *   • sheet → opens at medium on tap and holds two big action cards (Navigate +
  *             List, in the Basket/Invite style) and a "Stores" section: one
  *             option for a single store, or the split options (single last) with
@@ -49,6 +47,8 @@ type Props = {
     /** Called when a touch begins on the dock → the host ignores the map's
      *  leaked onPress for the same tap (else selecting an option deselects). */
     onInteract: () => void;
+    /** Dismiss the selection (bar X) — same as tapping empty map. */
+    onDismiss: () => void;
     /** Collapsed dock height → the map keeps content above the bar. */
     onCollapsedClearance?: (px: number) => void;
     /** Sheet occlusion per detent → the host insets the map's frame to the
@@ -59,7 +59,7 @@ type Props = {
 
 export default function StoreOptionsDock({
     options, selectedKey, onSelect, onNavigate, onCreateList, creatingList,
-    journeyKm, itemCount, colors, onInteract,
+    journeyKm, itemCount, colors, onInteract, onDismiss,
     onCollapsedClearance, onOcclusion,
 }: Props) {
     const { t } = useTranslation();
@@ -68,7 +68,6 @@ export default function StoreOptionsDock({
     const [barH, setBarH] = useState(52);
     const collapsedRef = useRef(120);
     const progress = useSharedValue(0);
-    const titleStyle = useDockTitleStyle(progress);
     // >1 option ⇒ the tapped store has split alternatives → a selectable list.
     const multi = options.length > 1;
     // The option the bar/actions reflect (the picked one, else the best).
@@ -89,10 +88,15 @@ export default function StoreOptionsDock({
             onStartShouldSetResponderCapture={noteTouch}
             onLayout={e => { const h = Math.round(e.nativeEvent.layout.height); if (h > 0) setBarH(h); }}
         >
-            <StoreLogos stores={current.stores} size={avatarSize.sm} styles={styles} />
-            <Animated.Text style={[styles.barTitle, titleStyle]} numberOfLines={1}>
-                {optionTitle(current)}
-            </Animated.Text>
+            {/* X — dismisses the selection (same as tapping empty map). Matches
+                the Catalog list sheet's close button (close · 22 · textPrimary). */}
+            <TouchableOpacity onPress={onDismiss} hitSlop={8} accessibilityLabel={t('common.close')}>
+                <Ionicons name="close" size={22} color={colors.textPrimary} />
+            </TouchableOpacity>
+            {/* Logos ONLY (no chain names), spread — a store's brand reads at a
+                glance; a split shows its 2–3 brands side by side. */}
+            <StoreLogos stores={current.stores} size={avatarSize.sm} styles={styles} spread />
+            <View style={styles.barSpacer} />
             <Text style={styles.barPrice} allowFontScaling={false}>{formatEuro(current.total)}</Text>
         </View>
     );
@@ -168,15 +172,16 @@ function optionTitle(option: SheetOption): string {
     return option.stores.map(s => chainBrandName(s.chainName)).join(' · ');
 }
 
-/** Overlapping chain badges (a stack for a split, a single badge otherwise). */
-function StoreLogos({ stores, size, styles }: { stores: SheetOption['stores']; size: number; styles: Styles }) {
+/** Chain badges for an option. `spread` lays a split's 2–3 badges side by side
+ *  (bar); the default OVERLAPS them into one grouped badge (option cards). */
+function StoreLogos({ stores, size, styles, spread }: { stores: SheetOption['stores']; size: number; styles: Styles; spread?: boolean }) {
     if (stores.length === 1) {
         return <ChainLogoChip chainId={stores[0].chainId} name={stores[0].chainName} size={size} />;
     }
     return (
-        <View style={styles.logoStack}>
+        <View style={[styles.logoStack, spread && styles.logoRowSpread]}>
             {stores.map((s, i) => (
-                <View key={s.storeId} style={i > 0 ? styles.logoStacked : undefined}>
+                <View key={s.storeId} style={!spread && i > 0 ? styles.logoStacked : undefined}>
                     <ChainLogoChip chainId={s.chainId} name={s.chainName} size={size} />
                 </View>
             ))}
@@ -271,7 +276,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // bar's tallest content is the 32dp logos, so without this it measured ~8dp
     // shorter and its stage-1 sheet read slightly shorter than the main dock's).
     bar: { ...dockBarBase, minHeight: 40 },
-    barTitle: { flex: 1, ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
+    barSpacer: { flex: 1 },
     barPrice: { fontSize: 18, fontWeight: '800', color: c.primary },
 
     // ── Content ──
@@ -289,6 +294,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     logoStack: { flexDirection: 'row', alignItems: 'center' },
     // Deeper overlap so a split reads as one grouped badge, not two chips.
     logoStacked: { marginLeft: -18 },
+    // Bar variant: badges side by side (no overlap), a small gap between them.
+    logoRowSpread: { gap: spacing.xs },
 
     // Each option is its OWN SheetCard. Explicit padding overrides SheetCard's
     // section padding; a transparent 1.5px ring is always present so the pink

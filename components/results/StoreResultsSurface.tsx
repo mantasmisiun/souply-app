@@ -1079,6 +1079,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                     itemCount={basketItemCount}
                     colors={colors}
                     onInteract={noteSheetPress}
+                    onDismiss={closeSheet}
                     onCollapsedClearance={setDockClearance}
                     onOcclusion={setSheetOcclusion}
                 />
@@ -1138,7 +1139,11 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                                         icon="cart-outline"
                                         title={t('tripMap.basketBtn')}
                                         subtitle={t('tripMap.basketBtnSub')}
-                                        onPress={() => router.push(`/basket/${id}` as any)}
+                                        // REPLACE (not push): swap the map for the
+                                        // basket so the back stack stays [Shopping,
+                                        // <map|basket>] — Back always returns to
+                                        // Shopping, never a stale stack of maps.
+                                        onPress={() => router.replace(`/basket/${id}` as any)}
                                         badge={basketItemCount > 0
                                             ? <View style={styles.cartCount}><Text style={styles.cartCountText}>{basketItemCount}</Text></View>
                                             : undefined}

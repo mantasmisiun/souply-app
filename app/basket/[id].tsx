@@ -529,7 +529,7 @@ export default function BasketDetailScreen() {
             // Persist the coords that actually produced these results so
             // re-calcs use the same viewpoint by default.
             await persistCoords(coords);
-            router.push(`/basket/results/${id}`);
+            router.replace(`/basket/results/${id}`);
         } catch {
             setCalcError(t('basketDetail.errorCalculate'));
         } finally {
@@ -796,7 +796,7 @@ export default function BasketDetailScreen() {
                                 {basket?.status === 'inProgress' || basket?.status === 'completed' ? (
                                     <ScalePressable
                                         style={[styles.storesPill, { flex: 1 }]}
-                                        onPress={() => router.push(`/basket/results/${id}`)}
+                                        onPress={() => router.replace(`/basket/results/${id}`)}
                                     >
                                         <Text style={styles.storesPillText}>
                                             {basket?.status === 'inProgress' ? t('basketDetail.viewInProgress') : t('basketDetail.viewCompleted')}
@@ -811,7 +811,7 @@ export default function BasketDetailScreen() {
                                         <ScalePressable
                                             style={[styles.storesPill, busy && styles.buttonCalcing, (routeIncomplete || items.length === 0) && styles.buttonDisabled]}
                                             onPress={basket?.status === 'compared'
-                                                ? () => router.push(`/basket/results/${id}`)
+                                                ? () => router.replace(`/basket/results/${id}`)
                                                 : handleCalculate}
                                             disabled={busy || routeIncomplete || items.length === 0}
                                             scaleTo={busy || routeIncomplete ? 1 : 0.95}
