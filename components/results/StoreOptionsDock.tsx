@@ -72,6 +72,10 @@ export default function StoreOptionsDock({
     const multi = options.length > 1;
     // The option the bar/actions reflect (the picked one, else the best).
     const current = options.find(o => o.key === selectedKey) ?? options[0];
+    // Bar distance: a single store's own distance; a split's FARTHEST store (its
+    // reach) — the "how far" cue shown next to the price.
+    const barDists = current?.stores.map(s => s.distance).filter(Number.isFinite) ?? [];
+    const barDistanceKm = barDists.length ? Math.max(...barDists) : NaN;
 
     // A newly tapped store (new option set) → open the sheet to medium so the
     // actions + store options are immediately in view.
@@ -97,6 +101,11 @@ export default function StoreOptionsDock({
                 glance; a split shows its 2–3 brands side by side. */}
             <StoreLogos stores={current.stores} size={avatarSize.sm} styles={styles} spread />
             <View style={styles.barSpacer} />
+            {/* How far, at a glance — a single store's distance, or a split's
+                farthest reach — so you can weigh cheap-vs-near before expanding. */}
+            {Number.isFinite(barDistanceKm) && barDistanceKm > 0 && (
+                <Text style={styles.barDistance} allowFontScaling={false}>{formatDistance(barDistanceKm)}</Text>
+            )}
             <Text style={styles.barPrice} allowFontScaling={false}>{formatEuro(current.total)}</Text>
         </View>
     );
@@ -277,6 +286,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // shorter and its stage-1 sheet read slightly shorter than the main dock's).
     bar: { ...dockBarBase, minHeight: 40 },
     barSpacer: { flex: 1 },
+    barDistance: { ...typography.bodySmall, color: c.textMuted, marginRight: spacing.sm },
     barPrice: { fontSize: 18, fontWeight: '800', color: c.primary },
 
     // ── Content ──
