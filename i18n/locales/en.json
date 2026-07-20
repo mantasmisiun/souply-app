@@ -4,7 +4,8 @@
     "searchPlaceholder": "Search address...",
     "dragHint": "Drag the map to fine-tune the spot",
     "min3": "Enter at least 3 characters",
-    "notFound": "Address not found"
+    "notFound": "Address not found",
+    "approx": "Approximate spot — drag the pin to adjust"
   },
   "tripReceipts": {
     "title": "Receipts",

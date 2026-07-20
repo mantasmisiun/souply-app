@@ -4,7 +4,8 @@
     "searchPlaceholder": "Ieškoti adreso...",
     "dragHint": "Vilkite žemėlapį, kad patikslintumėte vietą",
     "min3": "Įveskite bent 3 simbolius",
-    "notFound": "Adresas nerastas"
+    "notFound": "Adresas nerastas",
+    "approx": "Apytikslė vieta — pakoreguokite žymeklį"
   },
   "tripReceipts": {
     "title": "Kvitai",
