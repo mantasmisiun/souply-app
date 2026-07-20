@@ -266,7 +266,11 @@ const OptionItem = React.memo(function OptionItem({
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     // ── Info bar ──
-    bar: dockBarBase,
+    // minHeight matches the main map dock's bar (40) so both collapse to the
+    // same bar height → identical detent geometry at every stage (the store
+    // bar's tallest content is the 32dp logos, so without this it measured ~8dp
+    // shorter and its stage-1 sheet read slightly shorter than the main dock's).
+    bar: { ...dockBarBase, minHeight: 40 },
     barTitle: { flex: 1, ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
     barPrice: { fontSize: 18, fontWeight: '800', color: c.primary },
 
