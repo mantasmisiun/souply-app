@@ -1,8 +1,7 @@
 import React, { startTransition, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, Image, Platform, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
 import MapView, { Marker, Polyline, type Region } from 'react-native-maps';
-import Animated, { useSharedValue, useAnimatedProps, type SharedValue } from 'react-native-reanimated';
-import { Gesture, GestureDetector, type GestureType } from 'react-native-gesture-handler';
+import Animated, { useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Asset } from 'expo-asset';
 import { Ionicons } from '@expo/vector-icons';
@@ -77,28 +76,16 @@ type Props = {
     routeCoords?: LatLng[] | null;
     /** Tap empty map (not a marker) → dismiss the options sheet. */
     onMapPress?: () => void;
-    /** Height (px) the bottom sheet currently occludes, so centering/fitting
-     *  keeps content in the visible area above it. 0 = nothing covering. */
+    /** Height (px) the bottom sheet currently occludes at its SETTLED detent.
+     *  Drives the camera only, never the layout: on Android it feeds `mapPadding`
+     *  (GoogleMap.setPadding — the Google-Maps-app pattern: camera math against
+     *  the visible strip, logo moves up, no resize); on iOS (Apple provider,
+     *  where mapPadding is decorative) it's folded into fit edgePadding and the
+     *  centerOn latitude offset instead. */
     bottomOverlay?: number;
     /** Reports the nearest un-priced stores currently in view (capped at the
      *  batch limit) so the parent can offer an "price this area" button. */
     onVisibleUnpricedChange?: (storeIds: number[]) => void;
-    /** UI-thread flag: while true the map's pan is disabled (sheet is being
-     *  touched) — driven by the sheet's gesture, no JS-state lag. */
-    scrollDisabledSV?: SharedValue<boolean>;
-    /** UI-thread flag: true while a sheet is open above the collapsed bar. The
-     *  map's pan is disabled for the whole time (not just during a drag), so
-     *  sheet touches can never move the map. */
-    sheetOpenSV?: SharedValue<boolean>;
-    /** Stable gate for the non-animated gestures (zoom): false while a sheet is
-     *  open, so a pinch on the sheet can't zoom the map. */
-    gesturesEnabled?: boolean;
-    /** Ref to the map's own native gesture. The dock's pan
-     *  `.blocksExternalGesture()`s this, so a drag that begins on the bar holds
-     *  the map's native pan off on the native thread — the ONLY way to win the
-     *  first bar-drag (scrollEnabled is read by the map at touch-down, too late
-     *  for a JS flag flipped in onBegin). */
-    nativeGestureRef?: React.MutableRefObject<GestureType | undefined>;
 };
 
 type Styles = ReturnType<typeof makeStyles>;
@@ -527,8 +514,7 @@ const DirectoryLayer = React.memo(function DirectoryLayer({
 function StoreResultsMap({
     pins, userCoords, focusCoords, recommendedCoords, routeEndpoints, onSelectStore, colors,
     directory, pricedStoreIds, pricingStoreId, onLazyPrice, routeCoords, onMapPress,
-    onVisibleUnpricedChange, bottomOverlay = 0, scrollDisabledSV, sheetOpenSV, gesturesEnabled = true,
-    nativeGestureRef,
+    onVisibleUnpricedChange, bottomOverlay = 0,
 }: Props) {
     // How much of the bottom is covered by the sheet (capped so a fully-extended
     // sheet doesn't try to cram everything into a sliver — at that point the map
@@ -538,9 +524,6 @@ function StoreResultsMap({
     occlusionRef.current = occlusion;
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const mapRef = useRef<MapView>(null);
-    const mapAnimatedProps = useAnimatedProps(() => ({
-        scrollEnabled: !((scrollDisabledSV?.value ?? false) || (sheetOpenSV?.value ?? false)),
-    }));
     const isDark = useResolvedScheme() === 'dark';
     const insets = useSafeAreaInsets();
 
@@ -550,11 +533,6 @@ function StoreResultsMap({
     // which read as "tapping a pin does nothing". Record the last marker tap and
     // swallow any map-press within a short window of it.
     const markerPressRef = useRef(0);
-    // The map's native gesture, exposed to RNGH so the dock's pan can block it.
-    const mapNativeGesture = useMemo(() => {
-        const g = Gesture.Native();
-        return nativeGestureRef ? g.withRef(nativeGestureRef) : g;
-    }, [nativeGestureRef]);
     const markMarkerPress = useCallback(() => { markerPressRef.current = Date.now(); }, []);
     const handleStoreTap = useCallback((id: number) => { markMarkerPress(); onSelectStore(id); }, [markMarkerPress, onSelectStore]);
     const handleDirTap = useCallback((id: number) => { markMarkerPress(); onLazyPrice?.(id); }, [markMarkerPress, onLazyPrice]);
@@ -562,21 +540,6 @@ function StoreResultsMap({
     // iOS it hit-tests the tap against the projected pills first.
 
     useEffect(() => { preloadLogos(); }, []);
-
-    // Warm the scrollEnabled binding once the NATIVE map exists (onMapReady).
-    // Reanimated only writes a useAnimatedProps value to a third-party native
-    // component (MapView) on the first CHANGE, and a change requested before the
-    // native view exists is dropped — so the initial `scrollEnabled` never
-    // reaches the map, and the FIRST dock drag pans it (every drag after is fine,
-    // the binding is now live). Toggling here forces that first native write.
-    const warmScroll = useCallback(() => {
-        if (!scrollDisabledSV) return;
-        scrollDisabledSV.value = true;
-        // Two frames so the first native write (scrollEnabled=false) commits
-        // before we restore it — the map has just become ready and the user
-        // isn't dragging yet, so the brief disable is invisible.
-        requestAnimationFrame(() => requestAnimationFrame(() => { scrollDisabledSV.value = false; }));
-    }, [scrollDisabledSV]);
 
     const anySelected = useMemo(() => pins.some(p => p.active), [pins]);
 
@@ -793,24 +756,30 @@ function StoreResultsMap({
         }, 350);
     }, [region, liveRegion, markMarkerPress]);
 
-    // Bottom edge-padding for fits = the sheet occlusion (plus a base margin so
-    // content clears the very bottom when nothing's covering).
-    const fitBottomPad = () => Math.max(occlusionRef.current + 24, 90);
-    // Centering a single point: shift the camera south by half the occlusion so
-    // the point lands in the centre of the VISIBLE area above the sheet.
+    // Bottom fit padding, platform-split (researched, maps 1.20):
+    //  - Android: `mapPadding` (GoogleMap.setPadding) already reserves the sheet
+    //    area and since 1.18.4 fit edgePadding is ADDITIVE on top of it — so only
+    //    a small content margin here, or the occlusion double-counts.
+    //  - iOS (Apple provider): mapPadding is decorative (layoutMargins — MapKit
+    //    ignores it for camera math), so the occlusion must ride the edgePadding.
+    const fitBottomPad = () =>
+        Platform.OS === 'ios' ? occlusionRef.current + 48 : 48;
     const centerOn = useCallback((lat: number, lng: number, delta: number) => {
-        const off = (occlusionRef.current / 2) * (delta / SCREEN_H);
+        // iOS animateToRegion centers in the FULL view (no padding concept) →
+        // shift the target south by half the occlusion so the point lands in the
+        // centre of the visible strip. Android's camera is padding-aware.
+        const off = Platform.OS === 'ios' ? (occlusionRef.current / 2) * (delta / SCREEN_H) : 0;
         mapRef.current?.animateToRegion(
             { latitude: lat - off, longitude: lng, latitudeDelta: delta, longitudeDelta: delta },
             350,
         );
     }, []);
 
-    const fitAll = useCallback(() => {
+    const fitAll = useCallback((animated = true) => {
         if (allCoordsRef.current.length === 0) return;
         mapRef.current?.fitToCoordinates(allCoordsRef.current, {
             edgePadding: { top: 100, right: 80, bottom: fitBottomPad(), left: 80 },
-            animated: true,
+            animated,
         });
     }, []);
 
@@ -835,7 +804,7 @@ function StoreResultsMap({
                 centerOn(focusCoords[0].latitude, focusCoords[0].longitude, 0.0075);
             } else if (focusCoords && focusCoords.length > 1) {
                 mapRef.current?.fitToCoordinates(focusCoords, {
-                    edgePadding: { top: 110, right: 90, bottom: Math.max(occlusion + 24, 90), left: 90 },
+                    edgePadding: { top: 110, right: 90, bottom: fitBottomPad(), left: 90 },
                     animated: true,
                 });
             } else {
@@ -843,8 +812,11 @@ function StoreResultsMap({
             }
         }, 60);
         return () => clearTimeout(t);
-        // `occlusion` in deps → re-frame when the sheet moves to a new stage.
-    }, [focusKey, allKey, focusCoords, centerDefault, centerOn, occlusion]);
+        // NOTE: `occlusion` is deliberately NOT a dep — the frame is inset to the
+        // visible area, so dragging the sheet to a new detent must NOT re-frame
+        // the map (that read as the map "shifting focus" mid-drag). Fit only when
+        // the selection/pins change.
+    }, [focusKey, allKey, focusCoords, centerDefault, centerOn]);
 
     // ── iOS overlay pills + tap routing ──────────────────────────────────────
     // MEMOIZED on `images` (stable state identity — changes only when a bake
@@ -930,20 +902,36 @@ function StoreResultsMap({
     }, [onMapPress, liveRegion, mapW, mapH, handleDirTap, onClusterPress]);
 
     return (
+        // FULL-BLEED map, always — it renders behind the glass sheet (no bg gap,
+        // no resize jank). Touch safety needs no geometry: the sheet's
+        // pointerEvents-auto panel natively consumes every touch that begins on
+        // it (ReactViewGroup.onTouchEvent returns true), so the map only ever
+        // receives touches that start on its visible area.
         <View style={StyleSheet.absoluteFill}>
-            <GestureDetector gesture={mapNativeGesture}>
             <AnimatedMapView
                 ref={mapRef}
-                animatedProps={mapAnimatedProps}
                 style={StyleSheet.absoluteFill}
                 initialRegion={initialRegion}
-                onMapReady={() => { centerDefault(); warmScroll(); }}
+                // The Google-Maps-app camera pattern: the sheet's settled
+                // occlusion becomes viewport padding (GoogleMap.setPadding on
+                // Android — camera math against the visible strip, logo rides
+                // up; cheap, no relayout). Updated per settled detent only,
+                // never per-frame. On iOS (Apple provider) this is decorative;
+                // fits/centerOn compensate there instead.
+                mapPadding={{ top: 0, right: 0, bottom: occlusion, left: 0 }}
+                // Frame the area INSTANTLY on first ready — an animated fit here
+                // is still running when the map first paints, and a bar-drag
+                // right then interrupts the camera animation and pans the map
+                // instead of opening the sheet (the "first drag" bug). Later
+                // deselects still animate via centerDefault.
+                onMapReady={() => fitAll(false)}
                 onPress={handleMapPress}
                 onLayout={(e) => { mapW.value = e.nativeEvent.layout.width; mapH.value = e.nativeEvent.layout.height; }}
                 onRegionChange={Platform.OS === 'ios' ? onRegionLive : undefined}
                 onRegionChangeComplete={onRegionSettle}
                 customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
-                zoomEnabled={gesturesEnabled}
+                scrollEnabled={true}
+                zoomEnabled={true}
                 rotateEnabled={false}
                 pitchEnabled={false}
                 toolbarEnabled={false}
@@ -1020,7 +1008,6 @@ function StoreResultsMap({
                     );
                 })}
             </AnimatedMapView>
-            </GestureDetector>
 
             {/* iOS: directory (cluster bubbles + un-priced logos) as a projected
                 overlay — plain RN views, so the zoom re-bucketing churn never
@@ -1064,7 +1051,7 @@ function StoreResultsMap({
             {/* Same liquid-glass treatment as the store-count switcher up top
                 (LiquidGlass, solid fallback = the previous look on Android/old iOS). */}
             <View style={[styles.controls, { top: insets.top + spacing.md }]} pointerEvents="box-none">
-                <TouchableOpacity onPress={fitAll} activeOpacity={0.8}>
+                <TouchableOpacity onPress={() => fitAll()} activeOpacity={0.8}>
                     <LiquidGlass style={styles.ctrlBtn} fallback="solid">
                         <Ionicons name="scan-outline" size={iconSize.md} color={colors.textPrimary} />
                     </LiquidGlass>

@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, TouchableOpacity, Dimensions } from 'react-nati
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
-import Animated, { useSharedValue, type SharedValue } from 'react-native-reanimated';
+import Animated, { useSharedValue } from 'react-native-reanimated';
 import { spacing, radius, typography, iconSize, avatarSize, type AppTheme } from '../../constants/theme';
 import { type SheetOption } from '../../utils/splitOptions';
 import { ChainLogoChip } from '../ChainLogoChip';
@@ -46,27 +46,21 @@ type Props = {
     /** Basket item count for the List subtitle. */
     itemCount: number;
     colors: AppTheme;
-    /** UI-thread flag the map reads to freeze its pan while the dock is dragged. */
-    dragActiveSV: SharedValue<boolean>;
     /** Called when a touch begins on the dock → the host ignores the map's
      *  leaked onPress for the same tap (else selecting an option deselects). */
     onInteract: () => void;
-    /** Sheet detent (0 = collapsed bar, >0 = open). The host makes the map
-     *  non-interactive while it's open so sheet touches never reach the map. */
-    onStageChange?: (stage: number) => void;
-    /** The map's native gesture ref → the dock pan blocks it on the native
-     *  thread, so a drag beginning on the bar can't pan the map underneath. */
-    blockGestureRef?: { current: unknown } | null;
     /** Collapsed dock height → the map keeps content above the bar. */
     onCollapsedClearance?: (px: number) => void;
-    /** Map occlusion (grows with the stage) → the tapped store frames above it. */
-    onOcclusionChange?: (px: number) => void;
+    /** Sheet occlusion per detent → the host insets the map's frame to the
+     *  visible area above the sheet (so it frames stores there and no map sits
+     *  under the sheet to steal a drag). */
+    onOcclusion?: (px: number) => void;
 };
 
 export default function StoreOptionsDock({
     options, selectedKey, onSelect, onNavigate, onCreateList, creatingList,
-    journeyKm, itemCount, colors, dragActiveSV, onInteract, onStageChange, blockGestureRef,
-    onCollapsedClearance, onOcclusionChange,
+    journeyKm, itemCount, colors, onInteract,
+    onCollapsedClearance, onOcclusion,
 }: Props) {
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -127,28 +121,27 @@ export default function StoreOptionsDock({
                 />
             </View>
 
-            {/* Store options — ONE grouped card (no "Stores" header): a single
-                store, or the split options with the single-store option last.
-                Rounded at the top/bottom, hairline-separated in between, the
-                selected one tinted. */}
-            <SheetCard style={styles.optGroup}>
-                {options.map((opt, i) => (
-                    <OptionItem
-                        key={opt.key}
-                        option={opt}
-                        selected={selectedKey === opt.key}
-                        selectable={multi}
-                        divider={i > 0}
-                        first={i === 0}
-                        last={i === options.length - 1}
-                        styles={styles}
-                        colors={colors}
-                        onSelect={onSelect}
-                        onInteract={onInteract}
-                        t={t}
-                    />
-                ))}
-            </SheetCard>
+            {/* Store options — a "Stores" section of SEPARATE cards (one per
+                option: a single store, or the split options with the single-store
+                option last), the selected one ringed pink. */}
+            <View>
+                <Text style={styles.secLabel}>{t('results.sheet.stores')}</Text>
+                <View style={styles.optsList}>
+                    {options.map(opt => (
+                        <OptionItem
+                            key={opt.key}
+                            option={opt}
+                            selected={selectedKey === opt.key}
+                            selectable={multi}
+                            styles={styles}
+                            colors={colors}
+                            onSelect={onSelect}
+                            onInteract={onInteract}
+                            t={t}
+                        />
+                    ))}
+                </View>
+            </View>
         </View>
     );
 
@@ -157,21 +150,14 @@ export default function StoreOptionsDock({
             ref={dockRef}
             colors={colors}
             barAtTop
+            mapMode
             progressSV={progress}
-            dragActiveSV={dragActiveSV}
-            blockScrollRef={blockGestureRef}
             onTouchStart={onInteract}
             onCollapsedClearance={px => { collapsedRef.current = px; onCollapsedClearance?.(px); }}
+            onOcclusion={onOcclusion}
             barRowHeight={barH}
             barRow={barRow}
-            sheet={{
-                maxStage: 2,
-                content,
-                // Occlusion grows with the stage (the map clamps it to ~55 %, so
-                // medium and full both report a large value); collapsed reports
-                // just the bar height so the map reclaims the space.
-                onStageChange: s => { onStageChange?.(s); onOcclusionChange?.(s <= 0 ? collapsedRef.current : Math.round(SCREEN_H * 0.6)); },
-            }}
+            sheet={{ maxStage: 2, content }}
         />
     );
 }
@@ -198,15 +184,13 @@ function StoreLogos({ stores, size, styles }: { stores: SheetOption['stores']; s
     );
 }
 
-/** One option row inside the grouped store card — a split (2/3 stores) or the
- *  single-store baseline. `divider` draws the hairline above every row but the
- *  first; the selected split is tinted. Memoized so a stage settle re-render
- *  only touches rows whose `selected` flips. */
+/** One option — its OWN card (a split of 2/3 stores or the single-store
+ *  baseline). The selected one is ringed pink. Memoized so a stage settle
+ *  re-render only touches rows whose `selected` flips. */
 const OptionItem = React.memo(function OptionItem({
-    option, selected, selectable, divider, first, last, styles, colors, onSelect, onInteract, t,
+    option, selected, selectable, styles, colors, onSelect, onInteract, t,
 }: {
     option: SheetOption; selected: boolean; selectable: boolean;
-    divider: boolean; first: boolean; last: boolean;
     styles: Styles; colors: AppTheme; onSelect: (key: string) => void; onInteract: () => void; t: TFunction;
 }) {
     const multi = option.stores.length > 1;
@@ -224,14 +208,8 @@ const OptionItem = React.memo(function OptionItem({
             // the ancestor responder-capture that RNGH swallows.
             onPressIn={onInteract}
             onPress={() => onSelect(option.key)}
-            style={[
-                styles.optRow,
-                first && styles.optRowFirst,
-                last && styles.optRowLast,
-                divider && styles.optDivider,
-                selected && selectable && styles.optSelected,
-            ]}
         >
+            <SheetCard style={[styles.optCard, selected && selectable && styles.optCardSelected]}>
             <StoreLogos stores={option.stores} size={avatarSize.md} styles={styles} />
 
             <View style={styles.optMid}>
@@ -281,6 +259,7 @@ const OptionItem = React.memo(function OptionItem({
             </View>
 
             <Text style={styles.optPrice} allowFontScaling={false}>{formatEuro(option.total)}</Text>
+            </SheetCard>
         </TouchableOpacity>
     );
 });
@@ -297,35 +276,38 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     content: { ...dockContentBase, paddingBottom: spacing.lg },
     actionRow: { flexDirection: 'row', gap: 14 },
 
-    // ── Store options — one grouped card ──
-    // No inner padding: the rows span the full card width (wider). The first/last
-    // rows round to match the card so a tinted end row doesn't poke square
-    // corners past it (per-row rounding, so the card keeps its shadow).
-    optGroup: { paddingHorizontal: 0, paddingBottom: 0 },
+    // ── Store options — a "Stores" section of separate cards ──
+    secLabel: {
+        fontSize: 12, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase',
+        color: c.textMuted, marginBottom: spacing.sm, marginLeft: 4,
+    },
+    optsList: { gap: spacing.sm },
     logoStack: { flexDirection: 'row', alignItems: 'center' },
     // Deeper overlap so a split reads as one grouped badge, not two chips.
     logoStacked: { marginLeft: -18 },
 
-    // Contiguous rows — a hairline divider between them (no gaps), the selected
-    // split tinted.
-    optRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 12, paddingHorizontal: 16 },
-    optRowFirst: { borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg },
-    optRowLast: { borderBottomLeftRadius: radius.lg, borderBottomRightRadius: radius.lg },
-    optDivider: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },
-    optSelected: { backgroundColor: c.primaryMuted },
+    // Each option is its OWN SheetCard. Explicit padding overrides SheetCard's
+    // section padding; a transparent 1.5px ring is always present so the pink
+    // selected ring can't shift the row's layout.
+    optCard: {
+        flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+        paddingTop: 12, paddingBottom: 12, paddingHorizontal: 14,
+        borderWidth: 1.5, borderColor: 'transparent',
+    },
+    optCardSelected: { borderColor: c.primary },
     optMid: { flex: 1 },
     optTitle: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
     optSub: { ...typography.caption, color: c.textMuted, marginTop: 2 },
-    optPrice: { fontSize: 18, fontWeight: '800', color: c.primary },
+    optPrice: { fontSize: 15, fontWeight: '800', color: c.primary },
 
     // Badges — one row below the title.
     chipRow: { flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: spacing.xs, marginTop: spacing.xs },
     chip: {
-        flexDirection: 'row', alignItems: 'center', gap: spacing.xs,
+        flexDirection: 'row', alignItems: 'center', gap: 3,
         backgroundColor: 'rgba(120,120,128,0.16)', borderRadius: radius.pill,
-        paddingHorizontal: spacing.sm, paddingVertical: spacing.xs,
+        paddingHorizontal: 7, paddingVertical: 2,
     },
-    chipText: { ...typography.label, color: c.textSecondary },
+    chipText: { ...typography.label, fontSize: 11, color: c.textSecondary },
     warnChip: { backgroundColor: c.warning + '2E' },
     detourChip: { backgroundColor: c.warning + '2E' },
     detourText: { color: c.warning, fontWeight: '700' },

@@ -109,6 +109,12 @@ interface Props {
      *  change (T2 compact dock, session vs tab bar). Peek is excluded so the
      *  value doesn't jump when a chooser appears. */
     onCollapsedClearance?: (px: number) => void;
+    /** Reports the sheet's OCCLUSION — how far its top edge reaches up from the
+     *  screen bottom — at each settled detent. A host over a native map insets
+     *  the map's frame to this, so the map lives ONLY in the visible area above
+     *  the sheet (no map under it → nothing to steal a sheet drag, and the map
+     *  stays draggable wherever it shows). */
+    onOcclusion?: (px: number) => void;
     /** A scrollable behind the bar whose scroll must yield to this sheet's Pan. */
     blockScrollRef?: { current: unknown } | null;
     /** When this panel is stacked IN FRONT of another dock (the session list
@@ -136,11 +142,20 @@ interface Props {
      *  a native map uses it to ignore the map's onPress that leaks through the
      *  GL surface for the same tap (which would otherwise deselect). */
     onTouchStart?: () => void;
+    /** Sheet floats over a LIVE native map (react-native-maps). The pan then uses
+     *  DECLARATIVE activation (activeOffset on both axes) instead of manual —
+     *  over a native map the manual path is starved (the map eats the touch
+     *  stream before onTouchesMove fires) so the sheet never reacts, and any drag
+     *  the manual path fails on falls through and pans the map. Declarative
+     *  activation makes RNGH claim the drag natively (cancelling the map) and OWN
+     *  every drag on the sheet, so nothing leaks. This is the gorhom-bottom-sheet-
+     *  over-react-native-maps pattern. */
+    mapMode?: boolean;
 }
 
 export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function DockedGlassSheet({
-    barRow, barRowHeight, sheet, colors: colorsProp, onBarHeight, onCollapsedClearance, blockScrollRef,
-    progressiveShadow, barAtTop, externalPanOnly, progressSV, dragActiveSV, onTouchStart,
+    barRow, barRowHeight, sheet, colors: colorsProp, onBarHeight, onCollapsedClearance, onOcclusion,
+    blockScrollRef, progressiveShadow, barAtTop, externalPanOnly, progressSV, dragActiveSV, onTouchStart, mapMode,
 }, ref) {
     const themed = useTheme();
     const colors = colorsProp ?? themed;
@@ -193,6 +208,17 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     const draggingSV = useSharedValue(false);
     const stageRef = useRef(0);
     const [stage, setStageState] = useState(0);
+    // Report occlusion (sheet-top distance from the screen bottom) per settled
+    // detent, so a map host can inset its frame to exactly the visible area.
+    // Collapsed matches collapsedClearance; medium/full grow up to the snap
+    // height (the float margin shrinks to 0 as it docks).
+    useEffect(() => {
+        if (!onOcclusion) return;
+        const lo = snaps[0], hi = snaps[snaps.length - 1];
+        const height = snaps[Math.min(stage, snaps.length - 1)];
+        const prog = hi > lo ? (height - lo) / (hi - lo) : 0;
+        onOcclusion(Math.round(COLLAPSED_MARGIN * (1 - prog) + height));
+    }, [stage, snaps, onOcclusion]);
 
     const onStageChange = sheet?.onStageChange;
     const onActiveChange = sheet?.onActiveChange;
@@ -269,10 +295,17 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     const pan = useMemo(() => {
         let g = Gesture.Pan()
             .enabled(hasSheet && !externalPanOnly)
-            .manualActivation(true)
             .simultaneousWithExternalGesture(scrollRef)
-            .onBegin((e) => { 'worklet'; grabY.value = e.absoluteY; grabX.value = e.absoluteX; if (dragActiveSV) dragActiveSV.value = true; if (onTouchStart) runOnJS(onTouchStart)(); })
-            .onTouchesMove((e, sm) => {
+            .onBegin((e) => { 'worklet'; grabY.value = e.absoluteY; grabX.value = e.absoluteX; if (dragActiveSV) dragActiveSV.value = true; if (onTouchStart) runOnJS(onTouchStart)(); });
+        if (mapMode) {
+            // Over a live native map: activate DECLARATIVELY on either axis so
+            // RNGH claims the drag on the native thread (cancelling the map) and
+            // OWNS every drag on the sheet — a manual path is starved and any drag
+            // it fails on falls through to pan the map. 6px in any direction wins
+            // it here; the drag itself only moves the sheet vertically (onUpdate).
+            g = g.activeOffsetX([-6, 6]).activeOffsetY([-6, 6]);
+        } else {
+            g = g.manualActivation(true).onTouchesMove((e, sm) => {
                 'worklet';
                 if (e.state === State.ACTIVE) return;
                 const t = e.allTouches[0];
@@ -290,7 +323,9 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                 // list's top collapses the sheet.
                 if (!atFull || (dy > 0 && scrollY.value <= 1)) sm.activate();
                 else sm.fail();
-            })
+            });
+        }
+        g = g
             .onStart(() => {
                 'worklet';
                 startH.value = h.value;
@@ -301,6 +336,12 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                 'worklet';
                 const sn = snapsSV.value;
                 const lo = sn[0], hi = sn[sn.length - 1];
+                // At full, a DOWNWARD drag while the list is scrolled must scroll
+                // the list (simultaneous), not collapse the sheet. (mapMode activates
+                // on every drag, so this handoff moves here from onTouchesMove.)
+                if (startH.value >= hi - 2 && e.translationY > 0 && scrollY.value > 1) {
+                    startH.value = hi + e.translationY; h.value = hi; return;
+                }
                 let nh = startH.value - e.translationY;
                 if (nh > hi) { startH.value = hi + e.translationY; nh = hi; }
                 else if (nh < lo) { startH.value = lo + e.translationY; nh = lo; }
@@ -316,7 +357,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
             });
         if (blockScrollRef) g = g.blocksExternalGesture(blockScrollRef as never);
         return g;
-    }, [hasSheet, externalPanOnly, snapEnd, h, startH, snapsSV, scrollY, draggingSV, grabX, grabY, setActiveJS, blockScrollRef, dragActiveSV, onTouchStart]);
+    }, [hasSheet, externalPanOnly, mapMode, snapEnd, h, startH, snapsSV, scrollY, draggingSV, grabX, grabY, setActiveJS, blockScrollRef, dragActiveSV, onTouchStart]);
 
     // ── ONE progress: 0 collapsed → 1 full (edge-to-edge). Margins, bar-row
     //    counter-offset and content anchor all derive from it, so sides + bottom
@@ -536,7 +577,14 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     // margin (clipStyle). Padding here would offset the sides but not the bottom,
     // making the side gaps wider than the bottom.
     wrap: {
-        position: 'absolute', left: 0, right: 0, bottom: 0,
+        // FULL-SCREEN box-none (not bottom:0 zero-height). A zero-height wrapper
+        // clips Android touch dispatch to a 0px rect, so the absolutely-positioned
+        // panel above it never receives touches — they fall through to a map
+        // beneath, which grabs the stream and cancels the sheet's pan (confirmed
+        // by device logs: onBegin fires, then onFinalize success=false, no
+        // onStart). Full-screen bounds let the panel consume its own area while
+        // box-none passes empty areas through to the map.
+        ...StyleSheet.absoluteFillObject,
         // Above screen chrome (CollapsingHeader overlay = 10): an expanded
         // sheet must cover floating back/search chips, not slide under them.
         zIndex: 20, elevation: 20,

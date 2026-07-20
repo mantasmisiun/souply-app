@@ -15,7 +15,6 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Animated, { FadeIn, useSharedValue } from 'react-native-reanimated';
-import { type GestureType } from 'react-native-gesture-handler';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { useTheme, spacing, radius, elevation, typography, iconSize, type AppTheme } from '../../constants/theme';
@@ -123,9 +122,6 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // ref discards a superseded run if the user changes location again mid-fetch.
     const [recalcing, setRecalcing] = useState(false);
     const recalcEpochRef = useRef(0);
-    // How much the store-options dock occludes the map (grows with its stage) so
-    // the tapped store frames above the open sheet.
-    const [storeOcclusion, setStoreOcclusion] = useState(0);
     useEffect(() => { void AsyncStorage.getItem('saverMode').then(v => setSaverMode(v === '1')); }, []);
     // ── Glass dock (same component as every new screen). Collapsed = the
     // price-summary bar; expanded = one scroll: Basket/Invite actions,
@@ -141,26 +137,13 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // Continuous sheet progress (0 collapsed → 1 full), mirrored out of the
     // dock so the title font can track drag distance on the UI thread (#3).
     const sheetProgress = useSharedValue(0);
-    // UI-thread flag: true while a touch is on the sheet → the map's pan is
-    // disabled instantly (via useAnimatedProps), so the map can't swallow the
-    // drag's move events. No JS-state lag.
-    const mapPanBlocked = useSharedValue(false);
-    // Reliable map-vs-sheet arbitration: the racy per-touch guards never held,
-    // so instead the map is made NON-INTERACTIVE for as long as a sheet is open
-    // above the collapsed bar. `storeSheetStage` (0 bar → >0 open) is reported by
-    // the store dock; while a sheet is open the map ignores pan AND its leaked
-    // onPress, so dragging the sheet's empty area can't move the map and tapping
-    // an option can't deselect. `sheetOpenSV` mirrors it onto the UI thread for
-    // the map's scrollEnabled animated prop.
-    const [storeSheetStage, setStoreSheetStage] = useState(0);
-    const anySheetOpen = selectedOptionKey != null ? storeSheetStage > 0 : dockExpanded;
-    const sheetOpenSV = useSharedValue(false);
-    useEffect(() => { sheetOpenSV.value = anySheetOpen; }, [anySheetOpen, sheetOpenSV]);
-    // The map's native gesture, handed to both docks so their pan
-    // `.blocksExternalGesture()`s it — a drag that begins on the collapsed bar
-    // holds the map's native pan off on the native thread (wins the first drag,
-    // which scrollEnabled can't since the map reads it at touch-down).
-    const mapNativeGestureRef = useRef<GestureType | undefined>(undefined);
+    // Map-vs-sheet: the map's frame is INSET to the sheet's occlusion (its top
+    // edge measured from the screen bottom), reported per detent by whichever
+    // dock is showing. The map then lives ONLY in the visible area above the
+    // sheet — no map under it, so a sheet drag is never stolen, the map is always
+    // pannable where it shows, and NO freeze is needed (Google-Maps model).
+    // Collapsed → inset to the bar; medium → to ~half; full → fully covered.
+    const [sheetOcclusion, setSheetOcclusion] = useState(150);
     // Title grows 15→20 when the sheet opens (like the catalog list sheet).
     const titleStyle = useDockTitleStyle(sheetProgress);
     const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
@@ -668,36 +651,43 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         return cs.length ? cs : null;
     }, [recommendedStores, singlePriced, cheapestStoreId]);
 
-    // Coords the map zooms to: the selected option's store(s), or null = fit all.
+    // Coords the map frames when a store is selected: the option's store(s) PLUS
+    // the trip origin (GPS / route start), so the WHOLE trip is visible — origin,
+    // route line and store(s) — instead of zooming tight onto the store alone.
+    // null = fit all (nothing selected).
     const focusCoords = useMemo(() => {
         if (!selectedOption) return null;
         const cs = selectedOption.stores
             .filter(s => s.latitude != null && s.longitude != null)
             .map(s => ({ latitude: s.latitude as number, longitude: s.longitude as number }));
-        return cs.length ? cs : null;
-    }, [selectedOption]);
+        if (!cs.length) return null;
+        const origin = routeEndpoints
+            ? { latitude: routeEndpoints.from.latitude, longitude: routeEndpoints.from.longitude }
+            : userCoords
+                ? { latitude: userCoords.lat, longitude: userCoords.lng }
+                : null;
+        return origin ? [origin, ...cs] : cs;
+    }, [selectedOption, routeEndpoints, userCoords]);
 
     const handlePinTap = useCallback((storeId: number) => {
         setSelectedStoreId(storeId);
         setSelectedOptionKey(null); // default to the best option for this store
     }, []);
     const handleSelectOption = useCallback((key: string) => setSelectedOptionKey(key), []);
-    const closeSheet = useCallback(() => { setSelectedStoreId(null); setSelectedOptionKey(null); setStoreSheetStage(0); }, []);
-    // The MapView's native onPress leaks through the GL surface for taps that
-    // land on the floating dock too (no gesture arbitration there). The dock
-    // stamps this on every touch that begins on it; a map-press within the window
-    // is that same leaked tap — ignore it so choosing an option never deselects.
-    // Tap the map to deselect — but ONLY when no sheet is open above the bar.
-    // PRIMARY guard: while a sheet is open the map is non-interactive, so a
-    // leaked onPress from tapping an option (or the sheet's empty area) must
-    // never reach closeSheet. The timestamp stays as a backstop for the brief
-    // open-snap window where the reported stage is still settling.
+    const closeSheet = useCallback(() => { setSelectedStoreId(null); setSelectedOptionKey(null); }, []);
+    // Touches on the sheet never reach the map (its panel consumes them), so
+    // these fire only for genuine map interactions. The timestamp backstop stays
+    // for the rare leaked onPress on the floating bar.
     const sheetPressRef = useRef(0);
     const noteSheetPress = useCallback(() => { sheetPressRef.current = Date.now(); }, []);
+    // Map TAP (press, no drag) — collapse an expanded main dock, else deselect a
+    // store. NOT on touch-start: a map DRAG must pan the map, never collapse the
+    // sheet (mirrors the store case, where a drag pans and a tap deselects).
     const handleMapTap = useCallback(() => {
-        if (anySheetOpen || Date.now() - sheetPressRef.current < 400) return;
+        if (Date.now() - sheetPressRef.current < 400) return;
+        if (dockExpanded) { dockRef.current?.collapse(); return; }
         closeSheet();
-    }, [anySheetOpen, closeSheet]);
+    }, [dockExpanded, closeSheet]);
 
     // Live store-count toggle (1/2/3) on the map. Pure CLIENT re-rank — combos
     // are scored from the already-priced stores, so no server recalc/spinner.
@@ -1037,11 +1027,9 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                             onLazyPrice={handleLazyPrice}
                             routeCoords={routeCoords}
                             onVisibleUnpricedChange={setVisibleUnpriced}
-                            scrollDisabledSV={mapPanBlocked}
-                            sheetOpenSV={sheetOpenSV}
-                            gesturesEnabled={!anySheetOpen}
-                            nativeGestureRef={mapNativeGestureRef}
-                            bottomOverlay={selectedOption ? Math.max(bottomClearance, storeOcclusion) : Math.max(bottomClearance, embedded ? 0 : dockClearance)}
+                            // Settled sheet occlusion → camera-only (mapPadding /
+                            // iOS fit padding). The map itself stays full-bleed.
+                            bottomOverlay={embedded ? 0 : sheetOcclusion}
                         />
                         {/* Full-bleed map → floating back circle, top-left
                             (standalone route only — the embedding host owns
@@ -1073,16 +1061,6 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                 gorhom-over-react-native-maps routing — no scrollEnabled toggles,
                 no gesture arbitration against the GL surface). */}
             <View style={StyleSheet.absoluteFill} pointerEvents="box-none">
-            {/* While the dock is expanded, a transparent scrim over the map
-                (below the dock) makes the sheet reliably interactive and
-                collapses the sheet on any map tap/drag. */}
-            {dockExpanded && !embedded && !selectedOption && !pickingPreset && (
-                <View
-                    style={styles.dockScrim}
-                    onStartShouldSetResponder={() => true}
-                    onResponderGrant={() => dockRef.current?.collapse()}
-                />
-            )}
 
             {/* Tap a pin → the store-options dock (same glass scaffold as the main
                 dock; replaces it while a store is selected). It lives INSIDE this
@@ -1100,12 +1078,9 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                     journeyKm={journeyKm}
                     itemCount={basketItemCount}
                     colors={colors}
-                    dragActiveSV={mapPanBlocked}
                     onInteract={noteSheetPress}
-                    onStageChange={setStoreSheetStage}
-                    blockGestureRef={mapNativeGestureRef}
                     onCollapsedClearance={setDockClearance}
-                    onOcclusionChange={setStoreOcclusion}
+                    onOcclusion={setSheetOcclusion}
                 />
             )}
 
@@ -1118,10 +1093,10 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                     ref={dockRef}
                     colors={colors}
                     barAtTop
+                    mapMode
                     progressSV={sheetProgress}
-                    dragActiveSV={mapPanBlocked}
-                    blockScrollRef={mapNativeGestureRef}
                     onCollapsedClearance={setDockClearance}
+                    onOcclusion={setSheetOcclusion}
                     barRowHeight={dockBarH}
                     barRow={
                         <View
@@ -1251,7 +1226,6 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     pickerOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: c.pageBackground, zIndex: 30, elevation: 30 },
-    dockScrim: { ...StyleSheet.absoluteFillObject, zIndex: 15, elevation: 15 },
     // Floating map header (map view is full-bleed): back circle + toggle, left.
     mapTopLeft: { position: 'absolute', left: spacing.md, alignItems: 'flex-start', gap: spacing.sm, zIndex: 20 },
     // Glass surfaces clip to their rounded shape (overflow hidden), so the
