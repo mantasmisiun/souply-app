@@ -184,7 +184,6 @@ export function useBakedPills(specs: MapPillSpec[]): {
   // `done` (captured OR failed) drives the throttle window so it advances even on a failed capture.
   const [done, setDone] = useState<Record<string, true>>({});
   const onShot = useCallback((key: string, uri: string, w: number, h: number) => {
-    if (__DEV__) console.log(`[BAKERY] baked key=${key} → …${uri.slice(-14)} ${Math.round(w)}x${Math.round(h)}dp`);
     setUris((prev) => (prev[key]?.uri === uri ? prev : { ...prev, [key]: { uri, w, h } }));
     setDone((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
   }, []);
