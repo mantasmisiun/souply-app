@@ -1,4 +1,4 @@
-import { nearestPool } from '../utils/candidatePool';
+import { nearestPool, nearestRoutePool } from '../utils/candidatePool';
 
 // Stores laid out due-north of a fixed centre so distance ≈ the `km` argument
 // (1° latitude ≈ 111.32 km), which makes distance order == insertion order and
@@ -84,5 +84,57 @@ describe('nearestPool', () => {
     it('represents every chain when each has a single nearby branch', () => {
         const stores = Array.from({ length: 8 }, (_, i) => store(i + 1, 0.3 * (i + 1)));
         expect(nearestPool(CENTER, stores).length).toBe(8);
+    });
+});
+
+// ── Route pool: work → home, 5 km due SOUTH. `at(chain, kmNorth, kmEast)` places
+// a store relative to WORK (negative kmNorth = south, toward home). ─────────────
+const WORK = { lat: 54.7, lng: 25.3 };
+const HOME = { lat: 54.7 - 5 / KM_PER_DEG_LAT, lng: 25.3 }; // 5 km south
+const KM_PER_DEG_LNG = KM_PER_DEG_LAT * Math.cos((WORK.lat * Math.PI) / 180);
+function at(chainId: number, kmNorth: number, kmEast = 0) {
+    return {
+        id: nextId++, chainId, name: 's', address: '',
+        latitude: WORK.lat + kmNorth / KM_PER_DEG_LAT,
+        longitude: WORK.lng + kmEast / KM_PER_DEG_LNG,
+        chainName: `chain${chainId}`, logoUrl: null,
+    };
+}
+
+describe('nearestRoutePool', () => {
+    beforeEach(() => { nextId = 1; });
+
+    it('bus: prefers the toward-destination store over a backtrack, drops far-from-stop', () => {
+        const toward = at(1, -0.5);   // 0.5 km south of work (toward home) — walkable, detour ~0
+        const behind = at(2, +0.5);   // 0.5 km north of work (backtrack) — walkable, detour ~1
+        const midRoute = at(3, -2.5); // on the line but 2.5 km from both stops — NOT walkable
+        const pool = nearestRoutePool(WORK, HOME, [toward, behind, midRoute], 'bus');
+        const ids = pool.map(s => s.id);
+        expect(ids).toContain(toward.id);
+        expect(ids).toContain(behind.id);
+        expect(ids).not.toContain(midRoute.id);   // mid-route: can't shop off a bus
+        expect(pool[0].id).toBe(toward.id);         // toward-destination ranks first (lower detour)
+    });
+
+    it('bus: directional works at the HOME end too (toward-work beats past-home)', () => {
+        const towardWork = at(1, -4.5); // 0.5 km north of home (toward work) — walkable, detour ~0
+        const pastHome = at(2, -5.5);   // 0.5 km south of home (past it) — walkable, detour ~1
+        const pool = nearestRoutePool(WORK, HOME, [towardWork, pastHome], 'bus');
+        expect(pool.map(s => s.id)).toEqual([towardWork.id, pastHome.id]);
+    });
+
+    it('car: keeps on-corridor stores, drops ones far off the line', () => {
+        const onLine = at(1, -2.5);       // midpoint of the route
+        const offLine = at(2, -2.5, 3);   // 3 km east of the midpoint → outside the ellipse
+        const pool = nearestRoutePool(WORK, HOME, [onLine, offLine], 'car');
+        const ids = pool.map(s => s.id);
+        expect(ids).toContain(onLine.id);
+        expect(ids).not.toContain(offLine.id);
+    });
+
+    it('applies the per-chain cap along the route', () => {
+        const sameChain = Array.from({ length: 5 }, (_, i) => at(7, -0.3 * (i + 1)));
+        const pool = nearestRoutePool(WORK, HOME, sameChain, 'bus');
+        expect(pool.length).toBe(3); // ≤ MAX_PER_CHAIN
     });
 });

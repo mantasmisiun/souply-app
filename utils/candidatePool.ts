@@ -34,15 +34,16 @@ export interface CandidatePool {
 // Constants
 // ---------------------------------------------------------------------------
 
-const BUS_RADIUS_KM = 3;            // hard search radius around the bus-mode center (route mode)
-const CAR_DETOUR_RATIO = 1.25;      // max (dist_A_store + dist_store_B) / dist_A_B
+const BUS_RADIUS_KM = 3;            // radius used by the centroid-shift visit filter
+const CAR_DETOUR_RATIO = 1.25;      // route corridor: max (d_from_store + d_store_to) / d_from_to
 const CENTROID_MIN_VISITS = 8;      // minimum visits before centroid shift activates
 const STORES_LITE_TTL_MS = 15 * 60 * 1000; // 15 min in-memory cache
 
-// Single-endpoint (current / specific / single-endpoint car) nearest-pool bounds.
-const MAX_RADIUS_KM = 10;           // hard ceiling for the nearest-pool search
+// Nearest-pool bounds — shared by single-endpoint AND route selection.
+const MAX_RADIUS_KM = 10;           // hard ceiling for single-endpoint search
 const TARGET_POOL = 12;             // nearest-N target before the per-chain guarantee
 const MAX_PER_CHAIN = 3;            // branches of ONE chain allowed among the nearest-N
+const BUS_WALK_KM = 1;              // route/bus: stores must be walkable from an endpoint
 
 // ---------------------------------------------------------------------------
 // In-memory store list cache (avoids re-fetching on every calculation)
@@ -98,98 +99,84 @@ function computeCentroid(
 }
 
 /**
- * Bus-mode candidate pool. The search center is:
- *   - midpoint(endpoint, centroid) if centroid shift applies
- *   - endpoint itself otherwise
- * All stores within BUS_RADIUS_KM of the center are candidates.
+ * Generic nearest-first bounded selection. `score(store)` returns a "nearness"
+ * cost (lower = nearer/better; null = excluded). Takes the nearest TARGET_POOL
+ * with a per-chain instance cap, then guarantees the nearest branch of every
+ * scorable chain (combo diversity). Shared by the single-endpoint and route
+ * pools so the density/diversity discipline is identical for both.
  */
-function busCandidates(
-    endpoint: { lat: number; lng: number },
-    centroid: { lat: number; lng: number } | null,
-    stores: StoreLite[],
-): { candidates: StoreLite[]; center: { lat: number; lng: number } } {
-    const center = centroid
-        ? { lat: (endpoint.lat + centroid.lat) / 2, lng: (endpoint.lng + centroid.lng) / 2 }
-        : endpoint;
-    const candidates = stores.filter(s =>
-        haversineKm(center.lat, center.lng, s.latitude, s.longitude) <= BUS_RADIUS_KM,
-    );
-    return { candidates, center };
-}
-
-/**
- * Car-mode candidate pool (detour ratio corridor). A store S is a candidate if
- * dist(A, S) + dist(S, B) ≤ CAR_DETOUR_RATIO × dist(A, B).
- *
- * When there's only one endpoint (specific mode), uses BUS_RADIUS_KM as the
- * fallback radius instead of the ratio formula.
- */
-function carCandidates(
-    from: { lat: number; lng: number },
-    to: { lat: number; lng: number } | null,
-    stores: StoreLite[],
-): StoreLite[] {
-    if (!to) {
-        // Single-endpoint car mode — just radius around the point
-        return stores.filter(s =>
-            haversineKm(from.lat, from.lng, s.latitude, s.longitude) <= BUS_RADIUS_KM,
-        );
-    }
-    const directKm = haversineKm(from.lat, from.lng, to.lat, to.lng);
-    if (directKm < 0.5) {
-        // Endpoints are almost the same — fall back to radius around midpoint
-        const mid = { lat: (from.lat + to.lat) / 2, lng: (from.lng + to.lng) / 2 };
-        return stores.filter(s =>
-            haversineKm(mid.lat, mid.lng, s.latitude, s.longitude) <= BUS_RADIUS_KM,
-        );
-    }
-    const threshold = CAR_DETOUR_RATIO * directKm;
-    return stores.filter(s =>
-        haversineKm(from.lat, from.lng, s.latitude, s.longitude) +
-        haversineKm(s.latitude, s.longitude, to.lat, to.lng) <= threshold,
-    );
-}
-
-/**
- * Bounded, NEAREST-FIRST candidate set for a single-endpoint search (current /
- * specific / single-endpoint car). Replaces "every store within a fixed radius",
- * which in dense cities returned dozens of same-chain branches → the map filled
- * with duplicate combos (the "10 identical Rimi+IKI pills" bug). Instead:
- *   1. nearest-first within MAX_RADIUS_KM;
- *   2. take the nearest ~TARGET_POOL, but at most MAX_PER_CHAIN branches of any
- *      one chain — keeps a genuine small/medium/large trio near you (no store-
- *      size data yet, so seeing them is the cue), while blocking "6 Maximas";
- *   3. guarantee the NEAREST branch of every chain in range, so the cheapest
- *      combo type is never hidden. A chain with nothing inside the radius is not
- *      viable — we do NOT fan out past the cap to find it.
- * Exported for unit testing (pure/deterministic).
- */
-export function nearestPool(center: { lat: number; lng: number }, stores: StoreLite[]): StoreLite[] {
-    const withinSorted = stores
-        .map(s => ({ s, d: haversineKm(center.lat, center.lng, s.latitude, s.longitude) }))
-        .filter(x => Number.isFinite(x.d) && x.d <= MAX_RADIUS_KM)
-        .sort((a, b) => a.d - b.d);
+function selectNearest(stores: StoreLite[], score: (s: StoreLite) => number | null): StoreLite[] {
+    const scored = stores
+        .map(s => ({ s, v: score(s) }))
+        .filter((x): x is { s: StoreLite; v: number } => x.v != null && Number.isFinite(x.v))
+        .sort((a, b) => a.v - b.v);
 
     const chosen = new Map<number, StoreLite>();
     const perChain = new Map<number, number>();
-
-    // 2. nearest-N with a per-chain instance cap.
-    for (const { s } of withinSorted) {
+    // Nearest-N with a per-chain instance cap.
+    for (const { s } of scored) {
         if (chosen.size >= TARGET_POOL) break;
         const n = perChain.get(s.chainId) ?? 0;
         if (n >= MAX_PER_CHAIN) continue;
         chosen.set(s.id, s);
         perChain.set(s.chainId, n + 1);
     }
-    // 3. ensure every chain in range has at least its nearest branch pooled
-    //    (combo diversity). withinSorted is distance-ascending, so the first
-    //    unseen store of a chain IS its nearest branch.
-    for (const { s } of withinSorted) {
+    // Guarantee every scorable chain's nearest branch (scored is cost-ascending,
+    // so the first unseen store of a chain IS its nearest/best branch).
+    for (const { s } of scored) {
         if (perChain.has(s.chainId)) continue;
         chosen.set(s.id, s);
         perChain.set(s.chainId, 1);
     }
     return [...chosen.values()];
+}
+
+/**
+ * Bounded, NEAREST-FIRST candidate set for a single-endpoint search (current /
+ * specific). Replaces "every store within a fixed radius", which in dense cities
+ * returned dozens of same-chain branches → the map filled with duplicate combos
+ * (the "10 identical Rimi+IKI pills" bug). Ranked by radial distance and capped
+ * within MAX_RADIUS_KM; a chain with nothing in range is simply not viable — we
+ * do NOT fan out past the ceiling to find it. Exported for unit testing.
+ */
+export function nearestPool(center: { lat: number; lng: number }, stores: StoreLite[]): StoreLite[] {
+    return selectNearest(stores, s => {
+        const d = haversineKm(center.lat, center.lng, s.latitude, s.longitude);
+        return d <= MAX_RADIUS_KM ? d : null;
+    });
+}
+
+/**
+ * Bounded, DIRECTIONAL candidate set for a route (from → to). Ranked by DETOUR —
+ * the extra travel a stop adds: d(from,S) + d(S,to) − d(from,to). Detour is ~0
+ * for a store ON the way and ~2× its distance for one BEHIND you, so ranking by
+ * it prefers "toward the destination" at BOTH ends automatically (near `from`,
+ * stores toward `to` win; near `to`, stores toward `from` win). Then the shared
+ * per-chain cap + nearest-branch guarantee apply.
+ *   · 'car' → the whole corridor: any store whose via-distance stays within
+ *             CAR_DETOUR_RATIO of the direct route (you can stop anywhere).
+ *   · 'bus' → only stores WALKABLE (BUS_WALK_KM) from an endpoint — you shop near
+ *             the stops, not mid-route — then directional by detour.
+ * Exported for unit testing.
+ */
+export function nearestRoutePool(
+    from: { lat: number; lng: number },
+    to: { lat: number; lng: number },
+    stores: StoreLite[],
+    kind: 'car' | 'bus',
+): StoreLite[] {
+    const direct = haversineKm(from.lat, from.lng, to.lat, to.lng);
+    return selectNearest(stores, s => {
+        const dFrom = haversineKm(from.lat, from.lng, s.latitude, s.longitude);
+        const dTo = haversineKm(to.lat, to.lng, s.latitude, s.longitude);
+        const detour = Math.max(0, dFrom + dTo - direct);
+        if (kind === 'bus') {
+            // Walkable from either endpoint (get off the bus and walk to it).
+            return Math.min(dFrom, dTo) <= BUS_WALK_KM ? detour : null;
+        }
+        // Car: inside the detour corridor (an ellipse hugging the route).
+        return dFrom + dTo <= CAR_DETOUR_RATIO * direct ? detour : null;
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -251,38 +238,25 @@ export async function buildCandidatePool(
             return { storeIds: nearestPool(center, allStores).map(s => s.id), searchCenter: center };
         }
 
-        // ── 'route' mode — corridor between two presets ──
+        // ── 'route' mode — directional pool between two presets ──
         if (mode === 'route') {
             const fromPreset = routeFrom ? presets[routeFrom] : null;
             const toPreset = routeTo ? presets[routeTo] : null;
-
-            // At minimum we need the from-point
             if (!fromPreset) return { storeIds: [], searchCenter: null };
 
             const from = { lat: fromPreset.lat, lng: fromPreset.lng };
-            const to = toPreset ? { lat: toPreset.lat, lng: toPreset.lng } : null;
+            // Destination not set yet → treat `from` as a single endpoint.
+            if (!toPreset) return { storeIds: nearestPool(from, allStores).map(s => s.id), searchCenter: from };
 
-            if (transport === 'car') {
-                const candidates = carCandidates(from, to, allStores);
-                return { storeIds: candidates.map(s => s.id), searchCenter: null };
+            const to = { lat: toPreset.lat, lng: toPreset.lng };
+            // Endpoints coincide → no meaningful direction; pool around the midpoint.
+            if (haversineKm(from.lat, from.lng, to.lat, to.lng) < 0.5) {
+                const mid = { lat: (from.lat + to.lat) / 2, lng: (from.lng + to.lng) / 2 };
+                return { storeIds: nearestPool(mid, allStores).map(s => s.id), searchCenter: mid };
             }
 
-            // Bus route: union of candidates near each endpoint's bus center
-            const fromCentroid = computeCentroid(fromPreset, allStores, visitMap);
-            const { candidates: fromCandidates } = busCandidates(from, fromCentroid, allStores);
-
-            if (!toPreset) {
-                return { storeIds: fromCandidates.map(s => s.id), searchCenter: null };
-            }
-
-            const toCentroid = computeCentroid(toPreset, allStores, visitMap);
-            const { candidates: toCandidates } = busCandidates(to!, toCentroid, allStores);
-
-            const unionIds = new Set([
-                ...fromCandidates.map(s => s.id),
-                ...toCandidates.map(s => s.id),
-            ]);
-            return { storeIds: [...unionIds], searchCenter: null };
+            const pool = nearestRoutePool(from, to, allStores, transport === 'car' ? 'car' : 'bus');
+            return { storeIds: pool.map(s => s.id), searchCenter: null };
         }
 
         return { storeIds: [], searchCenter: null };
