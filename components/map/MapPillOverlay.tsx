@@ -236,9 +236,12 @@ const OverlayPill = React.memo(function OverlayPill({
     // and the zIndex-free tree keeps the sheet (a later sibling) above the map.
     return (
         <Animated.View style={[styles.pill, style]}>
-            {/* BOTTOM: the current image, always fully opaque. */}
+            {/* BOTTOM: the current image, always fully opaque. A soft warm drop
+                shadow lifts the pill off the light map and makes overlapping pills
+                read as stacked (top casts onto the one below), not blended. iOS
+                shapes the shadow to the image's alpha → follows the pill outline. */}
             <View style={styles.imgLayer}>
-                <Image source={pill.source} style={{ width: w, height: h }} resizeMode="contain" />
+                <Image source={pill.source} style={[styles.pillShadow, { width: w, height: h }]} resizeMode="contain" />
             </View>
             {/* TOP: the outgoing image — keyed per morph so it MOUNTS opaque
                 (its own fade value, created at 1) and fades out over the new. */}
@@ -607,6 +610,9 @@ const styles = StyleSheet.create({
     // exceed the easing container for a few frames — clipping it would pop.
     pill: { position: 'absolute', left: 0, top: 0, overflow: 'visible' },
     imgLayer: { position: 'absolute', left: 0, top: 0 },
+    // Warm drop shadow on the pill image (iOS shapes it to the alpha = pill
+    // outline). Warm-dark ink, safe on both the light and dark map grounds.
+    pillShadow: { shadowColor: '#180A11', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.25, shadowRadius: 5 },
     clusterBubble: {
         alignItems: 'center', justifyContent: 'center', borderWidth: 2,
         shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.25, shadowRadius: 2,

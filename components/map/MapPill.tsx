@@ -567,7 +567,7 @@ const makeStyles = (c: AppTheme) =>
     pillInnerRadiusTwoRow: { borderRadius: 22 },
 
     // Ring (outer) colours + fill (inner) colours per variant.
-    ringNeutral: { backgroundColor: '#FFFFFF' },
+    ringNeutral: { backgroundColor: c.pillOutline },            // warm edge (light) / white halo (dark)
     ringAccent: { backgroundColor: c.primary },                  // cheapest + selected
     fillCard: { backgroundColor: c.cardBackground },             // neutral + cheapest
     fillPrimary: { backgroundColor: c.primary },                 // selected → solid primary

@@ -40,8 +40,8 @@ const lightTheme = {
   // same white as the section cards; at stage 3 the sections are set off from it
   // only by a very soft, gradual shadow (not a colour difference).
   sheetSurface:    '#FFFFFF',
-  surfaceMuted:    '#F3F4F6',
-  surfaceSubtle:   '#FAFAFA',
+  surfaceMuted:    '#F4F0EB',
+  surfaceSubtle:   '#FBF7F2',
   overlayBackdrop: 'rgba(17, 24, 39, 0.45)',
 
   // Brand / primary (beet — signature šaltibarščiai pink)
@@ -67,9 +67,17 @@ const lightTheme = {
   textInverse:    '#FFFFFF',
 
   // Borders / dividers
-  border:         '#E0E0E0',
-  borderSubtle:   '#F0F0F0',
-  borderMuted:    '#EEEEEE',
+  border:         '#E6DCD5',
+  borderSubtle:   '#F1EBE5',
+  borderMuted:    '#EFE9E3',
+  // Shadow ink — a warm dark plum (occluded light on a warm ground reads more
+  // cohesive than pure black). Theme-aware so dark keeps true black (a warm
+  // shadow would glow on near-black). Use via makeStyles(c) → shadowColor: c.shadow.
+  shadow:         '#3A1A23',
+  // Neutral map-pill ring. Light: a warm-grey edge so white pills separate from
+  // the light map AND from each other when they overlap. (Dark keeps the white
+  // halo — the pill body is dark there, so the ring lifts it off the dark map.)
+  pillOutline:    '#C4B6AE',
 
   // Material-3 tonal roles (Android modernization). Keyed to the beet brand
   // instead of wallpaper dynamic colour, so the identity stays intact while
@@ -140,6 +148,10 @@ const darkTheme: typeof lightTheme = {
   border:         '#3A3A3C',
   borderSubtle:   '#2A2A2C',
   borderMuted:    '#222224',
+  // Dark keeps true black — a warm shadow would read as a glow on near-black.
+  shadow:         '#000000',
+  // Dark: white halo (pill body is dark → the ring separates it from the map).
+  pillOutline:    '#FFFFFF',
 
   // Material-3 tonal roles (mirror of light; lifted for dark surfaces).
   secondaryContainer:   '#4A2A34',
@@ -348,8 +360,8 @@ export const withAlpha = (hex: string, alpha: number): string => {
  *  Neutral shadow; reads softer on dark surfaces automatically. */
 export const elevation = {
   level0: {},
-  level1: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3,  shadowOffset: { width: 0, height: 1 }, elevation: 1 },
-  level2: { shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 6,  shadowOffset: { width: 0, height: 2 }, elevation: 3 },
-  level3: { shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
-  level4: { shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10 },
+  level1: { shadowColor: '#180A11', shadowOpacity: 0.06, shadowRadius: 3,  shadowOffset: { width: 0, height: 1 }, elevation: 1 },
+  level2: { shadowColor: '#180A11', shadowOpacity: 0.10, shadowRadius: 6,  shadowOffset: { width: 0, height: 2 }, elevation: 3 },
+  level3: { shadowColor: '#180A11', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+  level4: { shadowColor: '#180A11', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10 },
 } as const;
