@@ -130,13 +130,9 @@ export default function AuditLogScreen() {
                     <Text style={styles.emptyText}>{t('admin.audit.empty')}</Text>
                 </View>
             ) : (
-                <AnimatedSectionList
-                    {...header.scroll}
-                    ListHeaderComponent={<ScreenHeading title={t('admin.auditLogTitle')} onLayout={header.onTitleLayout} />}
-                    sections={[{ data: rows }]}
-                    keyExtractor={(r: any) => String(r.id)}
-                    stickySectionHeadersEnabled
-                    renderSectionHeader={() => (
+                <>
+                {/* Always-pinned filter row: Fabric mis-hit-tests transformed
+                    sticky headers (touches fall through to the list). */}
                         <View style={[styles.chipsSurface, { marginHorizontal: -12 }]}>
                             <ScrollView
                                 horizontal
@@ -159,7 +155,11 @@ export default function AuditLogScreen() {
                                 })}
                             </ScrollView>
                         </View>
-                    )}
+                <AnimatedSectionList
+                    {...header.scroll}
+                    ListHeaderComponent={<ScreenHeading title={t('admin.auditLogTitle')} onLayout={header.onTitleLayout} />}
+                    sections={[{ data: rows }]}
+                    keyExtractor={(r: any) => String(r.id)}
                     contentContainerStyle={[styles.list, { paddingTop: 0 }]}
                     onEndReachedThreshold={0.4}
                     onEndReached={() => {
@@ -179,6 +179,7 @@ export default function AuditLogScreen() {
                         />
                     )}
                 />
+                </>
             )}
         </View>
     );

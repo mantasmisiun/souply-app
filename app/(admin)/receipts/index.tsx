@@ -133,13 +133,9 @@ export default function ReceiptsScreen() {
                     <MaterialProgress size="large" color={colors.primary} />
                 </View>
             ) : (
-                <AnimatedSectionList
-                    {...header.scroll}
-                    ListHeaderComponent={<ScreenHeading title={t('admin.tabReceipts')} onLayout={header.onTitleLayout} />}
-                    sections={[{ data: receipts }]}
-                    keyExtractor={(r: any) => r.id}
-                    stickySectionHeadersEnabled
-                    renderSectionHeader={() => (
+                <>
+                {/* Always-pinned filter row: Fabric mis-hit-tests transformed
+                    sticky headers (touches fall through to the list). */}
                         <View style={styles.chipBar}>
                             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipBarContent}>
                                 {chips.map(chip => {
@@ -158,7 +154,11 @@ export default function ReceiptsScreen() {
                                 })}
                             </ScrollView>
                         </View>
-                    )}
+                <AnimatedSectionList
+                    {...header.scroll}
+                    ListHeaderComponent={<ScreenHeading title={t('admin.tabReceipts')} onLayout={header.onTitleLayout} />}
+                    sections={[{ data: receipts }]}
+                    keyExtractor={(r: any) => r.id}
                     renderItem={renderItem}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
                     onEndReached={onLoadMore}
@@ -177,6 +177,7 @@ export default function ReceiptsScreen() {
                     ) : null}
                     ItemSeparatorComponent={() => <View style={styles.separator} />}
                 />
+                </>
             )}
         </View>
     );

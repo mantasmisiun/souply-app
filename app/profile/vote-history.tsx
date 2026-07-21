@@ -247,13 +247,9 @@ export default function VoteHistoryScreen() {
                     </Text>
                 </View>
             ) : (
-                <AnimatedSectionList
-                    {...header.scroll}
-                    ListHeaderComponent={<ScreenHeading title={t('screens.voteHistory')} onLayout={header.onTitleLayout} />}
-                    sections={[{ data: votes }]}
-                    keyExtractor={(v: any) => `${v.spIdA}-${v.spIdB}`}
-                    stickySectionHeadersEnabled
-                    renderSectionHeader={() => (
+                <>
+                {/* Always-pinned filter row: Fabric mis-hit-tests transformed
+                    sticky headers (touches fall through to the list). */}
                         <View style={{ backgroundColor: colors.pageBackground, marginHorizontal: -16 }}>
                             <View style={styles.searchRow}>
                                 <Ionicons name="search-outline" size={18} color={colors.textMuted} style={styles.searchIcon} />
@@ -286,13 +282,18 @@ export default function VoteHistoryScreen() {
                                 ))}
                             </ScrollView>
                         </View>
-                    )}
+                <AnimatedSectionList
+                    {...header.scroll}
+                    ListHeaderComponent={<ScreenHeading title={t('screens.voteHistory')} onLayout={header.onTitleLayout} />}
+                    sections={[{ data: votes }]}
+                    keyExtractor={(v: any) => `${v.spIdA}-${v.spIdB}`}
                     renderItem={renderItem}
                     contentContainerStyle={[styles.list, { paddingTop: 0 }]}
                     onEndReached={loadMore}
                     onEndReachedThreshold={0.3}
                     ListFooterComponent={listFooter}
                 />
+                </>
             )}
 
             {/* Help modal */}

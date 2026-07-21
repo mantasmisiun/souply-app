@@ -116,13 +116,8 @@ export default function ReceiptPickerScreen() {
     return (
         <View style={styles.container}>
             <CollapsingHeader controller={header} back smallTitle={t('shoppingListTab.selectExistingTitle')} />
-            <AnimatedSectionList
-                {...header.scroll}
-                ListHeaderComponent={<ScreenHeading title={t('shoppingListTab.selectExistingTitle')} onLayout={header.onTitleLayout} />}
-                sections={[{ data: filtered }]}
-                keyExtractor={(r: PickableReceipt) => `pick-${r.id}`}
-                stickySectionHeadersEnabled
-                renderSectionHeader={() => (
+            {/* Always-pinned filter row: Fabric mis-hit-tests transformed
+                sticky headers (touches fall through to the list). */}
                     <View style={{ backgroundColor: colors.pageBackground, marginHorizontal: -spacing.lg }}>
                         <ScrollView
                             horizontal
@@ -138,7 +133,11 @@ export default function ReceiptPickerScreen() {
                             />
                         </ScrollView>
                     </View>
-                )}
+            <AnimatedSectionList
+                {...header.scroll}
+                ListHeaderComponent={<ScreenHeading title={t('shoppingListTab.selectExistingTitle')} onLayout={header.onTitleLayout} />}
+                sections={[{ data: filtered }]}
+                keyExtractor={(r: PickableReceipt) => `pick-${r.id}`}
                 contentInsetAdjustmentBehavior="never"
                 contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: insets.bottom + 24 }]}
                 ListEmptyComponent={

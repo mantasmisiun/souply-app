@@ -852,18 +852,10 @@ export default function ReceiptsScreen() {
   return (
     <View style={styles.container}>
       <CollapsingHeader controller={header} back smallTitle={t('tabs.receipts')} />
-      <AnimatedSectionList
-        {...header.scroll}
-        sections={[{ data: listData }]}
-        keyExtractor={(it: any) =>
-          it.kind === "queue" ? `q-${it.data.id}` :
-          it.kind === "section" ? it.id :
-          `r-${it.data.id}`
-        }
-        stickySectionHeadersEnabled
-        contentInsetAdjustmentBehavior="never"
-        contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: tabBarHeight + 24 }]}
-        renderSectionHeader={() => (storeOptions.length > 1 || receipts.length > 0) ? (
+      {/* Always-pinned filter row: Fabric mis-hit-tests transformed sticky
+          headers (touches fall through to the list). */}
+      {(storeOptions.length > 1 || receipts.length > 0) ? (
+
           <View style={{ backgroundColor: colors.pageBackground, marginHorizontal: -spacing.lg }}>
             <ScrollView
               horizontal
@@ -892,6 +884,16 @@ export default function ReceiptsScreen() {
             </ScrollView>
           </View>
         ) : null}
+      <AnimatedSectionList
+        {...header.scroll}
+        sections={[{ data: listData }]}
+        keyExtractor={(it: any) =>
+          it.kind === "queue" ? `q-${it.data.id}` :
+          it.kind === "section" ? it.id :
+          `r-${it.data.id}`
+        }
+        contentInsetAdjustmentBehavior="never"
+        contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: tabBarHeight + 24 }]}
         ListHeaderComponent={
           <>
             <ScreenHeading title={t('tabs.receipts')} onLayout={header.onTitleLayout} />

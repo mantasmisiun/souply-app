@@ -682,11 +682,14 @@ export default function DiscountsScreen() {
                                 </ScalePressable>
                             </View>
                         ) : (
+                            <>
+                            {/* Always-pinned chips: Fabric mis-hit-tests transformed
+                                sticky headers (touches fall through to the list). */}
+                            {filterChips}
                             <AnimatedSectionList
                                 {...header.scroll}
                                 sections={[{ data: rows }]}
                                 keyExtractor={(_row, i) => `r-${i}`}
-                                stickySectionHeadersEnabled
                                 contentContainerStyle={{ paddingTop: 0, paddingBottom: barClearance }}
                                 keyboardDismissMode="on-drag"
                                 ListHeaderComponent={
@@ -715,7 +718,6 @@ export default function DiscountsScreen() {
                                     ) : null}
                                     </>
                                 }
-                                renderSectionHeader={() => filterChips}
                                 refreshControl={
                                     <RefreshControl
                                         refreshing={refreshing}
@@ -737,6 +739,7 @@ export default function DiscountsScreen() {
                                     </View>
                                 )}
                             />
+                            </>
                         )}
                     </View>
                 </View>

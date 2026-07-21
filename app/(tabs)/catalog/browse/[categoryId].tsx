@@ -580,25 +580,27 @@ export default function CategoryScreen() {
                             ))}
                         </View>
                     ) : (
+                        <>
+                        {/* ALWAYS-PINNED chips (real chrome, not a sticky section
+                            header): Fabric mis-hit-tests transformed sticky headers —
+                            touches on the stuck chips fell through to the list, so
+                            horizontal chip scrolling died after any vertical scroll. */}
+                        <View style={{ backgroundColor: colors.pageBackground, zIndex: 1 }}>
+                            <CategoryBubbles
+                                categories={l3Categories}
+                                selectedId={selectedL3}
+                                onSelect={handleChipSelect}
+                                allLabel={t('catalog.allProducts')}
+                            />
+                        </View>
                         <AnimatedSectionList
                             {...header.scroll}
                             sections={[{ data: productRows }]}
                             keyExtractor={(_row, i) => `r-${i}`}
-                            stickySectionHeadersEnabled
                             contentContainerStyle={{ paddingTop: 0, paddingBottom: barClearance }}
                             ListHeaderComponent={
                                 <ScreenHeading title={decodeURIComponent(name || '')} onLayout={header.onTitleLayout} />
                             }
-                            renderSectionHeader={() => (
-                                <View style={{ backgroundColor: colors.pageBackground }}>
-                                    <CategoryBubbles
-                                        categories={l3Categories}
-                                        selectedId={selectedL3}
-                                        onSelect={handleChipSelect}
-                                        allLabel={t('catalog.allProducts')}
-                                    />
-                                </View>
-                            )}
                             ListEmptyComponent={
                                 <Text style={styles.emptyText}>{t('catalog.noProducts')}</Text>
                             }
@@ -610,6 +612,7 @@ export default function CategoryScreen() {
                                 </View>
                             )}
                         />
+                        </>
                     )}
                 </View>
             </View>
