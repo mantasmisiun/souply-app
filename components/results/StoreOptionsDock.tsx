@@ -82,6 +82,12 @@ export default function StoreOptionsDock({
     const barJourneyKm = current ? journeyByOption.get(current.key) ?? null : null;
     const barRadial = current?.stores.map(s => s.distance).filter(Number.isFinite) ?? [];
     const barDistanceKm = barJourneyKm ?? (barRadial.length ? Math.max(...barRadial) : NaN);
+    // Baseline for a combo's "+extra" chip: the single-store option's journey
+    // (visit just the tapped store). Combo extra = its journey − this baseline, so
+    // the three numbers reconcile: bar(combo) = single + extra. (Same journey
+    // source everywhere — the old radial detour disagreed with the bar/single.)
+    const singleOption = options.find(o => o.stores.length === 1);
+    const baselineJourneyKm = singleOption ? journeyByOption.get(singleOption.key) ?? null : null;
 
     // A newly tapped store (new option set) → open the sheet to medium so the
     // actions + store options are immediately in view.
@@ -151,6 +157,7 @@ export default function StoreOptionsDock({
                             key={opt.key}
                             option={opt}
                             journeyKm={journeyByOption.get(opt.key) ?? null}
+                            baselineJourneyKm={baselineJourneyKm}
                             selected={selectedKey === opt.key}
                             selectable={multi}
                             styles={styles}
@@ -209,9 +216,10 @@ function StoreLogos({ stores, size, styles, spread }: { stores: SheetOption['sto
  *  baseline). The selected one is ringed pink. Memoized so a stage settle
  *  re-render only touches rows whose `selected` flips. */
 const OptionItem = React.memo(function OptionItem({
-    option, journeyKm, selected, selectable, styles, colors, onSelect, onInteract, t,
+    option, journeyKm, baselineJourneyKm, selected, selectable, styles, colors, onSelect, onInteract, t,
 }: {
-    option: SheetOption; journeyKm: number | null; selected: boolean; selectable: boolean;
+    option: SheetOption; journeyKm: number | null; baselineJourneyKm: number | null;
+    selected: boolean; selectable: boolean;
     styles: Styles; colors: AppTheme; onSelect: (key: string) => void; onInteract: () => void; t: TFunction;
 }) {
     const multi = option.stores.length > 1;
@@ -219,6 +227,12 @@ const OptionItem = React.memo(function OptionItem({
     // Single-store card: the whole trip start → this store → [route end]. Falls
     // back to the store's radial distance only if the journey is unavailable.
     const singleDistanceKm = journeyKm ?? (Number.isFinite(primary.distance) ? primary.distance : NaN);
+    // Combo card "+extra": how much MORE the split travels than the single-store
+    // baseline — journey(combo) − journey(single). Consistent with the bar. Falls
+    // back to the precomputed radial detour only when journeys are unavailable.
+    const extraKm = (journeyKm != null && baselineJourneyKm != null)
+        ? Math.max(0, journeyKm - baselineJourneyKm)
+        : option.detourKm;
 
     return (
         <TouchableOpacity
@@ -244,10 +258,10 @@ const OptionItem = React.memo(function OptionItem({
                 <View style={styles.chipRow}>
                     {multi ? (
                         <>
-                            {option.detourKm != null && option.detourKm > 0 && (
+                            {extraKm != null && extraKm > 0 && (
                                 <View style={[styles.chip, styles.detourChip]}>
                                     <Ionicons name="navigate-outline" size={iconSize.xs} color={colors.warning} />
-                                    <Text style={[styles.chipText, styles.detourText]} allowFontScaling={false}>{`+ ${formatDistance(option.detourKm)}`}</Text>
+                                    <Text style={[styles.chipText, styles.detourText]} allowFontScaling={false}>{`+ ${formatDistance(extraKm)}`}</Text>
                                 </View>
                             )}
                             {option.saving > 0 && (
