@@ -12,6 +12,7 @@ import {
     Share,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
+import CalcLoadingModal from '../../components/CalcLoadingModal';
 import { isWeighableDisplay } from '../../utils/weighable';
 import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
@@ -911,27 +912,11 @@ export default function BasketDetailScreen() {
                 )}
             </View>
 
-            {/* Full-screen calc progress modal so rapid back-taps can't
-                leave the user with a half-calculated basket. Shown for the
-                WHOLE busy window (location resolving + calculating), not just
-                `calcing` — otherwise GPS acquisition (seconds) passes with no
-                modal and the press feels dead. */}
-            <Modal
-                visible={busy}
-                transparent
-                animationType="fade"
-                statusBarTranslucent
-            >
-                <View style={styles.calcModalBackdrop}>
-                    <View style={styles.calcModalCard}>
-                        <MaterialProgress size="large" color={colors.primary} />
-                        <Text style={styles.calcModalTitle}>{t('basketDetail.calculating')}</Text>
-                        <Text style={styles.calcModalSub}>
-                            {t('basketDetail.calcModalSub')}
-                        </Text>
-                    </View>
-                </View>
-            </Modal>
+            {/* Full-screen calc progress modal so rapid back-taps can't leave the
+                user with a half-calculated basket. Shown for the WHOLE busy window
+                (location resolving + calculating) — the same spinner + rotating
+                messages the map shows, so the hop to the results map is seamless. */}
+            <CalcLoadingModal visible={busy} />
 
             <TemplateCoverEditor
                 visible={saveTplVisible}
@@ -1132,33 +1117,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         height: '100%',
         width: '60%',
         backgroundColor: c.primary,
-    },
-    calcModalBackdrop: {
-        flex: 1,
-        backgroundColor: c.overlayBackdrop,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    calcModalCard: {
-        backgroundColor: c.cardBackground,
-        borderRadius: radius.xl,
-        paddingHorizontal: 32,
-        paddingVertical: 28,
-        alignItems: 'center',
-        gap: 10,
-        minWidth: 220,
-        ...elevation.level3,
-    },
-    calcModalTitle: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: c.textPrimary,
-        marginTop: 4,
-    },
-    calcModalSub: {
-        fontSize: 12,
-        color: c.textSecondary,
-        textAlign: 'center',
     },
     card: {
         backgroundColor: c.cardBackground, borderRadius: 12, padding: 12, marginBottom: 10,

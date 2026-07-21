@@ -1071,6 +1071,18 @@
     "mapSummaryEmpty": "Tap a store to see its price",
     "morePrices": "More",
     "loading": "Calculating prices…",
+    "loadingMessages": [
+      "Squeezing the avocados for ripeness…",
+      "Haggling with the cashiers…",
+      "Comparing every price tag…",
+      "Weighing the bananas…",
+      "Digging for coupons under the couch…",
+      "Racing the shopping carts…",
+      "Counting every last cent…",
+      "Sniffing out the fresh bread…",
+      "Dodging the sample stands…",
+      "Loading up the cart, hold tight…"
+    ],
     "tapStore": "Tap a store",
     "batchCalculating": "Calculating…",
     "batchMore": "Price more ({{count}})",

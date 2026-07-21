@@ -1043,6 +1043,18 @@
     "mapSummaryEmpty": "Bakstelėkite parduotuvę, kad matytumėte kainą",
     "morePrices": "Daugiau",
     "loading": "Skaičiuojamos kainos…",
+    "loadingMessages": [
+      "Spaudžiame avokadus – ar prinokę…",
+      "Deramės su kasininkėmis…",
+      "Lyginame visas kainas…",
+      "Sveriame bananus…",
+      "Ieškome kuponų po sofa…",
+      "Lenktyniaujame su vežimėliais…",
+      "Skaičiuojame kiekvieną centą…",
+      "Uostome šviežią duoną…",
+      "Slepiamės nuo degustacijų…",
+      "Kraunamės į vežimėlį…"
+    ],
     "tapStore": "Palieskite parduotuvę",
     "batchCalculating": "Skaičiuojama…",
     "batchMore": "Paskaičiuoti dar ({{count}})",
