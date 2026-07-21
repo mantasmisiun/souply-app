@@ -1217,6 +1217,9 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                                                 setSaverMode(v);
                                                 saverModeRef.current = v; // sync before the recalc reads it
                                                 void AsyncStorage.setItem('saverMode', v ? '1' : '0');
+                                                // Collapse the dock so the loading modal + repriced
+                                                // results are the focus, not the settings sheet.
+                                                dockRef.current?.collapse();
                                                 // Reprice: saver widens the pool → different results.
                                                 setLazyResults([]);
                                                 void recalcForLocationChange();
