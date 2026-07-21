@@ -41,6 +41,10 @@ type Props = {
     creatingList: boolean;
     /** Whole-journey distance (origin → stores → [route end]) for Navigate. */
     journeyKm: number | null;
+    /** Per-option journey km (origin → its stores → [route end]), keyed by option
+     *  key. Drives the bar "how far" + the single-store card distance so both show
+     *  the real travel, not a radial leg. Value may be null (no origin/coords). */
+    journeyByOption: Map<string, number | null>;
     /** Basket item count for the List subtitle. */
     itemCount: number;
     colors: AppTheme;
@@ -59,7 +63,7 @@ type Props = {
 
 export default function StoreOptionsDock({
     options, selectedKey, onSelect, onNavigate, onCreateList, creatingList,
-    journeyKm, itemCount, colors, onInteract, onDismiss,
+    journeyKm, journeyByOption, itemCount, colors, onInteract, onDismiss,
     onCollapsedClearance, onOcclusion,
 }: Props) {
     const { t } = useTranslation();
@@ -72,10 +76,12 @@ export default function StoreOptionsDock({
     const multi = options.length > 1;
     // The option the bar/actions reflect (the picked one, else the best).
     const current = options.find(o => o.key === selectedKey) ?? options[0];
-    // Bar distance: a single store's own distance; a split's FARTHEST store (its
-    // reach) — the "how far" cue shown next to the price.
-    const barDists = current?.stores.map(s => s.distance).filter(Number.isFinite) ?? [];
-    const barDistanceKm = barDists.length ? Math.max(...barDists) : NaN;
+    // Bar "how far": the current plan's whole through-journey — start → its
+    // store(s) → [route end] — not a radial leg. Falls back to the store's own
+    // radial only if the journey couldn't be computed (no origin/coords).
+    const barJourneyKm = current ? journeyByOption.get(current.key) ?? null : null;
+    const barRadial = current?.stores.map(s => s.distance).filter(Number.isFinite) ?? [];
+    const barDistanceKm = barJourneyKm ?? (barRadial.length ? Math.max(...barRadial) : NaN);
 
     // A newly tapped store (new option set) → open the sheet to medium so the
     // actions + store options are immediately in view.
@@ -144,6 +150,7 @@ export default function StoreOptionsDock({
                         <OptionItem
                             key={opt.key}
                             option={opt}
+                            journeyKm={journeyByOption.get(opt.key) ?? null}
                             selected={selectedKey === opt.key}
                             selectable={multi}
                             styles={styles}
@@ -202,13 +209,16 @@ function StoreLogos({ stores, size, styles, spread }: { stores: SheetOption['sto
  *  baseline). The selected one is ringed pink. Memoized so a stage settle
  *  re-render only touches rows whose `selected` flips. */
 const OptionItem = React.memo(function OptionItem({
-    option, selected, selectable, styles, colors, onSelect, onInteract, t,
+    option, journeyKm, selected, selectable, styles, colors, onSelect, onInteract, t,
 }: {
-    option: SheetOption; selected: boolean; selectable: boolean;
+    option: SheetOption; journeyKm: number | null; selected: boolean; selectable: boolean;
     styles: Styles; colors: AppTheme; onSelect: (key: string) => void; onInteract: () => void; t: TFunction;
 }) {
     const multi = option.stores.length > 1;
     const primary = option.stores[0];
+    // Single-store card: the whole trip start → this store → [route end]. Falls
+    // back to the store's radial distance only if the journey is unavailable.
+    const singleDistanceKm = journeyKm ?? (Number.isFinite(primary.distance) ? primary.distance : NaN);
 
     return (
         <TouchableOpacity
@@ -249,10 +259,10 @@ const OptionItem = React.memo(function OptionItem({
                         </>
                     ) : (
                         <>
-                            {Number.isFinite(primary.distance) && primary.distance > 0 && (
+                            {Number.isFinite(singleDistanceKm) && singleDistanceKm > 0 && (
                                 <View style={styles.chip}>
                                     <Ionicons name="navigate-outline" size={iconSize.xs} color={colors.textMuted} />
-                                    <Text style={styles.chipText}>{formatDistance(primary.distance)}</Text>
+                                    <Text style={styles.chipText}>{formatDistance(singleDistanceKm)}</Text>
                                 </View>
                             )}
                             {primary.isApproximated && (

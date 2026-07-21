@@ -7,6 +7,8 @@ import {
     InteractionManager,
  Switch, Modal } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
+import CalcLoadingModal from '../CalcLoadingModal';
+import { buildJourneyCoords, sumJourneyKm, journeyKmForStores } from '../../utils/journey';
 import { StoreCountToggle } from '../map/StoreCountToggle';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter, useFocusEffect, useNavigation } from 'expo-router';
@@ -27,7 +29,7 @@ import { type StoreResult, fetchStorePrices } from '../../utils/basketPricing';
 import { getStoreDirectory } from '../../utils/storeDirectory';
 import { buildCandidatePool, type StoreLite } from '../../utils/candidatePool';
 import { orderStopsNearestFirst, orderStopsAlongRoute, buildGoogleMapsRouteUrl } from '../../utils/multiStopRoute';
-import { getPresets, getLocationSettings, saveLocationSettings, haversineKm } from '../../utils/locationStorage';
+import { getPresets, getLocationSettings, saveLocationSettings } from '../../utils/locationStorage';
 import StoreResultsMap, { type MapPin } from '../results/StoreResultsMap';
 import StoreOptionsDock from '../results/StoreOptionsDock';
 import { LiquidGlass } from '../LiquidGlass';
@@ -825,35 +827,33 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // The in-app route line for ANY selected option. ROUTE mode: routeFrom →
     // stores (ordered along the way) → routeTo. Otherwise: starting location →
     // store(s), nearest-first — same order the Vykti handoff uses.
-    const routeCoords = useMemo(() => {
-        if (!selectedOption) return null;
-        const stops = selectedOption.stores
-            .filter(s => s.latitude != null && s.longitude != null)
-            .map(s => ({ latitude: s.latitude as number, longitude: s.longitude as number }));
-        if (stops.length === 0) return null;
-        if (routeEndpoints) {
-            const ordered = orderStopsAlongRoute(routeEndpoints.from, routeEndpoints.to, stops);
-            return [routeEndpoints.from, ...ordered, routeEndpoints.to];
-        }
-        const origin = userCoords ? { latitude: userCoords.lat, longitude: userCoords.lng } : null;
-        // Need at least two points to draw: origin + store, or two stores.
-        if (!origin && stops.length < 2) return null;
-        const ordered = orderStopsNearestFirst(origin, stops);
-        return origin ? [origin, ...ordered] : ordered;
-    }, [selectedOption, userCoords, routeEndpoints]);
+    // Ordered travel coords for ANY option's stores — ROUTE mode: from → stores
+    // (ordered along the way) → to; GPS/place: origin → stores (nearest-first).
+    // Shared by the selected-option map line AND the per-option journey distances,
+    // so "how far" everywhere means the real through-journey, not a radial leg.
+    // Pure logic + unit tests live in utils/journey.ts.
+    const journeyCtx = useMemo(
+        () => ({ origin: userCoords, routeEndpoints }),
+        [userCoords, routeEndpoints],
+    );
 
-    // Total journey distance for the selected option's Navigate button — the sum
-    // of the ordered legs the map draws (origin → stores → [route end]). Same
-    // path as routeCoords, so GPS/place (from current location) and route mode
-    // (start → stores → end) are both covered. null when there's no origin.
-    const journeyKm = useMemo(() => {
-        if (!routeCoords || routeCoords.length < 2) return null;
-        let km = 0;
-        for (let i = 0; i < routeCoords.length - 1; i++) {
-            km += haversineKm(routeCoords[i].latitude, routeCoords[i].longitude, routeCoords[i + 1].latitude, routeCoords[i + 1].longitude);
-        }
-        return km;
-    }, [routeCoords]);
+    const routeCoords = useMemo(
+        () => (selectedOption ? buildJourneyCoords(selectedOption.stores, journeyCtx) : null),
+        [selectedOption, journeyCtx],
+    );
+
+    // Total journey distance for the selected option's Navigate button — GPS/place
+    // ends at the last store; route ends at the destination. null when no origin.
+    const journeyKm = useMemo(() => sumJourneyKm(routeCoords), [routeCoords]);
+
+    // Same journey, computed PER option, so the sheet bar and the single-store
+    // option card show the actual travel distance (start → store [→ end]) instead
+    // of the raw radial `store.distance`. Multi-store cards keep their +extra chip.
+    const journeyByOption = useMemo(() => {
+        const m = new Map<string, number | null>();
+        for (const o of selectedOptions) m.set(o.key, journeyKmForStores(o.stores, journeyCtx));
+        return m;
+    }, [selectedOptions, journeyCtx]);
 
     const [creatingList, setCreatingList] = useState(false);
 
@@ -1035,10 +1035,11 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         <>
             <View style={styles.container}>
                 {loading && !pullRefreshing ? (
-                    <Animated.View entering={FadeIn} style={styles.loadingContainer}>
-                        <MaterialProgress size="large" color={colors.primary} />
-                        <Text style={styles.loadingText}>{t('results.loading')}</Text>
-                    </Animated.View>
+                    // Plain background while loading — the CalcLoadingModal (below)
+                    // owns the spinner + rotating messages and covers this. The map
+                    // mounts only once `loading` clears, so pills pop AFTER the
+                    // modal lifts (the reveal the user sees).
+                    <View style={styles.loadingContainer} />
                 ) : mapMounted ? (
                     // Full-bleed map fills the content region; the option sheet
                     // floats over it at the bottom. The heavy MapView mount is
@@ -1110,6 +1111,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                     onCreateList={handleCreateShoppingList}
                     creatingList={creatingList}
                     journeyKm={journeyKm}
+                    journeyByOption={journeyByOption}
                     itemCount={basketItemCount}
                     colors={colors}
                     onInteract={noteSheetPress}
@@ -1231,6 +1233,11 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             )}
             </View>
             </View>
+
+            {/* Calc loading modal — spinner + rotating messages while the initial
+                load OR any recalc (saver toggle / location change) runs. It lifts
+                when the data lands; the map/pills then reveal underneath. */}
+            <CalcLoadingModal visible={(loading && !pullRefreshing) || recalcing} />
 
             <Modal visible={inviteOpen} transparent animationType="fade" onRequestClose={() => setInviteOpen(false)}>
                 <TouchableOpacity style={styles.qrBackdrop} activeOpacity={1} onPress={() => setInviteOpen(false)}>
