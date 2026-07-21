@@ -10,7 +10,7 @@ import { useBasketSession, type ChooserOption } from '../../state/basketSession'
 import { useBasketState } from '../../state/basketState';
 import { applyChooserPick } from '../../utils/basketUtils';
 import { formatDate } from '../../utils/formatCurrency';
-import { formatDayDate } from '../../utils/formatDayDate';
+import { formatWeekdayDate } from '../../utils/formatDayDate';
 import { TemplateCoverEditor, type CoverDraft } from '../TemplateCoverEditor';
 import { ShoppingSheet } from './ShoppingSheet';
 import { createTemplate } from '../../utils/basketTemplatesApi';
@@ -122,7 +122,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
         o.key === 'template' ? (o.name || t('basketSession.optionTemplate'))
         : o.key === 'family' ? t('basketSession.optionFamily')
         : o.name ? o.name
-        : o.updatedAt ? formatDayDate(o.updatedAt, i18n.language) : t('basketSession.optionPrevious');
+        : o.updatedAt ? formatWeekdayDate(o.updatedAt, i18n.language) : t('basketSession.optionPrevious');
     // Newest-first names, each capped so ≥3 fit on one line; middle-dot joined.
     const previewLine = (names: string[]): string =>
         names.slice(0, 4).map(n => (n.length > 18 ? `${n.slice(0, 17).trimEnd()}…` : n)).join('  ·  ');

@@ -33,7 +33,8 @@ import { useTheme, radius, spacing, type AppTheme } from '../../../constants/the
 import { ScalePressable } from '../../../components/ScalePressable';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatDate } from '../../../utils/formatCurrency';
-import { formatDayDate } from '../../../utils/formatDayDate';
+import { formatWeekday } from '../../../utils/formatDayDate';
+import CalendarBadge from '../../../components/CalendarBadge';
 import { useShoppingSheet } from '../../../state/shoppingSheet';
 import { buildReceiptDotMap, parseLooseDate, sameDay } from '../../../utils/receiptDots';
 import {
@@ -179,9 +180,27 @@ export default function TripsScreen() {
     const stageLabel = (s: number) => t(`trips.stage${s}`);
     const stageCta = (s: number) => t(`trips.cta${s}`);
 
+    // A custom name (trip or basket rename) or the ad-hoc label wins; otherwise the
+    // title is AUTO — derived from the last-activity date, shown as a calendar
+    // badge + full weekday rather than the cryptic "Ket liepos 16" string.
+    const customName = (trip: TripSummary): string | null =>
+        trip.name ?? trip.basket?.name ?? (trip.isAdHoc ? t('trips.adHocName') : null);
+
+    // Title as a string (archive rows, which already show the date on the right).
     const tripTitle = (trip: TripSummary) =>
-        trip.name ?? trip.basket?.name
-        ?? (trip.isAdHoc ? t('trips.adHocName') : formatDayDate(trip.anchorDate, i18n.language));
+        customName(trip) ?? formatWeekday(trip.anchorDate, i18n.language);
+
+    // Title as JSX: the last-activity calendar badge ALWAYS shows; the text is the
+    // custom name when renamed, else the full weekday.
+    const renderTripTitle = (trip: TripSummary) => {
+        const title = customName(trip) ?? formatWeekday(trip.anchorDate, i18n.language);
+        return (
+            <View style={styles.titleRow}>
+                <CalendarBadge date={trip.anchorDate} size={30} />
+                <Text style={styles.cardTitle} numberOfLines={1}>{title}</Text>
+            </View>
+        );
+    };
 
     const slotLine = (trip: TripSummary) => {
         if (trip.slots.length === 0) {
@@ -266,7 +285,7 @@ export default function TripsScreen() {
                                             </View>
                                         )}
                                     </View>
-                                    <Text style={styles.cardTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
+                                    {renderTripTitle(trip)}
                                 </View>
                                 <View style={styles.ctaBtn}>
                                     <Text style={styles.ctaText}>{stageCta(trip.stage)}</Text>
@@ -375,7 +394,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingHorizontal: 7, paddingVertical: 3,
     },
     membersChipText: { fontSize: 11, fontWeight: '700', color: c.textSecondary },
-    cardTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
+    cardTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, flexShrink: 1 },
+    titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     cardMeta: { fontSize: 13, color: c.textSecondary, marginTop: 3 },
     ctaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 2, marginTop: 8 },
     ctaText: { fontSize: 13, fontWeight: '700', color: c.primary },
