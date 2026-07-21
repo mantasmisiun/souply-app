@@ -5,7 +5,7 @@ import {
     StyleSheet,
     Alert,
     InteractionManager,
- Switch, Modal } from "react-native";
+ Switch, Modal, BackHandler } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import CalcLoadingModal from '../CalcLoadingModal';
 import { buildJourneyCoords, sumJourneyKm, journeyKmForStores } from '../../utils/journey';
@@ -34,8 +34,8 @@ import StoreResultsMap, { type MapPin } from '../results/StoreResultsMap';
 import StoreOptionsDock from '../results/StoreOptionsDock';
 import { LiquidGlass } from '../LiquidGlass';
 import { buildSplitOptions, TRIP_RADIUS_KM, type SheetOption } from '../../utils/splitOptions';
-import { BrandedQR } from '../BrandedQR';
-import { fetchTrips, createTripInviteUrl } from '../../utils/tripsApi';
+import { fetchTrips, createTripInviteUrl, fetchTripMembers, type TripMemberInfo } from '../../utils/tripsApi';
+import { InvitePane } from './InvitePane';
 import { formatEuro } from '../../utils/formatCurrency';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
 import { DockActionCard } from '../dock/DockActionCard';
@@ -127,7 +127,10 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     const saverModeRef = useRef(false);
     useEffect(() => { saverModeRef.current = saverMode; }, [saverMode]);
     const [inviteUrl, setInviteUrl] = useState<string | null>(null);
-    const [inviteOpen, setInviteOpen] = useState(false);
+    // Invite = an IN-SHEET pane (dock content swap), not a modal.
+    const [invitePane, setInvitePane] = useState(false);
+    const [tripId, setTripId] = useState<number | null>(null);
+    const [members, setMembers] = useState<TripMemberInfo[]>([]);
     // Quiet reprice triggered by a location change inside the dock (place picked
     // / route completed). Unlike loadResults it does NOT flip global `loading`
     // (the dock stays open) — just a small spinner in the summary bar. The epoch
@@ -207,16 +210,45 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // sheet's growing width on the UI thread with no JS measurement — the
     // side gaps stay constant at every drag position (matches the catalog
     // sheets, whose content tracks the edges via the built-in peek inset).
+    // Resolve this basket's trip + member roster once — powers the Pakviesti
+    // card's stacked initials AND the invite pane.
+    const refreshMembers = useCallback(async (tid: number) => {
+        try { setMembers(await fetchTripMembers(tid)); } catch { /* roster is cosmetic */ }
+    }, []);
+    useEffect(() => {
+        let alive = true;
+        (async () => {
+            try {
+                const trips = await fetchTrips();
+                const trip = trips.find(tr => tr.basket?.id === Number(id));
+                if (!alive || !trip) return;
+                setTripId(trip.id);
+                void refreshMembers(trip.id);
+            } catch { /* not a trip basket — invite hidden anyway */ }
+        })();
+        return () => { alive = false; };
+    }, [id, refreshMembers]);
+
     const openInvite = useCallback(async () => {
-        setInviteOpen(true);
-        setInviteUrl(null);
-        try {
-            const trips = await fetchTrips();
-            const trip = trips.find(tr => tr.basket?.id === Number(id));
-            if (!trip) { setInviteOpen(false); return; }
-            setInviteUrl(await createTripInviteUrl(trip.id));
-        } catch { setInviteOpen(false); }
-    }, [id]);
+        if (tripId == null) return;
+        setInvitePane(true);
+        dockRef.current?.snapTo(2);
+        if (!inviteUrl) {
+            // Codes are get-or-create (stable per trip) — hydrate instantly from
+            // disk, then refresh in the background so a revoked/expired token
+            // still corrects itself.
+            const cacheKey = `trip_invite_url:${tripId}`;
+            try {
+                const cached = await AsyncStorage.getItem(cacheKey);
+                if (cached) setInviteUrl(cached);
+            } catch { /* cache miss */ }
+            try {
+                const fresh = await createTripInviteUrl(tripId);
+                setInviteUrl(fresh);
+                void AsyncStorage.setItem(cacheKey, fresh);
+            } catch { /* cached (or spinner) stands */ }
+        }
+    }, [tripId, inviteUrl]);
 
     // Load the directory once — cached on disk for a week, so this is usually
     // an instant memory/disk hit with no network.
@@ -714,6 +746,18 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     }, []);
     const handleSelectOption = useCallback((key: string) => setSelectedOptionKey(key), []);
     const closeSheet = useCallback(() => { setSelectedStoreId(null); setSelectedOptionKey(null); }, []);
+    // Hardware back peels ONE layer: invite pane → store selection → (default
+    // navigation). Registered only while a layer is open so normal back is
+    // untouched otherwise.
+    useEffect(() => {
+        if (!invitePane && !selectedStoreId) return;
+        const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+            if (invitePane) { setInvitePane(false); return true; }
+            if (selectedStoreId) { closeSheet(); return true; }
+            return false;
+        });
+        return () => sub.remove();
+    }, [invitePane, selectedStoreId, closeSheet]);
     // Touches on the sheet never reach the map (its panel consumes them), so
     // these fire only for genuine map interactions. The timestamp backstop stays
     // for the rare leaked onPress on the floating bar.
@@ -1145,7 +1189,21 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                             style={styles.dockBar}
                             onLayout={e => { const h = Math.round(e.nativeEvent.layout.height); if (h > 0) setDockBarH(h); }}
                         >
-                            {cheapestTotal != null ? (
+                            {invitePane ? (
+                                <View style={styles.summaryHero}>
+                                    <TouchableOpacity
+                                        onPress={() => setInvitePane(false)}
+                                        hitSlop={10}
+                                        accessibilityLabel={t('common.back')}
+                                    >
+                                        <Ionicons name="chevron-back" size={26} color={colors.primary} />
+                                    </TouchableOpacity>
+                                    <Ionicons name="person-add" size={17} color={colors.primary} />
+                                    <Animated.Text style={[styles.summaryText, titleStyle]} numberOfLines={1}>
+                                        {t('basketDetail.inviteTitle')}
+                                    </Animated.Text>
+                                </View>
+                            ) : cheapestTotal != null ? (
                                 <View style={styles.summaryHero}>
                                     <Animated.Text style={[styles.summaryPrice, priceGrowStyle]} numberOfLines={1}>
                                         {formatEuro(cheapestTotal)}
@@ -1164,8 +1222,8 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                                     {t('results.mapSummaryEmpty')}
                                 </Animated.Text>
                             )}
-                            {recalcing && <MaterialProgress size="small" color={colors.primary} />}
-                            {visibleUnpriced.length > 0 && (
+                            {!invitePane && recalcing && <MaterialProgress size="small" color={colors.primary} />}
+                            {!invitePane && visibleUnpriced.length > 0 && (
                                 <TouchableOpacity
                                     style={styles.morePricesRound}
                                     accessibilityLabel={t('results.morePrices')}
@@ -1184,7 +1242,17 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                     sheet={{
                         maxStage: 2,
                         onStageChange: (st) => { setDockExpanded(st > 0); },
-                        content: (
+                        content: invitePane && tripId != null ? (
+                            <View style={styles.dockContent}>
+                                <InvitePane
+                                    tripId={tripId}
+                                    inviteUrl={inviteUrl}
+                                    members={members}
+                                    colors={colors}
+                                    onInvitesSent={() => void refreshMembers(tripId)}
+                                />
+                            </View>
+                        ) : (
                             <View style={styles.dockContent}>
                                 <View style={styles.bigBtnRow}>
                                     <DockActionCard
@@ -1207,6 +1275,22 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                                         title={t('basketDetail.inviteTitle')}
                                         subtitle={t('basketDetail.inviteSub')}
                                         onPress={() => void openInvite()}
+                                        badge={members.length > 1 ? (
+                                            <View style={styles.memberStack}>
+                                                {members.slice(0, 3).map((m, i) => (
+                                                    <View key={m.userId} style={[styles.memberDot, i > 0 && styles.memberDotOverlap]}>
+                                                        <Text style={styles.memberDotText}>
+                                                            {m.label.replace(/^@/, '').charAt(0).toUpperCase()}
+                                                        </Text>
+                                                    </View>
+                                                ))}
+                                                {members.length > 3 && (
+                                                    <View style={[styles.memberDot, styles.memberDotOverlap, styles.memberDotMore]}>
+                                                        <Text style={styles.memberDotText}>+{members.length - 3}</Text>
+                                                    </View>
+                                                )}
+                                            </View>
+                                        ) : undefined}
                                     />
                                 </View>
 
@@ -1259,16 +1343,6 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                 when the data lands; the map/pills then reveal underneath. */}
             <CalcLoadingModal visible={(loading && !pullRefreshing) || recalcing} />
 
-            <Modal visible={inviteOpen} transparent animationType="fade" onRequestClose={() => setInviteOpen(false)}>
-                <TouchableOpacity style={styles.qrBackdrop} activeOpacity={1} onPress={() => setInviteOpen(false)}>
-                    <View style={styles.qrCard} onStartShouldSetResponder={() => true}>
-                        <Text style={styles.optText}>{t('trips.tripQrTitle')}</Text>
-                        {inviteUrl
-                            ? <BrandedQR value={inviteUrl} size={200} />
-                            : <MaterialProgress size="large" color={colors.primary} />}
-                    </View>
-                </TouchableOpacity>
-            </Modal>
             <LocationPromptModal
                 visible={locationPromptVisible}
                 onResolved={async (coords) => {
@@ -1341,6 +1415,16 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingHorizontal: 4, backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center',
     },
     cartCountText: { color: c.onPrimary, fontSize: 10, fontWeight: '800' },
+    // Stacked member initials on the Pakviesti card (like map pill logo stacks).
+    memberStack: { position: 'absolute', top: -8, right: -12, flexDirection: 'row' },
+    memberDot: {
+        width: 20, height: 20, borderRadius: 10, backgroundColor: c.primary,
+        borderWidth: 1.5, borderColor: c.cardBackground,
+        alignItems: 'center', justifyContent: 'center',
+    },
+    memberDotOverlap: { marginLeft: -7 },
+    memberDotMore: { backgroundColor: c.textSecondary },
+    memberDotText: { color: c.onPrimary, fontSize: 9.5, fontWeight: '800' },
     settingRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
     settingText: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
     settingSub: { fontSize: 12, color: c.textSecondary, marginTop: 2 },

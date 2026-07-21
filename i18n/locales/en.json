@@ -1109,7 +1109,8 @@
       "storesCount": "{{count}} stores",
       "store": "Store",
       "missingCount": "Missing items: {{count}}",
-      "promoLine": "Items on sale: {{count}} · saving {{saved}}"
+      "promoLine": "Items on sale: {{count}} · saving {{saved}}",
+      "approxCount": "Approximate prices: {{count}}"
     },
     "mapCheapestCaption": "cheapest basket",
     "mapComparedStores": "{{count}} stores compared"
@@ -1679,5 +1680,19 @@
     "templateEmpty": "The recipe is empty",
     "newBadge": "New",
     "add": "Add"
+  },
+  "invite": {
+    "shareLink": "Share link",
+    "orDirect": "or invite directly",
+    "fieldPlaceholder": "email or @handle…",
+    "send": "Send invites ({{count}})",
+    "sent": "Sent ({{count}}) ✓",
+    "members": "Members ({{count}})",
+    "owner": "owner",
+    "noMembers": "No members yet",
+    "membersTitle": "Members",
+    "removeTitle": "Remove member?",
+    "removeBody": "{{name}} will lose access and cannot rejoin without your invite.",
+    "removeConfirm": "Remove"
   }
 }

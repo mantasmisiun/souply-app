@@ -101,6 +101,15 @@ export default function StoreOptionsDock({
         }
         return count > 0 ? { count, saved } : null;
     }, [multi, current]);
+    // Estimated prices at the tapped store: cross-chain averages + stale
+    // fallbacks — neither is a verified current price there. This is also WHY
+    // a nominally-cheaper store can rank below one with real prices (the
+    // server sorts by estimate count before total), so surface the number.
+    const approxCount = useMemo(() => {
+        const store = !multi && current?.stores.length === 1 ? current.stores[0] : null;
+        if (!store) return 0;
+        return store.items.filter(it => !it.isMissing && (it.isCrossChainAverage || it.isFallback)).length;
+    }, [multi, current]);
 
     // A newly tapped store (new option set) → open the sheet to medium so the
     // actions + store options are immediately in view.
@@ -212,6 +221,18 @@ export default function StoreOptionsDock({
                                         saved: formatEuro(promoStats.saved),
                                     })}
                                 </Text>
+                            </View>
+                        )}
+                        {approxCount > 0 && (
+                            /* Same chip badge language as the option cards'
+                               sparkles "apytikslė kaina" pill. */
+                            <View style={styles.factsChipRow}>
+                                <View style={styles.chip}>
+                                    <Ionicons name="sparkles-outline" size={iconSize.xs} color={colors.textMuted} />
+                                    <Text style={styles.chipText} allowFontScaling={false}>
+                                        {t('results.sheet.approxCount', { count: approxCount })}
+                                    </Text>
+                                </View>
                             </View>
                         )}
                         {current.stores[0].missingItemNames.length > 0 && (
@@ -410,6 +431,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     factsAddress: { flex: 1, fontSize: 13.5, color: c.textPrimary, lineHeight: 18 },
     factsPromo: { flex: 1, fontSize: 13, fontWeight: '600', color: c.textPrimary },
     factsMissing: { fontSize: 12.5, fontWeight: '600', color: c.textSecondary },
+    // Chip badge inside the facts card — self-start so the pill hugs its text
+    // instead of stretching to the card width.
+    factsChipRow: { flexDirection: 'row', alignSelf: 'flex-start' },
     secLabel: {
         fontSize: 12, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase',
         color: c.textMuted, marginBottom: spacing.sm, marginLeft: 4,

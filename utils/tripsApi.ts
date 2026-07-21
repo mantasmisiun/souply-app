@@ -137,6 +137,32 @@ export const createTripInviteUrl = async (tripId: number): Promise<string> => {
     return `https://souply.lt/join/${r.code}`;
 };
 
+/** Addressed invite: registered user → in-app notification; unknown email →
+ *  branded invite email. Oracle-free response either way. */
+export const sendAddressedTripInvite = async (
+    tripId: number,
+    target: { email?: string; handle?: string },
+): Promise<void> => {
+    await jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/invites`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(target),
+    }));
+};
+
+export interface TripMemberInfo { userId: string; role: 'owner' | 'member'; label: string; }
+
+export const fetchTripMembers = async (tripId: number): Promise<TripMemberInfo[]> => {
+    const r = await jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/members`));
+    return r.members ?? [];
+};
+
+/** Owner-only: remove a member (bans rejoin via member-created invites). */
+export const removeTripMember = async (tripId: number, userId: string): Promise<void> => {
+    const res = await fetch(`${API_BASE_URL}/api/trips/${tripId}/members/${encodeURIComponent(userId)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+};
+
 export interface TripStats {
     tripId: number;
     receiptCount: number;

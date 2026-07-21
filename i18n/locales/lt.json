@@ -1083,7 +1083,8 @@
       "storesCount": "{{count}} parduotuvės",
       "store": "Parduotuvė",
       "missingCount": "Trūksta prekių: {{count}}",
-      "promoLine": "Prekės su akcija: {{count}} · sutaupai {{saved}}"
+      "promoLine": "Prekės su akcija: {{count}} · sutaupai {{saved}}",
+      "approxCount": "Apytikslės kainos: {{count}}"
     },
     "mapCheapestCaption": "pigiausias krepšelis",
     "mapComparedStores": "palygintos {{count}} parduotuvės"
@@ -1656,5 +1657,19 @@
     "templateEmpty": "Receptas tuščias",
     "newBadge": "Nauja",
     "add": "Į krepšelį"
+  },
+  "invite": {
+    "shareLink": "Dalintis nuoroda",
+    "orDirect": "arba pakviesk tiesiogiai",
+    "fieldPlaceholder": "el. paštas arba @vardas…",
+    "send": "Siųsti pakvietimus ({{count}})",
+    "sent": "Išsiųsta ({{count}}) ✓",
+    "members": "Nariai ({{count}})",
+    "owner": "savininkas",
+    "noMembers": "Narių dar nėra",
+    "membersTitle": "Nariai",
+    "removeTitle": "Pašalinti narį?",
+    "removeBody": "{{name}} nebematys šio apsipirkimo ir negalės prisijungti iš naujo be tavo pakvietimo.",
+    "removeConfirm": "Pašalinti"
   }
 }
