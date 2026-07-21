@@ -1,5 +1,5 @@
-import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import React, { memo } from 'react';
+import { View, Image, StyleSheet } from 'react-native';
 import QRCodeStyled from 'react-native-qrcode-styled';
 import { useTheme } from '../constants/theme';
 
@@ -14,12 +14,17 @@ import { useTheme } from '../constants/theme';
  */
 const QR_DARK = '#16181D';
 
-export function BrandedQR({ value, size = 200 }: { value: string; size?: number }) {
+export const BrandedQR = memo(function BrandedQR({ value, size = 200, flat = false }: {
+    value: string;
+    size?: number;
+    /** No drop-shadow / tighter frame — for clipped containers (in-sheet). */
+    flat?: boolean;
+}) {
     const colors = useTheme();
     const pink = colors.primary;
     const logoPx = Math.round(size * 0.22);
     return (
-        <View style={styles.card}>
+        <View style={[styles.card, flat && styles.cardFlat]}>
             <QRCodeStyled
                 data={value}
                 size={size}
@@ -36,14 +41,28 @@ export function BrandedQR({ value, size = 200 }: { value: string; size?: number 
                 logo={{
                     href: require('../assets/images/icon.png'),
                     hidePieces: true,
-                    padding: 4,
+                    // tight excavation — clear only a sliver beyond the logo
+                    padding: 1,
                     width: logoPx,
                     height: logoPx,
+                    // INVISIBLE in the SVG: it only drives the excavation. The
+                    // RN <Image> overlay below is the single visible logo
+                    // (the SVG image was flaky on remounts; two would stack).
+                    opacity: 0,
                 }}
             />
+            {/* The ONLY visible logo — the SVG one above is opacity-0 and just
+                excavates the hole (it was flaky on remounts). */}
+            <View pointerEvents="none" style={styles.logoOverlayBox}>
+                <Image
+                    source={require('../assets/images/icon.png')}
+                    style={{ width: logoPx, height: logoPx }}
+                    resizeMode="contain"
+                />
+            </View>
         </View>
     );
-}
+});
 
 const styles = StyleSheet.create({
     card: {
@@ -56,5 +75,12 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.12,
         shadowRadius: 16,
         elevation: 6,
+    },
+    // In-sheet: the glass clip would cut a drop-shadow at the sides — flat
+    // card with a hairline instead, tighter frame.
+    logoOverlayBox: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+    cardFlat: {
+        shadowOpacity: 0, shadowRadius: 0, elevation: 0,
+        padding: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(0,0,0,0.12)',
     },
 });
