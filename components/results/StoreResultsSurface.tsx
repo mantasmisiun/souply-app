@@ -120,6 +120,10 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // Trip options (simplified flow): GPS/route settings, Saver mode and the
     // trip invite live on the MAP dock — the one place they change an outcome.
     const [saverMode, setSaverMode] = useState(false);
+    // Mirror of saverMode read synchronously by the request builders (a toggle
+    // recalc runs before setState commits, so the ref carries the new value).
+    const saverModeRef = useRef(false);
+    useEffect(() => { saverModeRef.current = saverMode; }, [saverMode]);
     const [inviteUrl, setInviteUrl] = useState<string | null>(null);
     const [inviteOpen, setInviteOpen] = useState(false);
     // Quiet reprice triggered by a location change inside the dock (place picked
@@ -338,6 +342,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             const origin = pool.searchCenter ?? coords;
             const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
             if (pool.storeIds.length > 0) body.storeIds = pool.storeIds;
+            if (saverModeRef.current) body.saver = true;
             const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -417,6 +422,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                 ?? (endpoints ? { lat: endpoints.from.latitude, lng: endpoints.from.longitude } : coords!);
             const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
             if (pool.storeIds.length > 0) body.storeIds = pool.storeIds;
+            if (saverModeRef.current) body.saver = true;
 
             const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
                 method: 'POST',
@@ -756,7 +762,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         setPricingStoreId(storeId);
         try {
             const coords = pricingCoords;
-            const res = await fetchStorePrices(Number(id), [storeId], coords);
+            const res = await fetchStorePrices(Number(id), [storeId], coords, saverModeRef.current);
             const priced = res.find(r => r.storeId === storeId);
             if (priced) {
                 setLazyResults(prev => prev.some(r => r.storeId === storeId) ? prev : [...prev, priced]);
@@ -780,7 +786,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         setBatchPricing(true);
         try {
             const coords = pricingCoords;
-            const res = await fetchStorePrices(Number(id), visibleUnpriced, coords);
+            const res = await fetchStorePrices(Number(id), visibleUnpriced, coords, saverModeRef.current);
             if (res.length) {
                 setLazyResults(prev => {
                     const have = new Set(prev.map(r => r.storeId));
@@ -1205,7 +1211,14 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                                         </View>
                                         <Switch
                                             value={saverMode}
-                                            onValueChange={(v) => { setSaverMode(v); void AsyncStorage.setItem('saverMode', v ? '1' : '0'); }}
+                                            onValueChange={(v) => {
+                                                setSaverMode(v);
+                                                saverModeRef.current = v; // sync before the recalc reads it
+                                                void AsyncStorage.setItem('saverMode', v ? '1' : '0');
+                                                // Reprice: saver widens the pool → different results.
+                                                setLazyResults([]);
+                                                void recalcForLocationChange();
+                                            }}
                                             trackColor={{ false: colors.border, true: colors.primary }}
                                             thumbColor={colors.onPrimary}
                                         />
