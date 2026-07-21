@@ -1,6 +1,6 @@
 import {
     Tabs,
-    useRouter } from 'expo-router';
+    useRouter , Redirect } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useEffect,
     useMemo,
@@ -32,7 +32,18 @@ import { useAdminModeStore } from '../../state/adminModeStore';
  * and `router.replace` to the appropriate root.
  */
 
-export default function AdminTabLayout() {
+// Inverse mode guard — wrapper component so the guarded early-return never
+// changes the inner layout's hook order (see (tabs)/_layout).
+export default function AdminLayoutGuard() {
+    const mode = useAdminModeStore(st => st.mode);
+    const hydrated = useAdminModeStore(st => st.hydrated);
+    if (hydrated && mode !== 'admin') {
+        return <Redirect href={'/(tabs)' as any} />;
+    }
+    return <AdminTabLayout />;
+}
+
+function AdminTabLayout() {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);

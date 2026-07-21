@@ -50,19 +50,9 @@ export default function AdminMenu() {
             /* non-fatal — release is a nice-to-have */
         }
 
-        // Full reload instead of router.replace across tab groups.
-        // Cross-group `router.replace` doesn't always cleanly tear down
-        // the (admin) navigator, and the visible behaviour was the
-        // user landing back in admin. A controlled reload reads
-        // AsyncStorage at boot (now 'user') and lands cleanly in
-        // (tabs). ~1.5s but reliable. Same pattern as recovery.
-        try {
-            const Updates = await import('expo-updates');
-            await Updates.reloadAsync();
-        } catch (e) {
-            console.warn('[adminMode] reloadAsync failed, falling back to router replace', e);
-            router.replace('/');
-        }
+        // No reload: both group layouts carry declarative mode guards
+        // (Redirect), so a plain replace is clean in both directions.
+        router.replace('/(tabs)' as any);
     };
 
     const settingsGear = (

@@ -885,3 +885,74 @@ export async function resolveFailedReceipt(id: number): Promise<void> {
     const res = await adminFetch(`/api/admin/failed-receipts/${id}/resolve`, { method: 'POST' });
     if (!res.ok) throw new Error(`resolve failed-receipt ${res.status}`);
 }
+
+// ── Scrape review (chain + day inspection) ───────────────────────────
+
+export type ScrapeVerifyStatus = 'checked' | 'flagged' | null;
+
+export interface ScrapeReviewProduct {
+    id: number;
+    name: string;
+    categoryId: number;
+    categoryName: string | null;
+    categoryReviewPending?: number;
+    imageUrls?: (string | null)[] | null;
+    chainLogos?: { chainId: number; logoUrl: string }[] | null;
+    minAmount: number | null;
+    maxAmount: number | null;
+    unit: string | null;
+    hasWeighable: number;
+    globalScore?: number | null;
+    verifyStatus: ScrapeVerifyStatus;
+    verifyNote: string | null;
+}
+
+export async function getScrapeDays(chainId: number): Promise<{ days: string[]; minDate: string | null; maxDate: string | null }> {
+    const res = await adminFetch(`/api/admin/catalog/scrape-days?chainId=${chainId}`);
+    if (!res.ok) throw new Error(`scrape-days ${res.status}`);
+    return res.json();
+}
+
+export async function getScrapeReview(params: {
+    chainId: number; date: string; l1?: number | null; l2?: number | null; l3?: number | null;
+    unresolvedOnly?: boolean; offset?: number; q?: string;
+}): Promise<{ products: ScrapeReviewProduct[]; limit: number; offset: number }> {
+    const q = new URLSearchParams({ chainId: String(params.chainId), date: params.date });
+    if (params.q) q.set('q', params.q);
+    if (params.l1) q.set('l1', String(params.l1));
+    if (params.l2) q.set('l2', String(params.l2));
+    if (params.l3) q.set('l3', String(params.l3));
+    if (params.unresolvedOnly) q.set('verification', 'unresolved');
+    if (params.offset) q.set('offset', String(params.offset));
+    const res = await adminFetch(`/api/admin/catalog/scrape-review?${q.toString()}`);
+    if (!res.ok) throw new Error(`scrape-review ${res.status}`);
+    return res.json();
+}
+
+export async function setScrapeVerification(args: {
+    chainId: number; date: string; productId: number; status: ScrapeVerifyStatus; note?: string | null;
+}): Promise<void> {
+    const res = await adminFetch('/api/admin/catalog/scrape-review/verify', {
+        method: 'POST',
+        body: JSON.stringify(args),
+    });
+    if (!res.ok) throw new Error(`verify ${res.status}`);
+}
+
+// ── Category quick-assign ────────────────────────────────────────────
+
+export interface CategorySuggestion {
+    categoryId: number;
+    categoryName: string;
+    parentName: string | null;
+    score: number;
+    example: string | null;
+    source: 'similar' | 'name';
+}
+
+export async function getProductCategorySuggestions(productId: number): Promise<CategorySuggestion[]> {
+    const res = await adminFetch(`/api/admin/products/${productId}/category-suggestions`);
+    if (!res.ok) throw new Error(`suggestions ${res.status}`);
+    const body = await res.json();
+    return body.suggestions ?? [];
+}

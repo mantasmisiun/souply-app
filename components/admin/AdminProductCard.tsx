@@ -32,9 +32,12 @@ interface Props {
     selected: boolean;
     onPress: () => void;
     onLongPress: () => void;
+    /** Override grid constraints (the base style bakes maxWidth:'50%' for
+     *  BARE placement in a 2-col row; wrapped placements pass '100%'). */
+    containerStyle?: object;
 }
 
-function AdminProductCard({ product, selectionMode, selected, onPress, onLongPress }: Props) {
+function AdminProductCard({ product, selectionMode, selected, onPress, onLongPress, containerStyle }: Props) {
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
 
@@ -52,7 +55,7 @@ function AdminProductCard({ product, selectionMode, selected, onPress, onLongPre
 
     return (
         <ScalePressable
-            style={[styles.card, selected && styles.cardSelected]}
+            style={[styles.card, selected && styles.cardSelected, containerStyle]}
             onPress={onPress}
             onLongPress={onLongPress}
         >

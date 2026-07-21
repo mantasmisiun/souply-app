@@ -1,4 +1,4 @@
-import { Tabs } from 'expo-router';
+import { Tabs, Redirect } from 'expo-router';
 import { NativeTabs, Icon, Label, Badge } from 'expo-router/unstable-native-tabs';
 import { BlurView } from 'expo-blur';
 import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
@@ -8,6 +8,7 @@ import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { useProfileStore } from '../../state/profileStore';
+import { useAdminModeStore } from '../../state/adminModeStore';
 import { HapticTab } from '../../components/haptic-tab';
 import { FloatingPillTabBar } from '../../components/FloatingPillTabBar';
 import { BeetrootIcon, BasketGlyph, ChefToqueGlyph, PiggyBankGlyph } from '../../components/icons/tabGlyphs';
@@ -37,7 +38,22 @@ function TabBadge({ count, styles }: { count: number; styles: ReturnType<typeof 
     );
 }
 
-export default function TabLayout() {
+// Declarative mode guard: while admin mode is active this group is
+// unreachable — pressing BACK out of (admin) lands here and bounces straight
+// back, so mode switching needs no app reload. Lives in a WRAPPER component
+// so the guarded early-return never changes the inner layout's hook order
+// ("Rendered more hooks than during the previous render").
+export default function TabLayoutGuard() {
+    const adminMode = useAdminModeStore(st => st.mode);
+    const adminHydrated = useAdminModeStore(st => st.hydrated);
+    if (adminHydrated && adminMode === 'admin') {
+        return <Redirect href={'/(admin)/catalog' as any} />;
+    }
+    return <TabLayout />;
+}
+
+function TabLayout() {
+
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);

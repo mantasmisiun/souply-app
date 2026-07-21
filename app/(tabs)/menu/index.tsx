@@ -834,18 +834,10 @@ export default function ProfilisScreen() {
                         onPress={async () => {
                             const { useAdminModeStore } = await import('../../../state/adminModeStore');
                             await useAdminModeStore.getState().setMode('admin');
-                            // Full reload — cross-group navigation
-                            // doesn't always cleanly tear down the
-                            // (tabs) navigator. Boot effect reads
-                            // 'admin' from AsyncStorage and routes to
-                            // the admin panel. Same pattern as the
-                            // inverse switch in (admin)/menu.tsx.
-                            try {
-                                const Updates = await import('expo-updates');
-                                await Updates.reloadAsync();
-                            } catch {
-                                router.replace('/' as any);
-                            }
+                            // No reload: the group layouts carry declarative
+                            // mode guards (Redirect), so a plain replace is
+                            // clean and BACK cannot leak across groups.
+                            router.replace('/(admin)/catalog' as any);
                         }}
                     >
                         <Ionicons name="shield-checkmark-outline" size={iconSize.lg} color={colors.primary} />
