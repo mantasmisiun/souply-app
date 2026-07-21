@@ -21,7 +21,7 @@
   "tripMap": {
     "actionsTitle": "Veiksmai",
     "basketBtn": "Krepšelis",
-    "basketBtnSub": "Peržiūrėti",
+    "basketBtnSub": "Redaguoti",
     "mapSettings": "Žemėlapio nustatymai",
     "settings": "Nustatymai",
     "locationRoute": "Vieta ir maršrutas",
@@ -1065,12 +1065,12 @@
     "errorCreateList": "Nepavyko sukurti pirkinių sąrašo",
     "sheet": {
       "storesPlural": "{{count}} parduotuvės",
-"stores": "Parduotuvės",
+      "stores": "Parduotuvės",
       "onlyHere": "Tik šioje parduotuvėje",
       "savingVsSingle": "Sutaupote {{amount}} vs 1 parduotuvė",
       "navigate": "Vykti",
       "createList": "Pirkinių sąrašas",
-"list": "Sąrašas",
+      "list": "Sąrašas",
       "creating": "Kuriama…",
       "approxPrice": "Apytikslė kaina",
       "missing": "Trūksta {{count}}",
@@ -1079,8 +1079,14 @@
       "items_one": "{{count}} prekė",
       "items_few": "{{count}} prekės",
       "items_many": "{{count}} prekių",
-      "items_other": "{{count}} prekių"
-    }
+      "items_other": "{{count}} prekių",
+      "storesCount": "{{count}} parduotuvės",
+      "store": "Parduotuvė",
+      "missingCount": "Trūksta prekių: {{count}}",
+      "promoLine": "Prekės su akcija: {{count}} · sutaupai {{saved}}"
+    },
+    "mapCheapestCaption": "pigiausias krepšelis",
+    "mapComparedStores": "palygintos {{count}} parduotuvės"
   },
   "shoppingListDetail": {
     "delete": "Ištrinti",

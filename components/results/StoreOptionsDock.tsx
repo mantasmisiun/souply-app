@@ -88,6 +88,19 @@ export default function StoreOptionsDock({
     // source everywhere — the old radial detour disagreed with the bar/single.)
     const singleOption = options.find(o => o.stores.length === 1);
     const baselineJourneyKm = singleOption ? journeyByOption.get(singleOption.key) ?? null : null;
+    // Discounted items at the (single) tapped store: count + how much the
+    // promos shave off vs regular prices.
+    const promoStats = useMemo(() => {
+        const store = !multi && current?.stores.length === 1 ? current.stores[0] : null;
+        if (!store) return null;
+        let count = 0, saved = 0;
+        for (const it of store.items) {
+            if (it.isMissing || it.price == null || it.promoPrice == null || it.promoPrice >= it.price) continue;
+            count += 1;
+            saved += (it.price - it.promoPrice) * (it.packsNeeded ?? it.quantity ?? 1);
+        }
+        return count > 0 ? { count, saved } : null;
+    }, [multi, current]);
 
     // A newly tapped store (new option set) → open the sheet to medium so the
     // actions + store options are immediately in view.
@@ -109,16 +122,43 @@ export default function StoreOptionsDock({
             <TouchableOpacity onPress={onDismiss} hitSlop={8} accessibilityLabel={t('common.close')}>
                 <Ionicons name="close" size={22} color={colors.textPrimary} />
             </TouchableOpacity>
-            {/* Logos ONLY (no chain names), spread — a store's brand reads at a
-                glance; a split shows its 2–3 brands side by side. */}
-            <StoreLogos stores={current.stores} size={avatarSize.sm} styles={styles} spread />
-            <View style={styles.barSpacer} />
-            {/* How far, at a glance — a single store's distance, or a split's
-                farthest reach — so you can weigh cheap-vs-near before expanding. */}
-            {Number.isFinite(barDistanceKm) && barDistanceKm > 0 && (
-                <Text style={styles.barDistance} allowFontScaling={false}>{formatDistance(barDistanceKm)}</Text>
+            {current.stores.length === 1 ? (
+                /* V1 "store hero": logo + name with distance caption, big price
+                   right — mirrors the summary bar's price-hero language. */
+                <>
+                    <StoreLogos stores={current.stores} size={avatarSize.sm} styles={styles} spread />
+                    <View style={styles.barNameCol}>
+                        <Text style={styles.barName} numberOfLines={1}>
+                            {chainBrandName(current.stores[0].chainName)}
+                        </Text>
+                        {Number.isFinite(barDistanceKm) && barDistanceKm > 0 && (
+                            <Text style={styles.barCap} numberOfLines={1} allowFontScaling={false}>
+                                {formatDistance(barDistanceKm)}
+                            </Text>
+                        )}
+                    </View>
+                    <View style={styles.barSpacer} />
+                    <Text style={styles.barPriceHero} allowFontScaling={false}>{formatEuro(current.total)}</Text>
+                </>
+            ) : (
+                <>
+                    {/* Combo (2–3 stores): overlapped logo stack + "N parduotuvės"
+                       with the through-journey caption — same hero language. */}
+                    <StoreLogos stores={current.stores} size={avatarSize.sm} styles={styles} />
+                    <View style={styles.barNameCol}>
+                        <Text style={styles.barName} numberOfLines={1}>
+                            {t('results.sheet.storesCount', { count: current.stores.length })}
+                        </Text>
+                        {Number.isFinite(barDistanceKm) && barDistanceKm > 0 && (
+                            <Text style={styles.barCap} numberOfLines={1} allowFontScaling={false}>
+                                {formatDistance(barDistanceKm)}
+                            </Text>
+                        )}
+                    </View>
+                    <View style={styles.barSpacer} />
+                    <Text style={styles.barPriceHero} allowFontScaling={false}>{formatEuro(current.total)}</Text>
+                </>
             )}
-            <Text style={styles.barPrice} allowFontScaling={false}>{formatEuro(current.total)}</Text>
         </View>
     );
 
@@ -146,9 +186,42 @@ export default function StoreOptionsDock({
                 />
             </View>
 
-            {/* Store options — a "Stores" section of SEPARATE cards (one per
-                option: a single store, or the split options with the single-store
-                option last), the selected one ringed pink. */}
+            {/* Single store (no split alternatives): the option card would just
+                repeat the bar — show a "Parduotuvė" FACTS card instead
+                (address + missing-count). Multi keeps the comparison cards. */}
+            {!multi && current.stores.length === 1 ? (
+                <View>
+                    <Text style={styles.secLabel}>{t('results.sheet.store')}</Text>
+                    <SheetCard style={styles.factsCard}>
+                        <View style={styles.factsRow}>
+                            <ChainLogoChip
+                                chainId={current.stores[0].chainId}
+                                name={current.stores[0].chainName}
+                                size={avatarSize.sm}
+                            />
+                            <Text style={styles.factsAddress} numberOfLines={2}>
+                                {current.stores[0].storeAddress}
+                            </Text>
+                        </View>
+                        {promoStats && (
+                            <View style={styles.factsRow}>
+                                <Ionicons name="pricetag-outline" size={16} color={colors.primary} />
+                                <Text style={styles.factsPromo}>
+                                    {t('results.sheet.promoLine', {
+                                        count: promoStats.count,
+                                        saved: formatEuro(promoStats.saved),
+                                    })}
+                                </Text>
+                            </View>
+                        )}
+                        {current.stores[0].missingItemNames.length > 0 && (
+                            <Text style={styles.factsMissing}>
+                                {t('results.sheet.missingCount', { count: current.stores[0].missingItemNames.length })}
+                            </Text>
+                        )}
+                    </SheetCard>
+                </View>
+            ) : (
             <View>
                 <Text style={styles.secLabel}>{t('results.sheet.stores')}</Text>
                 <View style={styles.optsList}>
@@ -169,6 +242,7 @@ export default function StoreOptionsDock({
                     ))}
                 </View>
             </View>
+            )}
         </View>
     );
 
@@ -310,8 +384,14 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // shorter and its stage-1 sheet read slightly shorter than the main dock's).
     bar: { ...dockBarBase, minHeight: 40 },
     barSpacer: { flex: 1 },
-    barDistance: { ...typography.bodySmall, color: c.textMuted, marginRight: spacing.sm },
-    barPrice: { fontSize: 18, fontWeight: '800', color: c.primary },
+    // V1 store-hero (single store)
+    barNameCol: { marginLeft: spacing.sm, flexShrink: 1 },
+    barName: { fontSize: 14.5, fontWeight: '700', color: c.textPrimary, lineHeight: 17 },
+    barCap: { fontSize: 11, lineHeight: 14, color: c.textSecondary },
+    barPriceHero: {
+        fontSize: 22, fontWeight: '800', letterSpacing: -0.4,
+        color: c.textPrimary, fontVariant: ['tabular-nums'],
+    },
 
     // ── Content ──
     // Bottom pad so the last option row is never flush against the sheet's
@@ -320,6 +400,16 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     actionRow: { flexDirection: 'row', gap: 14 },
 
     // ── Store options — a "Stores" section of separate cards ──
+    // Single-store facts card — same shadowed SheetCard family as the
+    // action cards above it.
+    // NO elevation/shadow overrides here — SheetCard's own boxShadow halo is
+    // the family look; Android elevation on a translucent card draws the
+    // gray-border artifact (see SheetCard's lightShadow comment).
+    factsCard: { padding: 12, gap: 10 },
+    factsRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    factsAddress: { flex: 1, fontSize: 13.5, color: c.textPrimary, lineHeight: 18 },
+    factsPromo: { flex: 1, fontSize: 13, fontWeight: '600', color: c.textPrimary },
+    factsMissing: { fontSize: 12.5, fontWeight: '600', color: c.textSecondary },
     secLabel: {
         fontSize: 12, fontWeight: '700', letterSpacing: 0.6, textTransform: 'uppercase',
         color: c.textMuted, marginBottom: spacing.sm, marginLeft: 4,

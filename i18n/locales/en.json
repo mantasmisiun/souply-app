@@ -21,7 +21,7 @@
   "tripMap": {
     "actionsTitle": "Actions",
     "basketBtn": "Basket",
-    "basketBtnSub": "View",
+    "basketBtnSub": "Edit",
     "mapSettings": "Map settings",
     "settings": "Settings",
     "locationRoute": "Location & Route",
@@ -1093,20 +1093,26 @@
     "errorCreateList": "Couldn't create shopping list",
     "sheet": {
       "storesPlural": "{{count}} stores",
-"stores": "Stores",
+      "stores": "Stores",
       "onlyHere": "Only at this store",
       "savingVsSingle": "Save {{amount}} vs 1 store",
       "navigate": "Navigate",
       "createList": "Shopping list",
-"list": "List",
+      "list": "List",
       "creating": "Creating…",
       "approxPrice": "Approx. price",
       "missing": "Missing {{count}}",
       "distanceKm": "{{km}} km",
       "extraKm": "+{{km}} km detour",
       "items_one": "{{count}} item",
-      "items_other": "{{count}} items"
-    }
+      "items_other": "{{count}} items",
+      "storesCount": "{{count}} stores",
+      "store": "Store",
+      "missingCount": "Missing items: {{count}}",
+      "promoLine": "Items on sale: {{count}} · saving {{saved}}"
+    },
+    "mapCheapestCaption": "cheapest basket",
+    "mapComparedStores": "{{count}} stores compared"
   },
   "shoppingListDetail": {
     "delete": "Delete",

@@ -16,7 +16,7 @@ import React, { useMemo, useState, useCallback, useEffect, useLayoutEffect, useR
 import { Ionicons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import Animated, { FadeIn, useSharedValue } from 'react-native-reanimated';
+import Animated, { FadeIn, useSharedValue, useAnimatedStyle } from 'react-native-reanimated';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { useTheme, spacing, radius, elevation, typography, iconSize, type AppTheme } from '../../constants/theme';
@@ -161,6 +161,11 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     const [sheetOcclusion, setSheetOcclusion] = useState(150);
     // Title grows 15→20 when the sheet opens (like the catalog list sheet).
     const titleStyle = useDockTitleStyle(sheetProgress);
+    // V1 price-hero: the big price grows slightly as the sheet opens (the
+    // dock-title idiom, scaled for the larger base size).
+    const priceGrowStyle = useAnimatedStyle(() => ({
+        fontSize: 23 + 4 * sheetProgress.value,
+    }));
     const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
     // "Define a location" — an inline point-picker overlay that takes over the
     // whole screen (strips the store chrome + dock, shows a centre pin +
@@ -1140,15 +1145,30 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                             style={styles.dockBar}
                             onLayout={e => { const h = Math.round(e.nativeEvent.layout.height); if (h > 0) setDockBarH(h); }}
                         >
-                            <Animated.Text style={[styles.summaryText, titleStyle]} numberOfLines={1}>
-                                {cheapestTotal != null
-                                    ? t('results.mapSummary', { price: formatEuro(cheapestTotal), count: pricedCount })
-                                    : t('results.mapSummaryEmpty')}
-                            </Animated.Text>
+                            {cheapestTotal != null ? (
+                                <View style={styles.summaryHero}>
+                                    <Animated.Text style={[styles.summaryPrice, priceGrowStyle]} numberOfLines={1}>
+                                        {formatEuro(cheapestTotal)}
+                                    </Animated.Text>
+                                    <View style={styles.summaryCaps}>
+                                        <Text style={styles.summaryCapTop} numberOfLines={1}>
+                                            {t('results.mapCheapestCaption')}
+                                        </Text>
+                                        <Text style={styles.summaryCapBottom} numberOfLines={1}>
+                                            {t('results.mapComparedStores', { count: pricedCount })}
+                                        </Text>
+                                    </View>
+                                </View>
+                            ) : (
+                                <Animated.Text style={[styles.summaryText, titleStyle]} numberOfLines={1}>
+                                    {t('results.mapSummaryEmpty')}
+                                </Animated.Text>
+                            )}
                             {recalcing && <MaterialProgress size="small" color={colors.primary} />}
                             {visibleUnpriced.length > 0 && (
                                 <TouchableOpacity
-                                    style={styles.morePricesGhost}
+                                    style={styles.morePricesRound}
+                                    accessibilityLabel={t('results.morePrices')}
                                     onPress={handleBatchPrice}
                                     disabled={batchPricing}
                                     activeOpacity={0.6}
@@ -1156,10 +1176,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                                 >
                                     {batchPricing
                                         ? <MaterialProgress size="small" color={colors.primary} />
-                                        : <>
-                                            <Ionicons name="add" size={17} color={colors.primary} />
-                                            <Text style={styles.morePricesGhostText}>{t('results.morePrices')}</Text>
-                                          </>}
+                                        : <Ionicons name="add" size={20} color={colors.primary} />}
                                 </TouchableOpacity>
                             )}
                         </View>
@@ -1303,8 +1320,19 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // ── Glass dock ─────────────────────────────────────────────────────────
     dockBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 40, paddingHorizontal: 16 },
     summaryText: { flex: 1, fontSize: 15, fontWeight: '700', color: c.textPrimary },
-    morePricesGhost: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 4 },
-    morePricesGhostText: { fontSize: 14, fontWeight: '700', color: c.primary },
+    // V1 "price hero" collapsed bar: big price + quiet two-line caption.
+    summaryHero: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
+    summaryPrice: {
+        fontSize: 23, fontWeight: '800', letterSpacing: -0.4,
+        color: c.textPrimary, fontVariant: ['tabular-nums'],
+    },
+    summaryCaps: { flexShrink: 1 },
+    summaryCapTop: { fontSize: 11, lineHeight: 14, color: c.textSecondary },
+    summaryCapBottom: { fontSize: 11, lineHeight: 14, fontWeight: '600', color: c.textPrimary },
+    morePricesRound: {
+        width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center',
+        backgroundColor: c.primaryMuted,
+    },
     dockContent: { paddingHorizontal: 16, paddingTop: 22, gap: 14 },
     bigBtnRow: { flexDirection: 'row', gap: 14 },
     // Item-count pip overlaid on the Basket action card's cart icon.
