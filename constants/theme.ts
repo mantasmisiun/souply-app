@@ -365,3 +365,8 @@ export const elevation = {
   level3: { shadowColor: '#180A11', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
   level4: { shadowColor: '#180A11', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10 },
 } as const;
+
+// The canonical glass recipe lives in ONE place — components/DockedGlassSheet.tsx
+// (blur + tint + rim + shadow + corners). Every floating bar renders through that
+// component (its `compact` variant for content-width switchers), so there is no
+// duplicated constant here to drift out of sync.

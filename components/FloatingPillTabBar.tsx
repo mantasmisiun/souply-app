@@ -164,6 +164,10 @@ export interface DockTab {
     key: string;
     label: string;
     icon: keyof typeof Ionicons.glyphMap;
+    /** Dim + ignore taps (e.g. a pane gated until the trip unlocks). */
+    disabled?: boolean;
+    /** Show a small lock glyph beside the label (a gated pane). */
+    locked?: boolean;
 }
 
 /**
@@ -178,11 +182,16 @@ export function DockTabsRow({
     activeKey,
     onSelect,
     onHeight,
+    hug,
 }: {
     tabs: DockTab[];
     activeKey: string;
     onSelect: (key: string) => void;
     onHeight?: (h: number) => void;
+    /** HUG layout: cells size to their content (equal, via `item.minWidth`)
+     *  instead of flex-filling the row — for a content-width dock (the compact
+     *  DockedGlassSheet). Default false = fill (the full-width root/map bars). */
+    hug?: boolean;
 }) {
     const colors = useTheme();
     const [innerWidth, setInnerWidth] = useState(0);
@@ -240,8 +249,11 @@ export function DockTabsRow({
                     label={tab.label}
                     focused={tab.key === activeKey}
                     colors={colors}
+                    disabled={tab.disabled}
+                    locked={tab.locked}
+                    hug={hug}
                     renderIcon={(color) => <Ionicons name={tab.icon} size={ICON_SIZE} color={color} />}
-                    onPress={() => { Haptics.selectionAsync(); onSelect(tab.key); }}
+                    onPress={() => { if (tab.disabled) return; Haptics.selectionAsync(); onSelect(tab.key); }}
                 />
             ))}
         </View>
@@ -260,6 +272,9 @@ function TabItem({
     renderIcon,
     onPress,
     tintOverride,
+    disabled,
+    locked,
+    hug,
 }: {
     label: string;
     focused: boolean;
@@ -268,9 +283,17 @@ function TabItem({
     onPress: () => void;
     /** Fixed tint for override-action items (primary / destructive red). */
     tintOverride?: string;
+    /** Dim the cell + swallow presses (a gated pane). */
+    disabled?: boolean;
+    /** Show a small lock glyph after the label. */
+    locked?: boolean;
+    /** Content-sized cell (for a hugging/content-width dock) instead of flex-fill. */
+    hug?: boolean;
 }) {
     const scale = useSharedValue(1);
-    const tint = tintOverride ?? (focused ? colors.onSecondaryContainer : colors.textSecondary);
+    const tint = disabled
+        ? colors.textMuted
+        : tintOverride ?? (focused ? colors.onSecondaryContainer : colors.textSecondary);
 
     useEffect(() => {
         if (focused) {
@@ -286,31 +309,34 @@ function TabItem({
     return (
         <Pressable
             accessibilityRole="button"
-            accessibilityState={focused ? { selected: true } : {}}
+            accessibilityState={{ selected: focused, disabled: !!disabled }}
             accessibilityLabel={label}
-            android_ripple={{
+            android_ripple={disabled ? undefined : {
                 color: withAlpha(colors.surfaceTint, stateLayer.pressed),
                 borderless: true,
                 radius: 30,
             }}
-            onPress={onPress}
-            onPressIn={() => { scale.value = withSpring(0.86, motion.spring); }}
-            onPressOut={() => { scale.value = withSpring(1, motion.springExpressive); }}
-            style={styles.item}
+            onPress={disabled ? undefined : onPress}
+            onPressIn={() => { if (!disabled) scale.value = withSpring(0.86, motion.spring); }}
+            onPressOut={() => { if (!disabled) scale.value = withSpring(1, motion.springExpressive); }}
+            style={[styles.item, hug && styles.itemHug, disabled && styles.itemDisabled]}
         >
             <Animated.View style={[styles.iconWrap, iconStyle]}>
                 {renderIcon(tint)}
             </Animated.View>
-            <Text
-                numberOfLines={1}
-                style={[
-                    focused ? typography.labelSmall : typography.caption,
-                    styles.label,
-                    { color: tint },
-                ]}
-            >
-                {label}
-            </Text>
+            <View style={styles.labelRow}>
+                <Text
+                    numberOfLines={1}
+                    style={[
+                        focused ? typography.labelSmall : typography.caption,
+                        styles.label,
+                        { color: tint },
+                    ]}
+                >
+                    {label}
+                </Text>
+                {locked && <Ionicons name="lock-closed" size={10} color={colors.textMuted} />}
+            </View>
         </Pressable>
     );
 }
@@ -330,10 +356,19 @@ const styles = StyleSheet.create({
     },
     item: {
         flex: 1,
+        // Equal minimum so a content-width (compact) dock keeps its cells the
+        // same width — the sliding indicator (itemWidth = innerWidth / count)
+        // then lands centred under each. Harmless full-width (flex dominates).
+        minWidth: 72,
         alignItems: 'center',
         justifyContent: 'center',
         gap: 2,
     },
+    itemDisabled: { opacity: 0.55 },
+    // HUG: content-sized cell (row shrinks to its tabs) — the compact dock. The
+    // shared minWidth keeps the two cells equal so the indicator stays centred.
+    itemHug: { flex: 0, paddingHorizontal: spacing.sm },
+    labelRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
     iconWrap: {
         height: INDICATOR_HEIGHT,
         alignItems: 'center',

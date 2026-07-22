@@ -8,9 +8,8 @@
  *    Trips → Stores donut carousel (same as My tab), and extra metric cards.
  */
 import {
-    View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Alert, ActivityIndicator, useColorScheme,
+    View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Alert, ActivityIndicator,
 } from 'react-native';
-import { BlurView } from 'expo-blur';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
@@ -24,7 +23,9 @@ import { DonutCarousel, type DonutPage } from '../../../components/DonutCarousel
 import { chainIdByName, chainBrandColor } from '../../../utils/chainBrandName';
 import { formatDate , formatEuro } from '../../../utils/formatCurrency';
 import { formatWeekday } from '../../../utils/formatDayDate';
-import { useTheme, radius, spacing, typography, withAlpha, type AppTheme } from '../../../constants/theme';
+import { useTheme, spacing, radius, typography, type AppTheme } from '../../../constants/theme';
+import { DockedGlassSheet } from '../../../components/DockedGlassSheet';
+import { DockTabsRow } from '../../../components/FloatingPillTabBar';
 import {
     fetchTrips, fetchTripReceipts, fetchTripStats, fetchTripScore, fetchMonthlyTripSpend,
     detachTripReceipt,
@@ -46,7 +47,6 @@ const receiptTotal = (r: TripReceipt): number =>
 
 export default function TripFinalScreen() {
     const colors = useTheme();
-    const isDark = useColorScheme() === 'dark';
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { t, i18n } = useTranslation();
     const router = useRouter();
@@ -373,49 +373,24 @@ export default function TripFinalScreen() {
                     )
                 )}
 
-                {/* ── compact glass tab bar (bottom-left, no drag). Stats is
-                    grayed/disabled until unlocked (a receipt + swipes done). ── */}
-                <View style={[styles.tabbarWrap, { paddingBottom: insets.bottom + spacing.sm }]}>
-                    <View style={styles.tabbar}>
-                        {/* Glass recipe mirrors the app's normal nav bar (DockedGlassSheet):
-                            constant BlurView(30) + a 0.62 surface tint overlay. */}
-                        <BlurView
-                            pointerEvents="none"
-                            intensity={30}
-                            tint={isDark ? 'dark' : 'light'}
-                            experimentalBlurMethod="dimezisBlurView"
-                            style={StyleSheet.absoluteFill}
+                {/* Pane switcher (bottom-left) — THE shared glass dock in its compact
+                    form (same blur/tint/rim/shadow/corners as the main nav + map
+                    bars, via DockedGlassSheet). Stats is gated until unlock. */}
+                <DockedGlassSheet
+                    compact
+                    barRowHeight={0}
+                    barRow={
+                        <DockTabsRow
+                            hug
+                            tabs={[
+                                { key: 'receipt', label: t('tripFinal.tabReceipt'), icon: 'receipt-outline' },
+                                { key: 'stats', label: t('tripFinal.tabStats'), icon: 'stats-chart-outline', disabled: locked !== false, locked: locked !== false },
+                            ]}
+                            activeKey={tab}
+                            onSelect={(k) => setTab(k as 'receipt' | 'stats')}
                         />
-                        <View
-                            pointerEvents="none"
-                            style={[StyleSheet.absoluteFill, { backgroundColor: withAlpha(isDark ? colors.surfaceContainer : '#FFFFFF', 0.62) }]}
-                        />
-                        {(['receipt', 'stats'] as const).map(k => {
-                            const on = tab === k;
-                            const disabled = k === 'stats' && locked !== false;
-                            return (
-                                <TouchableOpacity
-                                    key={k}
-                                    style={[styles.tab, on && styles.tabOn, disabled && styles.tabDisabled]}
-                                    onPress={() => !disabled && setTab(k)}
-                                    activeOpacity={disabled ? 1 : 0.8}
-                                >
-                                    <Ionicons
-                                        name={k === 'receipt' ? 'receipt-outline' : 'stats-chart-outline'}
-                                        size={22}
-                                        color={on ? colors.onPrimary : disabled ? colors.textMuted : colors.textSecondary}
-                                    />
-                                    <View style={styles.tabLabelRow}>
-                                        <Text style={[styles.tabText, on && { color: colors.onPrimary }, disabled && { color: colors.textMuted }]}>
-                                            {k === 'receipt' ? t('tripFinal.tabReceipt') : t('tripFinal.tabStats')}
-                                        </Text>
-                                        {disabled && <Ionicons name="lock-closed" size={10} color={colors.textMuted} />}
-                                    </View>
-                                </TouchableOpacity>
-                            );
-                        })}
-                    </View>
-                </View>
+                    }
+                />
             </View>
 
             {/* download selection footer */}
@@ -486,14 +461,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     memberPaid: { ...typography.bodySmallStrong, fontVariant: ['tabular-nums'], color: c.textPrimary },
     memberDev: { ...typography.labelSmall, fontWeight: '800', fontVariant: ['tabular-nums'], minWidth: 54, textAlign: 'right' },
 
-    // tab bar
-    tabbarWrap: { position: 'absolute', left: spacing.lg, bottom: 0, paddingTop: spacing.sm },
-    tabbar: { flexDirection: 'row', gap: 4, padding: 6, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border, overflow: 'hidden' },
-    tab: { flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, paddingVertical: 8, paddingHorizontal: 18, minHeight: 56, borderRadius: 14 },
-    tabOn: { backgroundColor: c.primary },
-    tabDisabled: { opacity: 0.55 },
-    tabLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-    tabText: { fontSize: 11.5, fontWeight: '700', color: c.textSecondary },
 
     // download footer
     dlBar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.md, backgroundColor: c.cardBackground, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },

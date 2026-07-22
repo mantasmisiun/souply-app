@@ -72,6 +72,26 @@ function clamp(v: number, lo: number, hi: number) {
     return Math.max(lo, Math.min(hi, v));
 }
 
+/** THE frosted-glass fill — the live blur + constant tint that make every dock
+ *  read as glass. Rendered identically by the full-width panel and the compact
+ *  bar so both share ONE recipe (a copied set of constants always drifts). The
+ *  rim/solid decoration layers stay with each caller (the panel animates them;
+ *  compact keeps them static). */
+function GlassFill({ isDark, style }: { isDark: boolean; style: any }) {
+    return (
+        <>
+            <BlurView
+                pointerEvents="none"
+                intensity={30}
+                tint={isDark ? 'dark' : 'light'}
+                experimentalBlurMethod="dimezisBlurView"
+                style={style.glassFill}
+            />
+            <View pointerEvents="none" style={[style.glassFill, style.tint]} />
+        </>
+    );
+}
+
 export interface DockedSheetControls {
     /** Open to the medium detent (stage 1). */
     expand(): void;
@@ -151,11 +171,18 @@ interface Props {
      *  every drag on the sheet, so nothing leaks. This is the gorhom-bottom-sheet-
      *  over-react-native-maps pattern. */
     mapMode?: boolean;
+    /** COMPACT variant: a content-width, bottom-left floating pill instead of the
+     *  full-width dock — for a plain tab switcher (e.g. the receipt Kvitai/
+     *  Statistika bar). Shares the EXACT glass recipe (blur + tint + rim + shadow
+     *  + corners) via GlassFill; only the geometry differs. Sheetless (no detents,
+     *  no pan, no animation) — `sheet`/`barRowHeight`/dock callbacks are ignored. */
+    compact?: boolean;
 }
 
 export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function DockedGlassSheet({
     barRow, barRowHeight, sheet, colors: colorsProp, onBarHeight, onCollapsedClearance, onOcclusion,
     blockScrollRef, progressiveShadow, barAtTop, externalPanOnly, progressSV, dragActiveSV, onTouchStart, mapMode,
+    compact,
 }, ref) {
     const themed = useTheme();
     const colors = colorsProp ?? themed;
@@ -470,6 +497,37 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     // Scroll at the FULL detent whenever one exists (floating or docked).
     const scrollEnabled = hasSheet && maxStage >= 2 && stage === lastIdx;
 
+    // ── COMPACT: content-width, bottom-left floating pill ─────────────────────
+    // A plain tab switcher (no sheet, no detents, no animation). Reuses the EXACT
+    // glass — GlassFill (blur + tint), styles.clip (border + shadow ink + corner)
+    // and styles.rim — so it is visually identical to the full-width docks at
+    // rest; only the geometry (hugs its content, anchored bottom-left with the
+    // same COLLAPSED_MARGIN float gap) differs. The clip omits left/right/width,
+    // so it sizes to the bar row.
+    if (compact) {
+        return (
+            <View style={styles.wrap} pointerEvents="box-none">
+                <View
+                    style={[
+                        styles.clip,
+                        styles.clipCompact,
+                        {
+                            borderRadius: cornerR,
+                            left: COLLAPSED_MARGIN,
+                            bottom: COLLAPSED_MARGIN + insets.bottom,
+                            shadowOpacity: isDark ? 0.18 : 0.07,
+                        },
+                    ]}
+                    pointerEvents="box-none"
+                >
+                    <GlassFill isDark={isDark} style={styles} />
+                    <View pointerEvents="none" style={styles.rim} />
+                    <View style={styles.barRowCompact}>{barRow}</View>
+                </View>
+            </View>
+        );
+    }
+
     const panel = (
         <Animated.View
             style={[
@@ -484,14 +542,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         >
             {/* CONSTANT GLASS (blur + tint) + a SOLID backdrop that fades in at
                 the full detent. */}
-            <BlurView
-                pointerEvents="none"
-                intensity={30}
-                tint={isDark ? 'dark' : 'light'}
-                experimentalBlurMethod="dimezisBlurView"
-                style={styles.glassFill}
-            />
-            <View pointerEvents="none" style={[styles.glassFill, styles.tint]} />
+            <GlassFill isDark={isDark} style={styles} />
             {dockAtLast && (
                 <Animated.View pointerEvents="none" style={[styles.glassFill, styles.solid, solidStyle]} />
             )}
@@ -601,6 +652,12 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
         shadowRadius: 6,
         shadowOffset: { width: 0, height: 2 },
     },
+    // COMPACT clip: hugs its content (no left/right/width set → sizes to the bar
+    // row); left/bottom/shadowOpacity are applied inline. `elevation` is static
+    // here (the full-width clip animates it via shadowStyle). Height = row + 2·PEEK
+    // = the full-width dock's collapsed height, so the two bars stand the same tall.
+    clipCompact: { elevation: 3 },
+    barRowCompact: { padding: PEEK },
     glassFill: {
         ...StyleSheet.absoluteFillObject,
         backgroundColor: Platform.OS === 'android' ? undefined : 'transparent',
