@@ -46,9 +46,11 @@
     "promoSaved": "saved {{amount}}",
     "promoNone": "no sales this time",
     "impulse": "Impulse",
-    "impulseFoot": "not on the list",
+    "impulseFoot_one": "item wasn't on the list",
+    "impulseFoot_other": "items weren't on the list",
     "forgotten": "Missed",
-    "forgottenFoot": "left on the list",
+    "forgottenFoot_one": "item left on the list",
+    "forgottenFoot_other": "items left on the list",
     "prediction": "Prediction",
     "predictionFoot": "{{pct}}% accurate",
     "memberSplit": "Who paid what",
@@ -654,6 +656,15 @@
       "cta": "Start",
       "label_one": "{{count}} item awaits confirmation",
       "label_other": "{{count}} items await confirmation"
+    },
+    "receiptQueue": {
+      "processing": "Processing receipt…",
+      "queued_one": "{{count}} receipt in queue",
+      "queued_other": "{{count}} receipts in queue",
+      "awaitingNetwork": "Waiting for network",
+      "error": "Couldn't process receipt",
+      "done": "Receipt processed",
+      "view": "View"
     }
   },
   "levelUp": {

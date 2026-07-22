@@ -28,7 +28,7 @@ export function DonutLegend({
                 const dimmed = anySelected && i !== selectedIndex;
                 return (
                     <Animated.View
-                        key={item.label}
+                        key={`${item.label}-${i}`}
                         entering={FadeIn.duration(280)}
                         exiting={FadeOut.duration(160)}
                         layout={LinearTransition.duration(280)}

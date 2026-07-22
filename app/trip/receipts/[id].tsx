@@ -8,15 +8,15 @@
  *    Trips → Stores donut carousel (same as My tab), and extra metric cards.
  */
 import {
-    View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Alert, ActivityIndicator,
+    View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Alert, ActivityIndicator, useColorScheme,
 } from 'react-native';
+import { BlurView } from 'expo-blur';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { MaterialProgress } from '@/components/MaterialProgress';
-import { LiquidGlass } from '../../../components/LiquidGlass';
 import { ChainLogoChip } from '../../../components/ChainLogoChip';
 import { UserAvatar } from '../../../components/UserAvatar';
 import { ScreenBackButton } from '../../../components/ScreenBackButton';
@@ -24,13 +24,14 @@ import { DonutCarousel, type DonutPage } from '../../../components/DonutCarousel
 import { chainIdByName, chainBrandColor } from '../../../utils/chainBrandName';
 import { formatDate , formatEuro } from '../../../utils/formatCurrency';
 import { formatWeekday } from '../../../utils/formatDayDate';
-import { useTheme, radius, spacing, typography, type AppTheme } from '../../../constants/theme';
+import { useTheme, radius, spacing, typography, withAlpha, type AppTheme } from '../../../constants/theme';
 import {
     fetchTrips, fetchTripReceipts, fetchTripStats, fetchTripScore, fetchMonthlyTripSpend,
     detachTripReceipt,
     type TripReceipt, type TripStats, type TripScore, type TripSpendEntry, type TripSummary,
 } from '../../../utils/tripsApi';
 import { downloadReceiptImage, downloadReceiptImages } from '../../../utils/downloadReceipt';
+import { ReceiptUploadSheet } from '../../../components/ReceiptUploadSheet';
 
 // Donut palette for categories / trips (stores use chain brand colours).
 const PALETTE = ['#EB6784', '#5EA29A', '#E8894D', '#6C8AE4', '#B07CD6', '#E0A93B', '#58B368', '#E06C9F', '#4CA0B3', '#C76B6B'];
@@ -45,6 +46,7 @@ const receiptTotal = (r: TripReceipt): number =>
 
 export default function TripFinalScreen() {
     const colors = useTheme();
+    const isDark = useColorScheme() === 'dark';
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { t, i18n } = useTranslation();
     const router = useRouter();
@@ -63,6 +65,7 @@ export default function TripFinalScreen() {
     const [selectMode, setSelectMode] = useState(false);
     const [selected, setSelected] = useState<Set<number>>(new Set());
     const [downloading, setDownloading] = useState(false);
+    const [uploadSheet, setUploadSheet] = useState(false);
 
     const load = useCallback(async () => {
         try {
@@ -128,23 +131,34 @@ export default function TripFinalScreen() {
     // ── donut pages ───────────────────────────────────────────────────────
     const donutPages = useMemo<DonutPage[]>(() => {
         if (!stats) return [];
-        const catSlices = stats.categoryBreakdown.map((c, i) => ({
+        // DonutChart keys slices by label (Maps + React keys); duplicate labels
+        // — two unnamed trips on the same weekday, two same-named categories —
+        // collide. Guarantee uniqueness while keeping the first occurrence clean.
+        const uniqueLabels = <T extends { label: string }>(slices: T[]): T[] => {
+            const seen = new Map<string, number>();
+            return slices.map(s => {
+                const n = seen.get(s.label) ?? 0;
+                seen.set(s.label, n + 1);
+                return n === 0 ? s : { ...s, label: `${s.label} (${n + 1})` };
+            });
+        };
+        const catSlices = uniqueLabels(stats.categoryBreakdown.map((c, i) => ({
             label: c.categoryName, value: c.total, color: PALETTE[i % PALETTE.length],
-        }));
-        const storeSlices = stats.chainBreakdown.map(c => ({
+        })));
+        const storeSlices = uniqueLabels(stats.chainBreakdown.map(c => ({
             label: c.chainName, value: c.total, color: chainBrandColor(c.chainName),
-        }));
+        })));
         // Trips this month: current trip first (highlighted), top others, rest → Kita.
         const sorted = [...tripSpend].sort((a, b) => b.totalSpent - a.totalSpent);
         const cur = sorted.find(s => s.tripId === tripId);
         const others = sorted.filter(s => s.tripId !== tripId);
         const head = [cur, ...others].filter(Boolean).slice(0, 5) as TripSpendEntry[];
         const rest = others.slice(Math.max(0, head.length - 1));
-        const tripSlices = head.map((s, i) => ({
+        const tripSlices = uniqueLabels(head.map((s, i) => ({
             label: s.name ?? formatWeekday(s.anchorDate, i18n.language),
             value: s.totalSpent,
             color: s.tripId === tripId ? colors.primary : PALETTE[(i + 1) % PALETTE.length],
-        }));
+        })));
         const restTotal = rest.reduce((s, x) => s + x.totalSpent, 0);
         if (restTotal > 0) tripSlices.push({ label: t('profilis.kitosLabel'), value: Math.round(restTotal * 100) / 100, color: colors.textMuted });
         const curIdx = head.findIndex(s => s.tripId === tripId);
@@ -177,7 +191,7 @@ export default function TripFinalScreen() {
                         <View style={styles.centered}><MaterialProgress size="large" color={colors.primary} /></View>
                     ) : receipts.length === 0 ? (
                         <View style={styles.centered}>
-                            <TouchableOpacity style={styles.bigBtn} onPress={() => router.push('/receipt' as any)}>
+                            <TouchableOpacity style={styles.bigBtn} onPress={() => setUploadSheet(true)}>
                                 <Ionicons name="cloud-upload-outline" size={22} color={colors.onPrimary} />
                                 <Text style={styles.bigBtnText}>{t('tripReceipts.upload')}</Text>
                             </TouchableOpacity>
@@ -186,7 +200,7 @@ export default function TripFinalScreen() {
                     ) : (
                         <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 92 }}>
                             <View style={styles.actionRow}>
-                                <TouchableOpacity style={[styles.bigBtn, { flex: 1 }]} onPress={() => router.push('/receipt' as any)}>
+                                <TouchableOpacity style={[styles.bigBtn, { flex: 1 }]} onPress={() => setUploadSheet(true)}>
                                     <Ionicons name="cloud-upload-outline" size={20} color={colors.onPrimary} />
                                     <Text style={styles.bigBtnText}>{t('tripReceipts.upload')}</Text>
                                 </TouchableOpacity>
@@ -306,15 +320,15 @@ export default function TripFinalScreen() {
                                 </View>
                                 <View style={styles.mcard}>
                                     <Text style={styles.mcap}>{t('tripFinal.impulse')}</Text>
-                                    <Text style={styles.mval}>{score?.unmatchedReceiptItems.length ?? 0}</Text>
-                                    <Text style={styles.mfoot}>{t('tripFinal.impulseFoot')}</Text>
+                                    <Text style={styles.mval}>{score?.impulseCount ?? 0}</Text>
+                                    <Text style={styles.mfoot}>{t('tripFinal.impulseFoot', { count: score?.impulseCount ?? 0 })}</Text>
                                 </View>
                             </View>
                             <View style={styles.mrow}>
                                 <View style={styles.mcard}>
                                     <Text style={styles.mcap}>{t('tripFinal.forgotten')}</Text>
-                                    <Text style={styles.mval}>{score?.unmatchedListItems.length ?? 0}</Text>
-                                    <Text style={styles.mfoot}>{t('tripFinal.forgottenFoot')}</Text>
+                                    <Text style={styles.mval}>{score?.forgottenCount ?? 0}</Text>
+                                    <Text style={styles.mfoot}>{t('tripFinal.forgottenFoot', { count: score?.forgottenCount ?? 0 })}</Text>
                                 </View>
                                 {prediction ? (
                                     <View style={styles.mcard}>
@@ -362,7 +376,20 @@ export default function TripFinalScreen() {
                 {/* ── compact glass tab bar (bottom-left, no drag). Stats is
                     grayed/disabled until unlocked (a receipt + swipes done). ── */}
                 <View style={[styles.tabbarWrap, { paddingBottom: insets.bottom + spacing.sm }]}>
-                    <LiquidGlass style={styles.tabbar} fallback="solid">
+                    <View style={styles.tabbar}>
+                        {/* Glass recipe mirrors the app's normal nav bar (DockedGlassSheet):
+                            constant BlurView(30) + a 0.62 surface tint overlay. */}
+                        <BlurView
+                            pointerEvents="none"
+                            intensity={30}
+                            tint={isDark ? 'dark' : 'light'}
+                            experimentalBlurMethod="dimezisBlurView"
+                            style={StyleSheet.absoluteFill}
+                        />
+                        <View
+                            pointerEvents="none"
+                            style={[StyleSheet.absoluteFill, { backgroundColor: withAlpha(isDark ? colors.surfaceContainer : '#FFFFFF', 0.62) }]}
+                        />
                         {(['receipt', 'stats'] as const).map(k => {
                             const on = tab === k;
                             const disabled = k === 'stats' && locked !== false;
@@ -375,17 +402,19 @@ export default function TripFinalScreen() {
                                 >
                                     <Ionicons
                                         name={k === 'receipt' ? 'receipt-outline' : 'stats-chart-outline'}
-                                        size={15}
+                                        size={22}
                                         color={on ? colors.onPrimary : disabled ? colors.textMuted : colors.textSecondary}
                                     />
-                                    <Text style={[styles.tabText, on && { color: colors.onPrimary }, disabled && { color: colors.textMuted }]}>
-                                        {k === 'receipt' ? t('tripFinal.tabReceipt') : t('tripFinal.tabStats')}
-                                    </Text>
-                                    {disabled && <Ionicons name="lock-closed" size={11} color={colors.textMuted} />}
+                                    <View style={styles.tabLabelRow}>
+                                        <Text style={[styles.tabText, on && { color: colors.onPrimary }, disabled && { color: colors.textMuted }]}>
+                                            {k === 'receipt' ? t('tripFinal.tabReceipt') : t('tripFinal.tabStats')}
+                                        </Text>
+                                        {disabled && <Ionicons name="lock-closed" size={10} color={colors.textMuted} />}
+                                    </View>
                                 </TouchableOpacity>
                             );
                         })}
-                    </LiquidGlass>
+                    </View>
                 </View>
             </View>
 
@@ -400,6 +429,12 @@ export default function TripFinalScreen() {
                     </TouchableOpacity>
                 </View>
             )}
+
+            <ReceiptUploadSheet
+                visible={uploadSheet}
+                onClose={() => setUploadSheet(false)}
+                listMap={trip && trip.slots.length > 0 ? trip.slots.map(s => `${s.chainId ?? 0}:${s.listId}`).join(',') : undefined}
+            />
         </>
     );
 }
@@ -453,11 +488,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
 
     // tab bar
     tabbarWrap: { position: 'absolute', left: spacing.lg, bottom: 0, paddingTop: spacing.sm },
-    tabbar: { flexDirection: 'row', gap: 3, padding: 4, borderRadius: 16, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border, overflow: 'hidden', ...({} as any) },
-    tab: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 8, paddingHorizontal: 14, borderRadius: 12 },
+    tabbar: { flexDirection: 'row', gap: 4, padding: 6, borderRadius: 20, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border, overflow: 'hidden' },
+    tab: { flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, paddingVertical: 8, paddingHorizontal: 18, minHeight: 56, borderRadius: 14 },
     tabOn: { backgroundColor: c.primary },
     tabDisabled: { opacity: 0.55 },
-    tabText: { fontSize: 12.5, fontWeight: '700', color: c.textSecondary },
+    tabLabelRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+    tabText: { fontSize: 11.5, fontWeight: '700', color: c.textSecondary },
 
     // download footer
     dlBar: { position: 'absolute', left: 0, right: 0, bottom: 0, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.md, paddingHorizontal: spacing.lg, paddingTop: spacing.md, backgroundColor: c.cardBackground, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border },

@@ -45,10 +45,16 @@
     "promoItems": "Prekės su akcija",
     "promoSaved": "sutaupyta {{amount}}",
     "promoNone": "šįkart be akcijų",
-    "impulse": "Impulsyvūs",
-    "impulseFoot": "nebuvo sąraše",
+    "impulse": "Impulsyvumas",
+    "impulseFoot_one": "prekė nebuvo sąraše",
+    "impulseFoot_few": "prekės nebuvo sąraše",
+    "impulseFoot_many": "prekių nebuvo sąraše",
+    "impulseFoot_other": "prekių nebuvo sąraše",
     "forgotten": "Neįsigijai",
-    "forgottenFoot": "liko sąraše",
+    "forgottenFoot_one": "prekė liko sąraše",
+    "forgottenFoot_few": "prekės liko sąraše",
+    "forgottenFoot_many": "prekių liko sąraše",
+    "forgottenFoot_other": "prekių liko sąraše",
     "prediction": "Prognozė",
     "predictionFoot": "tikslumas {{pct}}%",
     "memberSplit": "Kas kiek išleido",
@@ -623,6 +629,16 @@
       "label_one": "{{count}} prekė laukia patvirtinimo",
       "label_few": "{{count}} prekės laukia patvirtinimo",
       "label_other": "{{count}} prekių laukia patvirtinimo"
+    },
+    "receiptQueue": {
+      "processing": "Apdorojamas kvitas…",
+      "queued_one": "{{count}} kvitas eilėje",
+      "queued_few": "{{count}} kvitai eilėje",
+      "queued_other": "{{count}} kvitų eilėje",
+      "awaitingNetwork": "Laukiama interneto ryšio",
+      "error": "Nepavyko apdoroti kvito",
+      "done": "Kvitas apdorotas",
+      "view": "Peržiūrėti"
     }
   },
   "levelUp": {

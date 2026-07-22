@@ -205,6 +205,9 @@ export interface TripScore {
     isAdHoc: boolean;
     listItemCount: number;
     matchedListItemCount: number;
+    /** Stats-card counts (fuzzy product/name/L3 match; extra qty NOT impulse). */
+    impulseCount: number;
+    forgottenCount: number;
     /** Prediction accuracy: predicted (list) vs actual (receipt) over matched
      *  priced items; null → hide the prediction card. */
     predictedMatchedTotal: number | null;
