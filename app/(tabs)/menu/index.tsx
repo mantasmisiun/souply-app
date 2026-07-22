@@ -21,6 +21,7 @@ import { API_BASE_URL } from '../../../config/api';
 import { useTheme, spacing, radius, elevation, iconSize, typography, type AppTheme } from '../../../constants/theme';
 import { getLevelData, getLevelName } from '../../../constants/levels';
 import { DonutChart, type DonutSlice } from '../../../components/DonutChart';
+import { DonutLegend as Legend } from '../../../components/DonutLegend';
 import { BarChart, type BarSlice } from '../../../components/BarChart';
 import { useLevelStore } from '../../../state/levelStore';
 import { useProfileStore, fetchProfileIfStale } from '../../../state/profileStore';
@@ -54,55 +55,6 @@ const CAROUSEL_WIDTH = SCREEN_WIDTH - 32 - 40;
 // same height so the carousel stays a stable size — extra room on
 // those pages is fine.
 const CHART_PAGE_HEIGHT = 520;
-
-function Legend({
-    items,
-    selectedIndex,
-    formatValue,
-}: {
-    items: { label: string; color: string; value: number; logoUri?: string | null }[];
-    selectedIndex?: number | null;
-    // Per-row value formatter. Defaults to euro; the Stores page passes a
-    // percent-of-month formatter.
-    formatValue?: (value: number) => string;
-}) {
-    const colors = useTheme();
-    const fmtValue = formatValue ?? formatEuro;
-    const anySelected = selectedIndex !== null && selectedIndex !== undefined;
-    return (
-        <Animated.View style={legendStyles.container} layout={LinearTransition.duration(280)}>
-            {items.map((item, i) => {
-                const dimmed = anySelected && i !== selectedIndex;
-                return (
-                    <Animated.View
-                        key={item.label}
-                        entering={FadeIn.duration(280)}
-                        exiting={FadeOut.duration(160)}
-                        layout={LinearTransition.duration(280)}
-                    >
-                        <View style={[legendStyles.row, dimmed && legendStyles.rowDimmed]}>
-                            {item.logoUri ? (
-                                <ChainLogoChip chainId={chainIdByName(item.label) ?? 0} name={item.label} size={20} />
-                            ) : (
-                                <View style={[legendStyles.dot, { backgroundColor: item.color }]} />
-                            )}
-                            <Text style={[legendStyles.label, { color: colors.textSecondary }]} numberOfLines={1}>{item.label}</Text>
-                            <Text style={[legendStyles.value, { color: colors.textPrimary }]}>{fmtValue(item.value)}</Text>
-                        </View>
-                    </Animated.View>
-                );
-            })}
-        </Animated.View>
-    );
-}
-const legendStyles = StyleSheet.create({
-    container: { alignSelf: 'stretch', marginTop: spacing.sm, gap: spacing.xs },
-    row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-    rowDimmed: { opacity: 0.3 },
-    dot: { width: 10, height: 10, borderRadius: radius.pill, flexShrink: 0 },
-    label: { flex: 1, ...typography.label, fontWeight: '400' },
-    value: { ...typography.label, flexShrink: 0 },
-});
 
 /**
  * Standout CTA at the bottom of Profilis inviting non-creators to make a
@@ -369,58 +321,59 @@ export default function ProfilisScreen() {
         else if (pickerTarget === 'monthly') { setMonthEndOffset(offsetFromEnd); }
     };
 
-    const pages = [
-        {
-            title: t('profilis.carouselStores'),
-            content: (
-                <View style={styles.chartPage}>
-                    <View style={styles.monthNavRow}>
-                        <TouchableOpacity
-                            onPress={() => { setStoreMonthOffset(o => o + 1); setStoreSelected(null); }}
-                            disabled={!storeCanOlder}
-                            hitSlop={10}
-                            style={styles.monthNavBtn}
-                        >
-                            <Ionicons name="chevron-back" size={20}
-                                color={storeCanOlder ? colors.textPrimary : colors.borderSubtle} />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => openPicker('store')} style={styles.monthLabelBtn} hitSlop={8} activeOpacity={0.6}>
-                            <Text style={styles.monthRangeLabel}>{storeMonthLabel}</Text>
-                            <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            onPress={() => { setStoreMonthOffset(o => Math.max(0, o - 1)); setStoreSelected(null); }}
-                            disabled={!storeCanNewer}
-                            hitSlop={10}
-                            style={styles.monthNavBtn}
-                        >
-                            <Ionicons name="chevron-forward" size={20}
-                                color={storeCanNewer ? colors.textPrimary : colors.borderSubtle} />
-                        </TouchableOpacity>
-                    </View>
-                    {storeMonthSlices.length > 0 ? (
-                        <>
-                            <DonutChart
-                                data={storeMonthSlices}
-                                size={180}
-                                thickness={32}
-                                emptyColor={colors.borderSubtle}
-                                selectedIndex={storeSelected}
-                                onSelect={setStoreSelected}
-                                cardBackground={colors.cardBackground}
-                            />
-                            <Legend
-                                items={storeMonthSlices.map(s => ({ label: s.label, color: s.color, value: s.value, logoUri: s.logoUri }))}
-                                selectedIndex={storeSelected}
-                                formatValue={formatStorePct}
-                            />
-                        </>
-                    ) : (
-                        <Text style={styles.emptyChartText}>{t('profilis.noData')}</Text>
-                    )}
+    // Order: Categories → Monthly → Stores (mirrors the trip stats carousel).
+    const storesPage = {
+        title: t('profilis.carouselStores'),
+        content: (
+            <View style={styles.chartPage}>
+                <View style={styles.monthNavRow}>
+                    <TouchableOpacity
+                        onPress={() => { setStoreMonthOffset(o => o + 1); setStoreSelected(null); }}
+                        disabled={!storeCanOlder}
+                        hitSlop={10}
+                        style={styles.monthNavBtn}
+                    >
+                        <Ionicons name="chevron-back" size={20}
+                            color={storeCanOlder ? colors.textPrimary : colors.borderSubtle} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => openPicker('store')} style={styles.monthLabelBtn} hitSlop={8} activeOpacity={0.6}>
+                        <Text style={styles.monthRangeLabel}>{storeMonthLabel}</Text>
+                        <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        onPress={() => { setStoreMonthOffset(o => Math.max(0, o - 1)); setStoreSelected(null); }}
+                        disabled={!storeCanNewer}
+                        hitSlop={10}
+                        style={styles.monthNavBtn}
+                    >
+                        <Ionicons name="chevron-forward" size={20}
+                            color={storeCanNewer ? colors.textPrimary : colors.borderSubtle} />
+                    </TouchableOpacity>
                 </View>
-            ),
-        },
+                {storeMonthSlices.length > 0 ? (
+                    <>
+                        <DonutChart
+                            data={storeMonthSlices}
+                            size={180}
+                            thickness={32}
+                            emptyColor={colors.borderSubtle}
+                            selectedIndex={storeSelected}
+                            onSelect={setStoreSelected}
+                            cardBackground={colors.cardBackground}
+                        />
+                        <Legend
+                            items={storeMonthSlices.map(s => ({ label: s.label, color: s.color, value: s.value, logoUri: s.logoUri }))}
+                            selectedIndex={storeSelected}
+                            formatValue={formatStorePct}
+                        />
+                    </>
+                ) : (
+                    <Text style={styles.emptyChartText}>{t('profilis.noData')}</Text>
+                )}
+            </View>
+        ),
+    };
+    const pages = [
         {
             title: t('profilis.carouselCategories'),
             content: (
@@ -541,6 +494,7 @@ export default function ProfilisScreen() {
                 </View>
             ),
         },
+        storesPage,
     ];
 
     const settingsGear = (
