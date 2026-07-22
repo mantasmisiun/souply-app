@@ -9,8 +9,9 @@ import type { TripSummary, TripSlot } from './tripsApi';
  *   1 forming        → basket detail (edit items, "Find stores")
  *   2 compared       → the store-comparison map (results surface route)
  *   3 shopping       → the CLOSEST UNFINISHED store's list (store tabs inside)
- *   4 need receipt   → the trip receipts screen
- *   5 done           → the trip stats screen
+ *   4 need receipt   → the final screen, Receipt tab
+ *   5 done           → the final screen, Stats tab
+ * (Stages 4 and 5 share ONE two-tab screen — Kvitai / Statistika.)
  */
 export async function tripStageHref(trip: TripSummary): Promise<string> {
     if (trip.stage <= 1 && trip.basket) return `/basket/${trip.basket.id}`;
@@ -31,5 +32,5 @@ export async function tripStageHref(trip: TripSummary): Promise<string> {
         if (pick) return `/shopping-list/${pick.listId}?tripId=${trip.id}`;
     }
     if (trip.stage === 4) return `/trip/receipts/${trip.id}`;
-    return `/trip/stats/${trip.id}`;
+    return `/trip/receipts/${trip.id}?tab=stats`;
 }

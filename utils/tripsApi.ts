@@ -57,6 +57,8 @@ export interface TripReceiptItem {
     unit: string | null;
     matchedName: string | null;
     storeProductImageUrl: string | null;
+    /** promo-adjusted line total (matches the Stats hero) — price × qty. */
+    lineTotal: number | null;
 }
 
 export interface TripReceipt {
@@ -167,16 +169,27 @@ export const removeTripMember = async (tripId: number, userId: string): Promise<
 
 export interface TripStats {
     tripId: number;
+    savedVsMedian: number | null;
+    couldHaveSaved: number | null;
     receiptCount: number;
     totalSpent: number;
+    /** Live avg-across-stores minus paid (the saved/overpaid metric). */
     savings: number;
+    promoItemCount: number;
+    promoSavings: number;
     categoryBreakdown: { categoryName: string; total: number }[];
     chainBreakdown: { chainName: string; total: number }[];
-    memberSpend: { userId: string; total: number; receiptCount: number }[];
+    memberSpend: { userId: string; name: string | null; avatarColor: string | null; total: number; receiptCount: number }[];
 }
 
 export const fetchTripStats = async (tripId: number): Promise<TripStats> =>
     jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/stats`));
+
+export interface TripSpendEntry { tripId: number; name: string | null; anchorDate: string; totalSpent: number }
+
+/** Per-trip spend for a month (default current) — the "Kelionės" donut. */
+export const fetchMonthlyTripSpend = async (month?: string): Promise<TripSpendEntry[]> =>
+    jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/spend${month ? `?month=${month}` : ''}`));
 
 export interface PlanningScoreMonth { month: string; score: number | null; tripCount: number; adHocCount: number }
 
@@ -190,6 +203,12 @@ export interface TripScore {
     discipline: number;
     precision: number;
     isAdHoc: boolean;
+    listItemCount: number;
+    matchedListItemCount: number;
+    /** Prediction accuracy: predicted (list) vs actual (receipt) over matched
+     *  priced items; null → hide the prediction card. */
+    predictedMatchedTotal: number | null;
+    actualMatchedTotal: number | null;
     pairs: { listItemId: number; receiptItemId: number; source: 'auto' | 'manual'; productName: string | null }[];
     unmatchedListItems: { listItemId: number; name: string | null }[];
     unmatchedReceiptItems: { receiptItemId: number; name: string }[];
