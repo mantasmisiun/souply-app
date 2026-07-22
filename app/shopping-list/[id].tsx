@@ -16,6 +16,7 @@ import { ShoppingListDetail } from '../../components/ShoppingListDetail';
 import { StoreChipBar } from '../../components/StoreChipBar';
 import { InvitePane } from '../../components/results/InvitePane';
 import { BottomSheet } from '../../components/BottomSheet';
+import { ReceiptUploadSheet } from '../../components/ReceiptUploadSheet';
 import {
     fetchTrips, createTripInviteUrl, fetchTripMembers, fetchTripReceipts, type TripMemberInfo,
 } from '../../utils/tripsApi';
@@ -59,6 +60,7 @@ export default function UnifiedShoppingListScreen() {
     const [changeStoreConfirm, setChangeStoreConfirm] = useState(false);
     const [hasReceipts, setHasReceipts] = useState(false);
     const [viewConfirm, setViewConfirm] = useState(false);
+    const [uploadSheet, setUploadSheet] = useState(false);
     // Per-user list view: 'chips' (per-store tabs) or 'unified' (all items in one
     // list, each tagged with its store logo). Persisted LOCALLY, so switching is
     // this user's choice only — a shared trip's other members are unaffected.
@@ -384,8 +386,15 @@ export default function UnifiedShoppingListScreen() {
                 ) : undefined}
                 onInvite={resolvedTripId != null ? () => void openInvite() : undefined}
                 onChangeStore={resolvedBasketId != null ? () => setChangeStoreConfirm(true) : undefined}
-                onUploadReceipt={resolvedTripId != null ? () => router.push('/receipt' as any) : undefined}
+                onUploadReceipt={resolvedTripId != null ? () => setUploadSheet(true) : undefined}
                 onViewReceipts={resolvedTripId != null && hasReceipts ? onViewReceipts : undefined}
+            />
+
+            <ReceiptUploadSheet
+                visible={uploadSheet}
+                onClose={() => setUploadSheet(false)}
+                shoppingListId={entries.length === 0 ? String(activeListId) : undefined}
+                listMap={entries.length > 0 ? entries.map(e => `${chainIdByName(e.chainName) ?? 0}:${e.listId}`).join(',') : undefined}
             />
 
             {/* Whole-trip completion confirm — every store's items are checked. */}

@@ -17,6 +17,12 @@ export interface QueueItem {
   isPdf?: boolean;
   /** Original filename for display in error/awaiting cards. */
   name?: string;
+  /** Trip/list linking (background scan/upload from a shopping list): the
+   *  detected chain's list is linked after the receipt is created. `linkMap`
+   *  is chainId→listId; `fallbackLinkId` links a single-store list whose chain
+   *  we can't gate on. Mirrors the interactive scan-session link logic. */
+  linkMap?: Record<number, number>;
+  fallbackLinkId?: number | null;
   status: QueueStatus;
   error?: string;
   /** Human-readable progress line ("Nuskaitoma...", "3/8 prekės", "Išsaugoma..."). */
@@ -39,7 +45,13 @@ interface ReceiptQueueState {
   initialized: boolean;
 
   initialize: () => Promise<void>;
-  addItems: (entries: { uris: string[]; name?: string; isPdf?: boolean }[]) => void;
+  addItems: (entries: {
+    uris: string[];
+    name?: string;
+    isPdf?: boolean;
+    linkMap?: Record<number, number>;
+    fallbackLinkId?: number | null;
+  }[]) => void;
   markProcessing: (id: string, progress?: string) => void;
   updateProgress: (
     id: string,
@@ -100,6 +112,8 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
       uris: e.uris,
       isPdf: e.isPdf,
       name: e.name,
+      linkMap: e.linkMap,
+      fallbackLinkId: e.fallbackLinkId,
       status: "pending",
       addedAt: Date.now(),
     }));

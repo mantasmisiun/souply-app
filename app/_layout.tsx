@@ -12,6 +12,7 @@ import { GlassIconButton } from '../components/GlassIconButton';
 import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
+import { ReceiptProcessingBanner } from '../components/ReceiptProcessingBanner';
 import { EnvBadge } from '../components/EnvBadge';
 import { MaskRedactionHost } from '../components/MaskRedactionHost';
 import { BasketSessionHost } from '../components/basket/BasketSessionHost';
@@ -250,6 +251,7 @@ function RootLayout() {
       <DevUpdateBanner />
       <ShareHandler />
       <OfflineBanner />
+      <ReceiptProcessingBanner />
       <UsernameGate />
       <LevelUpModal />
       <UpdateGateModal />

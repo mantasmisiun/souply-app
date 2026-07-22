@@ -622,11 +622,43 @@ async function processIki(
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/**
+ * Fire-and-forget: attach a freshly-created receipt to a shopping list (the
+ * List card flips to "Kvitas pridėtas" on refresh, and the trip's planning
+ * score can then pair list ↔ receipt). Mirrors scanSessionService's private
+ * linkReceiptToList so the background queue links exactly like the live scan.
+ */
+function linkReceiptToList(listId: number, receiptId: number): void {
+  fetch(`${API_BASE_URL}/api/shopping-lists/${listId}/link-receipt`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ receiptId }),
+  }).catch(() => {});
+}
+
+/** Pick which list a background receipt links to, from its detected chain and
+ *  the enqueued link context. Same precedence as the interactive scan:
+ *  chain-matched map entry → single-store map value → explicit fallback. */
+function resolveLinkListId(
+  chainId: number | null,
+  linkMap: Record<number, number> | undefined,
+  fallbackLinkId: number | null | undefined,
+): number | null {
+  if (linkMap && chainId != null && linkMap[chainId] != null) return linkMap[chainId];
+  const values = linkMap ? Object.values(linkMap) : [];
+  if (values.length === 1) return values[0];
+  return fallbackLinkId ?? null;
+}
+
 export async function processOneReceipt(
   imageUris: string[],
   signal: AbortSignal,
   onProgress?: (step: string, done?: number, total?: number) => void,
-  opts?: { isPdf?: boolean },
+  opts?: {
+    isPdf?: boolean;
+    linkMap?: Record<number, number>;
+    fallbackLinkId?: number | null;
+  },
 ): Promise<ProcessingResult> {
   try {
     // PDF sources: page conversion is the item's FIRST stage (was a blocking
@@ -713,6 +745,12 @@ export async function processOneReceipt(
 
     onProgress?.(i18n.t("receiptQueue.saving"));
     const postResult = await postReceipt(parsedDataWithImage, signal);
+
+    // Link to the originating shopping list (background scan/upload from a
+    // list or trip). Fire-and-forget, and done even for duplicates — the live
+    // scan links duplicates too so the list card still reflects the receipt.
+    const linkListId = resolveLinkListId(chainId, opts?.linkMap, opts?.fallbackLinkId);
+    if (linkListId) linkReceiptToList(linkListId, postResult.receiptId);
 
     // Burn the black redaction boxes into the image BEFORE upload (via the
     // global off-screen ViewShot host — this service is headless). FAIL-CLOSED:
