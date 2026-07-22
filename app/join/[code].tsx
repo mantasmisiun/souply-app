@@ -15,6 +15,9 @@ import { useTranslation } from 'react-i18next';
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { ScreenBackButton } from '../../components/ScreenBackButton';
+import { NamePromptModal } from '../../components/NamePromptModal';
+import { useProfileStore } from '../../state/profileStore';
+import { patchProfileFields } from '../../utils/authApi';
 import {
     fetchJoinPreview, claimJoin, leaveOwnHousehold, HouseholdExistsError,
     type JoinPreview,
@@ -30,6 +33,13 @@ export default function JoinInviteScreen() {
     const [preview, setPreview] = useState<JoinPreview | null>(null);
     const [state, setState] = useState<'loading' | 'ready' | 'invalid' | 'joined'>('loading');
     const [busy, setBusy] = useState(false);
+    const [namePrompt, setNamePrompt] = useState(false);
+    const profile = useProfileStore(s => s.profile);
+    const fetchProfile = useProfileStore(s => s.fetchProfile);
+    // A shared trip/home needs everyone identifiable — resolve whether the
+    // caller already has ANY name (display / first / handle).
+    useEffect(() => { void fetchProfile(); }, [fetchProfile]);
+    const hasName = !!(profile?.displayName || profile?.firstName || profile?.username);
 
     useEffect(() => {
         if (!code) { setState('invalid'); return; }
@@ -41,7 +51,22 @@ export default function JoinInviteScreen() {
         return () => { cancelled = true; };
     }, [code]);
 
+    // Name gate: joining a shared trip/home requires a name. If the caller has
+    // none, prompt (required) before the actual claim.
     const doClaim = async () => {
+        if (!code || busy) return;
+        if (!hasName) { setNamePrompt(true); return; }
+        void performClaim();
+    };
+
+    const submitName = async (name: string, color: string) => {
+        await patchProfileFields({ displayName: name, avatarColor: color });
+        await fetchProfile();
+        setNamePrompt(false);
+        void performClaim();
+    };
+
+    const performClaim = async () => {
         if (!code || busy) return;
         try {
             setBusy(true);
@@ -154,6 +179,11 @@ export default function JoinInviteScreen() {
                         : <Text style={styles.ctaText}>{t('joinInvite.join')}</Text>}
                 </TouchableOpacity>
             </View>
+            <NamePromptModal
+                visible={namePrompt}
+                onSubmit={submitName}
+                onCancel={() => setNamePrompt(false)}
+            />
         </>
     );
 }

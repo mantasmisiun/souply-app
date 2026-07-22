@@ -30,6 +30,8 @@ export interface TripSummary {
     createdAt: string;
     stage: 1 | 2 | 3 | 4 | 5;
     memberCount: number;
+    /** Member avatar previews (owner first) for the stacked circles on shared cards. */
+    members?: { initial: string; color: string | null }[];
     anchorDate: string;
     basket: {
         id: number; status: string; itemCount: number;
@@ -150,7 +152,7 @@ export const sendAddressedTripInvite = async (
     }));
 };
 
-export interface TripMemberInfo { userId: string; role: 'owner' | 'member'; label: string; }
+export interface TripMemberInfo { userId: string; role: 'owner' | 'member'; label: string; avatarColor?: string | null; }
 
 export const fetchTripMembers = async (tripId: number): Promise<TripMemberInfo[]> => {
     const r = await jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/members`));

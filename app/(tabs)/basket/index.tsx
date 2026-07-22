@@ -31,6 +31,7 @@ import { getUserId } from '../../../config/user';
 import { useBasketState } from '../../../state/basketState';
 import { useTheme, radius, spacing, type AppTheme } from '../../../constants/theme';
 import { ScalePressable } from '../../../components/ScalePressable';
+import { UserAvatar } from '../../../components/UserAvatar';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatDate } from '../../../utils/formatCurrency';
 import { formatWeekday } from '../../../utils/formatDayDate';
@@ -61,6 +62,30 @@ function cardExit() {
 const STAGE_ICONS: Record<number, keyof typeof Ionicons.glyphMap> = {
     1: 'cart-outline', 2: 'storefront-outline', 3: 'list-outline', 4: 'receipt-outline', 5: 'stats-chart-outline',
 };
+
+/** Overlapping member-avatar circles for a shared card (up to 3 + "+N"). */
+function MemberStack({ members, total, styles }: {
+    members: { initial: string; color: string | null }[];
+    total: number;
+    styles: ReturnType<typeof makeStyles>;
+}) {
+    const shown = members.slice(0, 3);
+    const extra = total - shown.length;
+    return (
+        <View style={styles.memberStack}>
+            {shown.map((m, i) => (
+                <View key={i} style={i > 0 ? styles.memberOverlap : undefined}>
+                    <UserAvatar name={m.initial} color={m.color} size={22} style={styles.memberRing} />
+                </View>
+            ))}
+            {extra > 0 && (
+                <View style={[styles.memberOverlap, styles.memberMore]}>
+                    <Text style={styles.memberMoreText}>+{extra}</Text>
+                </View>
+            )}
+        </View>
+    );
+}
 
 export default function TripsScreen() {
     const colors = useTheme();
@@ -279,10 +304,7 @@ export default function TripsScreen() {
                                             <Text style={styles.cartChipText}>{trip.basket?.itemCount ?? 0}</Text>
                                         </View>
                                         {trip.memberCount > 1 && (
-                                            <View style={styles.membersChip}>
-                                                <Ionicons name="people-outline" size={12} color={colors.textSecondary} />
-                                                <Text style={styles.membersChipText}>{trip.memberCount}</Text>
-                                            </View>
+                                            <MemberStack members={trip.members ?? []} total={trip.memberCount} styles={styles} />
                                         )}
                                     </View>
                                     {renderTripTitle(trip)}
@@ -381,7 +403,16 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     previewName: { flexShrink: 1, fontSize: 12, color: c.textSecondary, maxWidth: '38%' },
     previewDot: { fontSize: 12, color: c.textMuted },
     ctaBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingLeft: 4 },
-    cardTop: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
+    cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 },
+    // Overlapping member avatars — top-right of a shared card.
+    memberStack: { flexDirection: 'row', alignItems: 'center' },
+    memberOverlap: { marginLeft: -8 },
+    memberRing: { borderWidth: 1.5, borderColor: c.cardBackground },
+    memberMore: {
+        width: 22, height: 22, borderRadius: 11, backgroundColor: c.surfaceMuted,
+        borderWidth: 1.5, borderColor: c.cardBackground, alignItems: 'center', justifyContent: 'center',
+    },
+    memberMoreText: { fontSize: 10, fontWeight: '800', color: c.textSecondary },
     stageChip: {
         flexDirection: 'row', alignItems: 'center', gap: 4,
         backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderRadius: radius.pill,
