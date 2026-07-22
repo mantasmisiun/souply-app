@@ -7,6 +7,7 @@ import { useTranslation } from 'react-i18next';
 import { type AppTheme, radius, spacing } from '../../constants/theme';
 import { BrandedQR } from '../BrandedQR';
 import { DockSection } from '../dock/DockSection';
+import { UserAvatar } from '../UserAvatar';
 import { MaterialProgress } from '../MaterialProgress';
 import { getUserId } from '../../config/user';
 import {
@@ -120,9 +121,9 @@ export function InvitePane({
             >
                 {inviteUrl && paneW > 0
                     /* Card total = qr·1.08 (QRCodeStyled's 4%-per-side padding)
-                       + 2×12 flat frame — solve for qr so the CARD's outer edge
-                       exactly matches the button width. */
-                    ? <BrandedQR flat value={inviteUrl} size={Math.max(120, Math.floor((paneW - 24) / 1.08))} />
+                       + 2×12 flat frame. Capped so it doesn't dominate a wide
+                       sheet — a scan-sized code, centred. */
+                    ? <BrandedQR flat value={inviteUrl} size={Math.min(210, Math.max(120, Math.floor((paneW - 24) / 1.08)))} />
                     : <MaterialProgress size="large" color={colors.primary} />}
             </TouchableOpacity>
             <TouchableOpacity
@@ -188,9 +189,7 @@ export function InvitePane({
                     <ScrollView style={styles.membersScroll} nestedScrollEnabled>
                         {members.map(m => (
                             <View key={m.userId} style={styles.memberRow}>
-                                <View style={styles.avatar}>
-                                    <Text style={styles.avatarText}>{m.label.replace(/^@/, '').charAt(0).toUpperCase()}</Text>
-                                </View>
+                                <UserAvatar name={m.label} color={m.avatarColor} size={30} />
                                 <Text style={styles.memberLabel} numberOfLines={1}>{m.label}</Text>
                                 {m.role === 'owner' && (
                                     <Text style={styles.ownerTag}>{t('invite.owner')}</Text>

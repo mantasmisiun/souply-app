@@ -78,6 +78,7 @@ export function CollapsingHeader({
     controller,
     background,
     back,
+    onBack,
     right,
     smallTitle,
     headerOptions,
@@ -87,6 +88,8 @@ export function CollapsingHeader({
     background?: string;
     /** Back chip in the top row. */
     back?: boolean;
+    /** Override the default pop — e.g. return to a specific tab. */
+    onBack?: () => void;
     /** Right-side action(s) in the top row. */
     right?: ReactNode;
     /** The collapsed bar title that fades in as the large title scrolls off. */
@@ -117,7 +120,7 @@ export function CollapsingHeader({
                 continuous pinned zone (no double separators). */}
             <View style={{ paddingTop: insets.top, backgroundColor: bg }}>
                 <View style={styles.barRow}>
-                    {back ? <ScreenBackButton /> : null}
+                    {back ? <ScreenBackButton onPress={onBack} /> : null}
                     <Animated.Text
                         numberOfLines={1}
                         style={[styles.barTitle, { color: colors.textPrimary }, smallTitleStyle]}

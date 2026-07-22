@@ -918,6 +918,10 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             const { getUserId } = await import('../../config/user');
             const userId = await getUserId();
 
+            // Replace any existing lists for this basket (a previous store pick)
+            // so re-selecting stores doesn't accumulate stale tabs/progress.
+            await fetch(`${API_BASE_URL}/api/baskets/${Number(id)}/shopping-lists`, { method: 'DELETE' }).catch(() => {});
+
             // "Padėjai sutaupyti" basis = average of the UNIQUE full-coverage
             // store totals − the store the user chose. Deduping the totals
             // (rounded to cents) stops a cluster of equally-cheap stores near
@@ -983,6 +987,9 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             const listData = await res.json();
             if (!listData?.id) throw new Error('Response missing id');
 
+            // Drop any stale split cache from a previous multi-store pick so the
+            // list screen doesn't rebuild old store tabs.
+            await AsyncStorage.removeItem(`split_lists_${id}`).catch(() => {});
             clearSessionBasket();
             useProfileStore.getState().invalidate();
             if (onListsCreated) { onListsCreated(listData.tripId ?? null); return; }
@@ -1010,6 +1017,10 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         try {
             const { getUserId } = await import('../../config/user');
             const userId = await getUserId();
+
+            // Replace any existing lists for this basket (a previous combo pick)
+            // so re-selecting stores doesn't accumulate stale tabs/progress.
+            await fetch(`${API_BASE_URL}/api/baskets/${Number(id)}/shopping-lists`, { method: 'DELETE' }).catch(() => {});
 
             const createdLists: { storeId: number; storeName: string; storeAddress: string; chainName: string; chainLogoUrl: string | null; listId: number }[] = [];
             let splitTripId: number | null = null;

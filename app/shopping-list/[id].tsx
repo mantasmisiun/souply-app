@@ -10,10 +10,18 @@ import { useLocalSearchParams, useFocusEffect, useRouter } from 'expo-router';
 import { useState, useCallback, useMemo, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme, spacing, radius, typography, elevation, type AppTheme } from '../../constants/theme';
 import { ShoppingListDetail } from '../../components/ShoppingListDetail';
 import { StoreChipBar } from '../../components/StoreChipBar';
-import { getMiniLogoUrl, chainBrandName } from '../../utils/chainBrandName';
+import { InvitePane } from '../../components/results/InvitePane';
+import { BottomSheet } from '../../components/BottomSheet';
+import {
+    fetchTrips, createTripInviteUrl, fetchTripMembers, type TripMemberInfo,
+} from '../../utils/tripsApi';
+import { getMiniLogoUrl, chainBrandName, chainIdByName } from '../../utils/chainBrandName';
+import { type UnifiedSource } from '../../components/ShoppingListDetail';
+import { setCachedListItems } from '../../utils/listItemsCache';
 import { formatStoreStreet } from '../../utils/formatAddress';
 import { API_BASE_URL } from '../../config/api';
 
@@ -39,6 +47,31 @@ export default function UnifiedShoppingListScreen() {
 
     const router = useRouter();
     const { t } = useTranslation();
+    const insets = useSafeAreaInsets();
+    // Trip context for the 3-dot actions (invite + change store). Resolved from
+    // the tripId param OR by matching this basket to its owning trip — either
+    // entry path (trip open or split-basket open) lands on the whole trip.
+    const [resolvedTripId, setResolvedTripId] = useState<number | null>(tripId ? Number(tripId) : null);
+    const [resolvedBasketId, setResolvedBasketId] = useState<number | null>(basketId ? Number(basketId) : null);
+    const [members, setMembers] = useState<TripMemberInfo[]>([]);
+    const [inviteOpen, setInviteOpen] = useState(false);
+    const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+    const [changeStoreConfirm, setChangeStoreConfirm] = useState(false);
+    // Per-user list view: 'chips' (per-store tabs) or 'unified' (all items in one
+    // list, each tagged with its store logo). Persisted LOCALLY, so switching is
+    // this user's choice only — a shared trip's other members are unaffected.
+    const [unified, setUnified] = useState(false);
+    const viewKey = `list_view_mode:${basketId ?? `trip_${tripId}`}`;
+    useEffect(() => {
+        AsyncStorage.getItem(viewKey).then(v => { if (v === 'unified') setUnified(true); }).catch(() => {});
+    }, [viewKey]);
+    const toggleViewMode = useCallback(() => {
+        setUnified(prev => {
+            const next = !prev;
+            void AsyncStorage.setItem(viewKey, next ? 'unified' : 'chips');
+            return next;
+        });
+    }, [viewKey]);
     const [entries, setEntries] = useState<SplitListEntry[]>([]);
     const [entriesLoaded, setEntriesLoaded] = useState(!basketId && !tripId);
     const [activeListId, setActiveListId] = useState(parseInt(id));
@@ -105,8 +138,9 @@ export default function UnifiedShoppingListScreen() {
         });
     }, [basketId]));
 
-    // Fetch remaining-item counts for each store's chip badge.
-    // The individual list endpoint doesn't aggregate counts so we fetch items directly.
+    // Fetch remaining-item counts for each store's chip badge. Also PRE-WARM the
+    // shared items cache with every list's full items, so switching store tabs
+    // or chips⇄unified paints instantly (the detail seeds from this cache).
     useEffect(() => {
         if (entries.length < 2) return;
         Promise.all(
@@ -114,8 +148,10 @@ export default function UnifiedShoppingListScreen() {
                 fetch(`${API_BASE_URL}/api/shopping-lists/${e.listId}/items`)
                     .then(r => r.ok ? r.json() : [])
                     .then((items: { isChecked: boolean }[]) => {
-                        const total = items.length;
-                        const checked = items.filter(i => i.isChecked).length;
+                        const arr = Array.isArray(items) ? items : [];
+                        setCachedListItems(e.listId, arr);
+                        const total = arr.length;
+                        const checked = arr.filter(i => i.isChecked).length;
                         return [e.listId, { itemCount: total, checkedCount: checked }] as const;
                     })
                     .catch(() => null)
@@ -132,14 +168,25 @@ export default function UnifiedShoppingListScreen() {
     // finishing must advance to the receipts screen, not the child's own
     // single-list completion prompt.
     const tripMode = isMulti || (!!tripId && entries.length > 0);
+    // Unified only makes sense with >1 store.
+    const showUnified = isMulti && unified;
+    const unifiedSources: UnifiedSource[] = useMemo(
+        () => entries.map(e => ({
+            listId: e.listId,
+            chainId: chainIdByName(e.chainName) ?? 0,
+            chainName: e.chainName,
+            chainLogoUrl: e.chainLogoUrl,
+        })),
+        [entries],
+    );
 
     const chips = useMemo(() => entries.map(e => {
         const summary = listSummaries.get(e.listId);
-        const remaining = summary ? summary.itemCount - summary.checkedCount : undefined;
         return {
             id: e.listId,
             label: chainBrandName(e.chainName),
-            count: remaining,
+            // checked / total (e.g. "1/2").
+            countLabel: summary ? `${summary.checkedCount}/${summary.itemCount}` : undefined,
             logoUrl: e.chainLogoUrl ? getMiniLogoUrl(e.chainName, e.chainLogoUrl) : null,
         };
     }), [entries, listSummaries]);
@@ -200,13 +247,64 @@ export default function UnifiedShoppingListScreen() {
             })();
             return;
         }
-        if (fullyChecked(active) && !advancedRef.current.has(activeListId)) {
+        // Silent advance to the next unfinished store only makes sense with the
+        // per-store tabs — in unified view there's no active tab to switch.
+        if (!unified && fullyChecked(active) && !advancedRef.current.has(activeListId)) {
             advancedRef.current.add(activeListId);
             const next = entries.find(e => e.listId !== activeListId && !fullyChecked(listSummaries.get(e.listId)));
             if (next) setActiveListId(next.listId);
         }
-         
-    }, [listSummaries, activeListId, entries, tripMode, basketId]);
+
+    }, [listSummaries, activeListId, entries, tripMode, basketId, unified]);
+
+    // Resolve the owning trip + member roster once (powers the 3-dot invite +
+    // change-store). Works from either entry path: tripId param, or matching
+    // this basket to its trip.
+    const refreshMembers = useCallback(async (tid: number) => {
+        try { setMembers(await fetchTripMembers(tid)); } catch { /* roster is cosmetic */ }
+    }, []);
+    useEffect(() => {
+        let alive = true;
+        (async () => {
+            try {
+                const trips = await fetchTrips();
+                const trip = trips.find(tr =>
+                    (tripId && tr.id === Number(tripId)) ||
+                    (basketId && tr.basket?.id === Number(basketId)),
+                );
+                if (!alive || !trip) return;
+                setResolvedTripId(trip.id);
+                if (trip.basket?.id) setResolvedBasketId(trip.basket.id);
+                void refreshMembers(trip.id);
+            } catch { /* not a trip basket — 3-dot actions stay hidden */ }
+        })();
+        return () => { alive = false; };
+    }, [tripId, basketId, refreshMembers]);
+
+    const openInvite = useCallback(async () => {
+        if (resolvedTripId == null) return;
+        setInviteOpen(true);
+        if (!inviteUrl) {
+            const cacheKey = `trip_invite_url:${resolvedTripId}`;
+            try {
+                const cached = await AsyncStorage.getItem(cacheKey);
+                if (cached) setInviteUrl(cached);
+            } catch { /* cache miss */ }
+            try {
+                const fresh = await createTripInviteUrl(resolvedTripId);
+                setInviteUrl(fresh);
+                void AsyncStorage.setItem(cacheKey, fresh);
+            } catch { /* cached (or spinner) stands */ }
+        }
+    }, [resolvedTripId, inviteUrl]);
+
+    const confirmChangeStore = useCallback(() => {
+        setChangeStoreConfirm(false);
+        if (resolvedBasketId == null) return;
+        // Back to the store-selection map. It restores the saved saver mode +
+        // store count from storage, so the user lands where they left off.
+        router.replace(`/basket/results/${resolvedBasketId}` as any);
+    }, [resolvedBasketId, router]);
 
     // Brief loading state only when basketId is provided and entries haven't loaded yet
     if (!entriesLoaded) {
@@ -235,21 +333,26 @@ export default function UnifiedShoppingListScreen() {
     return (
         <View style={{ flex: 1 }}>
             <ShoppingListDetail
-                key={activeListId}
-                listId={activeListId}
-                expectedCount={expectedCount ? parseInt(expectedCount) : undefined}
+                key={showUnified ? 'unified' : activeListId}
+                listId={showUnified ? entries[0].listId : activeListId}
+                expectedCount={showUnified ? undefined : (expectedCount ? parseInt(expectedCount) : undefined)}
                 isPartOfBasket={tripMode}
                 onItemsProgress={tripMode ? handleItemsProgress : undefined}
                 onSearchActiveChange={tripMode ? handleSearchActiveChange : undefined}
                 headerTitle={storeNames}
                 headerSubtitle={storeAddresses}
-                pinnedHeader={isMulti ? (
+                unifiedSources={showUnified ? unifiedSources : undefined}
+                viewMode={isMulti ? (unified ? 'unified' : 'chips') : undefined}
+                onToggleViewMode={isMulti ? toggleViewMode : undefined}
+                pinnedHeader={isMulti && !unified ? (
                     <StoreChipBar
                         chips={chips}
                         selectedId={activeListId}
                         onSelect={listId => setActiveListId(listId as number)}
                     />
                 ) : undefined}
+                onInvite={resolvedTripId != null ? () => void openInvite() : undefined}
+                onChangeStore={resolvedBasketId != null ? () => setChangeStoreConfirm(true) : undefined}
             />
 
             {/* Whole-trip completion confirm — every store's items are checked. */}
@@ -270,6 +373,40 @@ export default function UnifiedShoppingListScreen() {
                     </View>
                 </View>
             </Modal>
+
+            {/* Change-store confirm — re-picking a store on the map regenerates
+                this list from the basket, so the current progress is lost. */}
+            <Modal visible={changeStoreConfirm} transparent animationType="fade" onRequestClose={() => setChangeStoreConfirm(false)}>
+                <View style={mStyles(colors).overlay}>
+                    <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setChangeStoreConfirm(false)} />
+                    <View style={mStyles(colors).card}>
+                        <Text style={mStyles(colors).title}>{t('shoppingListDetail.changeStoreTitle')}</Text>
+                        <Text style={mStyles(colors).body}>{t('shoppingListDetail.changeStoreConfirm')}</Text>
+                        <View style={mStyles(colors).buttons}>
+                            <TouchableOpacity style={mStyles(colors).cancel} onPress={() => setChangeStoreConfirm(false)}>
+                                <Text style={mStyles(colors).cancelText}>{t('common.cancel')}</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={mStyles(colors).confirm} onPress={confirmChangeStore}>
+                                <Text style={mStyles(colors).confirmText}>{t('shoppingListDetail.changeStoreYes')}</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* Pakviesti — the same trip invite pane as the map, raised from the
+                bottom of the screen (slide-up + drag-to-dismiss). */}
+            <BottomSheet visible={inviteOpen} onClose={() => setInviteOpen(false)} title={t('shoppingListDetail.inviteAction')} icon="person-add">
+                {resolvedTripId != null && (
+                    <InvitePane
+                        tripId={resolvedTripId}
+                        inviteUrl={inviteUrl}
+                        members={members}
+                        onInvitesSent={() => void refreshMembers(resolvedTripId)}
+                        colors={colors}
+                    />
+                )}
+            </BottomSheet>
         </View>
     );
 }
@@ -289,4 +426,5 @@ const mStyles = (c: AppTheme) => StyleSheet.create({
     cancelText: { ...typography.body, color: c.textSecondary },
     confirm: { backgroundColor: c.primary, borderRadius: radius.pill, paddingVertical: spacing.sm, paddingHorizontal: spacing.lg },
     confirmText: { ...typography.body, color: c.onPrimary, fontWeight: '600' },
+
 });

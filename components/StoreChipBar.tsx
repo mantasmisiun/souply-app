@@ -9,8 +9,10 @@ export interface StoreChip {
     id: string | number;
     label: string;
     logoUrl?: string | null;
-    /** Remaining/total item count shown as a small badge on the chip */
+    /** A single count shown as a small badge on the chip. */
     count?: number;
+    /** A pre-formatted badge string (e.g. "1/2" checked/total) — wins over count. */
+    countLabel?: string;
 }
 
 interface Props {
@@ -57,10 +59,10 @@ export function StoreChipBar({ chips, selectedId, onSelect, allLabel }: Props) {
                             <Text style={[styles.chipText, active && styles.chipTextActive]}>
                                 {chip.label}
                             </Text>
-                            {chip.count != null && (
+                            {(chip.countLabel != null || chip.count != null) && (
                                 <View style={[styles.countBadge, active && styles.countBadgeActive]}>
                                     <Text style={[styles.countBadgeText, active && styles.countBadgeTextActive]}>
-                                        {chip.count}
+                                        {chip.countLabel ?? chip.count}
                                     </Text>
                                 </View>
                             )}
