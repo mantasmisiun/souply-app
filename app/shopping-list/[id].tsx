@@ -17,7 +17,7 @@ import { StoreChipBar } from '../../components/StoreChipBar';
 import { InvitePane } from '../../components/results/InvitePane';
 import { BottomSheet } from '../../components/BottomSheet';
 import {
-    fetchTrips, createTripInviteUrl, fetchTripMembers, type TripMemberInfo,
+    fetchTrips, createTripInviteUrl, fetchTripMembers, fetchTripReceipts, type TripMemberInfo,
 } from '../../utils/tripsApi';
 import { getMiniLogoUrl, chainBrandName, chainIdByName } from '../../utils/chainBrandName';
 import { type UnifiedSource } from '../../components/ShoppingListDetail';
@@ -57,6 +57,8 @@ export default function UnifiedShoppingListScreen() {
     const [inviteOpen, setInviteOpen] = useState(false);
     const [inviteUrl, setInviteUrl] = useState<string | null>(null);
     const [changeStoreConfirm, setChangeStoreConfirm] = useState(false);
+    const [hasReceipts, setHasReceipts] = useState(false);
+    const [viewConfirm, setViewConfirm] = useState(false);
     // Per-user list view: 'chips' (per-store tabs) or 'unified' (all items in one
     // list, each tagged with its store logo). Persisted LOCALLY, so switching is
     // this user's choice only — a shared trip's other members are unaffected.
@@ -276,6 +278,8 @@ export default function UnifiedShoppingListScreen() {
                 setResolvedTripId(trip.id);
                 if (trip.basket?.id) setResolvedBasketId(trip.basket.id);
                 void refreshMembers(trip.id);
+                // "Peržiūrėti kvitus" appears once any receipt exists.
+                fetchTripReceipts(trip.id).then(rs => { if (alive) setHasReceipts(rs.length > 0); }).catch(() => {});
             } catch { /* not a trip basket — 3-dot actions stay hidden */ }
         })();
         return () => { alive = false; };
@@ -306,14 +310,32 @@ export default function UnifiedShoppingListScreen() {
         router.replace(`/basket/results/${resolvedBasketId}` as any);
     }, [resolvedBasketId, router]);
 
-    // Brief loading state only when basketId is provided and entries haven't loaded yet
-    if (!entriesLoaded) {
-        return (
-            <View style={styles.centered}>
-                <MaterialProgress color={colors.primary} />
-            </View>
-        );
-    }
+    // Any item still unchecked across the trip's lists? Gates the view-receipts
+    // confirm ("viewing completes the list, no going back").
+    const anyUnchecked = useMemo(() => {
+        const vals = [...listSummaries.values()];
+        if (vals.length === 0) return true; // unknown → confirm (safe)
+        return vals.some(s => s.itemCount > 0 && s.checkedCount < s.itemCount);
+    }, [listSummaries]);
+
+    // Complete the trip's lists then open the final screen's Receipt tab.
+    const openReceiptsTab = useCallback(async () => {
+        setViewConfirm(false);
+        const ids = entries.length > 0 ? entries.map(e => e.listId) : [activeListId];
+        await Promise.all(ids.map(lid =>
+            fetch(`${API_BASE_URL}/api/shopping-lists/${lid}/status`, {
+                method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ status: 'completed' }),
+            }).catch(() => {})));
+        const tid = resolvedTripId ?? (tripId ? Number(tripId) : null);
+        if (tid) router.replace(`/trip/receipts/${tid}` as any);
+        else router.back();
+    }, [entries, activeListId, resolvedTripId, tripId, router]);
+
+    const onViewReceipts = useCallback(() => {
+        if (anyUnchecked) setViewConfirm(true);
+        else void openReceiptsTab();
+    }, [anyUnchecked, openReceiptsTab]);
 
     // Confirm: mark EVERY store's sub-list completed, then progress the
     // journey — trip-scoped opens land on the Upload-receipt screen.
@@ -329,6 +351,15 @@ export default function UnifiedShoppingListScreen() {
         if (tripId) router.replace(`/trip/receipts/${tripId}` as any);
         else router.back();
     };
+
+    // Brief loading state only when basketId is provided and entries haven't loaded yet
+    if (!entriesLoaded) {
+        return (
+            <View style={styles.centered}>
+                <MaterialProgress color={colors.primary} />
+            </View>
+        );
+    }
 
     return (
         <View style={{ flex: 1 }}>
@@ -353,6 +384,8 @@ export default function UnifiedShoppingListScreen() {
                 ) : undefined}
                 onInvite={resolvedTripId != null ? () => void openInvite() : undefined}
                 onChangeStore={resolvedBasketId != null ? () => setChangeStoreConfirm(true) : undefined}
+                onUploadReceipt={resolvedTripId != null ? () => router.push('/receipt' as any) : undefined}
+                onViewReceipts={resolvedTripId != null && hasReceipts ? onViewReceipts : undefined}
             />
 
             {/* Whole-trip completion confirm — every store's items are checked. */}
@@ -388,6 +421,25 @@ export default function UnifiedShoppingListScreen() {
                             </TouchableOpacity>
                             <TouchableOpacity style={mStyles(colors).confirm} onPress={confirmChangeStore}>
                                 <Text style={mStyles(colors).confirmText}>{t('shoppingListDetail.changeStoreYes')}</Text>
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+                </View>
+            </Modal>
+
+            {/* View-receipts with unchecked items — completing is irreversible. */}
+            <Modal visible={viewConfirm} transparent animationType="fade" onRequestClose={() => setViewConfirm(false)}>
+                <View style={mStyles(colors).overlay}>
+                    <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setViewConfirm(false)} />
+                    <View style={mStyles(colors).card}>
+                        <Text style={mStyles(colors).title}>{t('shoppingListDetail.viewReceiptsTitle')}</Text>
+                        <Text style={mStyles(colors).body}>{t('shoppingListDetail.viewReceiptsBody')}</Text>
+                        <View style={mStyles(colors).buttons}>
+                            <TouchableOpacity style={mStyles(colors).cancel} onPress={() => setViewConfirm(false)}>
+                                <Text style={mStyles(colors).cancelText}>{t('common.cancel')}</Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity style={mStyles(colors).confirm} onPress={() => void openReceiptsTab()}>
+                                <Text style={mStyles(colors).confirmText}>{t('shoppingListDetail.viewReceiptsYes')}</Text>
                             </TouchableOpacity>
                         </View>
                     </View>

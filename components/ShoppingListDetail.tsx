@@ -234,6 +234,10 @@ interface Props {
     /** View-mode toggle (3-dot) — shown only for multi-store lists. */
     viewMode?: 'chips' | 'unified';
     onToggleViewMode?: () => void;
+    /** Receipt actions (3-dot): upload a receipt for the trip; view uploaded
+     *  receipts (shown only when some exist). Trip-scoped only. */
+    onUploadReceipt?: () => void;
+    onViewReceipts?: () => void;
 }
 
 export interface UnifiedSource {
@@ -282,6 +286,8 @@ export function ShoppingListDetail({
     unifiedSources,
     viewMode,
     onToggleViewMode,
+    onUploadReceipt,
+    onViewReceipts,
 }: Props) {
     const colors = useTheme();
     const insets = useSafeAreaInsets();
@@ -817,6 +823,12 @@ export function ShoppingListDetail({
             : []),
         ...(onInvite
             ? [{ icon: 'person-add-outline' as const, label: t('shoppingListDetail.inviteAction'), onPress: () => { setMenuVisible(false); onInvite(); } }]
+            : []),
+        ...(onUploadReceipt
+            ? [{ icon: 'cloud-upload-outline' as const, label: t('shoppingListDetail.uploadReceipt'), onPress: () => { setMenuVisible(false); onUploadReceipt(); } }]
+            : []),
+        ...(onViewReceipts
+            ? [{ icon: 'receipt-outline' as const, label: t('shoppingListDetail.viewReceipts'), onPress: () => { setMenuVisible(false); onViewReceipts(); } }]
             : []),
     ];
 
