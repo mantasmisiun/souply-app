@@ -77,10 +77,9 @@ const styles = StyleSheet.create({
         elevation: 6,
     },
     // In-sheet: the glass clip would cut a drop-shadow at the sides — flat
-    // card with a hairline instead, tighter frame.
+    // card (no shadow, no border), tighter frame.
     logoOverlayBox: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
     cardFlat: {
-        shadowOpacity: 0, shadowRadius: 0, elevation: 0,
-        padding: 12, borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(0,0,0,0.12)',
+        shadowOpacity: 0, shadowRadius: 0, elevation: 0, padding: 12,
     },
 });

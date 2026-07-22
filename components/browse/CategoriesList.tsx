@@ -4,6 +4,7 @@ import {
     TouchableOpacity,
     Text,
     StyleSheet,
+    useWindowDimensions,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactElement } from 'react';
@@ -30,25 +31,37 @@ export interface Category {
 
 const EMPTY_L2: Category[] = [];
 
-const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, onSelectL2, colors, styles }: {
+const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, onSelectL2, onExpanded, colors, styles }: {
     item: Category;
     isExpanded: boolean;
     l2: Category[];
     onToggle: (id: number) => void;
     onSelectL2: (l2: Category) => void;
+    /** After expanding + settling: report the item's on-screen frame so the list
+     *  can scroll it into view (clears the tab bar) only if it's clipped. */
+    onExpanded: (id: number, screenY: number, height: number) => void;
     colors: AppTheme;
     styles: ReturnType<typeof makeStyles>;
 }) {
     const contentHeightRef = useRef(0);
     const animatedHeight = useSharedValue(0);
     const chevronRotation = useSharedValue(0);
+    const outerRef = useRef<View>(null);
 
+    const EXPAND_MS = 200;
     useLayoutEffect(() => {
         animatedHeight.value = withTiming(isExpanded ? contentHeightRef.current : 0, {
-            duration: 220,
-            easing: Easing.inOut(Easing.quad),
+            duration: EXPAND_MS,
+            easing: Easing.out(Easing.cubic),
         });
-        chevronRotation.value = withTiming(isExpanded ? 1 : 0, { duration: 220 });
+        chevronRotation.value = withTiming(isExpanded ? 1 : 0, { duration: EXPAND_MS });
+        if (isExpanded) {
+            // Measure once the height settles, then let the list decide the scroll.
+            const t = setTimeout(() => {
+                outerRef.current?.measureInWindow((_x, y, _w, h) => onExpanded(item.id, y, h));
+            }, EXPAND_MS + 30);
+            return () => clearTimeout(t);
+        }
     }, [isExpanded]);
 
     const animatedContentStyle = useAnimatedStyle(() => ({
@@ -65,7 +78,7 @@ const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, onSelectL2
         if (h > 0 && h !== contentHeightRef.current) {
             contentHeightRef.current = h;
             if (isExpanded) {
-                animatedHeight.value = withTiming(h, { duration: 150 });
+                animatedHeight.value = withTiming(h, { duration: EXPAND_MS, easing: Easing.out(Easing.cubic) });
             }
         }
     };
@@ -88,7 +101,7 @@ const L1Item = memo(function L1Item({ item, isExpanded, l2, onToggle, onSelectL2
     );
 
     return (
-        <View style={[styles.l1Container, isExpanded && styles.l1ContainerExpanded]}>
+        <View ref={outerRef} style={[styles.l1Container, isExpanded && styles.l1ContainerExpanded]}>
             <TouchableOpacity
                 style={[styles.l1Row, isExpanded && styles.l1RowExpanded]}
                 onPress={() => onToggle(item.id)}
@@ -128,11 +141,14 @@ interface Props {
     /** Scroll handler props from useCollapsingHeader().scroll, so a collapsing
      *  header can track this list's scroll. Optional — omit for a plain list. */
     scroll?: { onScroll?: any; scrollEventThrottle?: number };
+    /** The header's live scroll offset (useCollapsingHeader().offset), so an
+     *  expanded category can be scrolled into view by an EXACT relative amount. */
+    scrollOffset?: { value: number };
     /** Top padding to reserve for an overlaying collapsing header. */
     contentPaddingTop?: number;
 }
 
-export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop = 0 }: Props) {
+export function CategoriesList({ onSelectL2, header, scroll, scrollOffset, contentPaddingTop = 0 }: Props) {
     const colors = useTheme();
     const { i18n } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -141,6 +157,7 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
     // the last L1 row sits just above the bar on every device. No FAB here, so no
     // extra reserve.
     const tabBarHeight = useSafeBottomTabBarHeight();
+    const { height: winHeight } = useWindowDimensions();
     const listPadBottom = tabBarHeight + 8;
     const [l1Categories, setL1Categories] = useState<Category[]>([]);
     const [l2Map, setL2Map] = useState<Record<number, Category[]>>({});
@@ -190,7 +207,28 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
         // interacting with the page (spec: L1 toggle / scroll collapse it).
         useBasketSession.getState().collapseDock?.();
         setExpandedL1(prev => prev === id ? null : id);
+        // The scroll-into-view happens in onL1Expanded once the item has laid out.
     }, []);
+
+    // Screen top of the scrollable (measured) — the guard so a very tall card is
+    // top-aligned just under the header rather than pushed above it.
+    const listTopRef = useRef(0);
+
+    // Screen-aware scroll: after a category expands, only scroll if its bottom is
+    // clipped (e.g. behind the tab bar). Scroll up by EXACTLY the clipped amount
+    // (relative to the current offset), capped so the card's top stays under the
+    // header — precise and immune to content-height clamping on the last item.
+    const onL1Expanded = useCallback((id: number, screenY: number, height: number) => {
+        const cur = scrollOffset?.value;
+        if (cur == null) return; // no offset wired → skip (browse usages)
+        const visibleBottom = winHeight - tabBarHeight - 8;
+        if (screenY + height <= visibleBottom) return; // already fully visible
+        const topGuard = listTopRef.current || 100;
+        const overflow = (screenY + height) - visibleBottom;
+        const maxUp = Math.max(0, screenY - topGuard);   // don't push top above the header
+        const delta = Math.min(overflow, maxUp);
+        if (delta > 1) (listRef.current as any)?.scrollToOffset?.({ offset: cur + delta, animated: true });
+    }, [scrollOffset, tabBarHeight, winHeight]);
 
     if (loading) {
         return (
@@ -226,6 +264,7 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
             contentContainerStyle={[styles.list, { paddingTop: contentPaddingTop + (header ? 0 : 16), paddingBottom: listPadBottom }]}
             scrollIndicatorInsets={{ bottom: tabBarHeight }}
             ListHeaderComponent={header ?? undefined}
+            onLayout={() => { (listRef.current as any)?.measureInWindow?.((_x: number, y: number) => { if (y > 0) listTopRef.current = y; }); }}
             renderItem={({ item }) => (
                 <L1Item
                     item={item}
@@ -233,10 +272,15 @@ export function CategoriesList({ onSelectL2, header, scroll, contentPaddingTop =
                     l2={l2Map[item.id] ?? EMPTY_L2}
                     onToggle={toggleL1}
                     onSelectL2={onSelectL2}
+                    onExpanded={onL1Expanded}
                     colors={colors}
                     styles={styles}
                 />
             )}
+            onScrollToIndexFailed={info => {
+                // Not-yet-measured item: approximate, then settle.
+                (listRef.current as any)?.scrollToOffset?.({ offset: info.averageItemLength * info.index, animated: true });
+            }}
         />
     );
 }

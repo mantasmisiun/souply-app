@@ -85,6 +85,7 @@ export default function BrowseIndex() {
             <CategoriesList
                 onSelectL2={handleSelectL2}
                 scroll={header.scroll}
+                scrollOffset={header.offset}
                 contentPaddingTop={0}
                 header={(
                     <>
