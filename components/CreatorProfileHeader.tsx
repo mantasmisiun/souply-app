@@ -23,6 +23,7 @@ import { API_BASE_URL } from '../config/api';
 import { getUserId } from '../config/user';
 import { patchProfileFields } from '../utils/authApi';
 import { formatEuro } from '../utils/formatCurrency';
+import { AVATAR_PALETTE } from './UserAvatar';
 
 type Props = {
     profile: ProfileData;
@@ -38,6 +39,7 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
     const [editOpen, setEditOpen] = useState(false);
     const [draftFirst, setDraftFirst] = useState('');
     const [draftLast, setDraftLast] = useState('');
+    const [draftColor, setDraftColor] = useState<string | null>(null);
     const [savingName, setSavingName] = useState(false);
     // The logged-in session already carries identity — use it as a fallback so
     // the header is correct even if the /profile fetch is stale or hasn't been
@@ -126,12 +128,17 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
             setDraftFirst(fn);
             setDraftLast(ln);
         }
+        setDraftColor(profile.avatarColor ?? null);
         setEditOpen(true);
     };
     const saveName = async () => {
         if (savingName) return;
         setSavingName(true);
-        const ok = await patchProfileFields({ firstName: draftFirst.trim(), lastName: draftLast.trim() });
+        const ok = await patchProfileFields({
+            firstName: draftFirst.trim(),
+            lastName: draftLast.trim(),
+            ...(draftColor ? { avatarColor: draftColor } : {}),
+        });
         setSavingName(false);
         if (ok) { setEditOpen(false); onAvatarChanged(); }
         else Alert.alert(t('basketTab.errorGeneric'), t('basketTab.creatorProfile.saveFailed'));
@@ -151,7 +158,7 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
                     {avatarSrc ? (
                         <Image source={{ uri: avatarSrc }} style={styles.avatarImg} />
                     ) : (
-                        <View style={styles.avatarInitials}>
+                        <View style={[styles.avatarInitials, { backgroundColor: profile.avatarColor ?? colors.primary }]}>
                             <Text style={styles.avatarInitialsText}>{initials}</Text>
                         </View>
                     )}
@@ -196,6 +203,23 @@ export default function CreatorProfileHeader({ profile, onAvatarChanged }: Props
                             style={styles.input} value={draftLast} onChangeText={setDraftLast}
                             placeholderTextColor={colors.textMuted} maxLength={100} autoCapitalize="words"
                         />
+                        <Text style={styles.inputLabel}>{t('basketTab.creatorProfile.colorLabel')}</Text>
+                        <View style={styles.swatchRow}>
+                            {AVATAR_PALETTE.map(sw => (
+                                <TouchableOpacity
+                                    key={sw}
+                                    onPress={() => setDraftColor(sw)}
+                                    style={[
+                                        styles.swatch,
+                                        { backgroundColor: sw },
+                                        draftColor === sw && styles.swatchOn,
+                                    ]}
+                                    activeOpacity={0.8}
+                                >
+                                    {draftColor === sw && <Ionicons name="checkmark" size={16} color="#FFFFFF" />}
+                                </TouchableOpacity>
+                            ))}
+                        </View>
                         <View style={styles.modalActions}>
                             <TouchableOpacity style={styles.modalCancel} onPress={() => setEditOpen(false)}>
                                 <Text style={styles.modalCancelText}>{t('basketTab.creatorProfile.cancel')}</Text>
@@ -243,6 +267,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderWidth: 1, borderColor: c.border, borderRadius: radius.sm,
         paddingHorizontal: spacing.md, paddingVertical: spacing.sm, fontSize: 15, color: c.textPrimary,
     },
+    swatchRow: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm, marginTop: spacing.xs },
+    swatch: { width: 34, height: 34, borderRadius: 17, alignItems: 'center', justifyContent: 'center' },
+    swatchOn: { borderWidth: 2, borderColor: c.textPrimary },
     modalActions: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md, justifyContent: 'flex-end' },
     modalCancel: { paddingHorizontal: spacing.lg, paddingVertical: spacing.md, borderRadius: radius.pill },
     modalCancelText: { ...typography.bodyStrong, fontWeight: '700', color: c.textSecondary },

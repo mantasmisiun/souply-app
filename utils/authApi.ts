@@ -62,7 +62,7 @@ export async function checkUsernameAvailability(candidate: string): Promise<{
     return res.json();
 }
 
-export async function patchProfileFields(opts: { displayName?: string; bio?: string; firstName?: string; lastName?: string }): Promise<boolean> {
+export async function patchProfileFields(opts: { displayName?: string; bio?: string; firstName?: string; lastName?: string; avatarColor?: string | null }): Promise<boolean> {
     const res = await authedFetch(`${API_BASE_URL}/api/users/me/profile`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

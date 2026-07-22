@@ -26,6 +26,7 @@ import { useLevelStore } from '../../../state/levelStore';
 import { useProfileStore, fetchProfileIfStale } from '../../../state/profileStore';
 import { useAuthState } from '../../../state/authState';
 import CreatorProfileHeader from '../../../components/CreatorProfileHeader';
+import { ProfileIdentityCard } from '../../../components/ProfileIdentityCard';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatEuro } from '../../../utils/formatCurrency';
 import { formatMonthKey, formatMonthRange, monthAbbr, parseMonthKey } from '../../../utils/monthNames';
@@ -580,6 +581,15 @@ export default function ProfilisScreen() {
                 <CreatorProfileHeader
                     profile={profile}
                     onAvatarChanged={() => { invalidateProfile(); fetchProfile(); }}
+                />
+            )}
+            {/* Anonymous users have no creator header — give them an identity
+                card to set a name + colour (so joining a shared trip/home won't
+                prompt for one). */}
+            {!authUser && profile && (
+                <ProfileIdentityCard
+                    profile={profile}
+                    onChanged={() => { invalidateProfile(); fetchProfile(); }}
                 />
             )}
 

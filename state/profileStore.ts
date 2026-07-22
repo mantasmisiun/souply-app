@@ -19,6 +19,7 @@ export interface ProfileData {
     displayName?: string | null;
     username?: string | null;
     avatarUrl?: string | null;
+    avatarColor?: string | null;
     // Aggregate template stats (profile cards)
     templateCount?: number;
     totalVisits?: number;
