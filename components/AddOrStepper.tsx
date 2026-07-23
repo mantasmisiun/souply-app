@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { QuantityControl } from './QuantityControl';
 import AmountPickerModal from './AmountPickerModal';
-import { resolveCanonicalStep, resolveDisplayUnitKey } from '../utils/canonicalStep';
+import { resolveCanonicalStep, resolveDisplayUnitKey, resolveDisplayAmount } from '../utils/canonicalStep';
 import { useTheme, radius, type AppTheme } from '../constants/theme';
 
 /**
@@ -101,7 +101,7 @@ export function AddOrStepper({
         <>
             {quantity > 0 ? (
                 <QuantityControl
-                    quantity={quantity}
+                    quantity={resolveDisplayAmount(product, quantity)}
                     unit={unit}
                     size={size}
                     onDecrement={dec}

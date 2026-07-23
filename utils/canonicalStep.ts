@@ -43,9 +43,25 @@ export function resolveDisplayUnit(p: ProductCanonical): string {
  *  displayed unit and the step granularity can never disagree. */
 export function resolveDisplayUnitKey(p: ProductCanonical): 'kg' | 'l' | 'vnt' | 'pak' | 'rit' {
     const cu = p.canonicalUnit;
-    if (cu === 'kg' || cu === 'l' || cu === 'vnt' || cu === 'pak' || cu === 'rit') return cu;
-    if (p.isWeighable ?? p.hasWeighable) return 'kg';
+    // ONLY a truly weighable (sold-by-weight/volume) product shows kg / l.
+    if (p.isWeighable ?? p.hasWeighable) return cu === 'l' ? 'l' : 'kg';
+    // A packaged product is counted, even when its canonical unit is kg/l (that's
+    // a per-kg PRICING unit — a 250 g box is "1 vnt", not "0,25 kg"). Keep an
+    // explicit pack/roll sub-unit; everything else is 'vnt'.
+    if (cu === 'vnt' || cu === 'pak' || cu === 'rit') return cu;
     return 'vnt';
+}
+
+/**
+ * The amount to DISPLAY for a stored quantity. Weighable → the weight as-is
+ * (kg/l). Packaged → the pack COUNT: the quantity is canonical (a 250 g pack is
+ * stored as 0,25 kg), so count = quantity ÷ smallest pack (canonicalStep).
+ * Keeps the stored/priced value untouched — only the shown number changes.
+ */
+export function resolveDisplayAmount(p: ProductCanonical, quantity: number): number {
+    if (p.isWeighable ?? p.hasWeighable) return quantity;
+    const step = resolveCanonicalStep(p);
+    return step > 0 && step !== 1 ? Math.max(1, Math.round(quantity / step)) : Math.round(quantity);
 }
 
 export function resolveCanonicalStep(p: ProductCanonical): number {
