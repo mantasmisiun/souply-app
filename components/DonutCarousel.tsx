@@ -1,6 +1,6 @@
-import { useRef, useState, type ReactNode } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { View, Text, ScrollView, StyleSheet } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useTheme, spacing, typography, type AppTheme } from '../constants/theme';
 import { DonutChart, type DonutSlice } from './DonutChart';
 import { DonutLegend } from './DonutLegend';
@@ -8,6 +8,9 @@ import { DonutLegend } from './DonutLegend';
 export interface DonutPage {
     key: string;
     title: string;
+    /** Muted date-range line under the title — tells the user the window the
+     *  data was taken from. Omit for pages whose data isn't date-limited. */
+    subtitle?: string;
     slices: DonutSlice[];
     /** Per-row value formatter (default euro). */
     formatValue?: (value: number) => string;
@@ -32,29 +35,29 @@ export function DonutCarousel({ pages }: { pages: DonutPage[] }) {
     const [width, setWidth] = useState(0);
     const [active, setActive] = useState(0);
     const [selected, setSelected] = useState<number | null>(pages[0]?.preselect ?? null);
-
-    const goTo = (i: number) => {
-        const next = Math.max(0, Math.min(pages.length - 1, i));
-        scrollRef.current?.scrollTo({ x: next * width, animated: true });
-        setActive(next);
-        setSelected(pages[next]?.preselect ?? null);
-    };
+    // Card adapts to the active page's content height — pages have different
+    // legend-row counts, so a fixed height would leave dead space or clip.
+    const [heights, setHeights] = useState<Record<number, number>>({});
+    const containerH = useSharedValue(0);
+    useEffect(() => {
+        const target = heights[active];
+        if (!target) return;
+        if (containerH.value === 0) containerH.value = target;      // first measure: snap
+        else containerH.value = withTiming(target, { duration: 240 }); // page change: ease
+    }, [active, heights, containerH]);
+    const heightStyle = useAnimatedStyle(() => ({ height: containerH.value > 0 ? containerH.value : undefined }));
 
     const page = pages[active];
 
     return (
         <View style={styles.wrap} onLayout={e => { const w = e.nativeEvent.layout.width; if (w > 0) setWidth(w); }}>
             <View style={styles.titleRow}>
-                <TouchableOpacity onPress={() => goTo(active - 1)} disabled={active === 0} hitSlop={10}>
-                    <Ionicons name="chevron-back" size={18} color={active === 0 ? colors.borderSubtle : colors.textMuted} />
-                </TouchableOpacity>
                 <Text style={styles.title}>{page?.title}</Text>
-                <TouchableOpacity onPress={() => goTo(active + 1)} disabled={active === pages.length - 1} hitSlop={10}>
-                    <Ionicons name="chevron-forward" size={18} color={active === pages.length - 1 ? colors.borderSubtle : colors.textMuted} />
-                </TouchableOpacity>
+                {!!page?.subtitle && <Text style={styles.subtitle}>{page.subtitle}</Text>}
             </View>
 
             {width > 0 && (
+                <Animated.View style={[{ width, overflow: 'hidden' }, heightStyle]}>
                 <ScrollView
                     ref={scrollRef}
                     horizontal
@@ -69,7 +72,11 @@ export function DonutCarousel({ pages }: { pages: DonutPage[] }) {
                     }}
                 >
                     {pages.map((p, i) => (
-                        <View key={p.key} style={{ width, alignItems: 'center' }}>
+                        <View
+                            key={p.key}
+                            style={{ width, alignItems: 'center' }}
+                            onLayout={e => { const hgt = e.nativeEvent.layout.height; setHeights(prev => prev[i] === hgt ? prev : { ...prev, [i]: hgt }); }}
+                        >
                             {p.slices.length > 0 ? (
                                 <>
                                     <DonutChart
@@ -95,6 +102,7 @@ export function DonutCarousel({ pages }: { pages: DonutPage[] }) {
                         </View>
                     ))}
                 </ScrollView>
+                </Animated.View>
             )}
 
             <View style={styles.dots}>
@@ -108,8 +116,9 @@ export function DonutCarousel({ pages }: { pages: DonutPage[] }) {
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     wrap: { alignItems: 'center' },
-    titleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.lg, marginBottom: spacing.sm },
+    titleRow: { alignSelf: 'stretch', marginBottom: spacing.sm },
     title: { ...typography.bodyStrong, fontWeight: '800', color: c.textPrimary },
+    subtitle: { ...typography.caption, color: c.textMuted, marginTop: 2 },
     empty: { ...typography.body, color: c.textSecondary, paddingVertical: spacing.xxl },
     dots: { flexDirection: 'row', gap: 5, justifyContent: 'center', marginTop: spacing.md },
     dot: { width: 6, height: 6, borderRadius: 3, backgroundColor: c.border },
