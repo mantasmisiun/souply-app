@@ -366,6 +366,13 @@ async function postReceipt(
     }
     throw new ProcessingError("post_failed", "Kvitas jau įkeltas");
   }
+  // Re-upload of a previously user-hidden receipt: the server un-hid + re-linked
+  // the existing row (HTTP 200, no fresh `id`). Reuse its id and mark it a
+  // duplicate so the caller RE-RUNS the image upload — restoring the photo that
+  // was wiped when it was hidden.
+  if (data?.reactivated && Number.isFinite(data?.receiptId)) {
+    return { receiptId: Number(data.receiptId), mandatorySwipesRequired: data.mandatorySwipesRequired ?? 0, duplicate: true };
+  }
   if (!res.ok || !data?.id) {
     throw new ProcessingError("post_failed", data?.error || `HTTP ${res.status}`);
   }

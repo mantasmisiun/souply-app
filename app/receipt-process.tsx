@@ -2901,6 +2901,31 @@ export default function ProcessReceiptScreen() {
         </View>
       </Modal>
 
+      {/* Old-receipt confirm: the (parsed or entered) purchase date is >30 days
+          old — confirm it's really this trip's shop before saving. */}
+      <Modal
+        visible={sessionIsMine && sInput?.kind === 'oldDate'}
+        transparent
+        animationType="fade"
+        onRequestClose={() => respondSessionInput(false)}
+      >
+        <View style={styles.chainGateBackdrop}>
+          <View style={styles.chainGateCard}>
+            <Ionicons name="alert-circle-outline" size={40} color={colors.error} />
+            <Text style={styles.chainGateTitle}>{t('receiptProcess.oldDateTitle')}</Text>
+            <Text style={styles.chainGateBody}>
+              {t('receiptProcess.oldDateBody', { date: sInput?.kind === 'oldDate' ? formatDate(sInput.date) : '' })}
+            </Text>
+            <TouchableOpacity style={styles.chainGatePrimary} onPress={() => respondSessionInput(true)}>
+              <Text style={styles.chainGatePrimaryText}>{t('receiptProcess.oldDateConfirm')}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.chainGateSecondary} onPress={() => respondSessionInput(false)}>
+              <Text style={styles.chainGateSecondaryText}>{t('common.cancel')}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       {/* Souply-styled failure modal (replaces the stock OS Alert). */}
       <Modal
         visible={failGate !== null}

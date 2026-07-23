@@ -478,11 +478,25 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
       ocrLineCount: ocrLineTexts.length,
       parsedData: JSON.stringify({ footer, lineTexts: ocrLineTexts }),
     });
+    // Old-receipt gate: if the (parsed or entered) purchase date is more than 30
+    // days old, make the uploader confirm it's really this trip's shop before it
+    // saves — a stale receipt slipped into a shared trip is otherwise only caught
+    // by the after-the-fact badge. Unparseable → don't gate.
+    const OLD_RECEIPT_DAYS = 30;
+    const confirmIfOldReceipt = async (dateStr: string): Promise<boolean> => {
+      const d = new Date(dateStr);
+      if (Number.isNaN(d.getTime())) return true;
+      if ((Date.now() - d.getTime()) / 86400000 <= OLD_RECEIPT_DAYS) return true;
+      const proceed = await requestSessionInput<boolean>(sessionId, { kind: "oldDate", date: dateStr });
+      if (proceed) return true;
+      await bailWithLog(sessionId, "ocr_no_text", { ocrPreview: `old receipt (${dateStr}) not confirmed`, ...keyFieldsDiag() });
+      return false;
+    };
     // TIME IS OPTIONAL: some IKI layouts print date+time ONLY in the bottom VMI
     // fiscal line — a slightly short frame loses both. The exact hour only
     // orders same-day receipts, so default to midday rather than dead-ending.
     if (footer?.receiptNo && !footer.time) footer.time = "12:00";
-    if (footer?.receiptNo && footer?.date) return true;
+    if (footer?.receiptNo && footer?.date) return await confirmIfOldReceipt(footer.date);
     if (footer?.receiptNo && !footer?.date) {
       const picked = await requestSessionInput<Date | null>(sessionId, { kind: "date" });
       if (picked) {
@@ -490,7 +504,8 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
         const m = String(picked.getMonth() + 1).padStart(2, "0");
         const d = String(picked.getDate()).padStart(2, "0");
         footer.date = `${y}-${m}-${d}`;
-        return true;
+        // The manually-entered date must clear the same old-receipt gate.
+        return await confirmIfOldReceipt(footer.date);
       }
       // dismissed without a date → can't proceed
       await bailWithLog(sessionId, "ocr_no_text", { ocrPreview: "manual date entry cancelled", ...keyFieldsDiag() });

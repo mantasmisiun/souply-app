@@ -3,7 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import * as DocumentPicker from 'expo-document-picker';
-import { BottomSheet } from './BottomSheet';
+import { GlassSheet } from './GlassSheet';
 import { scanDocumentOnly } from '../utils/launchDocumentScanner';
 import { looksLikePdf } from '../utils/pdfToImages';
 import { useReceiptQueueStore } from '../state/receiptQueueStore';
@@ -83,22 +83,29 @@ export function ReceiptUploadSheet({
         addItems(entries);
     }, [onClose, addItems, link, t]);
 
+    if (!visible) return null;
+
     return (
-        <BottomSheet visible={visible} onClose={onClose} title={t('shoppingListDetail.uploadReceipt')} icon="cloud-upload-outline">
-            <TouchableOpacity style={styles.row} onPress={takePhoto} activeOpacity={0.7}>
-                <Ionicons name="camera-outline" size={iconSize.lg} color={colors.primary} />
-                <Text style={styles.rowText}>{t('receipts.menu.uploadCamera')}</Text>
-            </TouchableOpacity>
-            <View style={styles.divider} />
-            <TouchableOpacity style={styles.row} onPress={upload} activeOpacity={0.7}>
-                <Ionicons name="cloud-upload-outline" size={iconSize.lg} color={colors.primary} />
-                <Text style={styles.rowText}>{t('receipts.menu.uploadAction')}</Text>
-            </TouchableOpacity>
-        </BottomSheet>
+        <GlassSheet autoHeight onClose={onClose}>
+            <View style={styles.content}>
+                <Text style={styles.title}>{t('shoppingListDetail.uploadReceipt')}</Text>
+                <TouchableOpacity style={styles.row} onPress={takePhoto} activeOpacity={0.7}>
+                    <Ionicons name="camera-outline" size={iconSize.lg} color={colors.primary} />
+                    <Text style={styles.rowText}>{t('receipts.menu.uploadCamera')}</Text>
+                </TouchableOpacity>
+                <View style={styles.divider} />
+                <TouchableOpacity style={styles.row} onPress={upload} activeOpacity={0.7}>
+                    <Ionicons name="cloud-upload-outline" size={iconSize.lg} color={colors.primary} />
+                    <Text style={styles.rowText}>{t('receipts.menu.uploadAction')}</Text>
+                </TouchableOpacity>
+            </View>
+        </GlassSheet>
     );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
+    content: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs },
+    title: { ...typography.subheading, color: c.textPrimary, marginBottom: spacing.sm },
     row: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, paddingVertical: spacing.lg, paddingHorizontal: spacing.xs, borderRadius: radius.md },
     rowText: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },
     divider: { height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginLeft: 40 },

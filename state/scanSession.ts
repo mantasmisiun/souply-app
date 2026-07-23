@@ -32,6 +32,9 @@ export type ScanSessionPhase =
 
 export type ScanInputRequest =
   | { kind: "date" }
+  // The date (parsed OR manually entered) is an old receipt (>30 days before
+  // now) — confirm it's really this trip's shop before saving.
+  | { kind: "oldDate"; date: string }
   | { kind: "chainGate"; detectedChainId: number; expectedChainIds: number[] }
   | { kind: "store"; chainId: number; chainName: string; prefill: string | null };
 
