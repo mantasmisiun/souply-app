@@ -77,7 +77,7 @@ function clamp(v: number, lo: number, hi: number) {
  *  bar so both share ONE recipe (a copied set of constants always drifts). The
  *  rim/solid decoration layers stay with each caller (the panel animates them;
  *  compact keeps them static). */
-function GlassFill({ isDark, style }: { isDark: boolean; style: any }) {
+export function GlassFill({ isDark, style }: { isDark: boolean; style: any }) {
     return (
         <>
             <BlurView
@@ -91,6 +91,42 @@ function GlassFill({ isDark, style }: { isDark: boolean; style: any }) {
         </>
     );
 }
+
+/** The shared glass-edge + fill layer styles — ONE definition, consumed by both
+ *  the docked sheet (below) and the non-docked GlassSheet, so their glass can
+ *  never drift. Returns plain objects meant to be spread into a StyleSheet.create.
+ *   - clipEdge : hairline border + the barely-there shadow ink (opacity/elevation
+ *                are applied by the caller, since the dock animates them).
+ *   - glassFill: the absolute-fill layer the BlurView + tint paint into.
+ *   - tint     : the white(0.62)/surfaceContainer frosted wash over the blur.
+ *   - solid    : the opaque sheetSurface the glass fades INTO at the full detent.
+ *   - rim      : the 1.2px top highlight line that signals glass. */
+export function makeGlassLayerStyles(c: AppTheme, isDark: boolean) {
+    return {
+        clipEdge: {
+            borderWidth: StyleSheet.hairlineWidth,
+            borderColor: c.outlineVariant,
+            shadowColor: isDark ? '#000000' : '#5A2233',
+            shadowRadius: 6,
+            shadowOffset: { width: 0, height: 2 },
+        },
+        glassFill: {
+            ...StyleSheet.absoluteFillObject,
+            backgroundColor: Platform.OS === 'android' ? undefined : 'transparent',
+        },
+        tint: { backgroundColor: withAlpha(isDark ? c.surfaceContainer : '#FFFFFF', 0.62) },
+        solid: { backgroundColor: c.sheetSurface },
+        rim: {
+            ...StyleSheet.absoluteFillObject,
+            borderTopWidth: 1.2,
+            borderTopColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.9)',
+        },
+    } as const;
+}
+
+/** Shadow opacity at rest for the glass edge (light/dark) — shared so a static
+ *  (non-animated) glass surface matches the dock's resting shadow. */
+export const GLASS_SHADOW_OPACITY = { light: 0.07, dark: 0.18 } as const;
 
 export interface DockedSheetControls {
     /** Open to the medium detent (stage 1). */
@@ -623,7 +659,9 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     );
 });
 
-const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
+const makeStyles = (c: AppTheme, isDark: boolean) => {
+  const glass = makeGlassLayerStyles(c, isDark);
+  return StyleSheet.create({
     // NO horizontal padding — the clip sets its own symmetric left/right/bottom
     // margin (clipStyle). Padding here would offset the sides but not the bottom,
     // making the side gaps wider than the bottom.
@@ -643,14 +681,10 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     clip: {
         position: 'absolute',
         overflow: 'hidden',
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: c.outlineVariant,
-        // Barely-there shadow — just a hint of lift. Color/radius/offset are
-        // static; opacity + elevation come from the animated shadowStyle so a
-        // stacked front sheet can fade its shadow in on expand.
-        shadowColor: isDark ? '#000000' : '#5A2233',
-        shadowRadius: 6,
-        shadowOffset: { width: 0, height: 2 },
+        // Hairline edge + barely-there shadow ink — shared with GlassSheet via
+        // makeGlassLayerStyles. Opacity + elevation come from the animated
+        // shadowStyle so a stacked front sheet can fade its shadow in on expand.
+        ...glass.clipEdge,
     },
     // COMPACT clip: hugs its content (no left/right/width set → sizes to the bar
     // row); left/bottom/shadowOpacity are applied inline. `elevation` is static
@@ -658,23 +692,11 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     // = the full-width dock's collapsed height, so the two bars stand the same tall.
     clipCompact: { elevation: 3 },
     barRowCompact: { padding: PEEK },
-    glassFill: {
-        ...StyleSheet.absoluteFillObject,
-        backgroundColor: Platform.OS === 'android' ? undefined : 'transparent',
-    },
-    // Glass tint over the blur. Light: WHITE and VERY transparent (stages 1–2
-    // share this constant tint — solid only fades in medium→full — so both read
-    // as the same, markedly see-through white frosted panel). Dark keeps its
-    // tinted container.
-    tint: { backgroundColor: withAlpha(isDark ? c.surfaceContainer : '#FFFFFF', 0.62) },
-    // Opaque surface the glass fades INTO at full — WHITE in light (same as the
-    // section cards; a soft card shadow does the separating there).
-    solid: { backgroundColor: c.sheetSurface },
-    rim: {
-        ...StyleSheet.absoluteFillObject,
-        borderTopWidth: 1.2,
-        borderTopColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.9)',
-    },
+    // Glass fill / tint / solid / rim — the shared frosted-glass layers.
+    glassFill: glass.glassFill,
+    tint: glass.tint,
+    solid: glass.solid,
+    rim: glass.rim,
     contentClip: { position: 'absolute', left: 0, right: 0, overflow: 'hidden' },
     // Height of the under-title scroll fade (barAtTop mode).
     topFade: { position: 'absolute', height: 32 },
@@ -696,4 +718,5 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
         // near-transparent glass. Dark keeps the theme border tone.
         backgroundColor: isDark ? c.border : 'rgba(60,60,67,0.55)',
     },
-});
+  });
+};

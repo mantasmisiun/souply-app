@@ -1,3 +1,4 @@
+import { type ReactNode } from 'react';
 import { Platform, Pressable, StyleSheet } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -5,7 +6,10 @@ import { useTheme, motion, withAlpha } from '../constants/theme';
 import { LiquidGlass } from './LiquidGlass';
 
 interface Props {
-    icon: keyof typeof Ionicons.glyphMap;
+    icon?: keyof typeof Ionicons.glyphMap;
+    /** Custom icon element (e.g. a MaterialCommunityIcons glyph). Overrides
+     *  `icon`; the caller sets its own size/colour. */
+    iconNode?: ReactNode;
     onPress: () => void;
     /** Icon size in pt. The container scales with this for centring. */
     size?: number;
@@ -40,6 +44,7 @@ interface Props {
  */
 export function GlassIconButton({
     icon,
+    iconNode,
     onPress,
     size = 24,
     color,
@@ -51,7 +56,7 @@ export function GlassIconButton({
     const colors = useTheme();
     const tint = disabled ? colors.textMuted : (color ?? colors.primary);
     const disc = size + 16; // M3: 24dp icon in a 40dp container
-    const iconEl = <Ionicons name={icon} size={size} color={tint} />;
+    const iconEl = iconNode ?? <Ionicons name={icon ?? 'ellipse-outline'} size={size} color={tint} />;
     // The glass pill is an iOS-only affordance (Liquid Glass / blur capsule).
     const showGlass = glass && Platform.OS === 'ios';
 

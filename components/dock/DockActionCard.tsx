@@ -10,9 +10,12 @@ import { SheetCard } from '../SheetCard';
  * The main dock's Basket / Invite and the store dock's Navigate / List all use
  * this, so the primary actions look identical everywhere.
  */
-export function DockActionCard({ colors, icon, title, subtitle, onPress, onPressIn, disabled, loading, badge }: {
+export function DockActionCard({ colors, icon, iconNode, title, subtitle, onPress, onPressIn, disabled, loading, badge }: {
     colors: AppTheme;
-    icon: React.ComponentProps<typeof Ionicons>['name'];
+    icon?: React.ComponentProps<typeof Ionicons>['name'];
+    /** Custom icon element (e.g. a MaterialIcons glyph for the Android download
+     *  logo). Overrides `icon` when provided. */
+    iconNode?: ReactNode;
     title: string;
     subtitle?: string;
     onPress: () => void;
@@ -31,7 +34,7 @@ export function DockActionCard({ colors, icon, title, subtitle, onPress, onPress
                 <View>
                     {loading
                         ? <MaterialProgress size="small" color={colors.primary} />
-                        : <Ionicons name={icon} size={24} color={colors.primary} />}
+                        : iconNode ?? <Ionicons name={icon ?? 'ellipse-outline'} size={24} color={colors.primary} />}
                     {badge}
                 </View>
                 <Text style={styles.title}>{title}</Text>

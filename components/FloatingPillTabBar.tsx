@@ -168,6 +168,8 @@ export interface DockTab {
     disabled?: boolean;
     /** Show a small lock glyph beside the label (a gated pane). */
     locked?: boolean;
+    /** Pink dot on the icon — an attention cue (e.g. a pending mandatory queue). */
+    dot?: boolean;
 }
 
 /**
@@ -251,6 +253,7 @@ export function DockTabsRow({
                     colors={colors}
                     disabled={tab.disabled}
                     locked={tab.locked}
+                    dot={tab.dot}
                     hug={hug}
                     renderIcon={(color) => <Ionicons name={tab.icon} size={ICON_SIZE} color={color} />}
                     onPress={() => { if (tab.disabled) return; Haptics.selectionAsync(); onSelect(tab.key); }}
@@ -274,6 +277,7 @@ function TabItem({
     tintOverride,
     disabled,
     locked,
+    dot,
     hug,
 }: {
     label: string;
@@ -287,6 +291,8 @@ function TabItem({
     disabled?: boolean;
     /** Show a small lock glyph after the label. */
     locked?: boolean;
+    /** Pink attention dot on the icon. */
+    dot?: boolean;
     /** Content-sized cell (for a hugging/content-width dock) instead of flex-fill. */
     hug?: boolean;
 }) {
@@ -323,6 +329,7 @@ function TabItem({
         >
             <Animated.View style={[styles.iconWrap, iconStyle]}>
                 {renderIcon(tint)}
+                {dot && <View style={[styles.tabDot, { backgroundColor: colors.primary, borderColor: colors.surfaceContainerHigh }]} />}
             </Animated.View>
             <View style={styles.labelRow}>
                 <Text
@@ -373,6 +380,12 @@ const styles = StyleSheet.create({
         height: INDICATOR_HEIGHT,
         alignItems: 'center',
         justifyContent: 'center',
+    },
+    // Pink attention dot riding the icon's top-right corner (bordered so it lifts
+    // off the glyph). Signals a pending action on the tab (e.g. mandatory swipes).
+    tabDot: {
+        position: 'absolute', top: -2, right: -4,
+        width: 9, height: 9, borderRadius: 5, borderWidth: 1.5,
     },
     label: {
         textAlign: 'center',
