@@ -33,12 +33,12 @@
     "itemsN_one": "{{count}} prekė",
     "itemsSection": "Prekės",
     "byCategory": "Pagal kategoriją",
-    "byTrip": "Kelionės",
+    "byTrip": "Apsipirkimai",
     "byStore": "Pagal parduotuvę",
     "thisMonth": "šį mėn.",
     "avgPriceCap": "Vidutinė kaina",
     "avgPriceFoot": "mokėjai vidurkį",
-    "vsAverage": "palyginti su vidurkiu",
+    "vsAverage": "palyginus su vidurkiu",
     "planning": "Planavimas",
     "planningFoot": "kaip gerai suplanuota",
     "moreMetrics": "Papildomi rodikliai",
@@ -50,7 +50,7 @@
     "impulseFoot_few": "prekės nebuvo sąraše",
     "impulseFoot_many": "prekių nebuvo sąraše",
     "impulseFoot_other": "prekių nebuvo sąraše",
-    "forgotten": "Neįsigijai",
+    "forgotten": "Praleistos",
     "forgottenFoot_one": "prekė liko sąraše",
     "forgottenFoot_few": "prekės liko sąraše",
     "forgottenFoot_many": "prekių liko sąraše",
@@ -58,7 +58,9 @@
     "prediction": "Prognozė",
     "predictionFoot": "tikslumas {{pct}}%",
     "memberSplit": "Kas kiek išleido",
-    "someone": "Narys"
+    "someone": "Narys",
+    "vsUsual": "nei įprastai",
+    "planningNoBaseline": "pirmieji apsipirkimai"
   },
   "tripMap": {
     "actionsTitle": "Veiksmai",
@@ -1437,7 +1439,10 @@
     "comboDiscount": "Rinkinio nuolaida",
     "reverifyBadge": "Patvirtinkite atitikmenį",
     "scanBusyTitle": "Skenavimas jau vyksta",
-    "scanBusyBody": "Palaukite, kol baigsis dabartinis kvito apdorojimas, ir bandykite dar kartą."
+    "scanBusyBody": "Palaukite, kol baigsis dabartinis kvito apdorojimas, ir bandykite dar kartą.",
+    "oldDateTitle": "Senas kvitas",
+    "oldDateBody": "Šis kvitas iš {{date}} — senesnis nei 30 dienų. Ar tikrai jis iš šio apsipirkimo?",
+    "oldDateConfirm": "Taip, įkelti"
   },
   "product": {
     "noDataForPeriod": "Nėra duomenų pasirinktam laikotarpiui",
@@ -1754,5 +1759,101 @@
     "removeTitle": "Pašalinti narį?",
     "removeBody": "{{name}} nebematys šio apsipirkimo ir negalės prisijungti iš naujo be tavo pakvietimo.",
     "removeConfirm": "Pašalinti"
+  },
+  "receiptSheet": {
+    "delete": "Ištrinti",
+    "deleteSub": "kvitą",
+    "deletePhoto": "Ištrinti nuotrauką",
+    "deletePhotoSub": "nuotrauką",
+    "downloadSub": "Išsaugoti nuotrauką",
+    "deleteConfirmTitle": "Ištrinti kvitą?",
+    "deleteConfirmBody": "Kvitas ir jo nuotrauka bus pašalinti. Kainų duomenys išliks, o šį kvitą galėsite įkelti į kitą apsipirkimą.",
+    "deletePhotoConfirmTitle": "Ištrinti nuotrauką?",
+    "deletePhotoConfirmBody": "Bus pašalinta tik kvito nuotrauka. Kvito duomenys išliks.",
+    "deleteFailTitle": "Nepavyko",
+    "deleteFailBody": "Nepavyko ištrinti. Bandykite dar kartą.",
+    "removeFromTrip": "Pašalinti iš kelionės",
+    "removeFromTripSub": "Kvitas liks įkėlusiam vartotojui",
+    "removeFromTripConfirmTitle": "Pašalinti iš kelionės?",
+    "removeFromTripConfirmBody": "Kvitas bus pašalintas iš šios kelionės. Jis liks jį įkėlusiam vartotojui.",
+    "stale": "Senas kvitas — pirkta {{date}}. Gali būti ne šio apsipirkimo kvitas."
+  },
+  "planningSheet": {
+    "title": "Kaip vertiname planavimą",
+    "banner": "Beveik tobulas apsipirkimas! 🌟",
+    "noCompare": "Netoliese nebuvo su kuo palyginti — vertinam tik šią parduotuvę.",
+    "cat": {
+      "coverage": "Sąrašo pilnumas",
+      "discipline": "Disciplina",
+      "store": "Parduotuvės pasirinkimas"
+    },
+    "noList": {
+      "coverage": "Pirkai be sąrašo — susidaryk krepšelį, kad matytum, kaip laikaisi plano.",
+      "discipline": "Be sąrašo negalime įvertinti impulsų — kitąkart pabandyk krepšelį."
+    },
+    "tip": {
+      "cov": {
+        "perfect": "Nieko nepamiršai — visas sąrašas krepšelyje! 🎯",
+        "almostOne": "Beveik viską radai — pamiršai tik vieną prekę.",
+        "almostFew": "Beveik viską radai — pamiršai {{f}} prekes.",
+        "most": "Radai daugumą, bet pamiršai {{f}} sąrašo prekes.",
+        "half": "Pamiršai apie pusę sąrašo — {{f}} prekes.",
+        "low": "Pamiršai daug sąrašo prekių — {{f}} liko neįsigytos.",
+        "none": "Nepirkai nė vienos sąrašo prekės. Pirkai kitur ar keitei planus?"
+      },
+      "disc": {
+        "perfect": "Nė vieno neplanuoto pirkinio — geležinė disciplina! 💪",
+        "almost": "Beveik viskas pagal planą — tik €{{e}} neplanuotai.",
+        "mostlyOne": "Beveik viskas pagal planą — vienas neplanuotas pirkinys (€{{e}}).",
+        "mostlyFew": "Daugiausia pagal planą, bet {{i}} neplanuotos prekės (€{{e}}).",
+        "half": "Apie pusę išlaidų — neplanuotos (€{{e}}). Verta stabtelėti prieš įsimetant.",
+        "lots": "Daug neplanuotų pirkinių — €{{e}} nebuvo sąraše.",
+        "mostlyUnplanned": "Beveik viskas buvo neplanuota (€{{e}}). Sąrašas padėtų suvaldyti impulsus."
+      },
+      "store": {
+        "cheapest": "Pasirinkai pigiausią parduotuvę savo krepšeliui! 🏆",
+        "good": "Gera parduotuvė — vos €{{h}} brangiau nei pigiausia.",
+        "ok": "Neblogai, bet kitur tavo krepšelį būtų turėjęs ~€{{h}} pigiau.",
+        "overpaid": "Permokėjai ~€{{h}} — tie patys pirkiniai kitur pigesni.",
+        "priciest": "Viena brangiausių parduotuvių — €{{h}} daugiau nei pigiausioje."
+      }
+    }
+  },
+  "savingsSheet": {
+    "title": "Kur pigiausia",
+    "loading": "Skaičiuojame…",
+    "tip": {
+      "equal": "Šįkart kainų palyginti nepavyko — visose parduotuvėse jos parodytos vienodos.",
+      "cheapest": "Pigiausia parduotuvė tavo krepšeliui — geriau nerasi! 🏆",
+      "near": "Beveik pigiausia — {{store}} tavo krepšelį būtų turėjusi vos €{{headroom}} pigiau.",
+      "overpaid": "Permokėjai €{{headroom}} — {{store}} tuos pačius pirkinius siūlė pigiau.",
+      "worst": "Brangiausia parduotuvė — {{store}} tavo krepšelį būtų turėjusi €{{headroom}} pigiau."
+    }
+  },
+  "discountsSheet": {
+    "title": "Prekės su akcija",
+    "thisStore": "ši parduotuvė",
+    "explainer": "Šias akcijas siūlo {{chain}}. Kitos parduotuvės gali turėti didesnių nuolaidų ar mažesnių įprastų kainų — prieš apsipirkdami palyginkite krepšelį, kad rastumėte geriausius pasiūlymus."
+  },
+  "impulseSheet": {
+    "title": "Impulsyvumas",
+    "legendOk": "buvo sąraše",
+    "legendBad": "nebuvo sąraše",
+    "note": "Vienas kitas neplanuotas pirkinys — normalu. Bet brangesnės neplanuotos prekės gali iškreipti parduotuvių rekomendacijas, todėl stenkis pirkti pagal planą, kad palyginimai būtų kuo tikslesni."
+  },
+  "missedSheet": {
+    "title": "Praleistos",
+    "legendOk": "įsigijai",
+    "legendBad": "neįsigijai",
+    "note": "Praleisti vieną kitą suplanuotą pirkinį — normalu. Bet kuo labiau krepšelis skiriasi nuo plano, tuo mažesniu tikslumu galime palyginti parduotuves ir parinkti geriausią. Stenkis pildyti krepšelį kuo tiksliau, kad rekomendacijos būtų geriausios."
+  },
+  "predictionSheet": {
+    "title": "Prognozė",
+    "planned": "Planuota",
+    "actual": "Faktas",
+    "accuracy": "{{pct}}% tikslumas · {{count}} prek.",
+    "boughtAs": "pirkta: {{name}}",
+    "qtyNote": "planuota ×{{planned}} · pirkta ×{{bought}}",
+    "note": "Apsipirkdami visada palyginkite rekomenduojamos prekės vieneto kainą su kitomis prekėmis — souply gali būti pražiūrėjęs geresnį pasiūlymą."
   }
 }

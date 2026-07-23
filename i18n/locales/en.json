@@ -33,7 +33,7 @@
     "itemsN_one": "{{count}} item",
     "itemsSection": "Items",
     "byCategory": "By category",
-    "byTrip": "Trips",
+    "byTrip": "Shopping trips",
     "byStore": "By store",
     "thisMonth": "this month",
     "avgPriceCap": "Average price",
@@ -54,7 +54,9 @@
     "prediction": "Prediction",
     "predictionFoot": "{{pct}}% accurate",
     "memberSplit": "Who paid what",
-    "someone": "Member"
+    "someone": "Member",
+    "vsUsual": "vs usual",
+    "planningNoBaseline": "your first trips"
   },
   "tripMap": {
     "actionsTitle": "Actions",
@@ -1311,7 +1313,8 @@
   },
   "items": {
     "count_one": "{{count}} item",
-    "count_other": "{{count}} items"
+    "count_other": "{{count}} items",
+    "count_few": "{{count}} items"
   },
   "capture": {
     "retake": "Retake",
@@ -1457,7 +1460,10 @@
     "comboDiscount": "Bundle discount",
     "reverifyBadge": "Reconfirm match",
     "scanBusyTitle": "A scan is already running",
-    "scanBusyBody": "Wait for the current receipt to finish processing, then try again."
+    "scanBusyBody": "Wait for the current receipt to finish processing, then try again.",
+    "oldDateTitle": "Old receipt",
+    "oldDateBody": "This receipt is from {{date}} — more than 30 days old. Is it really from this trip?",
+    "oldDateConfirm": "Yes, upload"
   },
   "product": {
     "noDataForPeriod": "No data for the selected period",
@@ -1772,5 +1778,101 @@
     "removeTitle": "Remove member?",
     "removeBody": "{{name}} will lose access and cannot rejoin without your invite.",
     "removeConfirm": "Remove"
+  },
+  "receiptSheet": {
+    "delete": "Delete",
+    "deleteSub": "the receipt",
+    "deletePhoto": "Delete photo",
+    "deletePhotoSub": "the photo",
+    "downloadSub": "Save photo",
+    "deleteConfirmTitle": "Delete receipt?",
+    "deleteConfirmBody": "The receipt and its photo will be removed. Price data stays, and you can upload this receipt to another trip.",
+    "deletePhotoConfirmTitle": "Delete photo?",
+    "deletePhotoConfirmBody": "Only the receipt photo will be removed. The receipt data stays.",
+    "deleteFailTitle": "Failed",
+    "deleteFailBody": "Couldn't delete. Please try again.",
+    "removeFromTrip": "Remove from trip",
+    "removeFromTripSub": "Stays with the uploader",
+    "removeFromTripConfirmTitle": "Remove from trip?",
+    "removeFromTripConfirmBody": "The receipt will be removed from this trip. It stays with the member who uploaded it.",
+    "stale": "Old receipt — purchased {{date}}. May not be from this trip."
+  },
+  "planningSheet": {
+    "title": "How we judge planning",
+    "banner": "An almost-perfect shop! 🌟",
+    "noCompare": "No nearby stores to compare — judging this one alone.",
+    "cat": {
+      "coverage": "List completeness",
+      "discipline": "Discipline",
+      "store": "Store choice"
+    },
+    "noList": {
+      "coverage": "You shopped without a list — build a basket to track how well you stick to plan.",
+      "discipline": "Without a list we can't gauge impulses — try a basket next time."
+    },
+    "tip": {
+      "cov": {
+        "perfect": "Forgot nothing — your whole list made it! 🎯",
+        "almostOne": "Got almost everything — forgot just one item.",
+        "almostFew": "Got almost everything — forgot {{f}} items.",
+        "most": "Got most of it, but forgot {{f}} listed items.",
+        "half": "Forgot about half your list — {{f}} items.",
+        "low": "Forgot a lot of your list — {{f}} items left unbought.",
+        "none": "You bought none of your listed items. Shopped elsewhere or changed plans?"
+      },
+      "disc": {
+        "perfect": "Not one unplanned buy — iron discipline! 💪",
+        "almost": "Almost all on-plan — just €{{e}} unplanned.",
+        "mostlyOne": "Mostly on-plan — one unplanned buy (€{{e}}).",
+        "mostlyFew": "Mostly on-plan, but {{i}} unplanned items (€{{e}}).",
+        "half": "About half your spend was unplanned (€{{e}}). Worth a pause before it lands in the cart.",
+        "lots": "Lots of unplanned buys — €{{e}} wasn't on your list.",
+        "mostlyUnplanned": "Almost everything was unplanned (€{{e}}). A list would help rein in impulses."
+      },
+      "store": {
+        "cheapest": "You picked the cheapest store for your basket! 🏆",
+        "good": "Good pick — only €{{h}} above the cheapest.",
+        "ok": "Not bad, but your basket would've been ~€{{h}} cheaper elsewhere.",
+        "overpaid": "You overpaid ~€{{h}} — the same items were cheaper elsewhere.",
+        "priciest": "One of the priciest stores — €{{h}} more than the cheapest."
+      }
+    }
+  },
+  "savingsSheet": {
+    "title": "Where it's cheapest",
+    "loading": "Calculating…",
+    "tip": {
+      "equal": "Couldn't compare prices this time — they're shown the same across all stores.",
+      "cheapest": "The cheapest store for your basket — you nailed it! 🏆",
+      "near": "Nearly the cheapest — {{store}} would've been only €{{headroom}} less.",
+      "overpaid": "You paid €{{headroom}} more — {{store}} had the same items cheaper.",
+      "worst": "The priciest store — {{store}} would've had your basket €{{headroom}} cheaper."
+    }
+  },
+  "discountsSheet": {
+    "title": "On sale",
+    "thisStore": "this store",
+    "explainer": "These discounts are provided by {{chain}}. Other stores might have bigger discounts or lower regular prices — compare your basket before shopping to find the best deals."
+  },
+  "impulseSheet": {
+    "title": "Impulse",
+    "legendOk": "on your list",
+    "legendBad": "not on your list",
+    "note": "The odd unplanned item is fine. But pricier unplanned purchases can skew our store recommendations, so try to stick to your plan to keep comparisons as accurate as possible."
+  },
+  "missedSheet": {
+    "title": "Missed",
+    "legendOk": "bought",
+    "legendBad": "not bought",
+    "note": "Skipping the odd planned item is fine. But the more your basket drifts from your plan, the less accurately we can compare stores and pick the best one. Try to keep your basket as close to your plan as possible for the best recommendations."
+  },
+  "predictionSheet": {
+    "title": "Prediction",
+    "planned": "Planned",
+    "actual": "Actual",
+    "accuracy": "{{pct}}% accurate · {{count}} items",
+    "boughtAs": "bought: {{name}}",
+    "qtyNote": "planned ×{{planned}} · bought ×{{bought}}",
+    "note": "While shopping, always compare the recommended product's unit price against other options — Souply might have missed a better deal."
   }
 }
