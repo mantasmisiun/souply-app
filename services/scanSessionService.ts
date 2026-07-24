@@ -51,11 +51,9 @@ import { parseProductName } from "@shared/parsers/productNameParser";
 import {
   detectCardMaskBands,
   clampMaskBandsToProtected,
-  redactReceiptText,
-  wordCentreInMaskBand,
-  looksLikePiiText,
   type MaskBand,
 } from "@shared/parsers/cardMaskDetection";
+import { buildWordsDump, type WordsDumpLine } from "../utils/receiptWordsDump";
 import type { LabeledRegion } from "@shared/parsers/rimiParser";
 import type { IkiProduct } from "@shared/parsers/ikiParser";
 import type { PageMeta } from "../utils/receiptImage";
@@ -736,25 +734,10 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
       };
     } else if (chain === "iki") {
       // Capture the exact per-WORD lines the IKI column engine consumes, so a
-      // failing receipt can be reproduced 1:1 in a jest fixture. wordsDump
-      // ships in staging+prod, so it MUST be PII-safe: redact any word inside
-      // a mask band (or that LOOKS like a card/loyalty number) to '[•••]'.
-      const buildWordsDump = (ls: LineWithFrame[]) => ls.map((l) => ({
-        t: redactReceiptText(l.text),
-        x: [Math.round(l.xLeft), Math.round(l.xRight)],
-        y: [Math.round(l.yTop), Math.round(l.yBottom)],
-        c: l.yLeftTop != null
-          ? [Math.round(l.yLeftTop), Math.round(l.yRightTop ?? l.yTop), Math.round(l.yLeftBottom ?? l.yBottom), Math.round(l.yRightBottom ?? l.yBottom)]
-          : undefined,
-        w: l.words?.map((w) => {
-          const pii = wordCentreInMaskBand(w as any, detectedMaskBands) || looksLikePiiText(w.text);
-          return [
-            pii ? "[•••]" : w.text, Math.round(w.xLeft), Math.round(w.xRight), Math.round(w.yTop), Math.round(w.yBottom),
-            w.cornerPoints?.length ? w.cornerPoints.flatMap((pt) => [Math.round(pt.x), Math.round(pt.y)]) : undefined,
-          ];
-        }),
-      }));
-      wordsDump = buildWordsDump(mergedLines);
+      // failing receipt can be reproduced 1:1 in a jest fixture / receipts:reparse.
+      // SHARED with the background queue (utils/receiptWordsDump) so both paths
+      // emit an identical, PII-safe dump.
+      wordsDump = buildWordsDump(mergedLines as unknown as WordsDumpLine[], detectedMaskBands);
       wordsSrc = "scan";
 
       // The user-facing ensure* gates run BETWEEN the ensemble and the
@@ -779,7 +762,7 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
       // A stored wordsDump must reproduce the STORED parse — re-emit it from
       // the winning engine's lines when the ensemble flipped to ML Kit.
       if (flow.secondOcr) {
-        wordsDump = buildWordsDump(flow.secondOcr.mergedLines as any);
+        wordsDump = buildWordsDump(flow.secondOcr.mergedLines as unknown as WordsDumpLine[], detectedMaskBands);
       }
       if (flow.ikiGateFailed || ikiGateBailed) return; // bail already published
 
