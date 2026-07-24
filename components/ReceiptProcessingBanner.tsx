@@ -33,15 +33,10 @@ export function ReceiptProcessingBanner() {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const items = useReceiptQueueStore((s) => s.items);
     // On the Shopping (Apsipirkimai) root the in-list processing CARD takes over,
-    // and on a receipt screen a RETAKE (heal) shows its own progress on the
-    // existing receipt card — so the top banner would double up. A brand-NEW
-    // upload on the receipt screen has no card yet, so the banner is the only
-    // progress indicator: keep it. Suppress only when every in-flight item is a
-    // heal (or on the Shopping root).
-    const hasNewUpload = items.some(
-        (i) => (i.status === 'processing' || i.status === 'pending' || i.status === 'awaiting_network') && i.healReceiptId == null,
-    );
-    const bannerSuppressed = pathname === '/basket' || (pathname.startsWith('/trip/receipts') && !hasNewUpload);
+    // and on a receipt screen BOTH a retake (heal) and a new upload show their
+    // own placeholder/heal receipt CARD — so the top banner would double up.
+    // Suppress it on both (work continues in the global background queue).
+    const bannerSuppressed = pathname === '/basket' || pathname.startsWith('/trip/receipts');
     const recentIds = useReceiptQueueStore((s) => s.recentIds);
     const lastCompletedAt = useReceiptQueueStore((s) => s.lastCompletedAt);
 

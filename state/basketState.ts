@@ -46,7 +46,13 @@ export const useBasketState = create<BasketState>((set) => ({
       sessionBasketId: id !== null ? id : state.sessionBasketId,
     })),
 
-  clearSessionBasket: () => set({ draftBasketId: null, sessionBasketId: null }),
+  clearSessionBasket: () => {
+    set({ draftBasketId: null, sessionBasketId: null });
+    // The basket session lives in a SEPARATE store — clear its target too, or a
+    // graduated/deleted basket keeps driving catalog steppers + the session
+    // sheet. (Lazy require avoids an import cycle.)
+    try { require('./basketSession').useBasketSession.getState().clearTarget(); } catch {}
+  },
 
   initDraftBasket: async () => {
     try {

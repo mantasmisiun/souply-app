@@ -111,6 +111,8 @@ interface BasketSessionState {
     sessionBarClearance: number | null;
 
     setTarget: (t: SessionTarget, itemCount?: number) => void;
+    /** End the basket session (basket graduated to a list / was deleted). */
+    clearTarget: () => void;
     setDormant: (d: { count: number } | null) => void;
     setCollapseDock: (fn: (() => void) | null) => void;
     setDockOptions: (o: ChooserOption[] | null) => void;
@@ -166,6 +168,16 @@ export const useBasketSession = create<BasketSessionState>((set, get) => ({
         itemCount: itemCount ?? s.itemCount,
         newProductIds: [],
     })),
+    // End the active basket session entirely — the basket graduated to a
+    // shopping list (inProgress/completed) or was deleted, so it must stop
+    // driving catalog steppers and the session sheet. (dismissBar only HIDES
+    // the bar but keeps the target, which is why a done basket still painted
+    // steppers.) Templates are unaffected.
+    clearTarget: () => set(s => (
+        s.target == null || s.target.kind === 'template'
+            ? s
+            : { target: null, barVisible: false, itemCount: 0, newProductIds: [] }
+    )),
     setDormant: (d) => set({ dormant: d }),
     setCollapseDock: (fn) => set({ collapseDock: fn }),
     setDockOptions: (o) => set({ dockOptions: o }),

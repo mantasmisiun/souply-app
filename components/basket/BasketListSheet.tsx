@@ -96,6 +96,18 @@ export function BasketListSheet() {
                 const tpl = await getTemplate(target.templateId);
                 raw = Array.isArray(tpl.items) ? tpl.items : [];
             } else {
+                // Self-heal: a basket that graduated to a shopping list
+                // (inProgress/completed) or was deleted must stop being the
+                // session target — otherwise it keeps painting catalog steppers
+                // and this sheet. Clear it and bail.
+                const bres = await fetch(`${API_BASE_URL}/api/baskets/${target.basketId}`);
+                if (bres.status === 404) { useBasketSession.getState().clearTarget(); setItems([]); setCount(0); return; }
+                if (bres.ok) {
+                    const b = await bres.json().catch(() => null);
+                    if (b?.status === 'inProgress' || b?.status === 'completed') {
+                        useBasketSession.getState().clearTarget(); setItems([]); setCount(0); return;
+                    }
+                }
                 const res = await fetch(`${API_BASE_URL}/api/baskets/${target.basketId}/items`);
                 const data = await res.json();
                 raw = Array.isArray(data) ? data : [];
