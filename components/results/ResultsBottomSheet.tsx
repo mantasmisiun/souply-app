@@ -285,6 +285,7 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
             bottomInset={bottomInset}
             dockAtLast
             exitSlide
+            pulseHint
             onHeightChange={onHeightChange}
             onBarHeight={setActionsH}
             onContentHeight={setContentH}

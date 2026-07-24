@@ -3,7 +3,7 @@ import { View, Pressable, StyleSheet, Dimensions, Platform, BackHandler, type St
 import { Gesture, GestureDetector, ScrollView, State } from 'react-native-gesture-handler';
 import Animated, {
     SlideOutDown, runOnJS, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
-    useSharedValue, withSpring, withTiming,
+    useSharedValue, withDelay, withRepeat, withSequence, withSpring, withTiming,
 } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import { spacing, radius, withAlpha, useResolvedScheme, type AppTheme } from '../constants/theme';
@@ -144,6 +144,10 @@ type Props = {
      *  docked host merge its bar the instant a pill-drag begins, not only when
      *  the sheet settles. Bar-originated drags use the imperative bridge. */
     onActiveChange?: (active: boolean) => void;
+    /** DISCOVERABILITY HINT: while the sheet sits COLLAPSED (stage 0) the grabber
+     *  pill turns pink (colors.primary) and pulses on a slow cadence, cueing that
+     *  the bar expands. Off by default — opt in per sheet that wants the nudge. */
+    pulseHint?: boolean;
 };
 
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
@@ -155,7 +159,7 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     pages, onPopPage, onHandlePress, flushBottom = false, topRimColor,
     handleH = SHEET_HANDLE_H, cornerRadius, flushBottomRadius = 0,
     fadeGlassNearCollapse = false, handleAlign = 'center', glassBottomInset = 0,
-    onActiveChange,
+    onActiveChange, pulseHint = false,
 }, ref) {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const isDark = useResolvedScheme() === 'dark';
@@ -168,6 +172,8 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     const safeStage = Math.min(stage, snaps.length - 1);
 
     const height = useSharedValue(snaps[Math.min(initialStage, snaps.length - 1)]);
+    // Collapsed-stage discoverability pulse (opt-in via `pulseHint`) — see below.
+    const pillPulse = useSharedValue(0);
     // Declared BEFORE every worklet that captures it (a later `const` is still
     // in its temporal dead zone at worklet creation → undefined → crash).
     const snapsSV = useSharedValue<number[]>(snaps);
@@ -464,6 +470,24 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     const displayR = displayCornerRadius(bottomInset);
     const expandable = snaps.length > 1;
 
+    // DISCOVERABILITY PULSE: while collapsed (stage 0) an expandable sheet's pill
+    // glows pink and flashes on a ~2.7s cadence (grow + brighten, then a long
+    // hold) so users notice it lifts. Stops the instant the sheet leaves stage 0.
+    const pillHinting = pulseHint && expandable && safeStage === 0;
+    useEffect(() => {
+        pillPulse.value = pillHinting
+            ? withRepeat(withSequence(
+                withTiming(1, { duration: 460 }),
+                withTiming(0, { duration: 460 }),
+                withDelay(1800, withTiming(0, { duration: 0 })),
+            ), -1, false)
+            : withTiming(0, { duration: 200 });
+    }, [pillHinting, pillPulse]);
+    const pillStyle = useAnimatedStyle(() => ({
+        opacity: 0.8 + 0.2 * pillPulse.value,
+        transform: [{ scaleX: 1 + 0.5 * pillPulse.value }, { scaleY: 1 + 0.35 * pillPulse.value }],
+    }));
+
     // Dock-only draw styles (concentric bottom-corner growth + solid fade).
     const dockCornersStyle = useAnimatedStyle(() => {
         if (!dockAtLast) return {};
@@ -543,7 +567,9 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
             {/* PANEL (handle host) — slides transform-only with the body. */}
             <Animated.View style={[styles.panel, { height: maxSnap }, bodyStyle]} pointerEvents="box-none">
                 <View style={[styles.handleArea, { height: handleH }, handleAlign === 'bottom' && styles.handleAreaBottom]}>
-                    {expandable && <View style={styles.handle} />}
+                    {expandable && (pillHinting
+                        ? <Animated.View style={[styles.handle, { backgroundColor: colors.primary }, pillStyle]} />
+                        : <View style={styles.handle} />)}
                 </View>
             </Animated.View>
 

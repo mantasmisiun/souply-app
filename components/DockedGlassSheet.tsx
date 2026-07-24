@@ -12,7 +12,8 @@ import {
 } from 'react-native-gesture-handler';
 import Animated, {
     interpolateColor, runOnJS, useAnimatedScrollHandler, useAnimatedStyle,
-    useDerivedValue, useSharedValue, withSpring, useAnimatedReaction,
+    useDerivedValue, useSharedValue, withDelay, withRepeat, withSequence, withSpring,
+    withTiming, useAnimatedReaction,
 } from 'react-native-reanimated';
 import { BlurView } from 'expo-blur';
 import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
@@ -282,6 +283,26 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         const prog = hi > lo ? (height - lo) / (hi - lo) : 0;
         onOcclusion(Math.round(COLLAPSED_MARGIN * (1 - prog) + height));
     }, [stage, snaps, onOcclusion]);
+
+    // DISCOVERABILITY PULSE: while the sheet sits COLLAPSED (stage 0) the grabber
+    // pill glows pink (colors.primary) and flashes on a ~2.7s cadence — a grow +
+    // brighten, then a long hold — so users notice the bar lifts. Stops the moment
+    // the sheet leaves stage 0 (and never runs on a sheet-less bar).
+    const pillPulse = useSharedValue(0);
+    const pillHinting = hasSheet && stage === 0;
+    useEffect(() => {
+        pillPulse.value = pillHinting
+            ? withRepeat(withSequence(
+                withTiming(1, { duration: 460 }),
+                withTiming(0, { duration: 460 }),
+                withDelay(1800, withTiming(0, { duration: 0 })),
+            ), -1, false)
+            : withTiming(0, { duration: 200 });
+    }, [pillHinting, pillPulse]);
+    const pillPulseStyle = useAnimatedStyle(() => ({
+        opacity: 0.8 + 0.2 * pillPulse.value,
+        transform: [{ scaleX: 1 + 0.5 * pillPulse.value }, { scaleY: 1 + 0.35 * pillPulse.value }],
+    }));
 
     const onStageChange = sheet?.onStageChange;
     const onActiveChange = sheet?.onActiveChange;
@@ -645,7 +666,9 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
             {hasSheet && (
                 <View style={styles.pillWrap} pointerEvents="box-none">
                     <Pressable hitSlop={{ top: 12, bottom: 4, left: 28, right: 28 }} onPress={onExpandTap}>
-                        <View style={styles.pill} />
+                        {pillHinting
+                            ? <Animated.View style={[styles.pill, { backgroundColor: colors.primary }, pillPulseStyle]} />
+                            : <View style={styles.pill} />}
                     </Pressable>
                 </View>
             )}
