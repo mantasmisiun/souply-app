@@ -325,21 +325,10 @@ export default function TripsScreen() {
     const customName = (trip: TripSummary): string | null =>
         trip.name ?? trip.basket?.name ?? (trip.isAdHoc ? t('trips.adHocName') : null);
 
-    // Title as a string (archive rows, which already show the date on the right).
+    // Title text: the custom name when renamed, else the full weekday. The card
+    // renders the date separately as a full-height CalendarBadge column.
     const tripTitle = (trip: TripSummary) =>
         customName(trip) ?? formatWeekday(trip.anchorDate, i18n.language);
-
-    // Title as JSX: the last-activity calendar badge ALWAYS shows; the text is the
-    // custom name when renamed, else the full weekday.
-    const renderTripTitle = (trip: TripSummary) => {
-        const title = customName(trip) ?? formatWeekday(trip.anchorDate, i18n.language);
-        return (
-            <View style={styles.titleRow}>
-                <CalendarBadge date={trip.anchorDate} size={30} />
-                <Text style={styles.cardTitle} numberOfLines={1}>{title}</Text>
-            </View>
-        );
-    };
 
     const slotLine = (trip: TripSummary) => {
         if (trip.slots.length === 0) {
@@ -421,8 +410,15 @@ export default function TripsScreen() {
                     </View>
                 ) : (
                     active.map(trip => {
-                        const preview = trip.basket?.itemPreview ?? [];
                         const hasReceipt = trip.receiptCount > 0;
+                        // Once the trip has LISTS, they are the source of truth for the
+                        // card's count + preview: the basket is consumed into the lists,
+                        // so its own itemCount/itemPreview go stale (an emptied basket
+                        // rendered "0" and a blank preview row on a stage-3/4 card).
+                        const listItems = trip.slots.reduce((n, s) => n + (s.itemCount ?? 0), 0);
+                        const listPreview = trip.slots.flatMap(s => s.itemPreview ?? []);
+                        const preview = trip.slots.length > 0 ? listPreview : (trip.basket?.itemPreview ?? []);
+                        const plannedCount = trip.slots.length > 0 ? listItems : (trip.basket?.itemCount ?? 0);
                         const isNew = seenInit && isTripNew(seenTrips, trip.id, trip.receiptCount);
                         const chains = trip.chains ?? [];
                         const shownChains = chains.slice(0, 4);
@@ -437,14 +433,22 @@ export default function TripsScreen() {
                             layout={LinearTransition.duration(240).easing(Easing.out(Easing.cubic))}
                         >
                             <View style={styles.cardMain}>
-                                <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                                {/* Date column: every row (count/logos, title, preview) sits to
+                                    its RIGHT, so the calendar reads as the card's anchor rather
+                                    than a chip glued to the title. The badge keeps its natural
+                                    near-square tear-off proportions and centres in the column —
+                                    stretching it to the full row height read as a tall ribbon. */}
+                                <View style={styles.calCol}>
+                                    <CalendarBadge date={trip.anchorDate} size={60} />
+                                </View>
+                                <View style={styles.cardBody}>
                                     <View style={styles.cardTop}>
                                         <View style={styles.cardTopLeft}>
                                             {/* Uploaded receipt → receipt icon + recognised line count;
                                                 otherwise the planned shopping-list count. */}
                                             <View style={styles.cartChip}>
                                                 <Ionicons name={hasReceipt ? 'receipt-outline' : 'cart-outline'} size={14} color={colors.primary} />
-                                                <Text style={styles.cartChipText}>{hasReceipt ? trip.recognisedItemCount : (trip.basket?.itemCount ?? 0)}</Text>
+                                                <Text style={styles.cartChipText}>{hasReceipt ? trip.recognisedItemCount : plannedCount}</Text>
                                             </View>
                                             {/* Chain logos: receipt chains full colour, planned-only dimmed. */}
                                             {shownChains.length > 0 && (
@@ -465,27 +469,26 @@ export default function TripsScreen() {
                                             )}
                                         </View>
                                     </View>
-                                    {renderTripTitle(trip)}
+                                    <Text style={styles.cardTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
+                                    {preview.length > 0 ? (
+                                        // Newest items first — each name caps and ellipsises so 3+ fit.
+                                        <View style={styles.previewRow}>
+                                            {preview.slice(0, 3).map((name, i) => (
+                                                <React.Fragment key={i}>
+                                                    {i > 0 && <Text style={styles.previewDot}>·</Text>}
+                                                    <Text style={styles.previewName} numberOfLines={1}>{name}</Text>
+                                                </React.Fragment>
+                                            ))}
+                                        </View>
+                                    ) : slotLine(trip) ? (
+                                        <Text style={styles.cardMeta} numberOfLines={1}>{slotLine(trip)}</Text>
+                                    ) : null}
                                 </View>
                                 <View style={styles.ctaBtn}>
                                     <Text style={styles.ctaText}>{stageCta(trip.stage)}</Text>
                                     <Ionicons name="chevron-forward" size={16} color={colors.primary} />
                                 </View>
                             </View>
-                            {preview.length > 0 ? (
-                                // Newest items first, spanning the FULL card width —
-                                // each name caps and ellipsises so 3+ fit.
-                                <View style={styles.previewRow}>
-                                    {preview.slice(0, 3).map((name, i) => (
-                                        <React.Fragment key={i}>
-                                            {i > 0 && <Text style={styles.previewDot}>·</Text>}
-                                            <Text style={styles.previewName} numberOfLines={1}>{name}</Text>
-                                        </React.Fragment>
-                                    ))}
-                                </View>
-                            ) : slotLine(trip) ? (
-                                <Text style={styles.cardMeta} numberOfLines={1}>{slotLine(trip)}</Text>
-                            ) : null}
                         </AnimatedTouchable>
                         );
                     })
@@ -564,7 +567,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     cardActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     resolveBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 7 },
     resolveBtnText: { fontSize: 13, fontWeight: '800', color: c.onPrimary },
-    cardMain: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+    // `stretch` gives the date column the full content height to centre within.
+    cardMain: { flexDirection: 'row', alignItems: 'stretch', gap: 10 },
+    calCol: { justifyContent: 'center' },
+    cardBody: { flex: 1, minWidth: 0, gap: 4 },
     cartChip: {
         flexDirection: 'row', alignItems: 'center', gap: 4,
         backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderRadius: radius.pill,
@@ -584,7 +590,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     previewRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     previewName: { flexShrink: 1, fontSize: 12, color: c.textSecondary, maxWidth: '38%' },
     previewDot: { fontSize: 12, color: c.textMuted },
-    ctaBtn: { flexDirection: 'row', alignItems: 'center', gap: 2, paddingLeft: 4 },
+    // alignSelf keeps the CTA vertically centred now that the row stretches.
+    ctaBtn: { flexDirection: 'row', alignItems: 'center', alignSelf: 'center', gap: 2, paddingLeft: 4 },
     cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 },
     // Overlapping member avatars — top-right of a shared card.
     memberStack: { flexDirection: 'row', alignItems: 'center' },
@@ -608,7 +615,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     membersChipText: { fontSize: 11, fontWeight: '700', color: c.textSecondary },
     cardTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, flexShrink: 1 },
-    titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     cardMeta: { fontSize: 13, color: c.textSecondary, marginTop: 3 },
     ctaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 2, marginTop: 8 },
     ctaText: { fontSize: 13, fontWeight: '700', color: c.primary },

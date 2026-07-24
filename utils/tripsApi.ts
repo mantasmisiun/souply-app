@@ -19,6 +19,9 @@ export interface TripSlot {
     receiptSkipped: boolean;
     checkedCount: number;
     itemCount: number;
+    /** Newest-first list item names (max 5) — the card previews these once the
+     *  trip has lists (the basket's own preview empties when it becomes lists). */
+    itemPreview?: string[];
 }
 
 export interface TripSummary {
