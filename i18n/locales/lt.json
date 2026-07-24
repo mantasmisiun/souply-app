@@ -16,7 +16,10 @@
     "wrongBody": "Pašalinti šį kvitą iš apsipirkimo? Pats kvitas liks jūsų istorijoje.",
     "wrongConfirm": "Pašalinti",
     "wrongClosedTitle": "Nebegalima pašalinti",
-    "wrongClosedBody": "Kvitus galima šalinti tik iš neseniai vykusių apsipirkimų."
+    "wrongClosedBody": "Kvitus galima šalinti tik iš neseniai vykusių apsipirkimų.",
+    "processingTitle": "Apdorojamas kvitas",
+    "processing": "Skaitmeninama…",
+    "statsLowQuality": "Kvitas nuskaitytas nepilnai — sumos gali nesutapti su čekiu. Pakartokite nuotrauką tikslesniam rezultatui."
   },
   "tripFinal": {
     "tabReceipt": "Kvitai",
@@ -1888,6 +1891,7 @@
     "accuracy": "{{pct}}% tikslumas · {{count}} prek.",
     "boughtAs": "pirkta: {{name}}",
     "qtyNote": "planuota ×{{planned}} · pirkta ×{{bought}}",
-    "note": "Apsipirkdami visada palyginkite rekomenduojamos prekės vieneto kainą su kitomis prekėmis — souply gali būti pražiūrėjęs geresnį pasiūlymą."
+    "note": "Apsipirkdami visada palyginkite rekomenduojamos prekės vieneto kainą su kitomis prekėmis — souply gali būti pražiūrėjęs geresnį pasiūlymą.",
+    "lowQuality": "Šis kvitas nesutapo su čekio suma, todėl prognozės gali būti netikslios. Pakartokite nuotrauką."
   }
 }

@@ -286,6 +286,9 @@ export interface TripScore {
          *  unit/amount/weighable. */
         listPackAmount: number | null; listPackUnit: string | null;
         receiptUnit: string | null; receiptAmount: number | null; receiptWeighable: boolean;
+        /** Price per canonical unit (planned vs bought) + its unit — the row's
+         *  headline "€23.96/kg → €19.98/kg". null → no unit comparison. */
+        listUnitPrice: number | null; receiptUnitPrice: number | null; unitPriceUnit: string;
     }[];
     unmatchedListItems: { listItemId: number; name: string | null }[];
     unmatchedReceiptItems: { receiptItemId: number; name: string }[];

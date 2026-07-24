@@ -6,7 +6,7 @@ import { ProductImage } from '../ProductImage';
 import { SheetTitle } from './SheetTitle';
 import { useTheme, spacing, radius, typography, withAlpha, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { formatEuro } from '../../utils/formatCurrency';
-import { formatItemAmount } from '../../utils/amountDisplay';
+import { formatItemAmount, unitLabel, type UnitToken } from '../../utils/amountDisplay';
 import type { TripScore } from '../../utils/tripsApi';
 
 /**
@@ -18,7 +18,7 @@ import type { TripScore } from '../../utils/tripsApi';
  * A hero sums the two totals and a note frames the metric as a guide.
  */
 
-export function PredictionSheet({ score }: { score: TripScore }) {
+export function PredictionSheet({ score, lowQuality }: { score: TripScore; lowQuality?: boolean }) {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -44,6 +44,10 @@ export function PredictionSheet({ score }: { score: TripScore }) {
                 // own unit/amount/weighable.
                 plannedAmount: formatItemAmount({ quantity: p.listQty, isWeighable: p.isWeighable, unit: p.listPackUnit, packAmount: p.listPackAmount, canonicalStep: p.canonicalStep }),
                 boughtAmount: formatItemAmount({ quantity: p.receiptQty, isWeighable: p.receiptWeighable, unit: p.receiptUnit, packAmount: p.receiptAmount }),
+                // Headline comparison = price per canonical unit (€/kg, €/vnt).
+                planUnitPrice: p.listUnitPrice,
+                buyUnitPrice: p.receiptUnitPrice,
+                unit: unitLabel((p.unitPriceUnit || 'vnt') as UnitToken, t),
                 predicted: p.listPrice as number,
                 actual: p.receiptPrice,
                 delta: Math.round((p.receiptPrice - (p.listPrice as number)) * 100) / 100,
@@ -62,6 +66,15 @@ export function PredictionSheet({ score }: { score: TripScore }) {
         <View style={styles.body}>
             <View style={styles.padded}>
                 <SheetTitle title={t('predictionSheet.title')} />
+
+                {/* The receipt didn't reconcile to its printed total → the parsed
+                    prices are unreliable, so these forecasts may be off. */}
+                {lowQuality && (
+                    <View style={styles.qualityWarn}>
+                        <Ionicons name="warning-outline" size={16} color={colors.onWarning ?? colors.onPrimary} />
+                        <Text style={styles.qualityWarnText} numberOfLines={3}>{t('predictionSheet.lowQuality')}</Text>
+                    </View>
+                )}
 
                 {/* Hero: planned total → actual total, with the net surprise. */}
                 <View style={styles.hero}>
@@ -110,17 +123,25 @@ export function PredictionSheet({ score }: { score: TripScore }) {
                                 <Text style={[styles.pillText, { color: costColor(r.delta) }]}>{signed(r.delta)}</Text>
                             </View>
                         </View>
+                        {/* Headline: price per unit (planned → bought). Falls back
+                            to the plain line price when a unit price isn't derivable. */}
                         <View style={styles.flow}>
                             <Text style={styles.seg}>
-                                <Text style={styles.segQty}>{`${r.plannedAmount} · `}</Text>
-                                <Text style={styles.segPrice}>{formatEuro(r.predicted)}</Text>
+                                <Text style={styles.segPrice}>
+                                    {r.planUnitPrice != null ? `${formatEuro(r.planUnitPrice)}/${r.unit}` : formatEuro(r.predicted)}
+                                </Text>
                             </Text>
                             <Ionicons name="arrow-forward" size={13} color={colors.textMuted} />
                             <Text style={styles.seg}>
-                                <Text style={[styles.segQty, r.qtyDiff && { color: colors.primary, fontWeight: '700' }]}>{`${r.boughtAmount} · `}</Text>
-                                <Text style={styles.segPrice}>{formatEuro(r.actual)}</Text>
+                                <Text style={[styles.segPrice, { color: costColor(r.delta) }]}>
+                                    {r.buyUnitPrice != null ? `${formatEuro(r.buyUnitPrice)}/${r.unit}` : formatEuro(r.actual)}
+                                </Text>
                             </Text>
                         </View>
+                        {/* Amount bought, standard "N × amount unit" layout, under the delta. */}
+                        <Text style={[styles.amountLine, r.qtyDiff && { color: colors.primary }]} numberOfLines={1}>
+                            {r.plannedAmount === r.boughtAmount ? r.boughtAmount : `${r.plannedAmount} → ${r.boughtAmount}`}
+                        </Text>
                     </View>
                 </View>
                 </Fragment>
@@ -147,6 +168,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingVertical: spacing.sm, paddingHorizontal: spacing.md,
     },
     noteText: { flex: 1, ...typography.labelSmall, color: c.textSecondary, lineHeight: 17 },
+    qualityWarn: {
+        flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
+        backgroundColor: c.warning ?? c.error, borderRadius: radius.md,
+        paddingVertical: spacing.sm, paddingHorizontal: spacing.md,
+    },
+    qualityWarnText: { flex: 1, ...typography.labelSmall, color: c.onWarning ?? c.onPrimary, lineHeight: 17 },
 
     row: { flexDirection: 'row', gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, alignItems: 'flex-start' },
     // Canonical item divider (theme dividerItem), inset past the thumbnail.
@@ -162,5 +189,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     flow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: 6, flexWrap: 'wrap' },
     seg: { ...typography.bodySmall, fontVariant: ['tabular-nums'] },
     segQty: { color: c.textSecondary },
+    amountLine: { ...typography.labelSmall, color: c.textSecondary, marginTop: 2, fontVariant: ['tabular-nums'] },
     segPrice: { fontWeight: '700', color: c.textPrimary },
 });

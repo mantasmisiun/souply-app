@@ -158,32 +158,36 @@ export function formatItemAmount(item: DisplayItem, t?: (k: string) => string): 
     const q = Number(item.quantity);
     if (!Number.isFinite(q)) return '';
 
-    // Decide weight-vs-count on the COUNT (an explicit multiplier when present —
-    // a packed receipt line's merged-line count — else the quantity), so a
-    // fractional weight only triggers weight-mode when there's no pack context.
-    const decisionQty = item.multiplier != null ? Number(item.multiplier) : q;
-    if (isWeightDisplay(item, decisionQty)) {
-        const { value, unit } = fmtSize(q, item.unit ?? item.canonicalUnit ?? 'kg');
-        return `${value} ${unitLabel(unit, t)}`;
-    }
-
+    const trulyWeighable = truthyWeighable(item.isWeighable);
     const n = Math.max(1, Math.round(item.multiplier != null ? Number(item.multiplier) : q));
     const u = lc(item.unit);
     const packAmt = Number(item.packAmount);
     const hasPackAmt = Number.isFinite(packAmt) && packAmt > 0;
 
-    // Fluid-unit pack (g/ml/kg/l): show the pack size polished — "N × 500 g".
+    // 1. Sold by weight → the quantity IS the weight (kg/l), grams/ml polish.
+    if (trulyWeighable) {
+        const { value, unit } = fmtSize(q, item.unit ?? item.canonicalUnit ?? 'kg');
+        return `${value} ${unitLabel(unit, t)}`;
+    }
+    // 2. Packed with a known pack size → "N × 250 g". This MUST beat any weight
+    //    heuristic: the quantity here is a PACK COUNT, so a fluid canonicalStep
+    //    must never turn "2 × 250 g" into "2 g".
     if (FLUID_UNITS.has(u) && hasPackAmt) {
         const size = fmtSize(packAmt, u);
         return `${n} × ${size.value} ${unitLabel(size.unit, t)}`;
     }
-    // Pre-formatted pack label (receipt lines) — "N × 400 g".
+    // 3. Pre-formatted pack label (receipt lines) — "N × 400 g".
     if (item.packLabel) return `${n} × ${item.packLabel}`;
-    // Count-unit real multipack (a 10-pack) — "N × 10 vnt".
+    // 4. Count-unit real multipack (a 10-pack) — "N × 10 vnt".
     if (COUNT_UNITS.has(u) && hasPackAmt && packAmt > 1) {
         return `${n} × ${trim(packAmt)} ${unitLabel(u as UnitToken, t)}`;
     }
-    // Plain count — "N vnt" (no redundant "× 1").
+    // 5. No pack info + a fractional quantity → a weight (the "no 0,5 vnt" guard).
+    if (!hasPackAmt && !item.packLabel && q % 1 !== 0) {
+        const { value, unit } = fmtSize(q, item.unit ?? item.canonicalUnit ?? 'kg');
+        return `${value} ${unitLabel(unit, t)}`;
+    }
+    // 6. Plain count — "N vnt" (no redundant "× 1").
     return `${n} ${unitLabel(countUnitToken(item), t)}`;
 }
 

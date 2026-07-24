@@ -8,8 +8,9 @@
  *    Trips → Stores donut carousel (same as My tab), and extra metric cards.
  */
 import {
-    View, Text, TouchableOpacity, StyleSheet, ScrollView, Image,
+    View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Alert,
 } from 'react-native';
+import * as FileSystem from 'expo-file-system/legacy';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
@@ -132,6 +133,33 @@ export default function TripFinalScreen() {
     // A background heal (retake) of one of this trip's receipts just finished →
     // reload so the merged/renewed lines land (and drive the reveal animation).
     const queueItems = useReceiptQueueStore(s => s.items);
+    const addQueueItems = useReceiptQueueStore(s => s.addItems);
+
+    // DEV-ONLY: re-run the whole OCR→parse→heal pipeline on the receipt's CACHED
+    // photo (no camera). Downloads the stored image, then enqueues it exactly
+    // like "Perfotografuoti" (a heal keyed to this receipt) — lets us test parser
+    // changes (deskew) against the same image without re-photographing.
+    const devRerunFromCache = useCallback(async (r: TripReceipt) => {
+        try {
+            const imageRes = await fetch(`${API_BASE_URL}/api/receipts/${r.id}/image`);
+            const imageData = imageRes.ok ? await imageRes.json().catch(() => null) : null;
+            const url = imageData?.url as string | undefined;
+            if (!url) { Alert.alert('Dev re-run', 'No stored image URL for this receipt.'); return; }
+            const objKey = url.split('?')[0].split('/').pop() || `receipt-${r.id}.jpg`;
+            const localUri = `${FileSystem.cacheDirectory ?? ''}rerun-${Date.now()}-${objKey}`;
+            const dl = await FileSystem.downloadAsync(url, localUri);
+            if (dl.status !== 200) { Alert.alert('Dev re-run', `Download failed (${dl.status}).`); return; }
+            const linkMap = trip && trip.slots.length > 0
+                ? Object.fromEntries(trip.slots.map(s => [s.chainId ?? 0, s.listId]))
+                : undefined;
+            // DEV: full REPLACE (not heal-merge) so a parser change that only corrects an
+            // already-priced line (e.g. removing a phantom discount) actually surfaces.
+            addQueueItems([{ uris: [dl.uri], healReceiptId: r.id, devReplace: true, linkMap }]);
+            Alert.alert('Dev re-run', 'Re-running the pipeline on the cached photo (heal). Watch the card progress.');
+        } catch (e: any) {
+            Alert.alert('Dev re-run', `Failed: ${e?.message ?? e}`);
+        }
+    }, [addQueueItems, trip]);
     const lastQueueDoneAt = useReceiptQueueStore(s => s.lastCompletedAt);
     useEffect(() => { if (lastQueueDoneAt) void load(); }, [lastQueueDoneAt, load]);
     // Receipt ids with an in-flight retake → show heal progress on their card.
@@ -140,9 +168,27 @@ export default function TripFinalScreen() {
             && (q.status === 'processing' || q.status === 'pending' || q.status === 'awaiting_network'))
             .map(q => q.healReceiptId as number)), [queueItems]);
 
+    // NEW (non-heal) uploads whose target list belongs to THIS trip → render a
+    // placeholder receipt card with live progress (same shape as a real card)
+    // so a fresh upload isn't invisible while it processes. No top banner.
+    const tripListIds = useMemo(
+        () => new Set((trip?.slots ?? []).map(s => s.listId).filter((n): n is number => n != null)),
+        [trip]);
+    const pendingUploads = useMemo(() => queueItems.filter(q =>
+        q.healReceiptId == null
+        && (q.status === 'processing' || q.status === 'pending' || q.status === 'awaiting_network')
+        && ((q.fallbackLinkId != null && tripListIds.has(q.fallbackLinkId))
+            || (q.linkMap != null && Object.values(q.linkMap).some(lid => tripListIds.has(lid))))
+    ), [queueItems, tripListIds]);
+
     // Merged Kvitai item list + a per-key reveal assignment: when a heal changes
     // the data, diff vs the previous list — a changed line = 'refreshed', a new
     // key = 'inserted' — and stagger them so they scan in one at a time.
+    // A receipt fails the footer-reconciliation check (Σ line paid ≠ printed
+    // total by >10%) → its parsed lines are UNRELIABLE, so the derived stats
+    // (Prognozė, Sutaupyta, planning) must be shown with a warning, not as
+    // truth. Server sets `lowQuality`; we surface it here.
+    const anyLowQuality = useMemo(() => (receipts ?? []).some(r => !!r.lowQuality), [receipts]);
     const merged = useMemo(() => mergeReceiptItems(receipts ?? []), [receipts]);
     // Discounted rows drive the "Prekės su akcija" card + sheet — a real discount is a
     // regular total above the paid one (line promos AND combo/set-deals, since
@@ -355,7 +401,7 @@ export default function TripFinalScreen() {
                 {tab === 'receipt' && (
                     receipts == null ? (
                         <View style={styles.centered}><MaterialProgress size="large" color={colors.primary} /></View>
-                    ) : receipts.length === 0 ? (
+                    ) : receipts.length === 0 && pendingUploads.length === 0 ? (
                         <View style={styles.centered}>
                             <TouchableOpacity style={styles.bigBtn} onPress={() => setUploadSheet(true)}>
                                 <Ionicons name="cloud-upload-outline" size={22} color={colors.onPrimary} />
@@ -366,7 +412,27 @@ export default function TripFinalScreen() {
                     ) : (
                         <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 92 }}>
                             {/* Receipt cards — tap opens the receipt sheet. */}
-                            <Text style={styles.sectionTitle}>{t('tripFinal.receiptsCount', { count: receipts.length })}</Text>
+                            <Text style={styles.sectionTitle}>{t('tripFinal.receiptsCount', { count: receipts.length + pendingUploads.length })}</Text>
+                            {/* Placeholder cards for a fresh upload still processing — same shape
+                                as a real receipt card, with a spinner + bottom progress glow. */}
+                            {pendingUploads.map(q => {
+                                const frac = q.progressTotal
+                                    ? Math.max(0.05, Math.min(1, (q.progressDone ?? 0) / q.progressTotal))
+                                    : 0.08;
+                                return (
+                                    <View key={`pending-${q.id}`} style={styles.rcard}>
+                                        <View style={styles.pendingIcon}>
+                                            <Ionicons name="receipt-outline" size={20} color={colors.textMuted} />
+                                        </View>
+                                        <View style={{ flex: 1, minWidth: 0 }}>
+                                            <Text style={styles.rstore} numberOfLines={1}>{t('tripReceipts.processingTitle')}</Text>
+                                            <Text style={styles.rsub} numberOfLines={1}>{q.progress || t('tripReceipts.processing')}</Text>
+                                        </View>
+                                        <MaterialProgress size="small" color={colors.primary} />
+                                        <ProgressGlow edge="bottom" fraction={frac} />
+                                    </View>
+                                );
+                            })}
                             {receipts.map(r => {
                                 const healItem = queueItems.find(q => q.healReceiptId === r.id
                                     && (q.status === 'processing' || q.status === 'pending' || q.status === 'awaiting_network'));
@@ -410,6 +476,14 @@ export default function TripFinalScreen() {
                                 </TouchableOpacity>
                                 );
                             })}
+                            {/* DEV: re-run the pipeline on the CACHED photo (test parser
+                                changes without re-photographing). __DEV__ only. */}
+                            {__DEV__ && receipts.filter(r => !healingReceiptIds.has(r.id)).map(r => (
+                                <TouchableOpacity key={`dev-rerun-${r.id}`} style={styles.devRerunBtn} onPress={() => devRerunFromCache(r)} activeOpacity={0.7}>
+                                    <Ionicons name="refresh" size={14} color={colors.textSecondary} />
+                                    <Text style={styles.devRerunText}>{`DEV · re-run + REPLACE #${r.id} (cached photo)`}</Text>
+                                </TouchableOpacity>
+                            ))}
                             {/* Low-quality scan → offer a retake that HEALS the receipt.
                                 Hidden while THIS receipt is already being healed. */}
                             {receipts.filter(r => r.lowQuality && !healingReceiptIds.has(r.id)).map(r => (
@@ -495,6 +569,15 @@ export default function TripFinalScreen() {
                                 <AnimatedNumber value={stats.totalSpent} format={formatEuro} style={styles.heroVal} />
                                 <Text style={styles.heroLbl}>{t('trips.statSpent')}</Text>
                             </View>
+
+                            {/* Reconciliation warning: a receipt didn't scan cleanly, so
+                                these numbers may be off — nudge a retake. */}
+                            {anyLowQuality && (
+                                <View style={styles.qualityWarn}>
+                                    <Ionicons name="warning-outline" size={16} color={colors.onWarning ?? colors.onPrimary} />
+                                    <Text style={styles.qualityWarnText} numberOfLines={3}>{t('tripReceipts.statsLowQuality')}</Text>
+                                </View>
+                            )}
 
                             {/* two mains */}
                             <View style={styles.mrow}>
@@ -740,7 +823,7 @@ export default function TripFinalScreen() {
             {/* Prediction sheet (tap the Prognozė card) — per-item forecast vs actual. */}
             {predictionOpen && score && (
                 <GlassSheet autoHeight onClose={() => setPredictionOpen(false)}>
-                    <PredictionSheet score={score} />
+                    <PredictionSheet score={score} lowQuality={anyLowQuality} />
                 </GlassSheet>
             )}
 
@@ -790,6 +873,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     bigBtnText: { fontSize: 14.5, fontWeight: '700', color: c.onPrimary },
 
     rcard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: c.cardBackground, borderWidth: 1, borderColor: c.border, borderRadius: radius.lg, padding: spacing.md, marginHorizontal: spacing.lg, marginBottom: spacing.sm, overflow: 'hidden' },
+    pendingIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center' },
     rstore: { ...typography.bodySmallStrong, color: c.textPrimary },
     rsub: { ...typography.labelSmall, color: c.textSecondary, marginTop: 2 },
     rtot: { ...typography.bodySmallStrong, fontVariant: ['tabular-nums'], color: c.textPrimary },
@@ -812,6 +896,19 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderWidth: 1, borderColor: c.primary,
         padding: spacing.md, marginHorizontal: spacing.lg, marginBottom: spacing.sm,
     },
+    qualityWarn: {
+        flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
+        backgroundColor: c.warning ?? c.error, borderRadius: radius.md,
+        paddingVertical: spacing.sm, paddingHorizontal: spacing.md, marginBottom: spacing.md,
+    },
+    devRerunBtn: {
+        flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
+        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border, borderStyle: 'dashed',
+        borderRadius: radius.md, paddingVertical: spacing.sm, paddingHorizontal: spacing.md,
+        marginHorizontal: spacing.lg, marginBottom: spacing.sm,
+    },
+    devRerunText: { ...typography.labelSmall, color: c.textSecondary },
+    qualityWarnText: { flex: 1, ...typography.labelSmall, color: c.onWarning ?? c.onPrimary, lineHeight: 17 },
     retakeTitle: { fontSize: 14, fontWeight: '800', color: c.textPrimary },
     retakeSub: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
     retakeBtn: { backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 7 },

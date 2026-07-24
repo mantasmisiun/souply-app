@@ -93,6 +93,13 @@ describe('LIST — SP / receipt-line rows', () => {
         expect(formatItemAmount({ quantity: 2, isWeighable: false, unit: 'g', packAmount: 500 }, t)).toBe('2 × 500 g');
         expect(formatItemAmount({ quantity: 1, isWeighable: false, unit: 'l', packAmount: 1 }, t)).toBe('1 × 1 l');
     });
+    // Regression: a PACK COUNT with a fluid canonicalStep must NOT render "2 g"
+    // (the pack-size branch beats the weight heuristic). Lavazza: 2 × 250 g packs.
+    it('L2 pack-count + fluid step: 2 × 250 g, never "2 g"', () => {
+        const r = formatItemAmount({ quantity: 2, isWeighable: false, unit: 'g', packAmount: 250, canonicalStep: 0.5 }, t);
+        expect(r).toBe('2 × 250 g');
+        expect(r).not.toBe('2 g');
+    });
     // L3: count-unit real multipack.
     it('L3 vnt multipack (10-pack): 1 × 10 vnt', () => {
         expect(formatItemAmount({ quantity: 1, isWeighable: false, unit: 'vnt', packAmount: 10 }, t)).toBe('1 × 10 vnt');

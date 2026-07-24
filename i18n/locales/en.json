@@ -16,7 +16,10 @@
     "wrongBody": "Remove this receipt from the trip? The receipt itself stays in your history.",
     "wrongConfirm": "Remove",
     "wrongClosedTitle": "Can't remove anymore",
-    "wrongClosedBody": "Receipts can only be removed from recent trips."
+    "wrongClosedBody": "Receipts can only be removed from recent trips.",
+    "processingTitle": "Processing receipt",
+    "processing": "Scanning…",
+    "statsLowQuality": "This receipt did not scan cleanly — the numbers may not match the paper receipt. Retake the photo for accuracy."
   },
   "tripFinal": {
     "tabReceipt": "Receipts",
@@ -1907,6 +1910,7 @@
     "accuracy": "{{pct}}% accurate · {{count}} items",
     "boughtAs": "bought: {{name}}",
     "qtyNote": "planned ×{{planned}} · bought ×{{bought}}",
-    "note": "While shopping, always compare the recommended product's unit price against other options — Souply might have missed a better deal."
+    "note": "While shopping, always compare the recommended product's unit price against other options — Souply might have missed a better deal.",
+    "lowQuality": "This receipt did not reconcile to its total, so these forecasts may be off. Retake the photo."
   }
 }
