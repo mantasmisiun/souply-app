@@ -10,9 +10,7 @@ import { DockSection } from '../dock/DockSection';
 import { UserAvatar } from '../UserAvatar';
 import { MaterialProgress } from '../MaterialProgress';
 import { getUserId } from '../../config/user';
-import {
-    sendAddressedTripInvite, removeTripMember, type TripMemberInfo,
-} from '../../utils/tripsApi';
+import { type TripMemberInfo } from '../../utils/tripsApi';
 
 /**
  * In-sheet invite pane (dock content swap, not a separate modal):
@@ -20,14 +18,20 @@ import {
  *   QR card (tap → fullscreen) + "Dalintis nuoroda" (native share — the raw
  *   link is never shown), then the SMART chip field (email or @handle; space/
  *   comma/enter commits a chip, × removes) + send, then the member roster.
+ *
+ * Scope-agnostic: the caller injects `onSendInvite` / `onRemoveMember` so the
+ * SAME pane powers trip sharing AND family-shopping (household) sharing.
  */
 export function InvitePane({
-    tripId, inviteUrl, members, onInvitesSent, colors,
+    inviteUrl, members, onInvitesSent, onSendInvite, onRemoveMember, onLeave, colors,
 }: {
-    tripId: number;
     inviteUrl: string | null;
     members: TripMemberInfo[];
     onInvitesSent?: () => void;
+    onSendInvite: (target: { email?: string; handle?: string }) => Promise<void>;
+    onRemoveMember: (userId: string) => Promise<void>;
+    /** When provided, a non-owner sees a leave control on their OWN card. */
+    onLeave?: () => Promise<void>;
     colors: AppTheme;
 }) {
     const { t } = useTranslation();
@@ -53,12 +57,29 @@ export function InvitePane({
                     text: t('invite.removeConfirm'),
                     style: 'destructive',
                     onPress: async () => {
-                        try { await removeTripMember(tripId, m.userId); onInvitesSent?.(); } catch { /* roster refresh shows truth */ }
+                        try { await onRemoveMember(m.userId); onInvitesSent?.(); } catch { /* roster refresh shows truth */ }
                     },
                 },
             ],
         );
-    }, [tripId, onInvitesSent, t]);
+    }, [onRemoveMember, onInvitesSent, t]);
+
+    const confirmLeave = useCallback(() => {
+        Alert.alert(
+            t('invite.leaveTitle'),
+            t('invite.leaveBody'),
+            [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('invite.leaveConfirm'),
+                    style: 'destructive',
+                    onPress: async () => {
+                        try { await onLeave?.(); onInvitesSent?.(); } catch { /* refresh shows truth */ }
+                    },
+                },
+            ],
+        );
+    }, [onLeave, onInvitesSent, t]);
 
     const isValidTarget = (v: string) =>
         /^@?[a-z0-9_.]{3,}$/i.test(v) && v.startsWith('@')
@@ -87,7 +108,7 @@ export function InvitePane({
         setSending(true);
         try {
             for (const c of chips) {
-                await sendAddressedTripInvite(tripId, c.startsWith('@') ? { handle: c } : { email: c });
+                await onSendInvite(c.startsWith('@') ? { handle: c } : { email: c });
             }
             setSentCount(chips.length);
             setChips([]);
@@ -97,7 +118,7 @@ export function InvitePane({
         } finally {
             setSending(false);
         }
-    }, [chips, sending, tripId, onInvitesSent]);
+    }, [chips, sending, onSendInvite, onInvitesSent]);
 
     const shareLink = useCallback(async () => {
         if (!inviteUrl) return;
@@ -197,7 +218,13 @@ export function InvitePane({
                                 {iAmOwner && m.userId !== myId && m.role !== 'owner' && (
                                     <TouchableOpacity onPress={() => confirmRemove(m)} hitSlop={8}
                                         accessibilityLabel={t('invite.removeConfirm')}>
-                                        <Ionicons name="close-circle-outline" size={20} color={colors.textMuted} />
+                                        <Ionicons name="person-remove-outline" size={20} color={colors.textMuted} />
+                                    </TouchableOpacity>
+                                )}
+                                {onLeave && !iAmOwner && m.userId === myId && m.role !== 'owner' && (
+                                    <TouchableOpacity onPress={confirmLeave} hitSlop={8}
+                                        accessibilityLabel={t('invite.leaveConfirm')}>
+                                        <Ionicons name="exit-outline" size={20} color="#E53E3E" />
                                     </TouchableOpacity>
                                 )}
                             </View>

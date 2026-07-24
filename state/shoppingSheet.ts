@@ -35,6 +35,20 @@ interface ShoppingSheetState {
      *  the Shopping card animates out immediately, before the next re-fetch. */
     removeTripByBasket: ((basketId: number) => void) | null;
     setRemoveTripByBasket: (fn: ((basketId: number) => void) | null) => void;
+
+    // ── Android back bridge (Shopping tab) ──────────────────────────────
+    /** Dock detent: 0 collapsed, >0 expanded. Set by the dock. */
+    sheetStage: number;
+    setSheetStage: (n: number) => void;
+    /** The dock's inner sub-view ('main' | 'family' | 'upload'). */
+    sheetView: string;
+    setSheetView: (v: string) => void;
+    /** Collapse the dock to its bar (set by the dock while on the shopping root). */
+    collapseSheet: (() => void) | null;
+    setCollapseSheet: (fn: (() => void) | null) => void;
+    /** Pop one in-sheet sub-pane back to main (set by ShoppingSheet). */
+    sheetGoBack: (() => void) | null;
+    setSheetGoBack: (fn: (() => void) | null) => void;
 }
 
 export const useShoppingSheet = create<ShoppingSheetState>((set) => ({
@@ -52,4 +66,12 @@ export const useShoppingSheet = create<ShoppingSheetState>((set) => ({
     setRefreshTrips: (fn) => set({ refreshTrips: fn }),
     removeTripByBasket: null,
     setRemoveTripByBasket: (fn) => set({ removeTripByBasket: fn }),
+    sheetStage: 0,
+    setSheetStage: (n) => set({ sheetStage: n }),
+    sheetView: 'main',
+    setSheetView: (v) => set({ sheetView: v }),
+    collapseSheet: null,
+    setCollapseSheet: (fn) => set({ collapseSheet: fn }),
+    sheetGoBack: null,
+    setSheetGoBack: (fn) => set({ sheetGoBack: fn }),
 }));

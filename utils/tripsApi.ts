@@ -86,6 +86,10 @@ export interface TripReceipt {
     /** 1 when the purchase date is >30 days old — a stale-receipt flag shown to
      *  all trip members (red badge + red note). */
     staleReceipt?: number;
+    /** Low scan quality (unreadable-line fraction OR a reconciliation gap) →
+     *  offer a retake/heal. `unmatchedCount` is the user-facing "N unrecognised". */
+    lowQuality?: boolean;
+    unmatchedCount?: number;
     items: TripReceiptItem[];
 }
 
@@ -115,7 +119,7 @@ export interface HouseholdInfo {
     name: string | null;
     role: string;
     sharedBasketId: number | null;
-    members: { userId: string; role: string; joinedAt: string }[];
+    members: { userId: string; role: string; joinedAt: string; label?: string | null; avatarColor?: string | null }[];
 }
 
 export const fetchOwnHousehold = async (): Promise<HouseholdInfo | null> => {
@@ -135,6 +139,18 @@ export const createOwnHousehold = async (name?: string): Promise<{ householdId: 
 export const createHouseholdInviteUrl = async (): Promise<string> => {
     const r = await jsonOrThrow(await fetch(`${API_BASE_URL}/api/households/mine/invites`, { method: 'POST' }));
     return `https://souply.lt/join/${r.code}`;
+};
+
+/** Addressed household invite: registered user → in-app notification; unknown
+ *  email → branded invite email. Oracle-free response either way. */
+export const sendAddressedHouseholdInvite = async (
+    target: { email?: string; handle?: string },
+): Promise<void> => {
+    await jsonOrThrow(await fetch(`${API_BASE_URL}/api/households/mine/invites`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(target),
+    }));
 };
 
 /** Leave the current household (last member leaving dissolves it). */

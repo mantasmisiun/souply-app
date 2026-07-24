@@ -1,21 +1,16 @@
-import { View, Text, TouchableOpacity, StyleSheet, Image, Modal, Switch, Share } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Image, Dimensions } from 'react-native';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import Animated, { useAnimatedStyle, useSharedValue, withTiming, Easing } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming, Easing, interpolate, runOnJS } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { MaterialProgress } from '../MaterialProgress';
 import { SheetCard } from '../SheetCard';
-import { ConfirmModal } from '../ConfirmModal';
-import { BrandedQR } from '../BrandedQR';
+import { DockActionCard } from '../dock/DockActionCard';
+import { FamilyShoppingPane } from './FamilyShoppingPane';
+import { ReceiptUploadPane } from './ReceiptUploadPane';
 import { useTheme, useResolvedScheme, spacing, radius, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { useShoppingSheet } from '../../state/shoppingSheet';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
-import {
-    createOwnHousehold, fetchOwnHousehold, createHouseholdInviteUrl,
-    leaveHousehold, removeHouseholdMember,
-} from '../../utils/tripsApi';
-import { formatDate } from '../../utils/formatCurrency';
 import i18n from '../../i18n';
 
 /**
@@ -27,6 +22,9 @@ import i18n from '../../i18n';
 
 type Phase = 'menu' | 'loading' | 'gate' | 'preview';
 type Mode = 'popular' | 'discounts' | 'personal';
+type SheetView = 'main' | 'family' | 'upload';
+
+const SCREEN_W = Dimensions.get('window').width;
 
 interface PreviewItem {
     productId: number;
@@ -106,64 +104,8 @@ export function ShoppingSheet({ collapse }: { collapse: () => void }) {
     const household = useShoppingSheet(s => s.household);
     const refreshTrips = useShoppingSheet(s => s.refreshTrips);
 
-    const [myId, setMyId] = useState<string | null>(null);
-    useEffect(() => { void getUserId().then(setMyId); }, []);
-
-    // ── Family section ───────────────────────────────────────────────────
-    const [familyOpen, setFamilyOpen] = useState(false);
-    const [familyBusy, setFamilyBusy] = useState(false);
-    const [inviteOpen, setInviteOpen] = useState(false);
-    const [inviteUrl, setInviteUrl] = useState<string | null>(null);
-    const [confirm, setConfirm] = useState<
-        | { kind: 'remove'; userId: string }
-        | { kind: 'leave' }
-        | null
-    >(null);
-    const [confirmBusy, setConfirmBusy] = useState(false);
-
-    const refreshHousehold = async () => {
-        const hh = await fetchOwnHousehold().catch(() => null);
-        useShoppingSheet.getState().setHousehold(hh);
-    };
-
-    const onFamilyToggle = async (on: boolean) => {
-        setFamilyOpen(on);
-        if (on && !household && !familyBusy) {
-            // First enable mints the household (the old create-card behavior).
-            setFamilyBusy(true);
-            try {
-                await createOwnHousehold();
-                await refreshHousehold();
-                refreshTrips?.();
-            } catch { setFamilyOpen(false); }
-            finally { setFamilyBusy(false); }
-        }
-    };
-
-    const openInvite = async () => {
-        setInviteOpen(true);
-        setInviteUrl(null);
-        try { setInviteUrl(await createHouseholdInviteUrl()); }
-        catch { setInviteOpen(false); }
-    };
-
-    const runConfirm = async () => {
-        if (!confirm || confirmBusy) return;
-        setConfirmBusy(true);
-        try {
-            if (confirm.kind === 'remove') await removeHouseholdMember(confirm.userId);
-            else await leaveHousehold();
-            await refreshHousehold();
-            refreshTrips?.();
-            if (confirm.kind === 'leave') setFamilyOpen(false);
-            setConfirm(null);
-        } catch { /* keep modal open — user can retry/cancel */ }
-        finally { setConfirmBusy(false); }
-    };
-
-    const isOwner = household?.role === 'owner';
-    const memberLabel = (m: { userId: string; joinedAt: string }, idx: number): string =>
-        m.userId === myId ? t('smartBasket.familyYou') : t('smartBasket.familyMember', { n: idx + 1 });
+    // ── Top actions: family-shopping + receipt-upload (in-sheet panes) ───
+    const [view, setView] = useState<SheetView>('main');
 
     // ── AI Basket flow ───────────────────────────────────────────────────
     const [phase, setPhase] = useState<Phase>('menu');
@@ -253,79 +195,90 @@ export function ShoppingSheet({ collapse }: { collapse: () => void }) {
 
     const sep = <View style={styles.sep} />;
 
+    // ── In-sheet navigation: a horizontal push/pop between the main body and
+    //    the sub-panes, matching the native screen transition — the incoming
+    //    pane slides in from the right (main → sub), and Back reverses it. ──
+    const [prevView, setPrevView] = useState<SheetView | null>(null);
+    const slide = useSharedValue(1);   // 1 = settled
+    const dir = useSharedValue(1);     // +1 forward (in from right), -1 back (in from left)
+    const navigate = (to: SheetView) => {
+        if (to === view) return;
+        dir.value = to === 'main' ? -1 : 1;
+        setPrevView(view);
+        setView(to);
+        slide.value = 0;
+        slide.value = withTiming(1, { duration: 280, easing: Easing.out(Easing.cubic) }, (finished) => {
+            if (finished) runOnJS(setPrevView)(null);
+        });
+    };
+    const incomingStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: interpolate(slide.value, [0, 1], [dir.value * SCREEN_W, 0]) }],
+    }));
+    const outgoingStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: interpolate(slide.value, [0, 1], [0, -dir.value * SCREEN_W]) }],
+    }));
+
+    // Publish in-sheet nav to the Android back bridge (basket tab peels
+    // sub-pane → main before collapsing the dock).
+    const navigateRef = useRef(navigate);
+    navigateRef.current = navigate;
+    useEffect(() => { useShoppingSheet.getState().setSheetView(view); }, [view]);
+    useEffect(() => {
+        const s = useShoppingSheet.getState();
+        s.setSheetGoBack(() => navigateRef.current('main'));
+        return () => { s.setSheetGoBack(null); s.setSheetView('main'); };
+    }, []);
+
+    const renderView = (v: SheetView) => {
+        if (v === 'family') return <FamilyShoppingPane onBack={() => navigate('main')} />;
+        if (v === 'upload') return <ReceiptUploadPane onBack={() => navigate('main')} />;
+        return renderMain();
+    };
+
     return (
-        <View style={styles.body}>
+        <View style={styles.pager}>
+            <Animated.View style={[styles.body, incomingStyle]}>
+                {renderView(view)}
+            </Animated.View>
+            {prevView != null && (
+                <Animated.View style={[styles.body, styles.pagerBelow, outgoingStyle]} pointerEvents="none">
+                    {renderView(prevView)}
+                </Animated.View>
+            )}
+        </View>
+    );
+
+    function renderMain() {
+        return (
+        <>
             <Text style={styles.sheetHeading}>{t('smartBasket.sheetTitle')}</Text>
 
-
-
-            {/* ── Family list ─────────────────────────────────────────── */}
-            <SheetCard>
-                <View style={styles.row}>
-                    <View style={styles.rowIcon}>
-                        <Ionicons name="home-outline" size={20} color={colors.primary} />
-                    </View>
-                    <View style={{ flex: 1 }}>
-                        <Text style={styles.rowTitle}>{household?.name ?? t('smartBasket.familyTitle')}</Text>
-                        {household ? (
-                            <Text style={styles.rowSub}>{t('trips.householdMembers', { count: household.members.length })}</Text>
-                        ) : null}
-                    </View>
-                    {familyBusy
-                        ? <MaterialProgress size="small" color={colors.primary} />
-                        : (
-                            <Switch
-                                value={familyOpen}
-                                onValueChange={(v) => { void onFamilyToggle(v); }}
-                                trackColor={{ false: colors.border, true: colors.primary }}
-                                thumbColor={colors.onPrimary}
-                            />
-                        )}
-                </View>
-                {familyOpen && household && (
-                    <>
-                        {sep}
-                        {isOwner && (
-                            <TouchableOpacity style={styles.row} onPress={() => { void openInvite(); }}>
-                                <View style={[styles.rowIcon, styles.addIcon]}>
-                                    <Ionicons name="person-add" size={18} color={colors.onPrimary} />
-                                </View>
-                                <Text style={styles.rowTitle}>{t('smartBasket.familyAddMember')}</Text>
-                            </TouchableOpacity>
-                        )}
-                        {household.members.map((m, idx) => (
-                            <View key={m.userId}>
-                                {(isOwner || idx > 0) && sep}
-                                <View style={styles.row}>
-                                    <View style={styles.rowIcon}>
-                                        <Ionicons name={m.role === 'owner' ? 'star-outline' : 'person-outline'} size={18} color={colors.primary} />
-                                    </View>
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.rowTitle}>{memberLabel(m, idx)}</Text>
-                                        <Text style={styles.rowSub}>{formatDate(m.joinedAt)}</Text>
-                                    </View>
-                                    {isOwner && m.userId !== myId && (
-                                        <TouchableOpacity onPress={() => setConfirm({ kind: 'remove', userId: m.userId })} hitSlop={8}>
-                                            <Ionicons name="close-circle-outline" size={22} color={colors.textMuted} />
-                                        </TouchableOpacity>
-                                    )}
-                                </View>
+            {/* ── Top actions: Family shopping + Receipt upload ─────────── */}
+            <View style={styles.actionRow}>
+                <DockActionCard
+                    colors={colors}
+                    icon="home"
+                    title={t('smartBasket.familyTitle')}
+                    subtitle={household
+                        ? t('trips.householdMembers', { count: household.members.length })
+                        : t('family.disabled')}
+                    onPress={() => navigate('family')}
+                />
+                <DockActionCard
+                    colors={colors}
+                    iconNode={
+                        <View style={styles.uploadIcon}>
+                            <Ionicons name="receipt-outline" size={24} color={colors.primary} />
+                            <View style={styles.uploadPlus}>
+                                <Ionicons name="add" size={11} color="#FFFFFF" />
                             </View>
-                        ))}
-                        {!isOwner && (
-                            <>
-                                {sep}
-                                <TouchableOpacity style={styles.row} onPress={() => setConfirm({ kind: 'leave' })}>
-                                    <View style={[styles.rowIcon, styles.leaveIcon]}>
-                                        <Ionicons name="exit-outline" size={18} color="#E53E3E" />
-                                    </View>
-                                    <Text style={[styles.rowTitle, { color: '#E53E3E' }]}>{t('smartBasket.familyLeave')}</Text>
-                                </TouchableOpacity>
-                            </>
-                        )}
-                    </>
-                )}
-            </SheetCard>
+                        </View>
+                    }
+                    title={t('family.uploadTitle')}
+                    subtitle={t('family.uploadSub')}
+                    onPress={() => navigate('upload')}
+                />
+            </View>
 
             {/* ── AI Basket ───────────────────────────────────────────── */}
             <SheetCard>
@@ -404,58 +357,32 @@ export function ShoppingSheet({ collapse }: { collapse: () => void }) {
                     </>
                 )}
             </SheetCard>
-
-            {/* ── Invite sheet (Add new member) ───────────────────────── */}
-            <Modal visible={inviteOpen} transparent animationType="slide" onRequestClose={() => setInviteOpen(false)}>
-                <TouchableOpacity style={styles.inviteBackdrop} activeOpacity={1} onPress={() => setInviteOpen(false)}>
-                    <View style={styles.inviteSheet} onStartShouldSetResponder={() => true}>
-                        <View style={styles.grabber} />
-                        <Text style={styles.inviteTitle}>{t('smartBasket.inviteTitle')}</Text>
-                        <Text style={styles.rowSub}>{t('smartBasket.inviteBody')}</Text>
-                        <View style={styles.qrWrap}>
-                            {inviteUrl
-                                ? <BrandedQR value={inviteUrl} size={200} />
-                                : <MaterialProgress size="large" color={colors.primary} />}
-                        </View>
-                        <TouchableOpacity
-                            style={[styles.createBtn, !inviteUrl && { opacity: 0.5 }]}
-                            disabled={!inviteUrl}
-                            onPress={() => { if (inviteUrl) void Share.share({ message: inviteUrl }); }}
-                        >
-                            <Text style={styles.createBtnText}>{t('smartBasket.inviteShare')}</Text>
-                        </TouchableOpacity>
-                    </View>
-                </TouchableOpacity>
-            </Modal>
-
-            <ConfirmModal
-                visible={confirm != null}
-                title={confirm?.kind === 'leave' ? t('smartBasket.leaveTitle') : t('smartBasket.removeTitle')}
-                body={confirm?.kind === 'leave' ? t('smartBasket.leaveBody') : t('smartBasket.removeBody')}
-                confirmLabel={confirm?.kind === 'leave' ? t('smartBasket.familyLeave') : t('smartBasket.removeConfirm')}
-                cancelLabel={t('common.cancel')}
-                destructive
-                busy={confirmBusy}
-                onConfirm={() => { void runConfirm(); }}
-                onClose={() => { if (!confirmBusy) setConfirm(null); }}
-            />
-        </View>
-    );
+        </>
+        );
+    }
 }
 
 const makeStyles = (c: AppTheme, _isDark: boolean) => StyleSheet.create({
+    pager: { overflow: 'hidden' },
+    pagerBelow: { position: 'absolute', top: 0, left: 0, right: 0 },
     body: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.sm, gap: spacing.md },
     sheetHeading: { fontSize: 22, fontWeight: '700', color: c.textPrimary, paddingTop: spacing.xs, paddingBottom: spacing.xs },
     cardTitle: { fontSize: 20, fontWeight: '800', color: c.textPrimary, paddingVertical: spacing.md },
     filterRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
+    actionRow: { flexDirection: 'row', gap: spacing.md },
+    // Upload button glyph: receipt icon + a white "+" in a pink dot.
+    uploadIcon: { width: 26, height: 26, alignItems: 'center', justifyContent: 'center' },
+    uploadPlus: {
+        position: 'absolute', top: -3, right: -4, width: 14, height: 14, borderRadius: 7,
+        backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center',
+        borderWidth: 1.5, borderColor: c.cardBackground,
+    },
     row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 10 },
     rowIcon: {
         width: 40, height: 40, borderRadius: 20,
         backgroundColor: c.primaryMuted ?? c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
     },
-    addIcon: { backgroundColor: c.primary },
-    leaveIcon: { backgroundColor: 'rgba(229,62,62,0.12)' },
     rowTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
     rowSub: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
     sep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem },
@@ -474,13 +401,4 @@ const makeStyles = (c: AppTheme, _isDark: boolean) => StyleSheet.create({
     },
     createBtnText: { fontSize: 14, fontWeight: '800', color: c.onPrimary },
     errorText: { fontSize: 13, color: '#E53E3E', paddingBottom: spacing.xs },
-    inviteBackdrop: { flex: 1, backgroundColor: c.overlayBackdrop, justifyContent: 'flex-end' },
-    inviteSheet: {
-        backgroundColor: c.cardBackground,
-        borderTopLeftRadius: radius.xl ?? 24, borderTopRightRadius: radius.xl ?? 24,
-        padding: spacing.xl, gap: spacing.sm, alignItems: 'stretch',
-    },
-    grabber: { alignSelf: 'center', width: 40, height: 5, borderRadius: 3, backgroundColor: c.border, marginBottom: spacing.sm },
-    inviteTitle: { fontSize: 18, fontWeight: '800', color: c.textPrimary },
-    qrWrap: { alignItems: 'center', paddingVertical: spacing.lg, minHeight: 220, justifyContent: 'center' },
 });

@@ -13,6 +13,7 @@ import { formatDate } from '../../utils/formatCurrency';
 import { formatWeekdayDate } from '../../utils/formatDayDate';
 import { TemplateCoverEditor, type CoverDraft } from '../TemplateCoverEditor';
 import { ShoppingSheet } from './ShoppingSheet';
+import { useShoppingSheet } from '../../state/shoppingSheet';
 import { createTemplate } from '../../utils/basketTemplatesApi';
 import { getUserId } from '../../config/user';
 
@@ -78,6 +79,18 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
         setCollapseDock(() => { if (atFull()) return; controls.current?.collapse(); });
         return () => setCollapseDock(null);
     }, [hasSheet, setCollapseDock]);
+
+    // Android back bridge: expose collapse while on the Shopping root so the
+    // tab's back handler can close the dock; reset stage on leave.
+    useEffect(() => {
+        if (!onShoppingRoot) return;
+        useShoppingSheet.getState().setCollapseSheet(() => controls.current?.collapse());
+        return () => {
+            const s = useShoppingSheet.getState();
+            s.setCollapseSheet(null);
+            s.setSheetStage(0);
+        };
+    }, [onShoppingRoot]);
 
     // Raise the chooser to medium when the Add flow requests it. Nonce-driven +
     // gated on hasSheet so it fires once the sheet is actually mounted (the
@@ -234,6 +247,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                 // their Add buttons stop spinning.
                 onStageChange: (stage) => {
                     stageRef.current = stage;
+                    if (onShoppingRoot) useShoppingSheet.getState().setSheetStage(stage);
                     if (stage !== 0 || onShoppingRoot) return;
                     const s = useBasketSession.getState();
                     if (s.target == null && s.pendingAdds.length > 0) cancelPending();

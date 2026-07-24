@@ -16,6 +16,7 @@ import { MaterialProgress } from '@/components/MaterialProgress';
 import { useTheme, type AppTheme } from '../../constants/theme';
 import { ScreenBackButton } from '../../components/ScreenBackButton';
 import { NamePromptModal } from '../../components/NamePromptModal';
+import { ConfirmModal } from '../../components/ConfirmModal';
 import { useProfileStore } from '../../state/profileStore';
 import { patchProfileFields } from '../../utils/authApi';
 import {
@@ -34,6 +35,9 @@ export default function JoinInviteScreen() {
     const [state, setState] = useState<'loading' | 'ready' | 'invalid' | 'joined'>('loading');
     const [busy, setBusy] = useState(false);
     const [namePrompt, setNamePrompt] = useState(false);
+    // "Already in a family shopping" guard — a household invite while already in
+    // one prompts Leave (destructive) vs Stay (neutral) before the retry.
+    const [leaveConfirm, setLeaveConfirm] = useState(false);
     const profile = useProfileStore(s => s.profile);
     const fetchProfile = useProfileStore(s => s.fetchProfile);
     // A shared trip/home needs everyone identifiable — resolve whether the
@@ -74,33 +78,26 @@ export default function JoinInviteScreen() {
             setState('joined');
         } catch (e) {
             if (e instanceof HouseholdExistsError) {
-                // ONE household per user — confirm leaving before the retry.
-                Alert.alert(
-                    t('joinInvite.leaveFirstTitle'),
-                    t('joinInvite.leaveFirstBody'),
-                    [
-                        { text: t('common.cancel'), style: 'cancel' },
-                        {
-                            text: t('joinInvite.leaveFirstConfirm'),
-                            style: 'destructive',
-                            onPress: async () => {
-                                try {
-                                    setBusy(true);
-                                    await leaveOwnHousehold();
-                                    await claimJoin(String(code));
-                                    setState('joined');
-                                } catch {
-                                    Alert.alert(t('joinInvite.errorTitle'), t('joinInvite.errorBody'));
-                                } finally {
-                                    setBusy(false);
-                                }
-                            },
-                        },
-                    ],
-                );
+                // ONE household per user — Leave/Stay modal before the retry.
+                setLeaveConfirm(true);
             } else {
                 Alert.alert(t('joinInvite.errorTitle'), t('joinInvite.errorBody'));
             }
+        } finally {
+            setBusy(false);
+        }
+    };
+
+    const leaveThenClaim = async () => {
+        if (!code) return;
+        setLeaveConfirm(false);
+        try {
+            setBusy(true);
+            await leaveOwnHousehold();
+            await claimJoin(String(code));
+            setState('joined');
+        } catch {
+            Alert.alert(t('joinInvite.errorTitle'), t('joinInvite.errorBody'));
         } finally {
             setBusy(false);
         }
@@ -183,6 +180,17 @@ export default function JoinInviteScreen() {
                 visible={namePrompt}
                 onSubmit={submitName}
                 onCancel={() => setNamePrompt(false)}
+            />
+            <ConfirmModal
+                visible={leaveConfirm}
+                title={t('joinInvite.leaveFirstTitle')}
+                body={t('joinInvite.leaveFirstBody')}
+                confirmLabel={t('joinInvite.leaveFirstConfirm')}
+                cancelLabel={t('joinInvite.leaveFirstStay')}
+                destructive
+                busy={busy}
+                onConfirm={() => { void leaveThenClaim(); }}
+                onClose={() => { if (!busy) setLeaveConfirm(false); }}
             />
         </>
     );

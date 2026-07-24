@@ -34,7 +34,7 @@ import StoreResultsMap, { type MapPin } from '../results/StoreResultsMap';
 import StoreOptionsDock from '../results/StoreOptionsDock';
 import { LiquidGlass } from '../LiquidGlass';
 import { buildSplitOptions, TRIP_RADIUS_KM, type SheetOption } from '../../utils/splitOptions';
-import { fetchTrips, createTripInviteUrl, fetchTripMembers, type TripMemberInfo } from '../../utils/tripsApi';
+import { fetchTrips, createTripInviteUrl, fetchTripMembers, sendAddressedTripInvite, removeTripMember, type TripMemberInfo } from '../../utils/tripsApi';
 import { InvitePane } from './InvitePane';
 import { formatEuro } from '../../utils/formatCurrency';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
@@ -1256,10 +1256,11 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                         content: invitePane && tripId != null ? (
                             <View style={styles.dockContent}>
                                 <InvitePane
-                                    tripId={tripId}
                                     inviteUrl={inviteUrl}
                                     members={members}
                                     colors={colors}
+                                    onSendInvite={(target) => sendAddressedTripInvite(tripId, target)}
+                                    onRemoveMember={(userId) => removeTripMember(tripId, userId)}
                                     onInvitesSent={() => void refreshMembers(tripId)}
                                 />
                             </View>

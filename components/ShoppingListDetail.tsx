@@ -11,10 +11,10 @@ import {
     ScrollView,
 } from "react-native";
 import Animated, {
-    useSharedValue, useAnimatedStyle, withTiming, withSpring, LinearTransition,
+    useSharedValue, useAnimatedStyle, withSpring, LinearTransition,
 } from 'react-native-reanimated';
-import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ProgressGlow } from './ProgressGlow';
 import { LiquidGlass } from './LiquidGlass';
 import { SkeletonBox } from './SkeletonBox';
 import { useRouter, useFocusEffect } from 'expo-router';
@@ -515,12 +515,6 @@ export function ShoppingListDetail({
     const totalCount = items.length;
     const progress = totalCount > 0 ? checkedCount / totalCount : 0;
 
-    // Top-edge progress glow — animates to the active list's fraction. Keyed
-    // remount (store switch) resets it to that store's own progress.
-    const glow = useSharedValue(0);
-    useEffect(() => { glow.value = withTiming(progress, { duration: 400 }); }, [progress]);
-    const glowStyle = useAnimatedStyle(() => ({ width: `${glow.value * 100}%` }));
-
     const { rows } = useMemo(() => {
         const visible = items.slice(0, visibleCount);
         const unchecked = visible.filter(i => !i.isChecked);
@@ -862,20 +856,7 @@ export function ShoppingListDetail({
                         Replaces the old inline progress bar; reflects the ACTIVE
                         store's fraction (remount resets per store). */}
                     {(unified || list?.status === 'active') && totalCount > 0 && (
-                        <View pointerEvents="none" style={styles.glowWrap}>
-                            <Animated.View style={[styles.glowFill, glowStyle]}>
-                                <View style={styles.glowLine} />
-                                <Svg width="100%" height={14} style={styles.glowBloom}>
-                                    <Defs>
-                                        <SvgLinearGradient id="listGlow" x1="0" y1="0" x2="0" y2="1">
-                                            <Stop offset="0" stopColor={colors.primary} stopOpacity="0.55" />
-                                            <Stop offset="1" stopColor={colors.primary} stopOpacity="0" />
-                                        </SvgLinearGradient>
-                                    </Defs>
-                                    <Rect x="0" y="0" width="100%" height="14" fill="url(#listGlow)" />
-                                </Svg>
-                            </Animated.View>
-                        </View>
+                        <ProgressGlow fraction={progress} />
                     )}
 
                     {/* ALWAYS MOUNTED (opacity toggle): the toast unmounting on the
@@ -1203,15 +1184,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
 
     // Search + 3-dot sit side by side in the header's right slot.
     headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
-
-    // ── Top-edge progress glow ────────────────────────────────────────────────
-    // Pinned over the very top of the screen (above the header). The fill's
-    // width animates to the active list's fraction; a 3px line rides a soft
-    // downward bloom.
-    glowWrap: { position: 'absolute', top: 0, left: 0, right: 0, height: 17, zIndex: 30, elevation: 30 },
-    glowFill: { height: '100%' },
-    glowLine: { height: 3, backgroundColor: c.primary },
-    glowBloom: { marginTop: 0 },
 
     scrollContent: { paddingBottom: spacing.xxxl },
     listInner: { paddingTop: spacing.sm, paddingHorizontal: spacing.md },

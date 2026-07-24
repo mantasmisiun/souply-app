@@ -18,7 +18,8 @@ import { InvitePane } from '../../components/results/InvitePane';
 import { BottomSheet } from '../../components/BottomSheet';
 import { ReceiptUploadSheet } from '../../components/ReceiptUploadSheet';
 import {
-    fetchTrips, createTripInviteUrl, fetchTripMembers, fetchTripReceipts, type TripMemberInfo,
+    fetchTrips, createTripInviteUrl, fetchTripMembers, fetchTripReceipts,
+    sendAddressedTripInvite, removeTripMember, type TripMemberInfo,
 } from '../../utils/tripsApi';
 import { getMiniLogoUrl, chainBrandName, chainIdByName } from '../../utils/chainBrandName';
 import { type UnifiedSource } from '../../components/ShoppingListDetail';
@@ -460,9 +461,10 @@ export default function UnifiedShoppingListScreen() {
             <BottomSheet visible={inviteOpen} onClose={() => setInviteOpen(false)} title={t('shoppingListDetail.inviteAction')} icon="person-add">
                 {resolvedTripId != null && (
                     <InvitePane
-                        tripId={resolvedTripId}
                         inviteUrl={inviteUrl}
                         members={members}
+                        onSendInvite={(target) => sendAddressedTripInvite(resolvedTripId, target)}
+                        onRemoveMember={(userId) => removeTripMember(resolvedTripId, userId)}
                         onInvitesSent={() => void refreshMembers(resolvedTripId)}
                         colors={colors}
                     />
