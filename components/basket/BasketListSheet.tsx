@@ -40,6 +40,8 @@ interface PreviewItem {
     imageUrl: string | null;
     isWeighable: boolean;
     canonicalUnit: string | null;
+    canonicalFamily: 'fluid' | 'count' | null;
+    canonicalStep: number | null;
 }
 
 export function BasketListSheet() {
@@ -106,6 +108,8 @@ export function BasketListSheet() {
                 imageUrl: Array.isArray(it.imageUrls) ? it.imageUrls.find(Boolean) ?? null : null,
                 isWeighable: !!it.isWeighable,
                 canonicalUnit: it.canonicalUnit ?? null,
+                canonicalFamily: it.canonicalFamily ?? null,
+                canonicalStep: it.canonicalStep ?? null,
             }));
             setItems(rows);
             setCount(rows.length);

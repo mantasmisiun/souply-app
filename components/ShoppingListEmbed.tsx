@@ -10,7 +10,7 @@ import { useState, useCallback, useMemo } from 'react';
 import { useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTheme, type AppTheme } from '../constants/theme';
-import { isWeighableDisplay } from '../utils/weighable';
+import { formatItemAmount } from '../utils/amountDisplay';
 import { API_BASE_URL } from '../config/api';
 import { formatEuro } from '../utils/formatCurrency';
 import { ProductImage } from './ProductImage';
@@ -242,7 +242,7 @@ function EmbedItemCard({ item, onToggle, onDelete, styles, colors }: ItemCardPro
                         {item.productName}
                     </Text>
                     <Text style={styles.itemMeta}>
-                        {item.quantity} {isWeighableDisplay(item.isWeighable, item.quantity) ? 'kg' : 'vnt.'}
+                        {formatItemAmount({ quantity: item.quantity, isWeighable: item.isWeighable, unit: item.unit })}
                         {item.price ? ` · ${formatEuro(item.price)}` : ''}
                     </Text>
                 </View>

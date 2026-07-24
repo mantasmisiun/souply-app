@@ -1,4 +1,5 @@
 import type { TripReceipt } from './tripsApi';
+import { fmtSize, unitLabel } from './amountDisplay';
 
 /**
  * Collapses a trip's receipt lines for the identified-items list: lines matched
@@ -94,12 +95,14 @@ export function mergeReceiptItems(receipts: TripReceipt[]): MergedReceiptItem[] 
  */
 export function mergedQtyLabel(m: MergedReceiptItem): string {
     const unit = (m.unit ?? '').toLowerCase();
-    if (unit.includes('kg')) {
-        const w = parseFloat(m.quantity.toFixed(3));
-        return `${w} kg`;
-    }
+    const asWeight = (kg: number) => {
+        const s = fmtSize(kg, 'kg');            // grams/kg polish, shared everywhere
+        return `${s.value} ${unitLabel(s.unit)}`;
+    };
+    if (unit.includes('kg')) return asWeight(m.quantity);
+    // Several merged lines of the same pack → "N × pack size".
     if (m.count > 1 && m.sizeUnit) return `${m.count} × ${m.sizeUnit}`;
     // A fractional qty is a weight even without a 'kg' unit; else a piece count.
-    if (m.quantity % 1 !== 0) return `${parseFloat(m.quantity.toFixed(3))} kg`;
+    if (m.quantity % 1 !== 0) return asWeight(m.quantity);
     return `${Math.max(1, Math.round(m.quantity))} vnt`;
 }

@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { QuantityControl } from './QuantityControl';
 import AmountPickerModal from './AmountPickerModal';
-import { resolveCanonicalStep, resolveDisplayUnitKey, resolveDisplayAmount } from '../utils/canonicalStep';
+import { productStep, productUsesPicker, productAmountParts, unitLabel } from '../utils/amountDisplay';
 import { useTheme, radius, type AppTheme } from '../constants/theme';
 
 /**
@@ -14,13 +14,11 @@ import { useTheme, radius, type AppTheme } from '../constants/theme';
  * card, product detail, list sheet, search and discounts. It owns everything
  * those surfaces used to copy-paste:
  *   · the toggle: an Add button when quantity is 0, else the QuantityControl;
- *   · the weighable/range decision: tapping Add (or the stepper centre) opens
- *     the AmountPickerModal for weighable or min≠max range items, otherwise it
- *     adds one canonical step directly;
- *   · canonical stepping for +/− (0.1 for weighable kg, 1 for count) with
- *     drop-below-one-step removal;
- *   · each item's unit shown next to the amount, localised (kg / l / pcs /
- *     packs / rolls), via resolveDisplayUnitKey + t('units.*').
+ *   · the weight/count decision: WEIGHT items (canonicalFamily 'fluid') open the
+ *     AmountPickerModal on tap and step 0.1; COUNT items add one directly and
+ *     step 1 — all via utils/amountDisplay (productUsesPicker / productStep);
+ *   · the amount + unit shown next to the stepper, with grams/ml polish, via
+ *     productAmountParts + unitLabel — the SAME formatter every surface uses.
  *
  * Persistence stays with the caller: `onCommit(qty)` is called with the new
  * quantity (0 = remove) and the parent writes it (draft basket / session /
@@ -60,8 +58,6 @@ interface Props {
 }
 
 const weighable = (p: SteppableProduct) => !!(p.isWeighable ?? p.hasWeighable);
-const isRange = (p: SteppableProduct) =>
-    p.minAmount != null && p.maxAmount != null && p.minAmount !== p.maxAmount;
 
 export function AddOrStepper({
     product, quantity, onCommit, size = 'default', addLabel, addIcon = 'cart-outline',
@@ -73,12 +69,15 @@ export function AddOrStepper({
     const styles = useMemo(() => makeStyles(colors, lg), [colors, lg]);
     const [pickerOpen, setPickerOpen] = useState(false);
 
-    const step = resolveCanonicalStep(product);
-    const usesPicker = !noPicker && (isRange(product) || weighable(product));
-    // Localised unit next to the amount (kg / l / pcs / packs / rolls). The KEY
-    // is derived from the canonical unit + weighable flag only — NEVER the raw
-    // 'g' unit — so a countable item (a book, a can) reads "1 pcs", not "1 kg".
-    const unit = t(`units.${resolveDisplayUnitKey(product)}`);
+    // ONE signal drives step / picker / display — canonicalFamily (see
+    // utils/amountDisplay). Weight items step 0.1 and open the picker; count
+    // items step 1 and add directly.
+    const step = productStep(product);
+    const usesPicker = !noPicker && productUsesPicker(product);
+    // The amount + unit shown in the stepper: weight items in kg/l with grams/ml
+    // polish (0.5 → "500 g"), count items as an integer count. Never divides.
+    const parts = productAmountParts(product, quantity);
+    const unit = unitLabel(parts.unit, t);
 
     const onAdd = useCallback(() => {
         if (busy) return;
@@ -101,7 +100,7 @@ export function AddOrStepper({
         <>
             {quantity > 0 ? (
                 <QuantityControl
-                    quantity={resolveDisplayAmount(product, quantity)}
+                    quantity={parts.value}
                     unit={unit}
                     size={size}
                     onDecrement={dec}

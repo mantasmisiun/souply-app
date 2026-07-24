@@ -37,7 +37,7 @@ import { useTheme, spacing, radius, elevation, iconSize, avatarSize, typography,
 import * as Haptics from 'expo-haptics';
 import { formatEuro } from '../utils/formatCurrency';
 import { formatStoreStreet } from '../utils/formatAddress';
-import { isWeighableDisplay } from '../utils/weighable';
+import { formatItemAmount, fmtSize, unitLabel } from '../utils/amountDisplay';
 import { chainBrandName } from '../utils/chainBrandName';
 import { useTranslation } from 'react-i18next';
 
@@ -163,16 +163,12 @@ function ShoppingListItemCard({ item, isMine, onToggle, onRemove, storeBadge, st
                         {item.productName}
                     </Text>
                     <Text style={styles.itemQuantity} numberOfLines={1}>
-                        {(() => {
-                            if (isWeighableDisplay(item.isWeighable, item.quantity)) {
-                                return item.quantity < 10 ? `${item.quantity} kg` : `${item.quantity} g`;
-                            }
-                            const amt = Number(item.amount);
-                            if (item.storeProductId && Number.isFinite(amt) && amt > 0 && item.unit) {
-                                return `${item.quantity} × ${fmtPackSize(amt, item.unit)}`;
-                            }
-                            return `${item.quantity} ${t('shoppingListDetail.unitPieces')}`;
-                        })()}
+                        {formatItemAmount({
+                            quantity: item.quantity,
+                            isWeighable: item.isWeighable,
+                            unit: item.unit,
+                            packAmount: item.storeProductId ? item.amount : null,
+                        }, t)}
                     </Text>
                     {item.requiresCoupon && item.couponLabel && !item.isChecked && (
                         <View style={styles.couponBadge}>
@@ -258,15 +254,11 @@ interface PackOption {
     imageUrl: string | null;
 }
 
-// "350 g", "1 l" — sizes print in their natural unit (never 0.35 kg, never 0.5 l).
+// "350 g", "1 l" — the shared size formatter (grams/ml polish) so pack-pill
+// labels match every other amount surface.
 const fmtPackSize = (amount: number, unit: string): string => {
-    if ((unit === 'g' || unit === 'ml') && amount >= 1000) {
-        return `${Number((amount / 1000).toFixed(3))} ${unit === 'g' ? 'kg' : 'l'}`;
-    }
-    if ((unit === 'kg' || unit === 'l') && amount > 0 && amount < 1) {
-        return `${Number((amount * 1000).toFixed(1))} ${unit === 'kg' ? 'g' : 'ml'}`;
-    }
-    return `${Number(amount.toFixed(3))} ${unit}`;
+    const s = fmtSize(amount, unit);
+    return `${s.value} ${unitLabel(s.unit)}`;
 };
 const packBaseAmount = (amount: number, unit: string): number =>
     unit === 'kg' || unit === 'l' ? amount * 1000 : amount;

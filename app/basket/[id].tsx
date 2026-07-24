@@ -14,6 +14,7 @@ import {
 import { MaterialProgress } from '@/components/MaterialProgress';
 import CalcLoadingModal from '../../components/CalcLoadingModal';
 import { isWeighableDisplay } from '../../utils/weighable';
+import { formatItemAmount } from '../../utils/amountDisplay';
 import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
@@ -67,6 +68,9 @@ interface BasketItem {
      *  quantity must label as l, not the old hardcoded kg (Rokiškio pienas
      *  0,5 l rendered "0,5 kg"). */
     canonicalUnit?: string | null;
+    /** Canonical family + step — the weight-vs-count signal (utils/amountDisplay). */
+    canonicalFamily?: 'fluid' | 'count' | string | null;
+    canonicalStep?: number | null;
     imageUrls?: (string | null | undefined)[] | string | null;
 }
 
@@ -744,7 +748,7 @@ export default function BasketDetailScreen() {
                                     <View style={styles.itemActionRow}>
                                         {readOnly ? (
                                             <Text style={styles.itemQtyText}>
-                                                {item.quantity} {weighable ? (item.canonicalUnit === 'l' ? t('units.l') : t('units.kg')) : t('units.vnt')}
+                                                {formatItemAmount({ quantity: item.quantity, isWeighable: weighable, canonicalUnit: item.canonicalUnit, unit: item.canonicalUnit, canonicalFamily: item.canonicalFamily, canonicalStep: item.canonicalStep }, t)}
                                             </Text>
                                         ) : (
                                             <>

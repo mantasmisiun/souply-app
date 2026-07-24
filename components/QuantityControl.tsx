@@ -22,7 +22,10 @@ export function QuantityControl({ quantity, onDecrement, onIncrement, unit, size
     const colors = useTheme();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const lg = size === 'large';
-    const formatted = Number.isInteger(quantity) ? String(quantity) : quantity.toFixed(1);
+    // `quantity` is already the DISPLAY value from amountDisplay (grams as a
+    // whole number, kg/l trimmed) — show it verbatim, just trimming any float
+    // noise; never re-round to 1 decimal (that mangled 1.25 kg → "1.3").
+    const formatted = Number.isInteger(quantity) ? String(quantity) : String(parseFloat(quantity.toFixed(3)));
 
     return (
         <View style={[styles.quantityControl, lg && styles.quantityControlLg, style]}>
