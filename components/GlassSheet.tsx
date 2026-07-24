@@ -82,6 +82,11 @@ export function GlassSheet({
     const h = useSharedValue(0);
     const startH = useSharedValue(0);
     const backdrop = useSharedValue(0);
+    // Latches true the instant a dismiss begins. The autoHeight re-settle below must
+    // NOT spring a closing sheet back open — SavingsSheet & co. re-measure (async load
+    // + bar animations) exactly as the user drags to dismiss, which otherwise cancels
+    // the close (h springs back to mediumH, backdrop already gone, onClose never fires).
+    const closing = useSharedValue(false);
     // Flips true when the open spring settles — content sequences its animations
     // off this so the bars don't animate while the sheet is still moving.
     const opened = useSharedValue(false);
@@ -106,6 +111,7 @@ export function GlassSheet({
     const settledOnceRef = useRef(false);
     useEffect(() => {
         if (!openedRef.current || !autoHeight || mediumH <= 0) return;
+        if (closing.value) return; // a dismiss is in flight — never spring back open
         if (!settledOnceRef.current) { settledOnceRef.current = true; return; }
         // Also mark opened here: a re-settle (content grew after an async fetch)
         // interrupts the open spring, so its completion fires finished=false and
@@ -118,11 +124,12 @@ export function GlassSheet({
     }, [mediumH]);
 
     const dismiss = useCallback(() => {
+        closing.value = true;
         backdrop.value = withTiming(0, { duration: 180 });
         h.value = withTiming(0, { duration: 200 }, (done) => {
             if (done) runOnJS(onClose)();
         });
-    }, [backdrop, h, onClose]);
+    }, [backdrop, h, onClose, closing]);
 
     // Hardware back dismisses (peels this layer before navigation).
     useEffect(() => {
@@ -140,6 +147,7 @@ export function GlassSheet({
         const cur = h.value;
         // Below the medium detent → dismiss (drag-down to close).
         if (cur < mediumH * 0.72 || velocityY > 900) {
+            closing.value = true;
             backdrop.value = withTiming(0, { duration: 180 });
             h.value = withTiming(0, { duration: 200 }, (done) => { if (done) runOnJS(onClose)(); });
             return;
@@ -149,7 +157,7 @@ export function GlassSheet({
         if (velocityY < -500) idx = 1;
         else if (velocityY > 500) idx = 0;
         h.value = withSpring(snaps[idx], { ...SNAP_SPRING, velocity: -velocityY });
-    }, [h, backdrop, mediumH, fullH, snaps, onClose]);
+    }, [h, backdrop, mediumH, fullH, snaps, onClose, closing]);
 
     const pan = useMemo(() => Gesture.Pan()
         .manualActivation(true)
