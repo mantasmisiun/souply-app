@@ -342,6 +342,35 @@ async function logFail(
   }
 }
 
+/** RETAKE: POST the re-scan's parse to the heal endpoint, which merges it into
+ *  the SAME receipt (kept lines untouched, garbled lines healed, missed lines
+ *  recovered). 409 = the retake was a DIFFERENT receipt → surfaced so the UI can
+ *  offer a full replace instead. Returns the existing receipt id (image + markDone
+ *  reuse the normal downstream). */
+async function healExistingReceipt(
+  receiptId: number,
+  parsedData: object,
+  signal: AbortSignal,
+): Promise<{ receiptId: number; mandatorySwipesRequired: number }> {
+  const userId = await getUserId();
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${receiptId}/heal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-User-Id": userId },
+    // swapImage: the retake photo is uploaded to this receipt right after, so the
+    // server adopts the retake's band/crop geometry to match the new image.
+    body: JSON.stringify({ parsedData, swapImage: true }),
+    timeoutMs: TIMEOUT_HEAVY_MS,
+    externalSignal: signal,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 409) {
+    // The retake was a DIFFERENT receipt — the message tells the user to upload it separately.
+    throw new ProcessingError("post_failed", i18n.t("retake.differentReceipt"));
+  }
+  if (!res.ok) throw new ProcessingError("post_failed", i18n.t("retake.healFailed"));
+  return { receiptId, mandatorySwipesRequired: data?.mandatorySwipesRequired ?? 0 };
+}
+
 async function postReceipt(
   parsedData: object,
   signal: AbortSignal,
@@ -665,6 +694,8 @@ export async function processOneReceipt(
     isPdf?: boolean;
     linkMap?: Record<number, number>;
     fallbackLinkId?: number | null;
+    /** RETAKE: heal this existing receipt instead of creating a new one. */
+    healReceiptId?: number;
   },
 ): Promise<ProcessingResult> {
   try {
@@ -751,13 +782,18 @@ export async function processOneReceipt(
     };
 
     onProgress?.(i18n.t("receiptQueue.saving"));
-    const postResult = await postReceipt(parsedDataWithImage, signal);
+    // RETAKE → heal the existing receipt (merge into its stored parse); otherwise
+    // create a new one. The image is still (re)uploaded below to the SAME id.
+    const postResult = opts?.healReceiptId
+      ? await healExistingReceipt(opts.healReceiptId, parsedDataWithImage, signal)
+      : await postReceipt(parsedDataWithImage, signal);
 
-    // Link to the originating shopping list (background scan/upload from a
-    // list or trip). Fire-and-forget, and done even for duplicates — the live
-    // scan links duplicates too so the list card still reflects the receipt.
-    const linkListId = resolveLinkListId(chainId, opts?.linkMap, opts?.fallbackLinkId);
-    if (linkListId) linkReceiptToList(linkListId, postResult.receiptId);
+    // Link to the originating shopping list (background scan/upload from a list
+    // or trip). Skipped for a heal (the receipt already has its trip/list).
+    if (!opts?.healReceiptId) {
+      const linkListId = resolveLinkListId(chainId, opts?.linkMap, opts?.fallbackLinkId);
+      if (linkListId) linkReceiptToList(linkListId, postResult.receiptId);
+    }
 
     // Burn the black redaction boxes into the image BEFORE upload (via the
     // global off-screen ViewShot host — this service is headless). FAIL-CLOSED:

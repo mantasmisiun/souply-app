@@ -68,20 +68,21 @@ export function mergeReceiptItems(receipts: TripReceipt[]): MergedReceiptItem[] 
 }
 
 /**
- * The quantity/size caption for a merged row:
+ * The quantity/size caption for a merged row — ALWAYS present so every item
+ * shows its amount:
  *   • weighable (unit kg)        → summed weight, e.g. "1.85 kg"
+ *   • fractional, no kg unit     → still a weight ("0.2 kg")
  *   • repeated fixed-size packs  → "2 × 400 g"
- *   • repeated / multi discrete  → "3 vnt"
- *   • a single unit              → null (nothing to show)
+ *   • discrete pieces            → "N vnt", including a single "1 vnt"
  */
-export function mergedQtyLabel(m: MergedReceiptItem): string | null {
+export function mergedQtyLabel(m: MergedReceiptItem): string {
     const unit = (m.unit ?? '').toLowerCase();
     if (unit.includes('kg')) {
         const w = parseFloat(m.quantity.toFixed(3));
         return `${w} kg`;
     }
     if (m.count > 1 && m.sizeUnit) return `${m.count} × ${m.sizeUnit}`;
-    const n = Math.round(m.quantity);
-    if (n > 1) return `${n} vnt`;
-    return null;
+    // A fractional qty is a weight even without a 'kg' unit; else a piece count.
+    if (m.quantity % 1 !== 0) return `${parseFloat(m.quantity.toFixed(3))} kg`;
+    return `${Math.max(1, Math.round(m.quantity))} vnt`;
 }

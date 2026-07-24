@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { useRouter } from 'expo-router';
+import { useRouter, usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { MaterialProgress } from './MaterialProgress';
@@ -30,7 +30,13 @@ export function ReceiptProcessingBanner() {
     const colors = useTheme();
     const { t } = useTranslation();
     const router = useRouter();
+    const pathname = usePathname();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    // On the Shopping (Apsipirkimai) root the in-list processing CARD takes over,
+    // and on a receipt screen the retaken receipt card shows its own heal progress
+    // — so the top banner would double up. Suppress it on both (work continues in
+    // the global background queue regardless of which screen is shown).
+    const bannerSuppressed = pathname === '/basket' || pathname.startsWith('/trip/receipts');
 
     const items = useReceiptQueueStore((s) => s.items);
     const recentIds = useReceiptQueueStore((s) => s.recentIds);
@@ -67,7 +73,7 @@ export function ReceiptProcessingBanner() {
         return null;
     }, [items, recentIds, lastCompletedAt, dismissedAt]);
 
-    if (!state) return null;
+    if (!state || bannerSuppressed) return null;
 
     const pct =
         state.mode === 'processing' && state.total && state.total > 0

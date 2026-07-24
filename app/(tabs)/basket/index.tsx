@@ -23,6 +23,9 @@ import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useRouter, useFocusEffect } from 'expo-router';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
+import { useBackToExit } from '../../../hooks/useBackToExit';
+import { useReceiptQueueStore, type QueueItem } from '../../../state/receiptQueueStore';
+import { ProgressGlow } from '../../../components/ProgressGlow';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
@@ -87,6 +90,43 @@ function MemberStack({ members, total, styles }: {
     );
 }
 
+/** In-flight receipt-queue item as a card shaped like a trip card, with a
+ *  bottom-edge progress glow + status line. Only shown on the Shopping screen;
+ *  the work itself runs in the global background queue. */
+function ProcessingCard({ item }: { item: QueueItem }) {
+    const colors = useTheme();
+    const { t } = useTranslation();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
+    const isError = item.status === 'error';
+    const fraction = item.progressTotal && item.progressTotal > 0
+        ? Math.max(0.05, Math.min(1, (item.progressDone ?? 0) / item.progressTotal))
+        : 0.08;
+    const status = item.progress
+        ?? (item.status === 'pending' ? t('banners.receiptQueue.queued', { count: 1 })
+            : item.status === 'awaiting_network' ? t('banners.receiptQueue.awaitingNetwork')
+            : isError ? (item.error || t('banners.receiptQueue.error'))
+            : t('banners.receiptQueue.processing'));
+    return (
+        <View style={[styles.card, styles.processingCard]}>
+            <View style={styles.cardMain}>
+                <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                    <View style={styles.cardTop}>
+                        <View style={styles.cartChip}>
+                            <Ionicons name="receipt-outline" size={14} color={colors.primary} />
+                        </View>
+                    </View>
+                    <Text style={styles.processingTitle} numberOfLines={1}>{t('banners.receiptQueue.processing')}</Text>
+                    <Text style={styles.cardMeta} numberOfLines={1}>{status}</Text>
+                </View>
+                {isError
+                    ? <Ionicons name="alert-circle" size={22} color={colors.error} />
+                    : <MaterialProgress size="small" color={colors.primary} />}
+            </View>
+            <ProgressGlow edge="bottom" fraction={fraction} color={isError ? colors.error : colors.primary} />
+        </View>
+    );
+}
+
 export default function TripsScreen() {
     const colors = useTheme();
     const { t, i18n } = useTranslation();
@@ -95,6 +135,26 @@ export default function TripsScreen() {
     const header = useCollapsingHeader();
     const tabBarHeight = useSafeBottomTabBarHeight();
     const { setDraftBasketId } = useBasketState();
+
+    // Android back: peel the dock sheet first (sub-pane → main → collapse),
+    // then fall through to press-back-again-to-exit.
+    const sheetIntercept = useCallback(() => {
+        const s = useShoppingSheet.getState();
+        if (s.sheetView !== 'main' && s.sheetGoBack) { s.sheetGoBack(); return true; }
+        if (s.sheetStage > 0 && s.collapseSheet) { s.collapseSheet(); return true; }
+        return false;
+    }, []);
+    const { backToExitToast } = useBackToExit(sheetIntercept);
+
+    // In-flight receipt uploads → processing cards at the top of the list.
+    const queueItems = useReceiptQueueStore(s => s.items);
+    const queueInitialize = useReceiptQueueStore(s => s.initialize);
+    const lastCompletedAt = useReceiptQueueStore(s => s.lastCompletedAt);
+    useEffect(() => { void queueInitialize(); }, [queueInitialize]);
+    const processingItems = useMemo(
+        () => queueItems.filter(i => i.status === 'processing' || i.status === 'pending'
+            || i.status === 'awaiting_network' || i.status === 'error'),
+        [queueItems]);
 
     const [trips, setTrips] = useState<TripSummary[]>([]);
     const [household, setHousehold] = useState<HouseholdInfo | null>(null);
@@ -131,6 +191,12 @@ export default function TripsScreen() {
         hasFetchedRef.current = true;
         fetchAll(silent);
     }, [fetchAll]));
+
+    // A queued receipt just finished (markDone bumps lastCompletedAt) → silently
+    // refetch so the new ad-hoc trip card appears and the processing card clears.
+    useEffect(() => {
+        if (lastCompletedAt) void fetchAll(true);
+    }, [lastCompletedAt, fetchAll]);
 
     // Calendar filter (spec): dot per trip on its best-known shopping date,
     // chain-coloured via the trip's slots; ad-hoc trips dot as "Kita". The
@@ -242,6 +308,7 @@ export default function TripsScreen() {
     if (loading) return (
         <View style={styles.container}>
             <CollapsingHeader controller={header} smallTitle={t('tabs.trips')} />
+            {backToExitToast}
             <View style={{ padding: 16, gap: 12 }}>
                 <ScreenHeading title={t('tabs.trips')} />
                 {Array.from({ length: 4 }).map((_, i) => (
@@ -254,6 +321,7 @@ export default function TripsScreen() {
     return (
         <View style={styles.container}>
             <CollapsingHeader controller={header} smallTitle={t('tabs.trips')} />
+            {backToExitToast}
             <Animated.ScrollView
                 {...header.scroll}
                 style={styles.container}
@@ -271,11 +339,30 @@ export default function TripsScreen() {
             >
                 {/* index 0: large title (scrolls away) */}
                 <ScreenHeading title={t('tabs.trips')} onLayout={header.onTitleLayout} />
-                {/* index 1: filter chips — native sticky, pin under the bar */}
+                {/* index 1: pinned family card (when enabled) + filter chips —
+                    native sticky, pin under the bar as one opaque unit */}
                 <View style={{ backgroundColor: colors.pageBackground }}>
+                    {household && (
+                        <TouchableOpacity
+                            style={styles.familyCard}
+                            activeOpacity={0.85}
+                            onPress={() => router.push('/family' as any)}
+                        >
+                            <View style={styles.familyIcon}>
+                                <Ionicons name="home" size={22} color={colors.onPrimary} />
+                            </View>
+                            <View style={{ flex: 1 }}>
+                                <Text style={styles.familyCardTitle}>{t('family.cardTitle')}</Text>
+                                <Text style={styles.familyCardSub}>{t('trips.householdMembers', { count: household.members.length })}</Text>
+                            </View>
+                            <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+                        </TouchableOpacity>
+                    )}
                     <ShoppingFilterChips />
                 </View>
-                {active.length === 0 ? (
+                {/* In-flight receipt uploads — cards at the very top */}
+                {processingItems.map(item => <ProcessingCard key={item.id} item={item} />)}
+                {active.length === 0 && processingItems.length === 0 ? (
                     <View style={styles.centered}>
                         <Ionicons name="cart-outline" size={56} color={colors.textMuted} />
                         <Text style={styles.emptyText}>{t('trips.empty')}</Text>
@@ -373,18 +460,20 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.cardBackground,
         borderBottomWidth: 0.5, borderBottomColor: c.border,
     },
-    householdCard: {
+    // Pinned family-shopping card — stands out: pink-tinted fill, solid pink
+    // icon disc, pink border. Navigates to the family (Basket/History) screen.
+    familyCard: {
         flexDirection: 'row', alignItems: 'center', gap: spacing.md,
-        backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: 14, marginBottom: 12,
-        borderWidth: 1.5, borderColor: c.primary, borderStyle: 'dashed',
+        backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderRadius: radius.lg, padding: 14,
+        marginHorizontal: 16, marginTop: 4, marginBottom: 10,
+        borderWidth: 1, borderColor: c.primary,
     },
-    householdIcon: {
+    familyIcon: {
         width: 40, height: 40, borderRadius: radius.md,
-        backgroundColor: c.primaryMuted ?? c.surfaceMuted,
-        alignItems: 'center', justifyContent: 'center',
+        backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center',
     },
-    householdTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
-    householdSub: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
+    familyCardTitle: { fontSize: 15, fontWeight: '800', color: c.textPrimary },
+    familyCardSub: { fontSize: 12, color: c.primary, marginTop: 2, fontWeight: '600' },
 
     card: {
         backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: 14, marginBottom: 10,
@@ -392,6 +481,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderWidth: 3, borderColor: 'transparent', borderLeftColor: c.primary,
         gap: 6,
     },
+    // Same card shell, clipped so the bottom-edge progress glow follows the corners.
+    processingCard: { overflow: 'hidden' },
+    processingTitle: { fontSize: 15, fontWeight: '800', color: c.textPrimary },
     cardMain: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     cartChip: {
         flexDirection: 'row', alignItems: 'center', gap: 4,

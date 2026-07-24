@@ -23,6 +23,10 @@ export interface QueueItem {
    *  we can't gate on. Mirrors the interactive scan-session link logic. */
   linkMap?: Record<number, number>;
   fallbackLinkId?: number | null;
+  /** RETAKE: when set, this capture HEALS the given existing receipt (POST
+   *  /receipts/:id/heal) instead of creating a new one — a second observation
+   *  merged into the stored parse. */
+  healReceiptId?: number;
   status: QueueStatus;
   error?: string;
   /** Human-readable progress line ("Nuskaitoma...", "3/8 prekės", "Išsaugoma..."). */
@@ -51,6 +55,7 @@ interface ReceiptQueueState {
     isPdf?: boolean;
     linkMap?: Record<number, number>;
     fallbackLinkId?: number | null;
+    healReceiptId?: number;
   }[]) => void;
   markProcessing: (id: string, progress?: string) => void;
   updateProgress: (
@@ -114,6 +119,7 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
       name: e.name,
       linkMap: e.linkMap,
       fallbackLinkId: e.fallbackLinkId,
+      healReceiptId: e.healReceiptId,
       status: "pending",
       addedAt: Date.now(),
     }));

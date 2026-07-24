@@ -33,13 +33,15 @@ import { Image } from "expo-image";
 import { useTranslation } from "react-i18next";
 import { ProductImage } from "../ProductImage";
 import { ChainLogoChip } from "../ChainLogoChip";
-import { ScreenBackButton } from "../ScreenBackButton";
+import { ProgressGlow } from "../ProgressGlow";
+import { ScreenNavBar } from "../ScreenNavBar";
 import { API_BASE_URL } from "../../config/api";
 import { fetchWithTimeout, TIMEOUT_STANDARD_MS, TIMEOUT_FAST_MS } from "../../utils/fetchWithTimeout";
 import { getUserId } from "../../config/user";
 import { useTheme, type AppTheme } from "../../constants/theme";
 import { useLevelStore } from "../../state/levelStore";
-import { capVoluntaryQueue } from "../../utils/swipeQueueCap";
+import { capVoluntaryQueue, composeVoluntaryReceiptDeck } from "../../utils/swipeQueueCap";
+import { RECOGNITION } from "@shared/recognitionConfig";
 import { BandCropImage } from "../receipt/BandCropImage";
 import { ProcessingLoader } from "../ProcessingLoader";
 import { MergeArrowsIcon, ParallelArrowsIcon, DivergeArrowsIcon, type VoteIconProps } from "../VoteIcons";
@@ -162,38 +164,6 @@ const MIN_DWELL_MS = 700;
 const MAX_RECEIPTS_PER_SESSION = 5;
 
 // ── Sub-components ─────────────────────────────────────────────────────────
-
-function ProgressDots({
-  total,
-  current,
-  colors,
-}: {
-  total: number;
-  current: number;
-  colors: AppTheme;
-}) {
-  if (total === 0) return null;
-  return (
-    <View style={{ flexDirection: "row", gap: 4, flexWrap: "wrap", justifyContent: "center" }}>
-      {Array.from({ length: total }, (_, i) => (
-        <View
-          key={i}
-          style={{
-            width: 6,
-            height: 6,
-            borderRadius: 3,
-            backgroundColor:
-              i < current
-                ? colors.success
-                : i === current
-                ? colors.warning
-                : colors.textMuted,
-          }}
-        />
-      ))}
-    </View>
-  );
-}
 
 function CardSide({
   side,
@@ -556,6 +526,17 @@ export function SwipeQueue({
     timer: ReturnType<typeof setTimeout>;
   } | null>(null);
 
+  /**
+   * Ask-once ledger (Gap 2): per-receiptId set of Card-B `receiptLineIdx`s that
+   * were built into that receipt's mandatory deck — i.e. SERVED to the user.
+   * Mandatory completion swipes the WHOLE deck (done requires idx >= length), so
+   * "in the deck" == "shown, regardless of vote". On complete-swipes we echo these
+   * back as `servedResolveLineIdxs` so the server can mark them asked even if its
+   * save-time resolve snapshot was evicted. Keyed by receiptId because one queue
+   * can span several receipts, each with its own /complete-swipes POST.
+   */
+  const servedResolveLineIdxsRef = useRef<Map<string, Set<number>>>(new Map());
+
   const currentReceiptId = receiptIdList[receiptIdx] ?? null;
 
   const translateX = useSharedValue(0);
@@ -576,18 +557,21 @@ export function SwipeQueue({
       const userId = userIdRef.current ?? (await getUserId());
       userIdRef.current = userId;
 
-      // Fetch the receipt-anchored queue. In voluntary mode also fetch
-      // the global queue in parallel so `capVoluntaryQueue` can enforce
-      // the 3+3+3+1 spec (3 cards per slot in priority 2→1→3, plus 1
-      // global card flagged with `fromGlobalFill`). We still pass
-      // `voluntary=1` to the server so it knows to trigger the
-      // background OSC refill for the user's missing orphans (the
-      // refill is fire-and-forget; it benefits the user's NEXT visit).
+      // Fetch the receipt-anchored queue. The GLOBAL "community" pool is fetched in
+      // parallel ONLY for the no-receipt community path (voluntary without a receipt) —
+      // a RECEIPT-scoped voluntary session is RELEVANCE-ONLY: it must contain only THIS
+      // receipt's own crops + 688 rescues + receipt-anchored identity cards, never
+      // unrelated global fill (which was diluting the 10 slots and crowding out the
+      // receipt's uncategorised items). We still pass `voluntary=1` so the server
+      // triggers the background OSC refill for the user's missing orphans (fire-and-
+      // forget; benefits the NEXT visit).
       // MANDATORY mode fetches nothing here — the one-shot /mandatory-queue endpoint
       // below replaces the old 4-request orchestration (receipt swipe-queue → relatedTo
       // top-up → resolve-queue → orphan-backfill), usually served from the save-time
-      // snapshot. Voluntary keeps its parallel receipt+global fetches for the 3+3+3+1 cap.
+      // snapshot.
       const isMandatory = !!currentReceiptId && !isVoluntary;
+      // Receipt-scoped voluntary ⇒ no global pool; community voluntary (no receipt) keeps it.
+      const wantsGlobalPool = isVoluntary && !currentReceiptId;
       const receiptParts: string[] = [];
       if (currentReceiptId) {
         receiptParts.push(`receiptId=${encodeURIComponent(currentReceiptId)}`);
@@ -603,12 +587,9 @@ export function SwipeQueue({
         ? [null as Response | null, null as Response | null]
         : await Promise.all([
             fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue${receiptQs}`),
-            isVoluntary
-              ? fetch(
-                  `${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue` +
-                    // Gate the voluntary GLOBAL pool to receipt-related cards only.
-                    (currentReceiptId ? `?relatedTo=${encodeURIComponent(currentReceiptId)}` : ""),
-                )
+            wantsGlobalPool
+              ? // Community path (no receipt in focus): ungated global "help identify" pool.
+                fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/swipe-queue`)
               : Promise.resolve(null as Response | null),
           ]);
       if (receiptRes && !receiptRes.ok) throw new Error(`HTTP ${receiptRes.status}`);
@@ -622,14 +603,16 @@ export function SwipeQueue({
         globalItems = Array.isArray(globalData?.items) ? globalData.items : [];
       }
 
-      // Voluntary: up to 5 receipt-resolution Card-B (your items first) + the
-      // relatedness-gated community cards, batch of 10. Fetched up front so the
-      // 'asked' marking happens once. (Mirrors RECOGNITION.queue.voluntaryReceiptHalf=5.)
+      // Voluntary: receipt-resolution Card-B CROPS (your own OCR lines — the highest-
+      // value cards) fetched up front so the 'asked' marking happens once. Fetch up to
+      // the comfort cap; they fill FIRST below, then the receipt's slot cards fill the
+      // rest of the 10.
+      const CROP_COMFORT_CAP = RECOGNITION.queue.voluntaryCropComfortCap;
       let voluntaryCardB: ReceiptResolveCard[] = [];
       if (isVoluntary && currentReceiptId) {
         try {
           const rq = await fetch(
-            `${API_BASE_URL}/api/receipts/${encodeURIComponent(currentReceiptId)}/resolve-queue?max=5`,
+            `${API_BASE_URL}/api/receipts/${encodeURIComponent(currentReceiptId)}/resolve-queue?max=${CROP_COMFORT_CAP}`,
           );
           if (rq.ok) {
             const rd = await rq.json();
@@ -643,14 +626,18 @@ export function SwipeQueue({
 
       let capped: QueueCard[];
       if (isVoluntary) {
-        // Voluntary spec: 3 slot 2 (orphans) → 3 slot 1 (cross-chain
-        // identity) → 3 slot 3 (same-chain dedup) → 1 global card.
-        // capVoluntaryQueue redistributes within the 9-card receipt
-        // budget when a slot has < 3 cards, and stamps fromGlobalFill
-        // on the community-contribution card.
-        capped = capVoluntaryQueue({ receiptItems, globalItems }).items;
+        // Receipt-scoped voluntary (currentReceiptId set) is RELEVANCE-ONLY: pass
+        // receiptScoped so capVoluntaryQueue fills all 10 slots from the receipt's own
+        // cards (slot 2 → 1 → 3) with NO global fill. The community path (no receipt)
+        // keeps the 9 receipt + ≥1 global behaviour. globalItems is [] when relevance-only.
+        const cappedSlots = capVoluntaryQueue({ receiptItems, globalItems, receiptScoped: !!currentReceiptId }).items;
         if (voluntaryCardB.length > 0) {
-          capped = [...voluntaryCardB.slice(0, 5), ...capped].slice(0, 10);
+          // Crops are highest value: fill FIRST up to the comfort cap, then the receipt's
+          // slot cards (688 rescues first) take the remaining slots up to 10. Shared merge
+          // so this deck and the badge count (getVoluntaryQueueCount) can never diverge.
+          capped = composeVoluntaryReceiptDeck(voluntaryCardB, cappedSlots, CROP_COMFORT_CAP);
+        } else {
+          capped = cappedSlots;
         }
         // H3 pending-alias community cards: help confirm learned receipt-name aliases
         // ("is this receipt text the same product as this SP?"). Appended after the
@@ -701,6 +688,20 @@ export function SwipeQueue({
       setIdx(0);
       setItemsReceiptId(currentReceiptId);
       cardShownAtRef.current = Date.now();
+
+      // Ask-once ledger (Gap 2): record every Card-B line index BUILT INTO this
+      // receipt's deck. Since mandatory completion swipes the whole deck, being in
+      // the deck == being served to the user. Union (never overwrite) so a re-load
+      // of the same receipt (sessionNum retry) keeps earlier-served indices. The
+      // /complete-swipes POST below echoes these back as `servedResolveLineIdxs`.
+      if (currentReceiptId) {
+        const served =
+          servedResolveLineIdxsRef.current.get(currentReceiptId) ?? new Set<number>();
+        for (const c of capped) {
+          if (isReceiptCard(c) && Number.isFinite(c.receiptLineIdx)) served.add(c.receiptLineIdx);
+        }
+        servedResolveLineIdxsRef.current.set(currentReceiptId, served);
+      }
 
       // Build the OCR-side band-crop source ONCE for this receipt so each Card-B renders
       // the SAME skewed parallelogram crop as the receipt-detail Items tab — not the flat
@@ -1170,8 +1171,16 @@ export function SwipeQueue({
         // this counter write (the host trusts the client-side completion — every
         // card was swiped here). Fire it capped; a lost response self-heals via the
         // next queue-count refresh.
+        // Echo the Card-B line indices actually SERVED for THIS receipt so the
+        // server's ask-once ledger is bulletproof against snapshot eviction (Gap 2).
+        // Empty set → [] (server treats empty as "mark nothing", which is correct).
+        const servedResolveLineIdxs = Array.from(
+          servedResolveLineIdxsRef.current.get(currentReceiptId) ?? [],
+        ).sort((a, b) => a - b);
         fetchWithTimeout(`${API_BASE_URL}/api/receipts/${currentReceiptId}/complete-swipes`, {
           method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ servedResolveLineIdxs }),
           timeoutMs: TIMEOUT_STANDARD_MS,
         }).catch(() => {});
       }
@@ -1240,10 +1249,6 @@ export function SwipeQueue({
 
   // ── Render ─────────────────────────────────────────────────────────────
 
-  const headerTitle = isMulti
-    ? t('swipe.headerProgress', { current: receiptIdx + 1, total: receiptIdList.length })
-    : t('swipe.header');
-
   // The done/empty SCREEN is shown only for the standalone session-complete state or a
   // voluntary receipt with nothing to rescue. Every OTHER "done" state — a mandatory in-place
   // session (including the 0-card case: receipts 220/221) or a voluntary all-seen session — is
@@ -1261,8 +1266,18 @@ export function SwipeQueue({
       {/* Back routes through onExit — mode-aware: the standalone route pops back, the
           in-place receipt-process host runs leaveSwipePhase (which fetches the comparison
           and flips to the detail). A raw router.back() here would pop the whole host screen
-          and strand the just-saved receipt. */}
-      {renderHeader && <Stack.Screen options={{ title: headerTitle, headerLeft: () => <ScreenBackButton onPress={() => onExit()} /> }} />}
+          and strand the just-saved receipt. The native header is hidden in favour of the
+          app's in-screen chrome pattern (pink chevron + left title, own top inset). */}
+      {renderHeader && (
+        <>
+          <Stack.Screen options={{ headerShown: false }} />
+          <ScreenNavBar
+            title={t('swipe.header')}
+            subtitle={isMulti ? t('swipe.headerProgress', { current: receiptIdx + 1, total: receiptIdList.length }) : undefined}
+            onBack={() => onExit()}
+          />
+        </>
+      )}
 
       {/* ── Loading ──
           Covers the screen while the queue data loads, while the active card's images are
@@ -1331,15 +1346,12 @@ export function SwipeQueue({
         </View>
       )}
 
-      {/* ── Progress dots — just below nav bar ── */}
+      {/* ── Progress glow — a thin fill pinned over the very top of the screen
+          (same treatment as the shopping list's top-edge glow). Fills as the
+          deck advances: a mandatory 3-card session steps in thirds, voluntary
+          over its full deck length. */}
       {!loading && !error && !doneWithCurrentReceipt && currentItem && (
-        <View style={styles.dotsBar}>
-          <ProgressDots
-            total={cappedItems.length}
-            current={idx}
-            colors={colors}
-          />
-        </View>
+        <ProgressGlow fraction={cappedItems.length ? idx / cappedItems.length : 0} />
       )}
 
       {/* ── Active card ── */}
@@ -1501,13 +1513,6 @@ const makeStyles = (c: AppTheme) =>
       textAlign: "center",
       marginBottom: 16,
       fontSize: 16,
-    },
-
-    // ── Dots bar ──
-    dotsBar: {
-      alignItems: "center",
-      paddingTop: 10,
-      paddingBottom: 4,
     },
 
     // ── Stage ──

@@ -19,12 +19,14 @@ import { useTheme, spacing, radius, typography, iconSize, type AppTheme } from '
  * single `shoppingListId`.
  */
 export function ReceiptUploadSheet({
-    visible, onClose, shoppingListId, listMap,
+    visible, onClose, shoppingListId, listMap, healReceiptId,
 }: {
     visible: boolean;
     onClose: () => void;
     shoppingListId?: string;
     listMap?: string;
+    /** RETAKE: heal this existing receipt instead of creating a new one. */
+    healReceiptId?: number;
 }) {
     const colors = useTheme();
     const { t } = useTranslation();
@@ -58,8 +60,8 @@ export function ReceiptUploadSheet({
         // page URIs WITHOUT navigating — the queue processes them silently.
         const uris = await scanDocumentOnly();
         if (!uris) return;
-        addItems([{ uris, linkMap: link.linkMap, fallbackLinkId: link.fallbackLinkId }]);
-    }, [onClose, isOnline, addItems, link, t]);
+        addItems([{ uris, linkMap: link.linkMap, fallbackLinkId: link.fallbackLinkId, healReceiptId }]);
+    }, [onClose, isOnline, addItems, link, t, healReceiptId]);
 
     const upload = useCallback(async () => {
         onClose();
@@ -75,13 +77,14 @@ export function ReceiptUploadSheet({
             isPdf: looksLikePdf(a.uri, a.mimeType, a.name),
             linkMap: link.linkMap,
             fallbackLinkId: link.fallbackLinkId,
+            healReceiptId,
         }));
         if (entries.length === 0) {
             Alert.alert(t('receipts.uploadFail.title'), t('receipts.uploadFail.body'));
             return;
         }
         addItems(entries);
-    }, [onClose, addItems, link, t]);
+    }, [onClose, addItems, link, t, healReceiptId]);
 
     if (!visible) return null;
 

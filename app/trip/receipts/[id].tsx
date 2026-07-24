@@ -11,15 +11,18 @@ import {
     View, Text, TouchableOpacity, StyleSheet, ScrollView, Image,
 } from 'react-native';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import { MaterialProgress } from '@/components/MaterialProgress';
+import { ProgressGlow } from '../../../components/ProgressGlow';
+import { useReceiptQueueStore } from '../../../state/receiptQueueStore';
 import { ChainLogoChip } from '../../../components/ChainLogoChip';
 import { UserAvatar } from '../../../components/UserAvatar';
 import { ScreenBackButton } from '../../../components/ScreenBackButton';
 import { GlassIconButton } from '../../../components/GlassIconButton';
+import { IdentifyButton } from '../../../components/IdentifyButton';
 import { GlassSheet } from '../../../components/GlassSheet';
 import { ReceiptDetailSheet } from '../../../components/receipt/ReceiptDetailSheet';
 import { PlanningSheet } from '../../../components/receipt/PlanningSheet';
@@ -27,6 +30,7 @@ import { SavingsSheet } from '../../../components/receipt/SavingsSheet';
 import { DiscountsSheet } from '../../../components/receipt/DiscountsSheet';
 import { PlanReconcileSheet, type PlanReconcileItem } from '../../../components/receipt/PlanReconcileSheet';
 import { PredictionSheet } from '../../../components/receipt/PredictionSheet';
+import { AnimatedNumber } from '../../../components/AnimatedNumber';
 import { SwipeQueue } from '../../../components/swipe/SwipeQueue';
 import { DonutCarousel, type DonutPage } from '../../../components/DonutCarousel';
 import { chainIdByName, chainBrandColor, chainBrandName } from '../../../utils/chainBrandName';
@@ -36,6 +40,8 @@ import { formatAmount } from '../../../utils/weighable';
 import { formatWeekday } from '../../../utils/formatDayDate';
 import { ltPluralSuffix } from '../../../utils/ltPlural';
 import { mergeReceiptItems, mergedQtyLabel } from '../../../utils/mergeReceiptItems';
+import Animated, { LinearTransition, FadeInDown } from 'react-native-reanimated';
+import { ScanRevealRow, type ScanMode } from '../../../components/ScanRevealRow';
 import { useTheme, spacing, radius, typography, type AppTheme } from '../../../constants/theme';
 import { DockedGlassSheet } from '../../../components/DockedGlassSheet';
 import { DockTabsRow } from '../../../components/FloatingPillTabBar';
@@ -45,6 +51,7 @@ import {
 } from '../../../utils/tripsApi';
 import { ReceiptUploadSheet } from '../../../components/ReceiptUploadSheet';
 import { getUserId } from '../../../config/user';
+import { API_BASE_URL } from '../../../config/api';
 
 // Donut palette for categories / trips (stores use chain brand colours).
 const PALETTE = ['#EB6784', '#5EA29A', '#E8894D', '#6C8AE4', '#B07CD6', '#E0A93B', '#58B368', '#E06C9F', '#4CA0B3', '#C76B6B'];
@@ -75,6 +82,17 @@ export default function TripFinalScreen() {
     const [locked, setLocked] = useState<boolean | null>(null);
 
     const [uploadSheet, setUploadSheet] = useState(false);
+    const [retakeReceiptId, setRetakeReceiptId] = useState<number | null>(null);
+    const [voluntaryOpen, setVoluntaryOpen] = useState(false);
+    // Voluntary identify-queue card count across the trip's receipts — the pink
+    // CTA only shows when there's something to swipe (matching the other voluntary
+    // entry points, which gate on the same endpoint). Per-receipt sum: any >0 means
+    // the combined queue has cards.
+    const [voluntaryCount, setVoluntaryCount] = useState(0);
+    // Has the (slow) count resolved yet? Drives the button's loading pulse so the
+    // CTA shows up immediately (breathing) rather than popping in seconds later.
+    const [voluntaryCountLoaded, setVoluntaryCountLoaded] = useState(false);
+    const voluntarySeqRef = useRef(0);
     const [sheetReceipt, setSheetReceipt] = useState<TripReceipt | null>(null);
     const [planningOpen, setPlanningOpen] = useState(false);
     const [savingsOpen, setSavingsOpen] = useState(false);
@@ -107,6 +125,41 @@ export default function TripFinalScreen() {
     }, [tripId]);
     useFocusEffect(useCallback(() => { void load(); }, [load]));
 
+    // A background heal (retake) of one of this trip's receipts just finished →
+    // reload so the merged/renewed lines land (and drive the reveal animation).
+    const queueItems = useReceiptQueueStore(s => s.items);
+    const lastQueueDoneAt = useReceiptQueueStore(s => s.lastCompletedAt);
+    useEffect(() => { if (lastQueueDoneAt) void load(); }, [lastQueueDoneAt, load]);
+    // Receipt ids with an in-flight retake → show heal progress on their card.
+    const healingReceiptIds = useMemo(() => new Set(
+        queueItems.filter(q => q.healReceiptId != null
+            && (q.status === 'processing' || q.status === 'pending' || q.status === 'awaiting_network'))
+            .map(q => q.healReceiptId as number)), [queueItems]);
+
+    // Merged Kvitai item list + a per-key reveal assignment: when a heal changes
+    // the data, diff vs the previous list — a changed line = 'refreshed', a new
+    // key = 'inserted' — and stagger them so they scan in one at a time.
+    const merged = useMemo(() => mergeReceiptItems(receipts ?? []), [receipts]);
+    const [mergedAnim, setMergedAnim] = useState<Map<string, { mode: ScanMode; order: number }>>(new Map());
+    const prevSigRef = useRef<Map<string, string> | null>(null);
+    useEffect(() => {
+        const cur = new Map(merged.map(m => [m.key, `${m.name}|${m.lineTotal}|${m.imageUrl ?? ''}`]));
+        const prev = prevSigRef.current;
+        prevSigRef.current = cur;
+        if (!prev) return; // first population — nothing to reveal
+        const changed = new Map<string, { mode: ScanMode; order: number }>();
+        let order = 0;
+        for (const m of merged) {
+            const sig = cur.get(m.key)!;
+            if (!prev.has(m.key)) changed.set(m.key, { mode: 'inserted', order: order++ });
+            else if (prev.get(m.key) !== sig) changed.set(m.key, { mode: 'refreshed', order: order++ });
+        }
+        if (changed.size === 0) return;
+        setMergedAnim(changed);
+        const to = setTimeout(() => setMergedAnim(new Map()), changed.size * 140 + 520 + 300);
+        return () => clearTimeout(to);
+    }, [merged]);
+
     const title = trip ? (trip.name ?? formatWeekday(trip.anchorDate, i18n.language)) : t('tripReceipts.title');
 
     const multi = (receipts?.length ?? 0) > 1;
@@ -119,6 +172,51 @@ export default function TripFinalScreen() {
             .map(r => String(r.id)),
         [receipts],
     );
+
+    // Sum the voluntary-queue-count across the trip's receipts (advisory UI — a
+    // stale-drop seq guards racing refreshes). Any positive → the CTA is worth it.
+    const refreshVoluntaryCount = useCallback(async () => {
+        const ids = (receipts ?? []).map(r => r.id);
+        if (ids.length === 0) { setVoluntaryCount(0); return; }
+        const seq = ++voluntarySeqRef.current;
+        try {
+            const userId = await getUserId();
+            const counts = await Promise.all(ids.map(async id => {
+                try {
+                    const res = await fetch(`${API_BASE_URL}/api/users/${encodeURIComponent(userId)}/voluntary-queue-count?receiptId=${id}`);
+                    if (!res.ok) return 0;
+                    const data = await res.json();
+                    return Number.isFinite(data?.count) ? Number(data.count) : 0;
+                } catch { return 0; }
+            }));
+            if (seq === voluntarySeqRef.current) {
+                setVoluntaryCount(counts.reduce((a, b) => a + b, 0));
+                setVoluntaryCountLoaded(true);
+            }
+        } catch { if (seq === voluntarySeqRef.current) setVoluntaryCountLoaded(true); /* advisory */ }
+    }, [receipts]);
+
+    // Fetch the voluntary count ONCE per receipts-load (and after a session, via
+    // onVoluntaryDone) — NOT on every Kvitai↔Statistika toggle. The count only
+    // changes after a swipe, so re-running the (server-side) queue assembly on each
+    // tab switch was pure waste (the repeated "RECEIPT … CARDING" logs).
+    useEffect(() => {
+        if (pendingSwipeIds.length === 0) void refreshVoluntaryCount();
+    }, [refreshVoluntaryCount, pendingSwipeIds.length]);
+
+    // Voluntary session end: reload now (the overlay closes, revealing the
+    // still-mounted stats so figures/donut animate the delta) + a catch-up reload
+    // a few seconds later — swipe votes POST on a 3s undo delay and the snapshot
+    // recompute is async, so the last votes may not be in the immediate reload.
+    const catchUpRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+    useEffect(() => () => { if (catchUpRef.current) clearTimeout(catchUpRef.current); }, []);
+    const onVoluntaryDone = useCallback(() => {
+        setVoluntaryOpen(false);
+        void load();
+        void refreshVoluntaryCount();
+        if (catchUpRef.current) clearTimeout(catchUpRef.current);
+        catchUpRef.current = setTimeout(() => { void load(); void refreshVoluntaryCount(); }, 4500);
+    }, [load, refreshVoluntaryCount]);
 
     // ── donut pages ───────────────────────────────────────────────────────
     const donutPages = useMemo<DonutPage[]>(() => {
@@ -228,6 +326,17 @@ export default function TripFinalScreen() {
                             accessibilityLabel={t('tripReceipts.upload')}
                         />
                     )}
+                    {/* Stats tab: a pink CTA to swipe the voluntary identify-queue —
+                        users help match receipt items to products. */}
+                    {tab === 'stats' && !voluntaryOpen && pendingSwipeIds.length === 0 && (voluntaryCount > 0 || !voluntaryCountLoaded) && (
+                        <IdentifyButton
+                            loading={!voluntaryCountLoaded}
+                            onPress={() => { if (voluntaryCount > 0) setVoluntaryOpen(true); }}
+                            titleTop={t('tripFinal.identifyTop')}
+                            titleBottom={t('tripFinal.identifyBottom')}
+                            accessibilityLabel={t('tripFinal.helpIdentify')}
+                        />
+                    )}
                 </View>
 
                 {/* ── RECEIPT PANE ── */}
@@ -246,7 +355,13 @@ export default function TripFinalScreen() {
                         <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 92 }}>
                             {/* Receipt cards — tap opens the receipt sheet. */}
                             <Text style={styles.sectionTitle}>{t('tripFinal.receiptsCount', { count: receipts.length })}</Text>
-                            {receipts.map(r => (
+                            {receipts.map(r => {
+                                const healItem = queueItems.find(q => q.healReceiptId === r.id
+                                    && (q.status === 'processing' || q.status === 'pending' || q.status === 'awaiting_network'));
+                                const healFraction = healItem?.progressTotal
+                                    ? Math.max(0.05, Math.min(1, (healItem.progressDone ?? 0) / healItem.progressTotal))
+                                    : 0.08;
+                                return (
                                 <TouchableOpacity
                                     key={r.id}
                                     style={styles.rcard}
@@ -260,66 +375,98 @@ export default function TripFinalScreen() {
                                                 <Ionicons name="alert" size={11} color={colors.onPrimary} />
                                             </View>
                                         )}
+                                        {!r.staleReceipt && !!r.lowQuality && !healItem && (
+                                            <View style={styles.scanBadge}>
+                                                <Ionicons name="scan" size={10} color="#FFFFFF" />
+                                            </View>
+                                        )}
                                     </View>
                                     <View style={{ flex: 1, minWidth: 0 }}>
                                         <Text style={styles.rstore} numberOfLines={1}>{r.chainName ?? r.storeName ?? `#${r.id}`}</Text>
                                         <Text style={styles.rsub} numberOfLines={1}>
-                                            {[r.receiptDate ? formatDate(r.receiptDate) : null, t(`items.count_${ltPluralSuffix(r.items.length)}`, { count: r.items.length })].filter(Boolean).join(' · ')}
+                                            {healItem
+                                                ? (healItem.progress || t('retake.healing'))
+                                                : [r.receiptDate ? formatDate(r.receiptDate) : null, t(`items.count_${ltPluralSuffix(r.items.length)}`, { count: r.items.length })].filter(Boolean).join(' · ')}
                                         </Text>
                                     </View>
-                                    <Text style={styles.rtot}>{formatEuro(receiptTotal(r))}</Text>
-                                    <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+                                    {healItem
+                                        ? <MaterialProgress size="small" color={colors.primary} />
+                                        : <><Text style={styles.rtot}>{formatEuro(receiptTotal(r))}</Text>
+                                            <Ionicons name="chevron-forward" size={18} color={colors.textMuted} /></>}
+                                    {/* Heal-in-progress → bottom-edge progress glow on the card. */}
+                                    {healItem && <ProgressGlow edge="bottom" fraction={healFraction} />}
                                 </TouchableOpacity>
+                                );
+                            })}
+                            {/* Low-quality scan → offer a retake that HEALS the receipt.
+                                Hidden while THIS receipt is already being healed. */}
+                            {receipts.filter(r => r.lowQuality && !healingReceiptIds.has(r.id)).map(r => (
+                                <View key={`rt-${r.id}`} style={styles.retakeBanner}>
+                                    <Ionicons name="scan-outline" size={20} color={colors.primary} />
+                                    <View style={{ flex: 1, minWidth: 0 }}>
+                                        <Text style={styles.retakeTitle}>{t('retake.bannerTitle')}</Text>
+                                        <Text style={styles.retakeSub} numberOfLines={1}>{t('retake.bannerSub', { count: r.unmatchedCount ?? 0 })}</Text>
+                                    </View>
+                                    <TouchableOpacity style={styles.retakeBtn} onPress={() => setRetakeReceiptId(r.id)} hitSlop={6}>
+                                        <Text style={styles.retakeBtnText}>{t('retake.action')}</Text>
+                                    </TouchableOpacity>
+                                </View>
                             ))}
 
                             {/* Identified items — duplicate/same-product lines merged;
                                 the price shown is the ACTUAL paid (promo-adjusted). */}
-                            {(() => {
-                                const merged = mergeReceiptItems(receipts);
+                            <Text style={styles.sectionTitle}>{`${t('tripFinal.itemsSection')} · ${merged.length}`}</Text>
+                            {merged.map(m => {
+                                const qtyLabel = mergedQtyLabel(m);
+                                const a = mergedAnim.get(m.key);
                                 return (
-                                    <>
-                                        <Text style={styles.sectionTitle}>{`${t('tripFinal.itemsSection')} · ${merged.length}`}</Text>
-                                        {merged.map(m => {
-                                            const qtyLabel = mergedQtyLabel(m);
-                                            return (
-                                                <View key={m.key} style={styles.itemRow}>
-                                                    <View style={styles.thumbWrap}>
-                                                        {m.imageUrl
-                                                            ? <Image source={{ uri: m.imageUrl }} style={styles.itemImage} />
-                                                            : <View style={[styles.itemImage, styles.itemImageEmpty]} />}
-                                                        {multi && (
-                                                            <View style={styles.itemBadge}>
-                                                                <ChainLogoChip chainId={m.chainId ?? chainIdByName(m.chainName ?? '') ?? 0} name={m.chainName ?? undefined} size={18} />
-                                                            </View>
-                                                        )}
-                                                    </View>
-                                                    <View style={{ flex: 1, minWidth: 0 }}>
-                                                        <Text style={styles.itemName} numberOfLines={1}>{m.name}</Text>
-                                                        {qtyLabel && <Text style={styles.itemMeta}>{qtyLabel}</Text>}
-                                                    </View>
-                                                    <Text style={styles.itemPrice}>{formatEuro(m.lineTotal)}</Text>
+                                    <Animated.View
+                                        key={m.key}
+                                        layout={LinearTransition.duration(360)}
+                                        entering={a?.mode === 'inserted' ? FadeInDown.duration(340) : undefined}
+                                    >
+                                        <ScanRevealRow mode={a?.mode} delay={(a?.order ?? 0) * 140}>
+                                            <View style={styles.itemRow}>
+                                                <View style={styles.thumbWrap}>
+                                                    {m.imageUrl
+                                                        ? <Image source={{ uri: m.imageUrl }} style={styles.itemImage} />
+                                                        : <View style={[styles.itemImage, styles.itemImageEmpty]}><Text style={styles.itemBeet}>🫜</Text></View>}
+                                                    {multi && (
+                                                        <View style={styles.itemBadge}>
+                                                            <ChainLogoChip chainId={m.chainId ?? chainIdByName(m.chainName ?? '') ?? 0} name={m.chainName ?? undefined} size={18} />
+                                                        </View>
+                                                    )}
                                                 </View>
-                                            );
-                                        })}
-                                    </>
+                                                <View style={{ flex: 1, minWidth: 0 }}>
+                                                    <Text style={styles.itemName} numberOfLines={1}>{m.name}</Text>
+                                                    {qtyLabel && <Text style={styles.itemMeta}>{qtyLabel}</Text>}
+                                                </View>
+                                                <Text style={styles.itemPrice}>{formatEuro(m.lineTotal)}</Text>
+                                            </View>
+                                        </ScanRevealRow>
+                                    </Animated.View>
                                 );
-                            })()}
+                            })}
                         </ScrollView>
                     )
                 )}
 
                 {/* ── STATS PANE ── */}
                 {tab === 'stats' && (
-                    locked == null ? (
+                    <>
+                    {locked == null ? (
                         <View style={styles.centered}><MaterialProgress size="large" color={colors.primary} /></View>
                     ) : pendingSwipeIds.length > 0 ? (
                         // Mandatory swipe queue hosted in-place: clear it here, then
                         // reload straight into the stats (no route bounce).
                         <View style={styles.swipeHost}>
+                            {/* renderHeader OFF: this screen's own chrome (back + trip title)
+                                is already above — the queue's in-screen nav bar would double
+                                it (and its safe-area inset). Progress shows via the top glow. */}
                             <SwipeQueue
                                 receiptIds={pendingSwipeIds}
                                 voluntary={false}
-                                renderHeader
+                                renderHeader={false}
                                 onAllDone={() => { void load(); }}
                                 onExit={() => setTab('receipt')}
                             />
@@ -330,7 +477,7 @@ export default function TripFinalScreen() {
                         <ScrollView contentContainerStyle={{ padding: spacing.lg, paddingBottom: insets.bottom + 92 }}>
                             {/* hero */}
                             <View style={styles.hero}>
-                                <Text style={styles.heroVal}>{formatEuro(stats.totalSpent)}</Text>
+                                <AnimatedNumber value={stats.totalSpent} format={formatEuro} style={styles.heroVal} />
                                 <Text style={styles.heroLbl}>{t('trips.statSpent')}</Text>
                             </View>
 
@@ -341,9 +488,11 @@ export default function TripFinalScreen() {
                                         <Text style={styles.mcap}>{stats.savings > 0 ? t('trips.statSaved') : stats.savings < 0 ? t('trips.statOverpaid') : t('tripFinal.avgPriceCap')}</Text>
                                         <Ionicons name="chevron-forward" size={13} color={colors.textMuted} />
                                     </View>
-                                    <Text style={[styles.mval, stats.savings > 0 && { color: colors.success }, stats.savings < 0 && { color: colors.error }]}>
-                                        {stats.savings === 0 ? '—' : `${stats.savings > 0 ? '+' : '−'}${formatEuro(Math.abs(stats.savings))}`}
-                                    </Text>
+                                    <AnimatedNumber
+                                        value={stats.savings}
+                                        format={(n) => Math.abs(n) < 0.005 ? '—' : `${n > 0 ? '+' : '−'}${formatEuro(Math.abs(n))}`}
+                                        style={[styles.mval, stats.savings > 0 && { color: colors.success }, stats.savings < 0 && { color: colors.error }]}
+                                    />
                                     <Text style={styles.mfoot}>{stats.savings === 0 ? t('tripFinal.avgPriceFoot') : t('tripFinal.vsAverage')}</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
@@ -356,7 +505,9 @@ export default function TripFinalScreen() {
                                         {score?.score != null && <Ionicons name="chevron-forward" size={13} color={colors.textMuted} />}
                                     </View>
                                     <Text style={styles.mval}>
-                                        {score?.score != null ? score.score : '—'}<Text style={styles.mvalSub}>{score?.score != null ? '/100' : ''}</Text>
+                                        {score?.score != null
+                                            ? <><AnimatedNumber value={score.score} format={(n) => String(Math.round(n))} /><Text style={styles.mvalSub}>/100</Text></>
+                                            : '—'}
                                     </Text>
                                     {score?.deltaPct != null && (
                                         <Text style={[styles.mfoot, styles.mfootStrong, { color: score.deltaPct >= 0 ? colors.success : colors.error }]}>
@@ -383,7 +534,7 @@ export default function TripFinalScreen() {
                                         <Text style={styles.mcap}>{t('tripFinal.promoItems')}</Text>
                                         {stats.promoItemCount > 0 && <Ionicons name="chevron-forward" size={13} color={colors.textMuted} />}
                                     </View>
-                                    <Text style={styles.mval}>{stats.promoItemCount}</Text>
+                                    <AnimatedNumber value={stats.promoItemCount} format={(n) => String(Math.round(n))} style={styles.mval} />
                                     <Text style={styles.mfoot}>{stats.promoSavings > 0 ? t('tripFinal.promoSaved', { amount: formatEuro(stats.promoSavings) }) : t('tripFinal.promoNone')}</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
@@ -395,11 +546,16 @@ export default function TripFinalScreen() {
                                         <Text style={styles.mcap}>{t('tripFinal.impulse')}</Text>
                                         {impulseItems.length > 0 && <Ionicons name="chevron-forward" size={13} color={colors.textMuted} />}
                                     </View>
-                                    <Text style={styles.mval}>{score?.impulseCount ?? 0}</Text>
+                                    <AnimatedNumber value={score?.impulseCount ?? 0} format={(n) => String(Math.round(n))} style={styles.mval} />
                                     <Text style={styles.mfoot}>{t('tripFinal.impulseFoot', { count: score?.impulseCount ?? 0 })}</Text>
                                 </TouchableOpacity>
                             </View>
+                            {/* Praleistos (missed) is plan-relative — hidden for trips with no
+                                planning; prediction likewise only shows with a priced plan, so
+                                the whole row drops for a plan-less (ad-hoc) trip. */}
+                            {(score?.hasList || prediction) && (
                             <View style={styles.mrow}>
+                                {score?.hasList ? (
                                 <TouchableOpacity
                                     style={styles.mcard}
                                     activeOpacity={missedItems.length > 0 ? 0.7 : 1}
@@ -409,9 +565,10 @@ export default function TripFinalScreen() {
                                         <Text style={styles.mcap}>{t('tripFinal.forgotten')}</Text>
                                         {missedItems.length > 0 && <Ionicons name="chevron-forward" size={13} color={colors.textMuted} />}
                                     </View>
-                                    <Text style={styles.mval}>{score?.forgottenCount ?? 0}</Text>
+                                    <AnimatedNumber value={score?.forgottenCount ?? 0} format={(n) => String(Math.round(n))} style={styles.mval} />
                                     <Text style={styles.mfoot}>{t('tripFinal.forgottenFoot', { count: score?.forgottenCount ?? 0 })}</Text>
                                 </TouchableOpacity>
+                                ) : <View style={{ flex: 1 }} />}
                                 {prediction ? (
                                     <TouchableOpacity style={styles.mcard} activeOpacity={0.7} onPress={() => setPredictionOpen(true)}>
                                         <View style={styles.mcapRow}>
@@ -425,6 +582,7 @@ export default function TripFinalScreen() {
                                     </TouchableOpacity>
                                 ) : <View style={{ flex: 1 }} />}
                             </View>
+                            )}
 
                             {/* per-user spend split (shared trips only) */}
                             {stats.memberSpend.length > 1 && (() => {
@@ -455,13 +613,32 @@ export default function TripFinalScreen() {
                         </ScrollView>
                     ) : (
                         <View style={styles.centered}><Text style={styles.hint}>{t('tripMap.statsLocked')}</Text></View>
-                    )
+                    )}
+                    {/* Voluntary identify-queue as an OVERLAY over the (still-mounted)
+                        stats content, so closing it reveals the refreshed figures + donut
+                        animating the change instead of a cold remount. */}
+                    {/* No paddingTop here — the queue's ScreenNavBar owns the top
+                        safe-area inset (padding it too would double the gap). */}
+                    {voluntaryOpen && (
+                        <View style={styles.voluntaryOverlay}>
+                            <SwipeQueue
+                                receiptIds={receipts?.map(r => String(r.id)) ?? []}
+                                voluntary
+                                renderHeader
+                                onAllDone={onVoluntaryDone}
+                                onExit={() => { setVoluntaryOpen(false); void refreshVoluntaryCount(); }}
+                            />
+                        </View>
+                    )}
+                    </>
                 )}
 
                 {/* Pane switcher (bottom-left) — THE shared glass dock in its compact
                     form (same blur/tint/rim/shadow/corners as the main nav + map
-                    bars, via DockedGlassSheet). Stats is gated until unlock. */}
-                <DockedGlassSheet
+                    bars, via DockedGlassSheet). Stats is gated until unlock. Hidden
+                    while the voluntary swipe overlay covers the screen — switching
+                    panes under it would be invisible and confusing. */}
+                {!voluntaryOpen && !(tab === 'stats' && pendingSwipeIds.length > 0) && <DockedGlassSheet
                     compact
                     barRowHeight={0}
                     barRow={
@@ -483,7 +660,7 @@ export default function TripFinalScreen() {
                             onSelect={(k) => setTab(k as 'receipt' | 'stats')}
                         />
                     }
-                />
+                />}
             </View>
 
             {/* Receipt sheet — the shared non-docked glass sheet. Mounted only
@@ -563,6 +740,12 @@ export default function TripFinalScreen() {
                 onClose={() => setUploadSheet(false)}
                 listMap={trip && trip.slots.length > 0 ? trip.slots.map(s => `${s.chainId ?? 0}:${s.listId}`).join(',') : undefined}
             />
+            {/* Retake → the SAME Take-photo/Upload sheet, but heals this receipt. */}
+            <ReceiptUploadSheet
+                visible={retakeReceiptId != null}
+                onClose={() => setRetakeReceiptId(null)}
+                healReceiptId={retakeReceiptId ?? undefined}
+            />
         </>
     );
 }
@@ -590,7 +773,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     bigBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, backgroundColor: c.primary, borderRadius: radius.lg, paddingVertical: 13, paddingHorizontal: spacing.lg },
     bigBtnText: { fontSize: 14.5, fontWeight: '700', color: c.onPrimary },
 
-    rcard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: c.cardBackground, borderWidth: 1, borderColor: c.border, borderRadius: radius.lg, padding: spacing.md, marginHorizontal: spacing.lg, marginBottom: spacing.sm },
+    rcard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: c.cardBackground, borderWidth: 1, borderColor: c.border, borderRadius: radius.lg, padding: spacing.md, marginHorizontal: spacing.lg, marginBottom: spacing.sm, overflow: 'hidden' },
     rstore: { ...typography.bodySmallStrong, color: c.textPrimary },
     rsub: { ...typography.labelSmall, color: c.textSecondary, marginTop: 2 },
     rtot: { ...typography.bodySmallStrong, fontVariant: ['tabular-nums'], color: c.textPrimary },
@@ -600,11 +783,29 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.error, alignItems: 'center', justifyContent: 'center',
         borderWidth: 2, borderColor: c.cardBackground,
     },
+    // Passive low-scan-quality hint on the receipt card corner (amber, camera).
+    scanBadge: {
+        position: 'absolute', top: -4, right: -4, width: 18, height: 18, borderRadius: 9,
+        backgroundColor: '#E39A17', alignItems: 'center', justifyContent: 'center',
+        borderWidth: 2, borderColor: c.cardBackground,
+    },
+    // Retake banner — a low-quality scan can be improved by re-shooting.
+    retakeBanner: {
+        flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+        backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderRadius: radius.lg,
+        borderWidth: 1, borderColor: c.primary,
+        padding: spacing.md, marginHorizontal: spacing.lg, marginBottom: spacing.sm,
+    },
+    retakeTitle: { fontSize: 14, fontWeight: '800', color: c.textPrimary },
+    retakeSub: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
+    retakeBtn: { backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 7 },
+    retakeBtnText: { fontSize: 13, fontWeight: '800', color: c.onPrimary },
 
     itemRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
     thumbWrap: { width: 40, height: 40 },
     itemImage: { width: 40, height: 40, borderRadius: 10 },
-    itemImageEmpty: { backgroundColor: c.surfaceMuted },
+    itemImageEmpty: { backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center' },
+    itemBeet: { fontSize: 20, opacity: 0.5 },
     itemBadge: { position: 'absolute', top: -5, left: -5, borderRadius: 11, padding: 1.5, backgroundColor: c.cardBackground },
     itemName: { ...typography.bodySmall, fontWeight: '600', color: c.textPrimary },
     itemMeta: { ...typography.labelSmall, color: c.textSecondary, marginTop: 1 },
@@ -633,4 +834,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
 
     // Mandatory-swipe host (Stats pane, before stats unlock).
     swipeHost: { flex: 1 },
+    // Voluntary queue overlay — opaque fill over the mounted stats so it animates on close.
+    voluntaryOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.pageBackground, zIndex: 20 },
 });
