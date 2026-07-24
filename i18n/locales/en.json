@@ -1905,12 +1905,10 @@
   },
   "predictionSheet": {
     "title": "Prediction",
-    "planned": "Planned",
-    "actual": "Actual",
-    "accuracy": "{{pct}}% accurate · {{count}} items",
-    "boughtAs": "bought: {{name}}",
-    "qtyNote": "planned ×{{planned}} · bought ×{{bought}}",
-    "note": "While shopping, always compare the recommended product's unit price against other options — Souply might have missed a better deal.",
+    "accuracyLabel": "Accuracy",
+    "expenseChange": "Spending change",
+    "plannedItem": "planned: {{name}}",
+    "note": "Accuracy is measured by comparing the products you bought against your shopping list. In store, always check the price per unit — you can sometimes find a better deal.",
     "lowQuality": "This receipt did not reconcile to its total, so these forecasts may be off. Retake the photo."
   }
 }

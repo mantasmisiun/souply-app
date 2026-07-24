@@ -6,7 +6,7 @@ import { ProductImage } from '../ProductImage';
 import { SheetTitle } from './SheetTitle';
 import { useTheme, spacing, radius, typography, withAlpha, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { formatEuro } from '../../utils/formatCurrency';
-import { formatItemAmount, unitLabel, type UnitToken } from '../../utils/amountDisplay';
+import { unitLabel, type UnitToken } from '../../utils/amountDisplay';
 import type { TripScore } from '../../utils/tripsApi';
 
 /**
@@ -34,25 +34,28 @@ export function PredictionSheet({ score, lowQuality }: { score: TripScore; lowQu
     const rows = useMemo(() =>
         score.pairs
             .filter(p => p.listPrice != null && p.listPrice > 0)
-            .map(p => ({
-                key: `${p.listItemId}:${p.receiptItemId}`,
-                planName: p.listName ?? p.productName ?? '—',
-                buyName: p.receiptName,
-                imageUris: p.imageUrls,
-                // listQty is a PACK COUNT (2 × 250 g), so show it against the
-                // SP pack size, never as "2 kg". Bought side = the receipt line's
-                // own unit/amount/weighable.
-                plannedAmount: formatItemAmount({ quantity: p.listQty, isWeighable: p.isWeighable, unit: p.listPackUnit, packAmount: p.listPackAmount, canonicalStep: p.canonicalStep }),
-                boughtAmount: formatItemAmount({ quantity: p.receiptQty, isWeighable: p.receiptWeighable, unit: p.receiptUnit, packAmount: p.receiptAmount }),
-                // Headline comparison = price per canonical unit (€/kg, €/vnt).
-                planUnitPrice: p.listUnitPrice,
-                buyUnitPrice: p.receiptUnitPrice,
-                unit: unitLabel((p.unitPriceUnit || 'vnt') as UnitToken, t),
-                predicted: p.listPrice as number,
-                actual: p.receiptPrice,
-                delta: Math.round((p.receiptPrice - (p.listPrice as number)) * 100) / 100,
-                qtyDiff: Math.round(p.listQty * 1000) !== Math.round(p.receiptQty * 1000),
-            }))
+            .map(p => {
+                // % change vs the ORIGINAL (planned) price. Prefer the per-unit price so a
+                // different bought quantity doesn't distort it; fall back to the line price.
+                const base = p.listUnitPrice ?? (p.listPrice as number);
+                const now = p.receiptUnitPrice ?? p.receiptPrice;
+                const pct = base != null && base > 0 && now != null
+                    ? Math.round(((now - base) / base) * 100) : null;
+                return {
+                    key: `${p.listItemId}:${p.receiptItemId}`,
+                    planName: p.listName ?? p.productName ?? '—',
+                    buyName: p.receiptName,
+                    imageUris: p.imageUrls,
+                    // Headline comparison = price per canonical unit (€/kg, €/vnt).
+                    planUnitPrice: p.listUnitPrice,
+                    buyUnitPrice: p.receiptUnitPrice,
+                    unit: unitLabel((p.unitPriceUnit || 'vnt') as UnitToken, t),
+                    predicted: p.listPrice as number,
+                    actual: p.receiptPrice,
+                    delta: Math.round((p.receiptPrice - (p.listPrice as number)) * 100) / 100,
+                    pct,
+                };
+            })
             .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta)),
         [score.pairs]);
 
@@ -61,6 +64,9 @@ export function PredictionSheet({ score, lowQuality }: { score: TripScore; lowQu
         Math.abs(delta) < 0.005 ? colors.textSecondary : delta > 0 ? colors.error : colors.success;
     const signed = (delta: number) =>
         Math.abs(delta) < 0.005 ? '0' : `${delta > 0 ? '+' : '−'}${formatEuro(Math.abs(delta))}`;
+    // Per-item badge = % change vs the planned price (+pricier / −cheaper).
+    const signedPct = (pct: number | null) =>
+        pct == null || pct === 0 ? '0%' : `${pct > 0 ? '+' : '−'}${Math.abs(pct)}%`;
 
     return (
         <View style={styles.body}>
@@ -76,24 +82,17 @@ export function PredictionSheet({ score, lowQuality }: { score: TripScore; lowQu
                     </View>
                 )}
 
-                {/* Hero: planned total → actual total, with the net surprise. */}
+                {/* Hero: forecast accuracy (Tikslumas) + how much the actual spend moved vs plan. */}
                 <View style={styles.hero}>
                     <View style={styles.heroSide}>
-                        <Text style={styles.heroLbl}>{t('predictionSheet.planned')}</Text>
-                        <Text style={styles.heroVal}>{formatEuro(predicted)}</Text>
+                        <Text style={styles.heroLbl}>{t('predictionSheet.accuracyLabel')}</Text>
+                        <Text style={styles.heroVal}>{accuracy != null ? `${accuracy}%` : '—'}</Text>
                     </View>
-                    <Ionicons name="arrow-forward" size={16} color={colors.textMuted} />
-                    <View style={styles.heroSide}>
-                        <Text style={styles.heroLbl}>{t('predictionSheet.actual')}</Text>
-                        <Text style={[styles.heroVal, { color: costColor(totalDelta) }]}>{formatEuro(actual)}</Text>
-                    </View>
-                    <View style={[styles.deltaChip, { backgroundColor: withAlpha(costColor(totalDelta), 0.14) }]}>
-                        <Text style={[styles.deltaChipText, { color: costColor(totalDelta) }]}>{signed(totalDelta)}</Text>
+                    <View style={[styles.heroSide, { marginLeft: 'auto', alignItems: 'flex-end' }]}>
+                        <Text style={styles.heroLbl}>{t('predictionSheet.expenseChange')}</Text>
+                        <Text style={[styles.heroVal, { color: costColor(totalDelta) }]}>{signed(totalDelta)}</Text>
                     </View>
                 </View>
-                {accuracy != null && (
-                    <Text style={styles.accuracy}>{t('predictionSheet.accuracy', { pct: accuracy, count: rows.length })}</Text>
-                )}
 
                 <View style={styles.note}>
                     <Ionicons name="information-circle-outline" size={18} color={colors.textSecondary} />
@@ -114,13 +113,13 @@ export function PredictionSheet({ score, lowQuality }: { score: TripScore; lowQu
                     <View style={{ flex: 1, minWidth: 0 }}>
                         <View style={styles.topLine}>
                             <View style={{ flex: 1, minWidth: 0 }}>
-                                <Text style={styles.name} numberOfLines={1}>{r.planName}</Text>
-                                {!!r.buyName && r.buyName !== r.planName && (
-                                    <Text style={styles.alt} numberOfLines={1}>{t('predictionSheet.boughtAs', { name: r.buyName })}</Text>
+                                <Text style={styles.name} numberOfLines={1}>{r.buyName || r.planName}</Text>
+                                {!!r.planName && (
+                                    <Text style={styles.alt} numberOfLines={1}>{t('predictionSheet.plannedItem', { name: r.planName })}</Text>
                                 )}
                             </View>
                             <View style={[styles.pill, { backgroundColor: withAlpha(costColor(r.delta), 0.14) }]}>
-                                <Text style={[styles.pillText, { color: costColor(r.delta) }]}>{signed(r.delta)}</Text>
+                                <Text style={[styles.pillText, { color: costColor(r.delta) }]}>{signedPct(r.pct)}</Text>
                             </View>
                         </View>
                         {/* Headline: price per unit (planned → bought). Falls back
@@ -138,10 +137,6 @@ export function PredictionSheet({ score, lowQuality }: { score: TripScore; lowQu
                                 </Text>
                             </Text>
                         </View>
-                        {/* Amount bought, standard "N × amount unit" layout, under the delta. */}
-                        <Text style={[styles.amountLine, r.qtyDiff && { color: colors.primary }]} numberOfLines={1}>
-                            {r.plannedAmount === r.boughtAmount ? r.boughtAmount : `${r.plannedAmount} → ${r.boughtAmount}`}
-                        </Text>
                     </View>
                 </View>
                 </Fragment>
@@ -158,9 +153,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     heroSide: { gap: 1 },
     heroLbl: { ...typography.labelSmall, color: c.textSecondary },
     heroVal: { fontSize: 20, fontWeight: '800', color: c.textPrimary, fontVariant: ['tabular-nums'] },
-    deltaChip: { marginLeft: 'auto', borderRadius: radius.pill, paddingHorizontal: spacing.sm, paddingVertical: 3 },
-    deltaChipText: { ...typography.bodySmall, fontWeight: '800', fontVariant: ['tabular-nums'] },
-    accuracy: { ...typography.labelSmall, color: c.textSecondary },
 
     note: {
         flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
@@ -188,7 +180,5 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     pillText: { ...typography.bodySmall, fontWeight: '800', fontVariant: ['tabular-nums'] },
     flow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: 6, flexWrap: 'wrap' },
     seg: { ...typography.bodySmall, fontVariant: ['tabular-nums'] },
-    segQty: { color: c.textSecondary },
-    amountLine: { ...typography.labelSmall, color: c.textSecondary, marginTop: 2, fontVariant: ['tabular-nums'] },
     segPrice: { fontWeight: '700', color: c.textPrimary },
 });

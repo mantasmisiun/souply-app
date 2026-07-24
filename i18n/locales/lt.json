@@ -1886,12 +1886,10 @@
   },
   "predictionSheet": {
     "title": "Prognozė",
-    "planned": "Planuota",
-    "actual": "Faktas",
-    "accuracy": "{{pct}}% tikslumas · {{count}} prek.",
-    "boughtAs": "pirkta: {{name}}",
-    "qtyNote": "planuota ×{{planned}} · pirkta ×{{bought}}",
-    "note": "Apsipirkdami visada palyginkite rekomenduojamos prekės vieneto kainą su kitomis prekėmis — souply gali būti pražiūrėjęs geresnį pasiūlymą.",
+    "accuracyLabel": "Tikslumas",
+    "expenseChange": "Išlaidų pokytis",
+    "plannedItem": "planuota: {{name}}",
+    "note": "Tikslumas gautas palyginus nupirktas prekes su pirkinių sąrašo prekėmis. Parduotuvėje visada atkreipkite dėmesį į kainą už vienetą, nes kartais galite rasti geresnių pasiūlymų.",
     "lowQuality": "Šis kvitas nesutapo su čekio suma, todėl prognozės gali būti netikslios. Pakartokite nuotrauką."
   }
 }
