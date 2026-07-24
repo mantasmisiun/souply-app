@@ -25,6 +25,8 @@ import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 import { useBackToExit } from '../../../hooks/useBackToExit';
 import { useReceiptQueueStore, type QueueItem } from '../../../state/receiptQueueStore';
+import { useTripSeenStore, isTripNew } from '../../../state/tripSeenStore';
+import { ChainLogoChip } from '../../../components/ChainLogoChip';
 import { ProgressGlow } from '../../../components/ProgressGlow';
 import { requestStoreResolution } from '../../../utils/storeResolution';
 import { StoreResolutionOverlay } from '../../../components/receipt/StoreResolutionOverlay';
@@ -170,6 +172,11 @@ export default function TripsScreen() {
     const queueItems = useReceiptQueueStore(s => s.items);
     const queueInitialize = useReceiptQueueStore(s => s.initialize);
     const lastCompletedAt = useReceiptQueueStore(s => s.lastCompletedAt);
+    // "New" (pink + badge) until the card is opened — persisted per-trip watermark.
+    const seenTrips = useTripSeenStore(s => s.seen);
+    const seenInit = useTripSeenStore(s => s.initialized);
+    const markTripOpened = useTripSeenStore(s => s.markOpened);
+    useEffect(() => { void useTripSeenStore.getState().initialize(); }, []);
     useEffect(() => { void queueInitialize(); }, [queueInitialize]);
     const processingItems = useMemo(
         () => queueItems.filter(i => i.status === 'processing' || i.status === 'pending'
@@ -277,8 +284,9 @@ export default function TripsScreen() {
     // the stage's screen — basket detail / comparison map / closest
     // unfinished list / receipts / stats. No trip container in between.
     const openTrip = useCallback((trip: TripSummary) => {
+        markTripOpened(trip.id, trip.receiptCount); // clears its New/pink state
         void tripStageHref(trip).then(href => router.push(href as any)).catch(() => {});
-    }, [router]);
+    }, [router, markTripOpened]);
 
     const onArchivedTap = useCallback((trip: TripSummary) => {
         Alert.alert(
@@ -414,10 +422,15 @@ export default function TripsScreen() {
                 ) : (
                     active.map(trip => {
                         const preview = trip.basket?.itemPreview ?? [];
+                        const hasReceipt = trip.receiptCount > 0;
+                        const isNew = seenInit && isTripNew(seenTrips, trip.id, trip.receiptCount);
+                        const chains = trip.chains ?? [];
+                        const shownChains = chains.slice(0, 4);
+                        const chainOverflow = chains.length - shownChains.length;
                         return (
                         <AnimatedTouchable
                             key={trip.id}
-                            style={styles.card}
+                            style={[styles.card, isNew && styles.cardNew]}
                             onPress={() => openTrip(trip)}
                             activeOpacity={0.8}
                             exiting={cardExit}
@@ -426,13 +439,31 @@ export default function TripsScreen() {
                             <View style={styles.cardMain}>
                                 <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
                                     <View style={styles.cardTop}>
-                                        <View style={styles.cartChip}>
-                                            <Ionicons name="cart-outline" size={14} color={colors.primary} />
-                                            <Text style={styles.cartChipText}>{trip.basket?.itemCount ?? 0}</Text>
+                                        <View style={styles.cardTopLeft}>
+                                            {/* Uploaded receipt → receipt icon + recognised line count;
+                                                otherwise the planned shopping-list count. */}
+                                            <View style={styles.cartChip}>
+                                                <Ionicons name={hasReceipt ? 'receipt-outline' : 'cart-outline'} size={14} color={colors.primary} />
+                                                <Text style={styles.cartChipText}>{hasReceipt ? trip.recognisedItemCount : (trip.basket?.itemCount ?? 0)}</Text>
+                                            </View>
+                                            {/* Chain logos: receipt chains full colour, planned-only dimmed. */}
+                                            {shownChains.length > 0 && (
+                                                <View style={styles.logoStrip}>
+                                                    {shownChains.map(c => (
+                                                        <ChainLogoChip key={c.chainId} chainId={c.chainId} name={c.chainName ?? undefined} size={22} dimmed={!c.hasReceipt} style={styles.logoChip} />
+                                                    ))}
+                                                    {chainOverflow > 0 && <Text style={styles.logoMore}>+{chainOverflow}</Text>}
+                                                </View>
+                                            )}
                                         </View>
-                                        {trip.memberCount > 1 && (
-                                            <MemberStack members={trip.members ?? []} total={trip.memberCount} styles={styles} />
-                                        )}
+                                        <View style={styles.cardTopRight}>
+                                            {isNew && (
+                                                <View style={styles.newBadge}><Text style={styles.newBadgeText}>{t('trips.newBadge')}</Text></View>
+                                            )}
+                                            {trip.memberCount > 1 && (
+                                                <MemberStack members={trip.members ?? []} total={trip.memberCount} styles={styles} />
+                                            )}
+                                        </View>
                                     </View>
                                     {renderTripTitle(trip)}
                                 </View>
@@ -540,6 +571,16 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingHorizontal: 10, paddingVertical: 4,
     },
     cartChipText: { fontSize: 13, fontWeight: '800', color: c.primary },
+    // New (unopened receipt) card: pink-tinted fill + full pink border, set apart
+    // from the pinned family card (also pink) by the "New" badge + receipt content.
+    cardNew: { backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderColor: c.primary },
+    cardTopLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 },
+    cardTopRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    logoStrip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
+    logoChip: {},
+    logoMore: { fontSize: 11, fontWeight: '800', color: c.textMuted, marginLeft: 2 },
+    newBadge: { backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 2 },
+    newBadgeText: { fontSize: 10, fontWeight: '900', color: c.onPrimary, letterSpacing: 0.3 },
     previewRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
     previewName: { flexShrink: 1, fontSize: 12, color: c.textSecondary, maxWidth: '38%' },
     previewDot: { fontSize: 12, color: c.textMuted },

@@ -45,6 +45,13 @@ export interface TripSummary {
     } | null;
     slots: TripSlot[];
     receiptCount: number;
+    /** Total parsed lines across the trip's receipts (all ReceiptItem rows) — the
+     *  receipt-icon badge count once a receipt has been uploaded. */
+    recognisedItemCount: number;
+    /** Unique chains involved (planned list chains + receipt chains), each flagged
+     *  whether a receipt exists for it — the card's logo strip renders a receipt
+     *  chain in full colour and a planned-only chain dimmed. */
+    chains: { chainId: number; chainName: string | null; hasReceipt: boolean }[];
 }
 
 async function jsonOrThrow(res: Response): Promise<any> {

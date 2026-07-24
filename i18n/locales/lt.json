@@ -1737,7 +1737,8 @@
     "planStoreLine": "Prekių: {{count}} · {{km}} km",
     "createLists": "Sukurti sąrašą",
     "searchErrorTitle": "Paieška nepavyko",
-    "searchErrorBody": "Patikrink ryšį ir bandyk dar kartą."
+    "searchErrorBody": "Patikrink ryšį ir bandyk dar kartą.",
+    "newBadge": "Naujas"
   },
   "notifications": {
     "title": "Pranešimai",

@@ -1756,7 +1756,8 @@
     "planStoreLine": "Items: {{count}} · {{km}} km",
     "createLists": "Create the list",
     "searchErrorTitle": "Search failed",
-    "searchErrorBody": "Check your connection and try again."
+    "searchErrorBody": "Check your connection and try again.",
+    "newBadge": "New"
   },
   "notifications": {
     "title": "Notifications",
