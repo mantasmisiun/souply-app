@@ -27,6 +27,8 @@ export interface QueueItem {
    *  /receipts/:id/heal) instead of creating a new one — a second observation
    *  merged into the stored parse. */
   healReceiptId?: number;
+  /** DEV-ONLY: with healReceiptId, fully REPLACE that receipt's parse instead of merging. */
+  devReplace?: boolean;
   status: QueueStatus;
   error?: string;
   /** Failure reason (e.g. "store_unrecognized") — drives the error card's CTA. */
@@ -65,6 +67,7 @@ interface ReceiptQueueState {
     linkMap?: Record<number, number>;
     fallbackLinkId?: number | null;
     healReceiptId?: number;
+    devReplace?: boolean;
     resolvedStore?: { storeId: number; storeName: string | null; storeAddress: string | null };
   }[]) => void;
   markProcessing: (id: string, progress?: string) => void;
@@ -135,6 +138,7 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
       linkMap: e.linkMap,
       fallbackLinkId: e.fallbackLinkId,
       healReceiptId: e.healReceiptId,
+      devReplace: e.devReplace,
       resolvedStore: e.resolvedStore,
       status: "pending",
       addedAt: Date.now(),

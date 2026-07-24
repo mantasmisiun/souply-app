@@ -85,7 +85,7 @@ export function useReceiptQueueRunner(): void {
         useReceiptQueueStore
           .getState()
           .updateProgress(next.id, step, done, total),
-      { isPdf: next.isPdf === true, linkMap: next.linkMap, fallbackLinkId: next.fallbackLinkId, healReceiptId: next.healReceiptId, resolvedStore: next.resolvedStore },
+      { isPdf: next.isPdf === true, linkMap: next.linkMap, fallbackLinkId: next.fallbackLinkId, healReceiptId: next.healReceiptId, devReplace: next.devReplace, resolvedStore: next.resolvedStore },
     )
       .then((result) => {
         useReceiptQueueStore.getState().markDone(next.id, result.receiptId);

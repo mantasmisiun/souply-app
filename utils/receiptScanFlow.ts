@@ -1,4 +1,3 @@
-import { Platform } from 'react-native';
 import {
     parseRimiReceipt,
     isRimiReceipt,
@@ -22,11 +21,8 @@ import {
 import { detectChainByVatCode } from '../shared/parsers/chainVatFallback';
 import { ensembleSecondOpinion } from './parseEnsemble';
 import { sectionReocrIfFlagged , graftRicherFields } from './sectionReocr';
-import { maybeReocrProducts, maybeReocrFooter, maybeReocrHeader, type ReocrOutcome } from './productReocr';
-import { makeProductStripReocr, reportReocrOutcome } from './productReocrDevice';
+import { runIkiReocrPasses } from './productReocrDevice';
 import { refineFooterBands } from './footerBandRefine';
-import { PRODUCT_REOCR_ENABLED } from '../constants/flags';
-import { devLog } from './devLog';
 
 /**
  * THE single scan→parse orchestration, shared verbatim by the Analyze screen
@@ -175,30 +171,13 @@ export async function parseChainReceipt(chain: ScanChain, args: ParseChainArgs):
         if (args.beforeIkiReocr && !(await args.beforeIkiReocr(parsed))) {
             return { parsed, secondOcr, ikiLines, sectionOcrLines, ikiGateFailed: true };
         }
-        // IKI whole-section product re-OCR — flagged sections re-crop +
-        // upscale + re-read; accepted only if strictly better. Android-only,
-        // flag-gated. Passes run on the PRIMARY read's merged lines.
-        if (PRODUCT_REOCR_ENABLED && Platform.OS === 'android' && ocr.pageMetas[0]) {
-            const reOcr = makeProductStripReocr(
-                ocr.pageMetas[0].uri,
-                ocr.pageMetas[0].pixelWidth,
-                ocr.pageMetas[0].pixelHeight,
-            );
-            let lines = ocr.mergedLines as any[];
-            const passes: [string, () => Promise<ReocrOutcome>][] = [
-                ['products', () => maybeReocrProducts(parsed as any, lines, reOcr, { reasons: ['no-name', 'no-price', 'amount-in-name', 'collapsed-band', 'garbled-name'] })],
-                ['footer', () => maybeReocrFooter(parsed as any, lines, reOcr, { reconcileThreshold: 1.0 })],
-                ['header', () => maybeReocrHeader(parsed as any, lines, reOcr)],
-                ['products-recon', () => maybeReocrProducts(parsed as any, lines, reOcr, { reconcileThreshold: 1.0 })],
-            ];
-            for (const [label, run] of passes) {
-                try {
-                    const o = await run();
-                    devLog(`scanFlow.productReocr.${label}`, { accepted: o.accepted, detail: o.detail });
-                    if (args.reportIkiReocr) void reportReocrOutcome(parsed.footer?.receiptNo, o.accepted, o.detail);
-                    if (o.accepted) { parsed = o.parsed; lines = o.lines as any[]; ikiLines = lines; }
-                } catch { /* fail-safe: keep prior parse */ }
-            }
+        // IKI product re-OCR — whole-section (cross-band scrambles) + per-band deskew (within-band
+        // garbles), each accept-gated on strictly-better reconciliation. THE pass sequence lives in
+        // runIkiReocrPasses so this interactive path and the background/heal queue never drift.
+        if (ocr.pageMetas[0]) {
+            const res = await runIkiReocrPasses(parsed as any, ocr.mergedLines as any[], ocr.pageMetas[0], { report: !!args.reportIkiReocr });
+            parsed = res.parsed as any;
+            if (res.changed) ikiLines = res.lines as any[];
         }
         // Footer field bands (date/time/receiptNo/total) — rebuild each from a
         // fresh ISOLATED strip re-OCR; fail-safe (keeps the parser's band when

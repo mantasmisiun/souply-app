@@ -8,6 +8,7 @@ import {
     garbageCount,
     acceptReocr,
     maybeReocrProducts,
+    maybeReocrProductBands,
     maybeReocrFooter,
     maybeReocrHeader,
     productSectionSpan,
@@ -15,6 +16,8 @@ import {
     headerSectionSpan,
     nameGarbleCount,
     suspectReason,
+    allProductBands,
+    regionQuad,
     type ReOcrFn,
 } from '../utils/productReocr';
 
@@ -196,6 +199,69 @@ describe('productReocr — whole-section (handles cross-band scramble)', () => {
         expect(calls[0]).toEqual(productSectionSpan(before));             // …spanning the whole section
         expect(out.accepted).toBe(true);                                  // and it still recovers
         expect(garbageCount(out.parsed)).toBeLessThan(garbageCount(before));
+    });
+});
+
+describe('productReocr — per-band re-OCR (Tier 1/2)', () => {
+    test('regionQuad extracts per-corner geometry, null when the region is degenerate', () => {
+        const q = regionQuad({ name: 'X', price: 1, region: { xLeft: 10, xRight: 900, yTop: 20, yBottom: 80, yLeftTop: 22, yRightTop: 28, yLeftBottom: 78, yRightBottom: 84 } } as any);
+        expect(q).toEqual({ xLeft: 10, xRight: 900, yLeftTop: 22, yRightTop: 28, yLeftBottom: 78, yRightBottom: 84 });
+        // No per-corner Y → fall back to yTop/yBottom (still a usable quad, flat top/bottom).
+        const flat = regionQuad({ name: 'X', price: 1, region: { xLeft: 10, xRight: 900, yTop: 20, yBottom: 80 } } as any);
+        expect(flat).toEqual({ xLeft: 10, xRight: 900, yLeftTop: 20, yRightTop: 20, yLeftBottom: 80, yRightBottom: 80 });
+        // xRight ≤ xLeft (no width) → null (nothing to deskew).
+        expect(regionQuad({ name: 'X', price: 1, region: { xLeft: 900, xRight: 10, yTop: 20, yBottom: 80 } } as any)).toBeNull();
+        expect(regionQuad({ name: 'X', price: 1, region: undefined } as any)).toBeNull();
+    });
+
+    test('allProductBands lists every product carrying a real band', () => {
+        const reg = (yTop: number, yBottom: number) => ({ name: 'X', price: 1, promoPrice: null, quantity: 1, region: { xLeft: 0, xRight: 9, yTop, yBottom } } as any);
+        const parsed: any = { products: [reg(10, 50), reg(60, 100), { name: 'Y', price: 1 }], footer: { total: 3 } };
+        expect(allProductBands(parsed).map((s) => s.index)).toEqual([0, 1]);   // the region-less product is skipped
+    });
+
+    // The defining per-band property: ONE crop PER suspect band (contrast maybeReocrProducts' single
+    // whole-section crop), threading each accepted splice forward, with the band quad forwarded so a
+    // deskewing ReOcrFn can straighten it.
+    test('fires one crop per suspect band, forwards span + index + quad, recovers, accepts', async () => {
+        const full = linesFromFixture('fixtures_ikiReceipt170.json');
+        const degraded = full.filter((l) => !/\bKETO\b/i.test(l.text));       // drop KETO name rows → suspects
+        const before = parseIkiReceipt(degraded);
+        const suspects = detectSuspectProducts(before);
+        expect(suspects.length).toBeGreaterThanOrEqual(1);
+        const calls: { span: [number, number]; idx: number; quad: any }[] = [];
+        const stub: ReOcrFn = async (ySpan, _r, idx, quad) => { calls.push({ span: ySpan, idx, quad }); return inStrip(full, ySpan); };
+        const out = await maybeReocrProductBands(before, degraded, stub);
+        expect(calls.length).toBe(suspects.length);                            // one crop PER band…
+        expect(calls.map((c) => c.span)).toEqual(suspects.map((s) => s.ySpan));// …each the suspect's own band span
+        expect(calls.map((c) => c.idx)).toEqual(suspects.map((s) => s.index));
+        expect(calls.every((c) => c.quad === null || typeof c.quad === 'object')).toBe(true);   // quad forwarded
+        expect(out.accepted).toBe(true);
+        expect(garbageCount(out.parsed)).toBeLessThan(garbageCount(before));
+    });
+
+    test('per-band fail-safe: a haywire re-OCR that worsens reconciliation is rejected, original kept', async () => {
+        const full = linesFromFixture('fixtures_ikiReceipt170.json');
+        const degraded = full.filter((l) => !/\bKETO\b/i.test(l.text));
+        const before = parseIkiReceipt(degraded);
+        const bogus: ReOcrFn = async (ySpan) => [
+            mkLine('BOGUS PRODUKTAS', ySpan[0] + 1, ySpan[0] + 20),
+            mkLine('999,99 A', ySpan[0] + 2, ySpan[0] + 21),
+        ];
+        const out = await maybeReocrProductBands(before, degraded, bogus);
+        expect(out.accepted).toBe(false);
+        expect(out.parsed).toBe(before);                                       // original kept
+    });
+
+    test('clean receipt → no suspects → per-band never invokes the re-OCR', async () => {
+        const lines = linesFromFixture('fixtures_ikiReceipt183.json');
+        const parsed = parseIkiReceipt(lines);
+        expect(detectSuspectProducts(parsed)).toEqual([]);
+        const throwing: ReOcrFn = async () => { throw new Error('per-band must NOT fire on a clean receipt'); };
+        const out = await maybeReocrProductBands(parsed, lines, throwing);
+        expect(out.accepted).toBe(false);
+        expect(out.detail).toBe('per-band:no-suspects');
+        expect(out.parsed).toBe(parsed);
     });
 });
 

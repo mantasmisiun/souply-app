@@ -44,7 +44,10 @@ describe('IKI receipt 318 — triple-glued line: EUR/ fragment homes on the kg-c
         const pom = res.products.find((p: any) => /POMIDORAI/i.test(p.name)).region;
         expect(lyd.yBottom - lyd.yTop).toBeLessThan(60);     // was 120px spanning both
         expect(pom.yBottom - pom.yTop).toBeGreaterThan(60);  // was a 9px sliver
-        expect(lyd.yBottom).toBeLessThan(pom.yTop + 15);     // seam sits between them
+        // Bands are per-column quads (tileByContent): the LEFT edge carries the names, so the
+        // no-swallow seam is checked on the name column — lyd's left-bottom must land at/above
+        // POMIDORAI's name-top so the name is never clipped. (yBottom/yTop mix columns now.)
+        expect(lyd.yLeftBottom).toBeLessThan(pom.yLeftTop + 15);   // name-column seam sits between them
     });
 
     test('all eight products present and named', () => {

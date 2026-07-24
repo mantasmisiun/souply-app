@@ -16,7 +16,9 @@ import {
   isIkiReceipt,
   parseIkiReceipt,
   type IkiProduct,
+  type IkiLine,
 } from "@shared/parsers/ikiParser";
+import { runIkiReocrPasses } from "../utils/productReocrDevice";
 import {
   isMaximaReceipt,
   parseMaximaReceipt,
@@ -413,6 +415,26 @@ async function healExistingReceipt(
   return { receiptId, mandatorySwipesRequired: data?.mandatorySwipesRequired ?? 0 };
 }
 
+/** DEV-ONLY: overwrite an existing receipt's parse ENTIRELY with this fresh re-parse (bypasses the
+ *  conservative heal-merge), so the dev re-run button shows exactly what the parser now produces.
+ *  Server refuses in production. */
+async function devReplaceReceipt(
+  receiptId: number,
+  parsedData: object,
+  signal: AbortSignal,
+): Promise<{ receiptId: number; mandatorySwipesRequired: number }> {
+  const userId = await getUserId();
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${receiptId}/dev-replace`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-User-Id": userId },
+    body: JSON.stringify({ parsedData }),
+    timeoutMs: TIMEOUT_HEAVY_MS,
+    externalSignal: signal,
+  });
+  if (!res.ok) throw new ProcessingError("post_failed", i18n.t("retake.healFailed"));
+  return { receiptId, mandatorySwipesRequired: 0 };
+}
+
 async function postReceipt(
   parsedData: object,
   signal: AbortSignal,
@@ -635,9 +657,14 @@ async function processIki(
   signal: AbortSignal,
   onProgress?: (done: number, total: number) => void,
   resolvedStore?: ResolvedStoreInput,
+  page?: { uri: string; pixelWidth: number; pixelHeight: number } | null,
 ): Promise<object> {
   const chainId = 3;
-  const parsed = parseIkiReceipt(mergedLines);
+  const parsed0 = parseIkiReceipt(mergedLines);
+  // Product re-OCR — whole-section (cross-band scrambles) + per-band deskew (within-band garbles),
+  // Android + flag gated, accept-gated on strictly-better reconciliation. SAME sequence the
+  // interactive scan uses (runIkiReocrPasses), so the background/heal queue no longer misses it.
+  const { parsed } = await runIkiReocrPasses(parsed0, mergedLines as unknown as IkiLine[], page ?? null, { report: true });
   const store = await resolveStore(chainId, "IKI", parsed.header.storeAddress, signal, resolvedStore);
   const rawProds = parsed.products.map((ip: IkiProduct) => ({
     name: ip.name,
@@ -701,6 +728,8 @@ export async function processOneReceipt(
     fallbackLinkId?: number | null;
     /** RETAKE: heal this existing receipt instead of creating a new one. */
     healReceiptId?: number;
+    /** DEV-ONLY: fully REPLACE healReceiptId's parse with this one (bypass the heal-merge). */
+    devReplace?: boolean;
     /** STORE RESOLUTION: user picked a store from the map after a store_unrecognized
      *  failure — inject it so the parse skips the automatic store match. */
     resolvedStore?: ResolvedStoreInput;
@@ -761,7 +790,7 @@ export async function processOneReceipt(
     } else if (chainId === 5) {
       parsedData = await processLidl(allLines, signal, reportMatch, opts?.resolvedStore);
     } else if (chainId === 3) {
-      parsedData = await processIki(mergedLines, signal, reportMatch, opts?.resolvedStore);
+      parsedData = await processIki(mergedLines, signal, reportMatch, opts?.resolvedStore, { uri: firstPageUri, pixelWidth: firstPageWidth, pixelHeight: firstPageHeight });
     } else {
       await logFail("chain_unrecognized", {
         ocrLineCount: lineTexts.length,
@@ -803,7 +832,9 @@ export async function processOneReceipt(
     onProgress?.(i18n.t("receiptQueue.saving"));
     // RETAKE → heal the existing receipt (merge into its stored parse); otherwise
     // create a new one. The image is still (re)uploaded below to the SAME id.
-    const postResult = opts?.healReceiptId
+    const postResult = opts?.healReceiptId && opts?.devReplace
+      ? await devReplaceReceipt(opts.healReceiptId, parsedDataWithImage, signal)
+      : opts?.healReceiptId
       ? await healExistingReceipt(opts.healReceiptId, parsedDataWithImage, signal)
       : await postReceipt(parsedDataWithImage, signal);
 
