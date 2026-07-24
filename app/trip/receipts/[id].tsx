@@ -31,7 +31,7 @@ import { DiscountsSheet } from '../../../components/receipt/DiscountsSheet';
 import { PlanReconcileSheet, type PlanReconcileItem } from '../../../components/receipt/PlanReconcileSheet';
 import { PredictionSheet } from '../../../components/receipt/PredictionSheet';
 import { AnimatedNumber } from '../../../components/AnimatedNumber';
-import { SwipeQueue } from '../../../components/swipe/SwipeQueue';
+import { SwipeQueueOverlay } from '../../../components/swipe/SwipeQueueOverlay';
 import { DonutCarousel, type DonutPage } from '../../../components/DonutCarousel';
 import { chainIdByName, chainBrandColor, chainBrandName } from '../../../utils/chainBrandName';
 import { formatDate , formatEuro } from '../../../utils/formatCurrency';
@@ -457,20 +457,15 @@ export default function TripFinalScreen() {
                     {locked == null ? (
                         <View style={styles.centered}><MaterialProgress size="large" color={colors.primary} /></View>
                     ) : pendingSwipeIds.length > 0 ? (
-                        // Mandatory swipe queue hosted in-place: clear it here, then
-                        // reload straight into the stats (no route bounce).
-                        <View style={styles.swipeHost}>
-                            {/* renderHeader OFF: this screen's own chrome (back + trip title)
-                                is already above — the queue's in-screen nav bar would double
-                                it (and its safe-area inset). Progress shows via the top glow. */}
-                            <SwipeQueue
-                                receiptIds={pendingSwipeIds}
-                                voluntary={false}
-                                renderHeader={false}
-                                onAllDone={() => { void load(); }}
-                                onExit={() => setTab('receipt')}
-                            />
-                        </View>
+                        // Mandatory swipe queue: same overlay presentation as the
+                        // voluntary flow below (shared <SwipeQueueOverlay> → identical
+                        // ScreenNavBar). Clears in-place, then reloads into the stats.
+                        <SwipeQueueOverlay
+                            receiptIds={pendingSwipeIds}
+                            voluntary={false}
+                            onAllDone={() => { void load(); }}
+                            onExit={() => setTab('receipt')}
+                        />
                     ) : locked ? (
                         <View style={styles.centered}><Text style={styles.hint}>{t('tripMap.statsLocked')}</Text></View>
                     ) : stats ? (
@@ -616,19 +611,15 @@ export default function TripFinalScreen() {
                     )}
                     {/* Voluntary identify-queue as an OVERLAY over the (still-mounted)
                         stats content, so closing it reveals the refreshed figures + donut
-                        animating the change instead of a cold remount. */}
-                    {/* No paddingTop here — the queue's ScreenNavBar owns the top
-                        safe-area inset (padding it too would double the gap). */}
+                        animating the change instead of a cold remount. Shares the exact
+                        <SwipeQueueOverlay> the mandatory queue above uses. */}
                     {voluntaryOpen && (
-                        <View style={styles.voluntaryOverlay}>
-                            <SwipeQueue
-                                receiptIds={receipts?.map(r => String(r.id)) ?? []}
-                                voluntary
-                                renderHeader
-                                onAllDone={onVoluntaryDone}
-                                onExit={() => { setVoluntaryOpen(false); void refreshVoluntaryCount(); }}
-                            />
-                        </View>
+                        <SwipeQueueOverlay
+                            receiptIds={receipts?.map(r => String(r.id)) ?? []}
+                            voluntary
+                            onAllDone={onVoluntaryDone}
+                            onExit={() => { setVoluntaryOpen(false); void refreshVoluntaryCount(); }}
+                        />
                     )}
                     </>
                 )}
@@ -832,8 +823,4 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     memberPaid: { ...typography.bodySmallStrong, fontVariant: ['tabular-nums'], color: c.textPrimary },
     memberDev: { ...typography.labelSmall, fontWeight: '800', fontVariant: ['tabular-nums'], minWidth: 54, textAlign: 'right' },
 
-    // Mandatory-swipe host (Stats pane, before stats unlock).
-    swipeHost: { flex: 1 },
-    // Voluntary queue overlay — opaque fill over the mounted stats so it animates on close.
-    voluntaryOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: c.pageBackground, zIndex: 20 },
 });
