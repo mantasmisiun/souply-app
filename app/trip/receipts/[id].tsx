@@ -36,7 +36,7 @@ import { DonutCarousel, type DonutPage } from '../../../components/DonutCarousel
 import { chainIdByName, chainBrandColor, chainBrandName } from '../../../utils/chainBrandName';
 import { formatDate , formatEuro } from '../../../utils/formatCurrency';
 import { formatMonthKey } from '../../../utils/monthNames';
-import { formatAmount } from '../../../utils/weighable';
+import { formatItemAmount } from '../../../utils/amountDisplay';
 import { formatWeekday } from '../../../utils/formatDayDate';
 import { ltPluralSuffix } from '../../../utils/ltPlural';
 import { mergeReceiptItems, mergedQtyLabel } from '../../../utils/mergeReceiptItems';
@@ -308,7 +308,7 @@ export default function TripFinalScreen() {
     const missedItems = useMemo<PlanReconcileItem[]>(() =>
         (score?.listItemsDetail ?? []).map(li => ({
             key: `li:${li.listItemId}`, name: li.name, imageUris: li.imageUrls,
-            meta: formatAmount(li.quantity, li.isWeighable, li.canonicalStep), ok: li.bought,
+            meta: formatItemAmount({ quantity: li.quantity, isWeighable: li.isWeighable, unit: li.packUnit, packAmount: li.packAmount, canonicalStep: li.canonicalStep }), ok: li.bought,
         })), [score]);
 
     // Prediction: hide unless a real (non-ad-hoc) list was priced.
@@ -498,17 +498,22 @@ export default function TripFinalScreen() {
 
                             {/* two mains */}
                             <View style={styles.mrow}>
+                                {/* Cross-store headline — MUST match the SavingsSheet it opens
+                                    (paid vs the median alternative basket). Using the per-item
+                                    `savings` here said "+0,14 saved" while the sheet showed the
+                                    most-expensive store; savedVsMedian is the same basis, so the
+                                    sign can't contradict the detail. */}
                                 <TouchableOpacity style={styles.mcard} activeOpacity={0.7} onPress={() => setSavingsOpen(true)}>
                                     <View style={styles.mcapRow}>
-                                        <Text style={styles.mcap}>{stats.savings > 0 ? t('trips.statSaved') : stats.savings < 0 ? t('trips.statOverpaid') : t('tripFinal.avgPriceCap')}</Text>
+                                        <Text style={styles.mcap}>{stats.savedVsMedian == null ? t('tripFinal.avgPriceCap') : stats.savedVsMedian > 0 ? t('trips.statSaved') : stats.savedVsMedian < 0 ? t('trips.statOverpaid') : t('tripFinal.avgPriceCap')}</Text>
                                         <Ionicons name="chevron-forward" size={13} color={colors.textMuted} />
                                     </View>
                                     <AnimatedNumber
-                                        value={stats.savings}
+                                        value={stats.savedVsMedian ?? 0}
                                         format={(n) => Math.abs(n) < 0.005 ? '—' : `${n > 0 ? '+' : '−'}${formatEuro(Math.abs(n))}`}
-                                        style={[styles.mval, stats.savings > 0 && { color: colors.success }, stats.savings < 0 && { color: colors.error }]}
+                                        style={[styles.mval, (stats.savedVsMedian ?? 0) > 0 && { color: colors.success }, (stats.savedVsMedian ?? 0) < 0 && { color: colors.error }]}
                                     />
-                                    <Text style={styles.mfoot}>{stats.savings === 0 ? t('tripFinal.avgPriceFoot') : t('tripFinal.vsAverage')}</Text>
+                                    <Text style={styles.mfoot}>{stats.savedVsMedian == null ? t('tripFinal.avgPriceFoot') : t('tripFinal.vsAverage')}</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
                                     style={styles.mcard}

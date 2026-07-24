@@ -6,7 +6,7 @@ import { ProductImage } from '../ProductImage';
 import { SheetTitle } from './SheetTitle';
 import { useTheme, spacing, radius, typography, withAlpha, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { formatEuro } from '../../utils/formatCurrency';
-import { formatAmount } from '../../utils/weighable';
+import { formatItemAmount } from '../../utils/amountDisplay';
 import type { TripScore } from '../../utils/tripsApi';
 
 /**
@@ -39,8 +39,11 @@ export function PredictionSheet({ score }: { score: TripScore }) {
                 planName: p.listName ?? p.productName ?? '—',
                 buyName: p.receiptName,
                 imageUris: p.imageUrls,
-                plannedAmount: formatAmount(p.listQty, p.isWeighable, p.canonicalStep),
-                boughtAmount: formatAmount(p.receiptQty, p.isWeighable, p.canonicalStep),
+                // listQty is a PACK COUNT (2 × 250 g), so show it against the
+                // SP pack size, never as "2 kg". Bought side = the receipt line's
+                // own unit/amount/weighable.
+                plannedAmount: formatItemAmount({ quantity: p.listQty, isWeighable: p.isWeighable, unit: p.listPackUnit, packAmount: p.listPackAmount, canonicalStep: p.canonicalStep }),
+                boughtAmount: formatItemAmount({ quantity: p.receiptQty, isWeighable: p.receiptWeighable, unit: p.receiptUnit, packAmount: p.receiptAmount }),
                 predicted: p.listPrice as number,
                 actual: p.receiptPrice,
                 delta: Math.round((p.receiptPrice - (p.listPrice as number)) * 100) / 100,

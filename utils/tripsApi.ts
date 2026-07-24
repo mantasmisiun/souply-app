@@ -281,6 +281,11 @@ export interface TripScore {
          *  the Prognozė sheet's per-item forecast rows. listPrice is null when the
          *  plan item had no calculated price. */
         listPrice: number | null; receiptPrice: number; listQty: number; receiptQty: number;
+        /** Pack size so the amount renders correctly: listQty is a PACK COUNT,
+         *  not kg (2 × 250 g ≠ 2 kg). Bought side uses the receipt line's own
+         *  unit/amount/weighable. */
+        listPackAmount: number | null; listPackUnit: string | null;
+        receiptUnit: string | null; receiptAmount: number | null; receiptWeighable: boolean;
     }[];
     unmatchedListItems: { listItemId: number; name: string | null }[];
     unmatchedReceiptItems: { receiptItemId: number; name: string }[];
@@ -289,7 +294,7 @@ export interface TripScore {
     impulseReceiptItemIds: number[];
     /** Every plan item classified bought / missed, with render data for the
      *  Missed sheet. */
-    listItemsDetail: { listItemId: number; name: string; imageUrls: string | (string | null)[] | null; quantity: number; isWeighable: boolean; canonicalStep: number | null; bought: boolean }[];
+    listItemsDetail: { listItemId: number; name: string; imageUrls: string | (string | null)[] | null; quantity: number; isWeighable: boolean; canonicalStep: number | null; packAmount: number | null; packUnit: string | null; bought: boolean }[];
 }
 
 export const fetchTripScore = async (tripId: number): Promise<TripScore> =>
