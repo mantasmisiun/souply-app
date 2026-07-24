@@ -715,7 +715,10 @@ export default function TripFinalScreen() {
                             })()}
                         </ScrollView>
                     ) : (
-                        <View style={styles.centered}><Text style={styles.hint}>{t('tripMap.statsLocked')}</Text></View>
+                        // Reached only when the trip is UNLOCKED (receipts exist) but the stats
+                        // fetch is still in flight — load() sets locked=false before stats arrive.
+                        // Show a spinner, not the "įkėlus kvitą" locked copy that briefly flashed.
+                        <View style={styles.centered}><MaterialProgress size="large" color={colors.primary} /></View>
                     )}
                     {/* Voluntary identify-queue as an OVERLAY over the (still-mounted)
                         stats content, so closing it reveals the refreshed figures + donut
