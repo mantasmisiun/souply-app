@@ -23,9 +23,14 @@ import { detachTripReceipt, type TripReceipt } from '../../utils/tripsApi';
  * a photo-only delete once it has been cleared (prices are kept either way).
  */
 
+// The recognised total the user PAID = the receipt's printed footer total. Only
+// fall back to summing the line items when the printed total wasn't readable — a
+// single mis-parsed line must never misstate what the card says was paid.
 const receiptTotal = (r: TripReceipt): number =>
-    r.items.reduce((s, it) => s + (it.lineTotal != null ? Number(it.lineTotal)
-        : it.price != null ? Number(it.price) : 0), 0);
+    r.printedTotal != null
+        ? Number(r.printedTotal)
+        : r.items.reduce((s, it) => s + (it.lineTotal != null ? Number(it.lineTotal)
+            : it.price != null ? Number(it.price) : 0), 0);
 
 export function ReceiptDetailSheet({
     receipt, tripId, isUploader, canModerate, onClose, onChanged,

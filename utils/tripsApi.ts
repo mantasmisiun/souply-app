@@ -79,6 +79,10 @@ export interface TripReceipt {
     chainId: number | null;
     receiptDate: string | null;
     processingStatus: string | null;
+    /** The receipt's OWN printed footer total (what the user paid) — the truth the
+     *  detail card shows, vs a line-item sum a mis-parsed line can skew. Null when
+     *  the total wasn't readable. */
+    printedTotal: number | null;
     mandatorySwipesRequired: number;
     mandatorySwipesCompleted: number;
     /** Who uploaded it — the sheet shows delete only to the uploader. */
