@@ -33,16 +33,33 @@ export function mergeReceiptItems(receipts: TripReceipt[]): MergedReceiptItem[] 
     const map = new Map<string, MergedReceiptItem>();
     const order: string[] = [];
     for (const r of receipts) {
+        // COMBO / SET-DEAL: the footer combo discount (IKI RINKINYS) is money paid off
+        // the whole receipt that never lands on a line price. Scale THIS receipt's paid
+        // item totals to the printed total (the paid truth) so each row shows the real
+        // net price, and the pre-combo `regularTotal` reads as a discount in the promo
+        // view. Which lines form the bundle is unknown, so it's spread proportionally.
+        const lineOf = (it: TripReceipt['items'][number]) =>
+            it.lineTotal != null ? Number(it.lineTotal) : it.price != null ? Number(it.price) : 0;
+        const combo = r.comboDiscount > 0 ? r.comboDiscount : 0;
+        let comboScale = 1;
+        if (combo > 0) {
+            const grossR = r.items.reduce((s, it) => s + lineOf(it), 0);
+            if (grossR > 0) {
+                const printed = r.printedTotal;
+                const net = (printed != null && printed > 0 && printed <= grossR) ? printed : Math.max(0, grossR - combo);
+                comboScale = net / grossR;
+            }
+        }
         for (const it of r.items) {
             const key = it.matchedSpId != null
                 ? `sp:${it.matchedSpId}`
                 : `nm:${(it.matchedName ?? it.name ?? '').trim().toLowerCase()}`;
-            const paid = it.lineTotal != null ? Number(it.lineTotal)
-                : it.price != null ? Number(it.price) : 0;
+            // Net paid = line total × the receipt's combo scale (1 when no combo).
+            const paid = lineOf(it) * comboScale;
             const qty = it.quantity != null ? Number(it.quantity) : 1;
-            // Regular (pre-promo) line total: price is the REGULAR unit price;
-            // lineTotal already applied any promo. When price is missing there is
-            // nothing to strike out, so fall back to the paid amount.
+            // Regular (pre-promo, pre-combo) line total: price is the REGULAR unit price;
+            // it stays GROSS so the discounts view can strike it through. When price is
+            // missing there is nothing to strike out, so fall back to the paid amount.
             const regular = it.price != null ? Number(it.price) * qty : paid;
             const ex = map.get(key);
             if (ex) {

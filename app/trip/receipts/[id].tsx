@@ -60,9 +60,13 @@ const monthOf = (iso: string): string => {
     const d = new Date(iso);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 };
-// Promo-adjusted line totals — sums to the Stats hero (totalSpent).
+// What the shopper actually paid = the receipt's printed footer total (combo/set-deal
+// discounts land there, not on line prices). Fall back to the line-sum only when the
+// printed total wasn't readable.
 const receiptTotal = (r: TripReceipt): number =>
-    r.items.reduce((s, it) => s + (it.lineTotal != null ? Number(it.lineTotal) : (it.price != null ? Number(it.price) : 0)), 0);
+    r.printedTotal != null
+        ? Number(r.printedTotal)
+        : r.items.reduce((s, it) => s + (it.lineTotal != null ? Number(it.lineTotal) : (it.price != null ? Number(it.price) : 0)), 0);
 
 export default function TripFinalScreen() {
     const colors = useTheme();
@@ -140,6 +144,14 @@ export default function TripFinalScreen() {
     // the data, diff vs the previous list — a changed line = 'refreshed', a new
     // key = 'inserted' — and stagger them so they scan in one at a time.
     const merged = useMemo(() => mergeReceiptItems(receipts ?? []), [receipts]);
+    // Discounted rows drive the "Prekės su akcija" card + sheet — a real discount is a
+    // regular total above the paid one (line promos AND combo/set-deals, since
+    // mergeReceiptItems folds the footer combo into the net lineTotal).
+    const discounted = useMemo(() => merged.filter(m => m.regularTotal > m.lineTotal + 0.005), [merged]);
+    const discountSavings = useMemo(
+        () => Math.round(discounted.reduce((s, m) => s + (m.regularTotal - m.lineTotal), 0) * 100) / 100,
+        [discounted],
+    );
     const [mergedAnim, setMergedAnim] = useState<Map<string, { mode: ScanMode; order: number }>>(new Map());
     const prevSigRef = useRef<Map<string, string> | null>(null);
     useEffect(() => {
@@ -441,7 +453,15 @@ export default function TripFinalScreen() {
                                                     <Text style={styles.itemName} numberOfLines={1}>{m.name}</Text>
                                                     {qtyLabel && <Text style={styles.itemMeta}>{qtyLabel}</Text>}
                                                 </View>
-                                                <Text style={styles.itemPrice}>{formatEuro(m.lineTotal)}</Text>
+                                                {m.regularTotal > m.lineTotal + 0.005 ? (
+                                                    // Discounted (line promo or combo/set-deal): struck regular over the paid net.
+                                                    <View style={styles.itemPriceCol}>
+                                                        <Text style={styles.itemRegularStrike}>{formatEuro(m.regularTotal)}</Text>
+                                                        <Text style={[styles.itemPrice, styles.itemPricePromo]}>{formatEuro(m.lineTotal)}</Text>
+                                                    </View>
+                                                ) : (
+                                                    <Text style={styles.itemPrice}>{formatEuro(m.lineTotal)}</Text>
+                                                )}
                                             </View>
                                         </ScanRevealRow>
                                     </Animated.View>
@@ -522,15 +542,15 @@ export default function TripFinalScreen() {
                             <View style={styles.mrow}>
                                 <TouchableOpacity
                                     style={styles.mcard}
-                                    activeOpacity={stats.promoItemCount > 0 ? 0.7 : 1}
-                                    onPress={() => { if (stats.promoItemCount > 0) setDiscountsOpen(true); }}
+                                    activeOpacity={discounted.length > 0 ? 0.7 : 1}
+                                    onPress={() => { if (discounted.length > 0) setDiscountsOpen(true); }}
                                 >
                                     <View style={styles.mcapRow}>
                                         <Text style={styles.mcap}>{t('tripFinal.promoItems')}</Text>
-                                        {stats.promoItemCount > 0 && <Ionicons name="chevron-forward" size={13} color={colors.textMuted} />}
+                                        {discounted.length > 0 && <Ionicons name="chevron-forward" size={13} color={colors.textMuted} />}
                                     </View>
-                                    <AnimatedNumber value={stats.promoItemCount} format={(n) => String(Math.round(n))} style={styles.mval} />
-                                    <Text style={styles.mfoot}>{stats.promoSavings > 0 ? t('tripFinal.promoSaved', { amount: formatEuro(stats.promoSavings) }) : t('tripFinal.promoNone')}</Text>
+                                    <AnimatedNumber value={discounted.length} format={(n) => String(Math.round(n))} style={styles.mval} />
+                                    <Text style={styles.mfoot}>{discountSavings > 0 ? t('tripFinal.promoSaved', { amount: formatEuro(discountSavings) }) : t('tripFinal.promoNone')}</Text>
                                 </TouchableOpacity>
                                 <TouchableOpacity
                                     style={styles.mcard}
@@ -801,6 +821,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     itemName: { ...typography.bodySmall, fontWeight: '600', color: c.textPrimary },
     itemMeta: { ...typography.labelSmall, color: c.textSecondary, marginTop: 1 },
     itemPrice: { ...typography.bodySmall, fontWeight: '700', color: c.textPrimary },
+    itemPriceCol: { alignItems: 'flex-end' },
+    itemRegularStrike: { ...typography.labelSmall, color: c.textMuted, textDecorationLine: 'line-through' },
+    itemPricePromo: { color: c.primary },
 
     // stats
     hero: { alignItems: 'center', paddingVertical: spacing.md },

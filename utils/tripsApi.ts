@@ -90,6 +90,10 @@ export interface TripReceipt {
      *  detail card shows, vs a line-item sum a mis-parsed line can skew. Null when
      *  the total wasn't readable. */
     printedTotal: number | null;
+    /** Footer combo/set-deal discount (IKI RINKINYS) — money off the whole receipt
+     *  that isn't on any line price. 0 when none. Applied client-side (proportionally)
+     *  so item prices + the discounts view reflect what was actually paid. */
+    comboDiscount: number;
     mandatorySwipesRequired: number;
     mandatorySwipesCompleted: number;
     /** Who uploaded it — the sheet shows delete only to the uploader. */
