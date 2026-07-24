@@ -42,6 +42,9 @@
     "planning": "Planning",
     "planningFoot": "how well planned",
     "moreMetrics": "More metrics",
+    "helpIdentify": "Help identify products",
+    "identifyTop": "Identify",
+    "identifyBottom": "products",
     "promoItems": "On sale",
     "promoSaved": "saved {{amount}}",
     "promoNone": "no sales this time",
@@ -87,6 +90,31 @@
     "locationSettings": "Location & route settings",
     "saverMode": "Saver mode",
     "saverModeSub": "Also compare similar products and pick the cheapest"
+  },
+  "retake": {
+    "bannerTitle": "Poor scan quality",
+    "bannerSub": "{{count}} items unrecognised",
+    "action": "Retake",
+    "healing": "Updating…",
+    "differentReceipt": "That's a different receipt — upload it separately",
+    "healFailed": "Couldn't update the receipt"
+  },
+  "family": {
+    "sheetTitle": "Family shopping",
+    "disabled": "Disabled",
+    "disabledHelp": "Turn on to share a basket with your family",
+    "uploadTitle": "Upload",
+    "uploadSub": "Receipt",
+    "you": "You",
+    "member": "Member",
+    "disableTitle": "Disable family shopping?",
+    "disableBody": "You'll leave the shared list. If you're the last member it will be deleted.",
+    "disableConfirm": "Disable",
+    "cardTitle": "Family shopping",
+    "screenTitle": "Family shopping",
+    "tabBasket": "Basket",
+    "tabHistory": "History",
+    "comingSoon": "Coming soon"
   },
   "smartBasket": {
     "sheetTitle": "Shopping",
@@ -1229,8 +1257,8 @@
     "directionSimilar": "Similar",
     "directionDifferent": "Different",
     "directionSkip": "Skip",
-    "header": "Help us recognise",
-    "headerProgress": "Help us recognise · {{current}}/{{total}}",
+    "header": "Item recognition",
+    "headerProgress": "Receipt {{current}} of {{total}}",
     "back": "Back",
     "doneAck": "Thanks!",
     "doneEmpty": "Nothing to recognise",
@@ -1671,9 +1699,10 @@
     "householdJoinedBody": "You'll now see the shared household basket and trips.",
     "tripJoined": "You joined the trip",
     "tripJoinedBody": "You're now a member of this trip — you'll see its lists and receipts.",
-    "leaveFirstTitle": "You already have a household",
-    "leaveFirstBody": "You can only belong to one household at a time. Leave the current one and join this one?",
-    "leaveFirstConfirm": "Leave and join",
+    "leaveFirstTitle": "You're already in a family shopping",
+    "leaveFirstBody": "You can only belong to one family shopping at a time. To join this one, leave your current one first.",
+    "leaveFirstConfirm": "Leave",
+    "leaveFirstStay": "Stay",
     "errorTitle": "Couldn't join",
     "errorBody": "Check your connection and try again."
   },
@@ -1777,7 +1806,10 @@
     "membersTitle": "Members",
     "removeTitle": "Remove member?",
     "removeBody": "{{name}} will lose access and cannot rejoin without your invite.",
-    "removeConfirm": "Remove"
+    "removeConfirm": "Remove",
+    "leaveTitle": "Leave family shopping?",
+    "leaveBody": "You'll lose access to the shared list. Leave?",
+    "leaveConfirm": "Leave"
   },
   "receiptSheet": {
     "delete": "Delete",

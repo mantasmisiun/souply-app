@@ -42,6 +42,9 @@
     "planning": "Planavimas",
     "planningFoot": "kaip gerai suplanuota",
     "moreMetrics": "Papildomi rodikliai",
+    "helpIdentify": "Padėti atpažinti prekes",
+    "identifyTop": "Atpažink",
+    "identifyBottom": "Prekes",
     "promoItems": "Prekės su akcija",
     "promoSaved": "sutaupyta {{amount}}",
     "promoNone": "šįkart be akcijų",
@@ -91,6 +94,31 @@
     "locationSettings": "Vietos ir maršruto nustatymai",
     "saverMode": "Taupymo režimas",
     "saverModeSub": "Lyginti ir panašias prekes, parenkant pigiausią"
+  },
+  "retake": {
+    "bannerTitle": "Prasta nuskaitymo kokybė",
+    "bannerSub": "Neatpažinta prekių: {{count}}",
+    "action": "Perfotografuoti",
+    "healing": "Atnaujinama…",
+    "differentReceipt": "Tai kitas kvitas — įkelk jį atskirai",
+    "healFailed": "Nepavyko atnaujinti kvito"
+  },
+  "family": {
+    "sheetTitle": "Šeimos apsipirkimas",
+    "disabled": "Išjungta",
+    "disabledHelp": "Įjunk, kad dalintumeisi krepšeliu su šeima",
+    "uploadTitle": "Įkelti",
+    "uploadSub": "Kvitą",
+    "you": "Tu",
+    "member": "Narys",
+    "disableTitle": "Išjungti šeimos apsipirkimą?",
+    "disableBody": "Paliksi bendrą sąrašą. Jei esi paskutinis narys, jis bus ištrintas.",
+    "disableConfirm": "Išjungti",
+    "cardTitle": "Šeimos apsipirkimas",
+    "screenTitle": "Šeimos apsipirkimas",
+    "tabBasket": "Krepšelis",
+    "tabHistory": "Istorija",
+    "comingSoon": "Netrukus"
   },
   "smartBasket": {
     "sheetTitle": "Apsipirkimai",
@@ -1208,8 +1236,8 @@
     "directionSimilar": "Panaši",
     "directionDifferent": "Skirtinga",
     "directionSkip": "Praleisti",
-    "header": "Padėk atpažinti",
-    "headerProgress": "Padėk atpažinti · {{current}}/{{total}}",
+    "header": "Prekių atpažinimas",
+    "headerProgress": "{{current}} kvitas iš {{total}}",
     "back": "Grįžti",
     "doneAck": "Ačiū!",
     "doneEmpty": "Nieko atpažinti",
@@ -1652,9 +1680,10 @@
     "householdJoinedBody": "Nuo šiol matysi bendrą namų ūkio krepšelį ir apsipirkimus.",
     "tripJoined": "Prisijungei prie apsipirkimo",
     "tripJoinedBody": "Dabar esi šio apsipirkimo dalyvis — matysi jo sąrašus ir kvitus.",
-    "leaveFirstTitle": "Jau turi namų ūkį",
-    "leaveFirstBody": "Vienu metu gali priklausyti tik vienam namų ūkiui. Palikti dabartinį ir prisijungti prie naujo?",
-    "leaveFirstConfirm": "Palikti ir prisijungti",
+    "leaveFirstTitle": "Jau priklausai šeimos apsipirkimui",
+    "leaveFirstBody": "Vienu metu gali priklausyti tik vienam šeimos apsipirkimui. Kad prisijungtum prie šio, pirma palik dabartinį.",
+    "leaveFirstConfirm": "Palikti",
+    "leaveFirstStay": "Likti",
     "errorTitle": "Nepavyko prisijungti",
     "errorBody": "Patikrink ryšį ir bandyk dar kartą."
   },
@@ -1758,7 +1787,10 @@
     "membersTitle": "Nariai",
     "removeTitle": "Pašalinti narį?",
     "removeBody": "{{name}} nebematys šio apsipirkimo ir negalės prisijungti iš naujo be tavo pakvietimo.",
-    "removeConfirm": "Pašalinti"
+    "removeConfirm": "Pašalinti",
+    "leaveTitle": "Palikti šeimos apsipirkimą?",
+    "leaveBody": "Nebematysi bendro sąrašo. Ar tikrai nori palikti?",
+    "leaveConfirm": "Palikti"
   },
   "receiptSheet": {
     "delete": "Ištrinti",
