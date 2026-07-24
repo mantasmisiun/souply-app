@@ -12,6 +12,7 @@ import { GlassIconButton } from '../../../components/GlassIconButton';
 import { useRouter , useFocusEffect, useNavigation } from 'expo-router';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
+import { useBackToExit } from '../../../hooks/useBackToExit';
 import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
 import { Ionicons } from '@expo/vector-icons';
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
@@ -93,6 +94,7 @@ export default function ProfilisScreen() {
     // Collapsing header: "Profilis" title hides on scroll (no pinned filter).
     const header = useCollapsingHeader();
     const tabBarHeight = useSafeBottomTabBarHeight();
+    const { backToExitToast } = useBackToExit();
 
     const triggerIfNewLevel = useLevelStore(s => s.triggerIfNewLevel);
 
@@ -522,6 +524,7 @@ export default function ProfilisScreen() {
             right={settingsGear}
             smallTitle={t('tabs.profilis')}
         />
+        {backToExitToast}
         <Animated.ScrollView
             ref={scrollRef}
             {...header.scroll}

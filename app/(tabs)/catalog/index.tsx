@@ -1,7 +1,7 @@
-import { View, TouchableOpacity, Text, StyleSheet, BackHandler, Platform } from 'react-native';
-import { useCallback, useMemo, useRef } from 'react';
-import { useRouter, useFocusEffect } from 'expo-router';
-import { Toast, type ToastHandle } from '../../../components/Toast';
+import { View, TouchableOpacity, Text, StyleSheet } from 'react-native';
+import { useMemo, useRef } from 'react';
+import { useRouter } from 'expo-router';
+import { useBackToExit } from '../../../hooks/useBackToExit';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, radius, elevation, type AppTheme } from '../../../constants/theme';
@@ -18,26 +18,8 @@ export default function BrowseIndex() {
     // Collapsing header: "Naršyti" title hides on scroll (no pinned filter here).
     const header = useCollapsingHeader();
 
-    // Android double-back-to-exit on the HOME tab. Without this, back on
-    // Naršyti pops the root stack to app/index.tsx, whose <Redirect> instantly
-    // re-creates (tabs)/browse — visually "another Naršyti behind" — and the
-    // pop/redirect cycle repeats forever instead of exiting.
-    const toastRef = useRef<ToastHandle>(null);
-    const lastBackPressAt = useRef(0);
-    useFocusEffect(useCallback(() => {
-        if (Platform.OS !== 'android') return;
-        const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-            const now = Date.now();
-            if (now - lastBackPressAt.current < 2000) {
-                BackHandler.exitApp();
-                return true;
-            }
-            lastBackPressAt.current = now;
-            toastRef.current?.show(t('catalog.backToExit'));
-            return true;
-        });
-        return () => sub.remove();
-    }, [t]));
+    // Android press-back-again-to-exit on this root tab.
+    const { backToExitToast } = useBackToExit();
 
     // Tap-debounce so a quick double-tap doesn't push /search twice.
     const lastSearchPushAt = useRef(0);
@@ -94,7 +76,7 @@ export default function BrowseIndex() {
                     </>
                 )}
             />
-            <Toast ref={toastRef} />
+            {backToExitToast}
         </View>
     );
 }

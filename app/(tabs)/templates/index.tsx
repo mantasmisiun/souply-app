@@ -19,6 +19,7 @@ import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
+import { useBackToExit } from '../../../hooks/useBackToExit';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
@@ -46,6 +47,7 @@ export default function TemplatesScreen() {
     const router = useRouter();
     const header = useCollapsingHeader();
     const tabBarHeight = useSafeBottomTabBarHeight();
+    const { backToExitToast } = useBackToExit();
     const authUsername = useAuthState((s: any) => s.user?.username ?? null);
 
     const [templates, setTemplates] = useState<BasketTemplate[]>([]);
@@ -157,6 +159,7 @@ export default function TemplatesScreen() {
     if (loading) return (
         <View style={styles.container}>
             <CollapsingHeader controller={header} smallTitle={t('tabs.templates')} />
+            {backToExitToast}
             <View style={{ padding: 16, gap: 12 }}>
                 <ScreenHeading title={t('tabs.templates')} />
                 {Array.from({ length: 4 }).map((_, i) => (
@@ -169,6 +172,7 @@ export default function TemplatesScreen() {
     return (
         <View style={styles.container}>
             <CollapsingHeader controller={header} smallTitle={t('tabs.templates')} />
+            {backToExitToast}
             <Animated.FlatList
                 {...header.scroll}
                 style={styles.container}
