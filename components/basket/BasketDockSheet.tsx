@@ -4,7 +4,7 @@ import { usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
-import { SheetCard } from '../SheetCard';
+import { SheetCard, SHEET_CARD_SHADOW_RADIUS } from '../SheetCard';
 import { useTheme, useResolvedScheme, spacing, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { useBasketSession, type ChooserOption } from '../../state/basketSession';
 import { useBasketState } from '../../state/basketState';
@@ -260,7 +260,9 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
 }
 
 const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
-    body: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.sm, gap: spacing.md },
+    // paddingBottom reserves the SheetCard shadow halo so the sheet's scroll
+    // viewport (overflow:'hidden') can't clip the last section's shadow.
+    body: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: SHEET_CARD_SHADOW_RADIUS, gap: spacing.md },
     // Same size as a screen's ScreenHeading title (22/700) — the sheet's own title.
     sheetHeading: { fontSize: 22, fontWeight: '700', color: c.textPrimary, paddingTop: spacing.xs, paddingBottom: spacing.xs },
     cardTitle: { fontSize: 20, fontWeight: '800', color: c.textPrimary, paddingVertical: spacing.md },

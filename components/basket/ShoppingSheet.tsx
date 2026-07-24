@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming, Easing, interpolate, runOnJS } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { SheetCard } from '../SheetCard';
+import { SheetCard, SHEET_CARD_SHADOW_RADIUS } from '../SheetCard';
 import { DockActionCard } from '../dock/DockActionCard';
 import { FamilyShoppingPane } from './FamilyShoppingPane';
 import { ReceiptUploadPane } from './ReceiptUploadPane';
@@ -365,7 +365,9 @@ export function ShoppingSheet({ collapse }: { collapse: () => void }) {
 const makeStyles = (c: AppTheme, _isDark: boolean) => StyleSheet.create({
     pager: { overflow: 'hidden' },
     pagerBelow: { position: 'absolute', top: 0, left: 0, right: 0 },
-    body: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.sm, gap: spacing.md },
+    // paddingBottom reserves the SheetCard shadow halo so the pager's
+    // overflow:'hidden' (needed for the horizontal pane slide) can't clip it.
+    body: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: SHEET_CARD_SHADOW_RADIUS, gap: spacing.md },
     sheetHeading: { fontSize: 22, fontWeight: '700', color: c.textPrimary, paddingTop: spacing.xs, paddingBottom: spacing.xs },
     cardTitle: { fontSize: 20, fontWeight: '800', color: c.textPrimary, paddingVertical: spacing.md },
     filterRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },

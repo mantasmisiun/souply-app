@@ -5,6 +5,19 @@ import { SheetSolidContext } from './DockedGlassSheet';
 import { useResolvedScheme, radius, spacing } from '../constants/theme';
 
 /**
+ * The radius of SheetCard's soft shadow halo — how far the shadow bleeds past
+ * the card box on every side. It renders OUTSIDE the card's bounds, so any
+ * ancestor with `overflow: 'hidden'` (an animated pager, a scroll viewport)
+ * clips the halo unless it reserves at least this much room past the card.
+ *
+ * CONTRACT: a sheet content container that stacks SheetCards must give its
+ * bottom edge `paddingBottom: SHEET_CARD_SHADOW_RADIUS` (and, if a card can sit
+ * flush against a clipped top/side, that side too). Reference this constant
+ * instead of a magic number so the reserve and the halo can never drift apart.
+ */
+export const SHEET_CARD_SHADOW_RADIUS = 20;
+
+/**
  * A section card inside a DockedGlassSheet. It reads the sheet's solid/dock
  * progress (SheetSolidContext) and animates from a light TRANSLUCENT panel while
  * the sheet is a floating glass (medium — still clearly a section, just blended)
@@ -45,6 +58,6 @@ const styles = StyleSheet.create({
     // boxShadow (not elevation) renders cleanly on the translucent medium card,
     // avoiding Android's elevation gray-border artifact.
     lightShadow: {
-        boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: 20, spreadDistance: 0, color: 'rgba(90,34,51,0.15)' }],
+        boxShadow: [{ offsetX: 0, offsetY: 0, blurRadius: SHEET_CARD_SHADOW_RADIUS, spreadDistance: 0, color: 'rgba(90,34,51,0.15)' }],
     },
 });
