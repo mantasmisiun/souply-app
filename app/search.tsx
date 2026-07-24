@@ -363,7 +363,14 @@ export default function SearchScreen() {
                 chainLogos: p.chainLogos ?? null,
                 minAmount: p.minAmount ?? null,
                 maxAmount: p.maxAmount ?? null,
+                unit: p.unit ?? null,
                 canonicalUnit: p.canonicalUnit ?? null,
+                canonicalStep: p.canonicalStep ?? null,
+                canonicalFamily: p.canonicalFamily ?? null,
+                hasWeighable: p.hasWeighable ?? p.isWeighable ?? 0,
+                // Cheapest-per-unit badge — same payload browse gets; without this
+                // the search card rendered no €/unit while categories did.
+                badge: p.badge ?? null,
             }));
 
         if (!cancelled) {

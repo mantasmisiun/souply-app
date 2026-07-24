@@ -21,6 +21,16 @@ export type UnitPriceBadge = {
     showLogo: boolean;
 };
 
+/** A generic top-right pill: an optional chain logo + a text (per-unit price on
+ *  browse/search; a "-30%" discount on the discounts screen). The visual is the
+ *  same half-pill either way. */
+export type CardBadge = {
+    showLogo: boolean;
+    chainId?: number | null;
+    logoUrl?: string | null;
+    text: string;
+};
+
 type Props = {
     name: string;
     imageUrls?: ImageUrlList;
@@ -36,8 +46,11 @@ type Props = {
      *  the template-add flow to render "Į šabloną" instead. */
     addLabel?: string;
     onOpen?: () => void;
-    /** Cheapest-per-unit badge; omit (e.g. discounts screen) to hide. */
+    /** Cheapest-per-unit badge (browse / search). */
     badge?: UnitPriceBadge | null;
+    /** Top-right discount badge (discounts screen) — rendered in the SAME slot
+     *  as `badge`; use one or the other. */
+    discountBadge?: CardBadge | null;
 };
 
 function BasketProductCard({
@@ -52,10 +65,17 @@ function BasketProductCard({
     addLabel,
     onOpen,
     badge,
+    discountBadge,
 }: Props) {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+
+    // ONE top-right pill: the per-unit price (browse/search) OR a discount
+    // (discounts) — same half-pill visual, just different content.
+    const topBadge: CardBadge | null = badge
+        ? { showLogo: badge.showLogo, chainId: badge.chainId, logoUrl: badge.logoUrl, text: `${formatEuro(badge.unitPrice)}/${badge.unit}` }
+        : discountBadge ?? null;
 
     return (
         <View style={styles.productCard}>
@@ -75,18 +95,18 @@ function BasketProductCard({
                     <ChainLogoStrip chainLogos={chainLogos} style={{ position: 'absolute', top: 6, left: 6 }} />
                 )}
             </ScalePressable>
-            {badge && (
-                <View style={[styles.unitBadge, !badge.showLogo && styles.unitBadgeNoLogo]} pointerEvents="none">
-                    {badge.showLogo && (
-                        <View style={[styles.unitBadgeLogoWrap, { backgroundColor: chainBrandColorById(badge.chainId) }]}>
-                            {badge.logoUrl ? (
-                                <Image source={{ uri: badge.logoUrl }} style={styles.unitBadgeLogo} resizeMode="contain" />
+            {topBadge && (
+                <View style={[styles.unitBadge, !topBadge.showLogo && styles.unitBadgeNoLogo]} pointerEvents="none">
+                    {topBadge.showLogo && (
+                        <View style={[styles.unitBadgeLogoWrap, { backgroundColor: chainBrandColorById(topBadge.chainId ?? 0) }]}>
+                            {topBadge.logoUrl ? (
+                                <Image source={{ uri: topBadge.logoUrl }} style={styles.unitBadgeLogo} resizeMode="contain" />
                             ) : (
-                                <Text style={styles.unitBadgeLogoFallback}>{badge.chainId}</Text>
+                                <Text style={styles.unitBadgeLogoFallback}>{topBadge.chainId}</Text>
                             )}
                         </View>
                     )}
-                    <Text style={styles.unitBadgeText}>{`${formatEuro(badge.unitPrice)}/${badge.unit}`}</Text>
+                    <Text style={styles.unitBadgeText}>{topBadge.text}</Text>
                 </View>
             )}
 

@@ -14,8 +14,7 @@ import { API_BASE_URL } from '@/config/api';
 import { useBasketState } from '@/state/basketState';
 import { useBasketSession } from '@/state/basketSession';
 import { addProductToBasket } from '@/utils/basketUtils';
-import { AddOrStepper } from '@/components/AddOrStepper';
-import { ProductImage } from '@/components/ProductImage';
+import BasketProductCard, { type CardBadge } from '@/components/browse/BasketProductCard';
 import { useTheme, radius, elevation, type AppTheme } from '@/constants/theme';
 import { getUserId } from '@/config/user';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -24,7 +23,6 @@ import { Toast, type ToastHandle } from '@/components/Toast';
 import { ScalePressable } from '@/components/ScalePressable';
 import { SkeletonBox } from '@/components/SkeletonBox';
 import { useBasketQuantities } from '@/hooks/useBasketQuantities';
-import { ChainLogoStrip } from '@/components/ChainLogoStrip';
 import { ChainLogoChip } from '@/components/ChainLogoChip';
 import { FilterDropdownModal, type FilterOption } from '@/components/FilterDropdownModal';
 import { StoreFilterButton } from '@/components/StoreFilterButton';
@@ -67,12 +65,6 @@ interface DiscountedProduct {
     canonicalFamily: 'fluid' | 'count' | null;
 }
 
-interface CardCallbacks {
-    onNavigate: (id: number) => void;
-    /** Persist the new quantity (0 = remove); AddOrStepper owns the stepping. */
-    onCommit: (qty: number) => void;
-}
-
 const CHAIN_NAME_BY_ID: Record<number, string> = { 1: 'Maxima', 2: 'Rimi', 3: 'Iki', 4: 'Norfa', 5: 'Lidl' };
 
 /** chainLogos can arrive as an array, or a single/double-encoded JSON string
@@ -105,65 +97,6 @@ const FilterChip = memo(({ label, active, onPress, styles, colors }: {
 ));
 FilterChip.displayName = 'FilterChip';
 
-const DiscountProductCard = memo(({
-    item, quantity, isAdding, styles, colors, addLabel,
-    onNavigate, onCommit,
-}: CardCallbacks & {
-    item: DiscountedProduct;
-    quantity: number;
-    isAdding: boolean;
-    styles: ReturnType<typeof makeStyles>;
-    colors: AppTheme;
-    /** Overrides "Į krepšelį" copy — template-add flow uses "Į šabloną". */
-    addLabel?: string;
-}) => {
-    const { t } = useTranslation();
-    // minAmount/maxAmount are server-normalised into grams (g/ml as 1000-base).
-    // Re-label as l/ml for fluid Products whose canonical unit is l, since
-    // kg ≈ l in the canonical-unit transitional simplification — same
-    // numeric value, different label.
-    const isVolume = item.unit === 'ml' || item.canonicalUnit === 'l';
-    const bigUnit = isVolume ? 'l' : 'kg';
-    const smallUnit = isVolume ? 'ml' : 'g';
-    const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
-    const amountText = item.minAmount != null && item.maxAmount != null
-        ? (() => { const min = Number(item.minAmount); const max = Number(item.maxAmount); return min === max ? fmt(min) : `${fmt(min)} - ${fmt(max)}`; })()
-        : '';
-    return (
-        <View style={styles.productCard}>
-            <TouchableOpacity onPress={() => onNavigate(item.id)} style={styles.productImageContainer} activeOpacity={0.7}>
-                <ProductImage uris={item.imageUrls} imageStyle={styles.productImage} placeholderStyle={styles.productImagePlaceholder} emojiStyle={styles.productImageEmoji} />
-                <ChainLogoStrip chainLogos={item.chainLogos} style={{ position: 'absolute', top: 6, left: 6 }} />
-                <View style={styles.discountBadge}>
-                    {item.realDiscountPct != null && item.cheapestChainId != null ? (
-                        // Cross-store real discount: the cheapest chain's logo replaces the
-                        // fire — "cheapest HERE, X% below the market average".
-                        <View style={styles.discountBadgeInner}>
-                            <ChainLogoChip chainId={item.cheapestChainId} size={16} />
-                            <Text style={styles.discountBadgeText}>-{item.realDiscountPct}%</Text>
-                        </View>
-                    ) : (
-                        <Text style={styles.discountBadgeText}>🔥 -{item.bestDiscountPct}%</Text>
-                    )}
-                </View>
-            </TouchableOpacity>
-            <View style={styles.productInfo}>
-                <Text style={styles.productName} numberOfLines={3}>{item.name}</Text>
-                <Text style={styles.amountText}>{amountText}</Text>
-            </View>
-            <AddOrStepper
-                product={item}
-                quantity={quantity}
-                onCommit={onCommit}
-                busy={isAdding}
-                addLabel={addLabel ?? t('catalog.addToBasket')}
-                fullWidth
-                noIcon
-            />
-        </View>
-    );
-});
-DiscountProductCard.displayName = 'DiscountProductCard';
 
 // SectionList (not FlatList) gives us a NATIVE sticky section header for the
 // search/filter chips while the large title scrolls away above it. Reanimated
@@ -565,19 +498,40 @@ export default function DiscountsScreen() {
         const quantity = isTemplateMode
             ? (templateMap[item.id]?.quantity ?? 0)
             : (basketQuantities[item.id] ?? 0);
+        // Amount range caption (250 g – 500 g), same shape as browse/search.
+        const isVolume = item.unit === 'ml' || item.canonicalUnit === 'l';
+        const big = isVolume ? 'l' : 'kg';
+        const small = isVolume ? 'ml' : 'g';
+        const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${big}` : `${v} ${small}`;
+        const amountText = item.minAmount != null && item.maxAmount != null
+            ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
+            : '';
+        // The top-right badge = the discount. Cross-store real discount shows the
+        // cheapest chain's logo; otherwise the 🔥 best-single-store discount.
+        const discountBadge: CardBadge = item.realDiscountPct != null && item.cheapestChainId != null
+            ? {
+                showLogo: true,
+                chainId: item.cheapestChainId,
+                logoUrl: parseChainLogos(item.chainLogos).find(c => c.chainId === item.cheapestChainId)?.logoUrl ?? null,
+                text: `-${item.realDiscountPct}%`,
+            }
+            : { showLogo: false, text: `🔥 -${item.bestDiscountPct}%` };
         return (
-            <DiscountProductCard
-                item={item}
+            <BasketProductCard
+                name={item.name}
+                imageUrls={item.imageUrls}
+                chainLogos={item.chainLogos}
+                amountText={amountText}
                 quantity={quantity}
-                isAdding={addingIds.has(item.id)}
-                styles={styles}
-                colors={colors}
-                addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
-                onNavigate={onNavigate}
+                product={item}
                 onCommit={(qty) => commitCardQty(item, quantity, qty)}
+                isAdding={addingIds.has(item.id)}
+                addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
+                onOpen={() => onNavigate(item.id)}
+                discountBadge={discountBadge}
             />
         );
-    }, [basketQuantities, addingIds, styles, colors, onNavigate, commitCardQty, isTemplateMode, templateMap, t]);
+    }, [basketQuantities, addingIds, onNavigate, commitCardQty, isTemplateMode, templateMap, t]);
 
     const clearSearch = useCallback(() => {
         setSearch('');
