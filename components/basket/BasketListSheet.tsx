@@ -248,16 +248,12 @@ export function BasketListSheet() {
                         router.push(`/template/${target.templateId}` as any);
                         return;
                     }
-                    // Stores ›: resolve the basket's trip and land on the map's
-                    // Stores tab (pills + prices, sheet at medium). Falls back
-                    // to the legacy basket page if the trip isn't found.
-                    try {
-                        const { fetchTrips } = await import('../../utils/tripsApi');
-                        const trips = await fetchTrips();
-                        const trip = trips.find(tr => tr.basket?.id === target.basketId);
-                        if (trip) { router.push(`/trip/${trip.id}?tab=stores` as any); return; }
-                    } catch {}
-                    router.push(`/basket/${target.basketId}` as any);
+                    // Stores ›: go STRAIGHT to the store-results map. It
+                    // self-calculates (resolves location + POSTs /calculate with
+                    // the loading modal) when the basket isn't compared yet, so
+                    // we skip the basket-edit screen the trip redirector bounces
+                    // a still-forming basket to.
+                    router.push(`/basket/results/${target.basketId}` as any);
                 }}
                 activeOpacity={0.85}
             >

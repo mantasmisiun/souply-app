@@ -190,7 +190,16 @@ export default function AmountPickerModal({
 
     return (
         <Modal visible={visible} transparent animationType="fade" onRequestClose={onCancel}>
-            <View style={styles.overlay}>
+            {/* ScrollView (not View) so a tap on Confirm while the custom-weight
+                keyboard is up registers on the FIRST tap instead of just
+                dismissing the keyboard. keyboardShouldPersistTaps="handled". */}
+            <ScrollView
+                style={styles.overlayBg}
+                contentContainerStyle={styles.overlay}
+                keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="none"
+                showsVerticalScrollIndicator={false}
+            >
                 {jokeAmount != null ? (
                     <View style={styles.modal}>
                         <Text style={styles.title}>{t('amountPicker.jokeTitle')}</Text>
@@ -312,15 +321,18 @@ export default function AmountPickerModal({
                     </View>
                 </View>
                 )}
-            </View>
+            </ScrollView>
         </Modal>
     );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    overlay: {
+    overlayBg: {
         flex: 1,
         backgroundColor: c.overlayBackdrop,
+    },
+    overlay: {
+        flexGrow: 1,
         justifyContent: 'center',
         alignItems: 'center',
         padding: 24,

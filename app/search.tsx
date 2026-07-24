@@ -631,6 +631,7 @@ export default function SearchScreen() {
           <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
               style={styles.bubblesRow}
               contentContainerStyle={styles.bubblesContainer}
           >
@@ -674,6 +675,7 @@ export default function SearchScreen() {
             key="store-products-search-grid"
             data={storeGridData}
             keyboardDismissMode="on-drag"
+            keyboardShouldPersistTaps="handled"
             onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
             keyExtractor={(item, idx) => {
                 if (item.kind === "create") return `create-${idx}`;
@@ -699,6 +701,7 @@ export default function SearchScreen() {
             key="products-search-grid"
             data={filteredProductResults}
             keyboardDismissMode="on-drag"
+            keyboardShouldPersistTaps="handled"
             onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
             keyExtractor={(item, idx) => `p-${item.id}-${idx}`}
             contentContainerStyle={[

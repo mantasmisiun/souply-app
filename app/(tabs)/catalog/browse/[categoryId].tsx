@@ -595,6 +595,8 @@ export default function CategoryScreen() {
                         </View>
                         <AnimatedSectionList
                             {...header.scroll}
+                            keyboardShouldPersistTaps="handled"
+                            keyboardDismissMode="on-drag"
                             sections={[{ data: productRows }]}
                             keyExtractor={(_row, i) => `r-${i}`}
                             contentContainerStyle={{ paddingTop: 0, paddingBottom: barClearance }}

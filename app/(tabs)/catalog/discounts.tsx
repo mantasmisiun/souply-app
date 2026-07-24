@@ -646,6 +646,7 @@ export default function DiscountsScreen() {
                                 keyExtractor={(_row, i) => `r-${i}`}
                                 contentContainerStyle={{ paddingTop: 0, paddingBottom: barClearance }}
                                 keyboardDismissMode="on-drag"
+                                keyboardShouldPersistTaps="handled"
                                 ListHeaderComponent={
                                     <>
                                         <ScreenHeading
