@@ -85,7 +85,7 @@ export function useReceiptQueueRunner(): void {
         useReceiptQueueStore
           .getState()
           .updateProgress(next.id, step, done, total),
-      { isPdf: next.isPdf === true, linkMap: next.linkMap, fallbackLinkId: next.fallbackLinkId, healReceiptId: next.healReceiptId },
+      { isPdf: next.isPdf === true, linkMap: next.linkMap, fallbackLinkId: next.fallbackLinkId, healReceiptId: next.healReceiptId, resolvedStore: next.resolvedStore },
     )
       .then((result) => {
         useReceiptQueueStore.getState().markDone(next.id, result.receiptId);
@@ -96,7 +96,12 @@ export function useReceiptQueueRunner(): void {
         if (routing.kind === "awaiting_network") {
           s.markAwaitingNetwork(next.id);
         } else {
-          s.markError(next.id, routing.message);
+          // Carry the chain/address context of a store_unrecognized failure so the
+          // error card can offer "Rasti parduotuvę" (open the store map).
+          const ctx = e instanceof ProcessingError
+            ? { reason: e.reason, chainId: e.storeContext?.chainId, chainName: e.storeContext?.chainName, storeAddress: e.storeContext?.storeAddress }
+            : undefined;
+          s.markError(next.id, routing.message, ctx);
           if (routing.isDuplicate) {
             // Duplicate receipts are informational — auto-dismiss after 4 s.
             setTimeout(

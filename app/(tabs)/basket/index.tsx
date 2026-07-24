@@ -26,6 +26,8 @@ import { useCollapsingHeader, CollapsingHeader } from '../../../components/Colla
 import { useBackToExit } from '../../../hooks/useBackToExit';
 import { useReceiptQueueStore, type QueueItem } from '../../../state/receiptQueueStore';
 import { ProgressGlow } from '../../../components/ProgressGlow';
+import { requestStoreResolution } from '../../../utils/storeResolution';
+import { StoreResolutionOverlay } from '../../../components/receipt/StoreResolutionOverlay';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
@@ -93,18 +95,20 @@ function MemberStack({ members, total, styles }: {
 /** In-flight receipt-queue item as a card shaped like a trip card, with a
  *  bottom-edge progress glow + status line. Only shown on the Shopping screen;
  *  the work itself runs in the global background queue. */
-function ProcessingCard({ item }: { item: QueueItem }) {
+function ProcessingCard({ item, onResolveStore }: { item: QueueItem; onResolveStore?: (item: QueueItem) => void }) {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const isError = item.status === 'error';
+    // Recoverable store_unrecognized failure → offer the "Rasti parduotuvę" map.
+    const needsStore = isError && item.errorReason === 'store_unrecognized' && item.storeChainId != null;
     const fraction = item.progressTotal && item.progressTotal > 0
         ? Math.max(0.05, Math.min(1, (item.progressDone ?? 0) / item.progressTotal))
         : 0.08;
+    const title = isError ? (item.error || t('banners.receiptQueue.error')) : t('banners.receiptQueue.processing');
     const status = item.progress
         ?? (item.status === 'pending' ? t('banners.receiptQueue.queued', { count: 1 })
             : item.status === 'awaiting_network' ? t('banners.receiptQueue.awaitingNetwork')
-            : isError ? (item.error || t('banners.receiptQueue.error'))
             : t('banners.receiptQueue.processing'));
     return (
         <View style={[styles.card, styles.processingCard]}>
@@ -115,14 +119,30 @@ function ProcessingCard({ item }: { item: QueueItem }) {
                             <Ionicons name="receipt-outline" size={14} color={colors.primary} />
                         </View>
                     </View>
-                    <Text style={styles.processingTitle} numberOfLines={1}>{t('banners.receiptQueue.processing')}</Text>
-                    <Text style={styles.cardMeta} numberOfLines={1}>{status}</Text>
+                    <Text style={styles.processingTitle} numberOfLines={2}>{title}</Text>
+                    {!isError && <Text style={styles.cardMeta} numberOfLines={1}>{status}</Text>}
                 </View>
-                {isError
-                    ? <Ionicons name="alert-circle" size={22} color={colors.error} />
-                    : <MaterialProgress size="small" color={colors.primary} />}
+                {isError ? (
+                    <View style={styles.cardActions}>
+                        {needsStore && (
+                            <TouchableOpacity style={styles.resolveBtn} onPress={() => onResolveStore?.(item)} hitSlop={6}>
+                                <Ionicons name="location-outline" size={14} color={colors.onPrimary} />
+                                <Text style={styles.resolveBtnText}>{t('basketDetail.findStore')}</Text>
+                            </TouchableOpacity>
+                        )}
+                        <TouchableOpacity
+                            onPress={() => useReceiptQueueStore.getState().removeItem(item.id)}
+                            hitSlop={8}
+                            accessibilityLabel={t('common.close')}
+                        >
+                            <Ionicons name="close" size={20} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    </View>
+                ) : (
+                    <MaterialProgress size="small" color={colors.primary} />
+                )}
             </View>
-            <ProgressGlow edge="bottom" fraction={fraction} color={isError ? colors.error : colors.primary} />
+            {!isError && <ProgressGlow edge="bottom" fraction={fraction} color={colors.primary} />}
         </View>
     );
 }
@@ -155,6 +175,26 @@ export default function TripsScreen() {
         () => queueItems.filter(i => i.status === 'processing' || i.status === 'pending'
             || i.status === 'awaiting_network' || i.status === 'error'),
         [queueItems]);
+
+    // Store-unrecognized error → open the chain-scoped store map; on pick, drop the
+    // errored item and re-enqueue with the resolved store injected (skips matchStore).
+    const [resolveOpen, setResolveOpen] = useState(false);
+    const onResolveStore = useCallback((item: QueueItem) => {
+        if (item.storeChainId == null) return;
+        const p = requestStoreResolution(item.storeChainId, item.storeChainName ?? '', item.storeOcrAddress ?? null);
+        setResolveOpen(true);
+        void p.then((picked) => {
+            setResolveOpen(false);
+            if (!picked) return;
+            const store = useReceiptQueueStore.getState();
+            store.removeItem(item.id);
+            store.addItems([{
+                uris: item.uris,
+                isPdf: item.isPdf,
+                resolvedStore: { storeId: picked.storeId, storeName: picked.storeName, storeAddress: picked.storeAddress },
+            }]);
+        });
+    }, []);
 
     const [trips, setTrips] = useState<TripSummary[]>([]);
     const [household, setHousehold] = useState<HouseholdInfo | null>(null);
@@ -361,7 +401,7 @@ export default function TripsScreen() {
                     <ShoppingFilterChips />
                 </View>
                 {/* In-flight receipt uploads — cards at the very top */}
-                {processingItems.map(item => <ProcessingCard key={item.id} item={item} />)}
+                {processingItems.map(item => <ProcessingCard key={item.id} item={item} onResolveStore={onResolveStore} />)}
                 {active.length === 0 && processingItems.length === 0 ? (
                     <View style={styles.centered}>
                         <Ionicons name="cart-outline" size={56} color={colors.textMuted} />
@@ -444,6 +484,12 @@ export default function TripsScreen() {
                 )}
             </Animated.ScrollView>
 
+            {/* Store-resolution map (chain-scoped pills) for a store_unrecognized upload. */}
+            {resolveOpen && (
+                <Modal visible transparent animationType="slide" onRequestClose={() => setResolveOpen(false)}>
+                    <StoreResolutionOverlay onCancel={() => setResolveOpen(false)} />
+                </Modal>
+            )}
         </View>
     );
 }
@@ -484,6 +530,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // Same card shell, clipped so the bottom-edge progress glow follows the corners.
     processingCard: { overflow: 'hidden' },
     processingTitle: { fontSize: 15, fontWeight: '800', color: c.textPrimary },
+    cardActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    resolveBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 7 },
+    resolveBtnText: { fontSize: 13, fontWeight: '800', color: c.onPrimary },
     cardMain: { flexDirection: 'row', alignItems: 'center', gap: 10 },
     cartChip: {
         flexDirection: 'row', alignItems: 'center', gap: 4,

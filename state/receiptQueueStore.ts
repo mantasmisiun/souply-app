@@ -29,6 +29,15 @@ export interface QueueItem {
   healReceiptId?: number;
   status: QueueStatus;
   error?: string;
+  /** Failure reason (e.g. "store_unrecognized") — drives the error card's CTA. */
+  errorReason?: string;
+  /** store_unrecognized context: lets the "Rasti parduotuvę" CTA open the
+   *  chain-scoped store map pre-seeded on the OCR address. */
+  storeChainId?: number;
+  storeChainName?: string;
+  storeOcrAddress?: string | null;
+  /** STORE RESOLUTION: user-picked store to inject on a re-process. */
+  resolvedStore?: { storeId: number; storeName: string | null; storeAddress: string | null };
   /** Human-readable progress line ("Nuskaitoma...", "3/8 prekės", "Išsaugoma..."). */
   progress?: string;
   /** When the progress is "matching products", how many done. Drives the bottom bar. */
@@ -56,6 +65,7 @@ interface ReceiptQueueState {
     linkMap?: Record<number, number>;
     fallbackLinkId?: number | null;
     healReceiptId?: number;
+    resolvedStore?: { storeId: number; storeName: string | null; storeAddress: string | null };
   }[]) => void;
   markProcessing: (id: string, progress?: string) => void;
   updateProgress: (
@@ -68,7 +78,7 @@ interface ReceiptQueueState {
   resumeAwaitingNetwork: () => void;
   markDone: (id: string, receiptId: number) => void;
   noteReceiptCreated: (receiptId: number) => void;
-  markError: (id: string, error: string) => void;
+  markError: (id: string, error: string, ctx?: { reason?: string; chainId?: number; chainName?: string; storeAddress?: string | null }) => void;
   removeItem: (id: string) => void;
   pruneRecentIds: (idsToKeep: number[]) => void;
 }
@@ -99,11 +109,16 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
       // Items that were mid-processing when the app was killed get reset
       // to pending so the runner picks them up. `awaiting_network` stays
       // — the network resumer flips it back when connectivity returns.
-      const restored = saved.map((item) =>
-        item.status === "processing"
-          ? { ...item, status: "pending" as const, progress: undefined, progressDone: undefined, progressTotal: undefined }
-          : item,
-      );
+      // Errored items are dropped: a failure can only be cleared by a fresh
+      // re-upload, so persisting it across cold starts just leaves a dead,
+      // un-actionable card sitting around forever.
+      const restored = saved
+        .filter((item) => item.status !== "error")
+        .map((item) =>
+          item.status === "processing"
+            ? { ...item, status: "pending" as const, progress: undefined, progressDone: undefined, progressTotal: undefined }
+            : item,
+        );
       set({ items: restored, initialized: true });
     } catch (e) {
       console.warn("[receiptQueue] load failed:", e);
@@ -120,6 +135,7 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
       linkMap: e.linkMap,
       fallbackLinkId: e.fallbackLinkId,
       healReceiptId: e.healReceiptId,
+      resolvedStore: e.resolvedStore,
       status: "pending",
       addedAt: Date.now(),
     }));
@@ -220,7 +236,7 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
     }));
   },
 
-  markError: (id, error) => {
+  markError: (id, error, ctx) => {
     set((state) => {
       const items = state.items.map((item) =>
         item.id === id
@@ -228,6 +244,10 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
               ...item,
               status: "error" as const,
               error,
+              errorReason: ctx?.reason,
+              storeChainId: ctx?.chainId,
+              storeChainName: ctx?.chainName,
+              storeOcrAddress: ctx?.storeAddress,
               progress: undefined,
               progressDone: undefined,
               progressTotal: undefined,

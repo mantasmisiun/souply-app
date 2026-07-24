@@ -15,7 +15,6 @@ type BannerState =
     | { mode: 'processing'; progress?: string; done?: number; total?: number }
     | { mode: 'queued'; count: number }
     | { mode: 'awaiting' }
-    | { mode: 'error' }
     | { mode: 'done'; receiptId: number | null }
     | null;
 
@@ -65,7 +64,9 @@ export function ReceiptProcessingBanner() {
         const pending = items.filter((i) => i.status === 'pending');
         if (pending.length > 0) return { mode: 'queued', count: pending.length };
         if (items.some((i) => i.status === 'awaiting_network')) return { mode: 'awaiting' };
-        if (items.some((i) => i.status === 'error')) return { mode: 'error' };
+        // Errors are NOT surfaced here: an un-actionable, content-shifting top bar
+        // is dead weight. Failed uploads are shown — with their retry/find-store CTA
+        // and a dismiss — on the Shopping (Apsipirkimai) processing card instead.
         // No active items — show the just-completed confirmation once.
         if (lastCompletedAt && lastCompletedAt !== dismissedAt) {
             return { mode: 'done', receiptId: recentIds.length > 0 ? recentIds[recentIds.length - 1] : null };
@@ -81,14 +82,12 @@ export function ReceiptProcessingBanner() {
             : null;
 
     const isDone = state.mode === 'done';
-    const isError = state.mode === 'error';
 
     const label = (() => {
         switch (state.mode) {
             case 'processing': return state.progress || t('banners.receiptQueue.processing');
             case 'queued': return t('banners.receiptQueue.queued', { count: state.count });
             case 'awaiting': return t('banners.receiptQueue.awaitingNetwork');
-            case 'error': return t('banners.receiptQueue.error');
             case 'done': return t('banners.receiptQueue.done');
         }
     })();
@@ -102,35 +101,32 @@ export function ReceiptProcessingBanner() {
 
     return (
         <SafeAreaView edges={['top']} style={{ backgroundColor: colors.surfaceContainer }}>
-            <View style={[styles.bar, isError && { backgroundColor: colors.errorMuted }]}>
+            <View style={styles.bar}>
                 {isDone ? (
                     <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
-                ) : isError ? (
-                    <Ionicons name="alert-circle" size={18} color={colors.error} />
                 ) : (
                     <MaterialProgress size={16} color={colors.primary} />
                 )}
 
-                <Text style={[styles.label, isError && { color: colors.error }]} numberOfLines={1}>
+                <Text style={styles.label} numberOfLines={1}>
                     {label}
                 </Text>
 
                 {isDone ? (
-                    <TouchableOpacity onPress={viewReceipt} hitSlop={8} style={styles.viewBtn}>
-                        <Text style={styles.viewText}>{t('banners.receiptQueue.view')}</Text>
-                    </TouchableOpacity>
-                ) : null}
-
-                {(isDone || isError) ? (
-                    <TouchableOpacity onPress={() => setDismissedAt(lastCompletedAt)} hitSlop={8}>
-                        <Ionicons name="close" size={18} color={colors.textSecondary} />
-                    </TouchableOpacity>
+                    <>
+                        <TouchableOpacity onPress={viewReceipt} hitSlop={8} style={styles.viewBtn}>
+                            <Text style={styles.viewText}>{t('banners.receiptQueue.view')}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity onPress={() => setDismissedAt(lastCompletedAt)} hitSlop={8}>
+                            <Ionicons name="close" size={18} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    </>
                 ) : null}
             </View>
 
             {/* Thin progress line — determinate during product matching, a subtle
-                full track otherwise. Hidden on the terminal done/error states. */}
-            {!isDone && !isError && (
+                full track otherwise. Hidden on the terminal done state. */}
+            {!isDone && (
                 <View style={styles.track}>
                     <View style={[styles.fill, pct != null ? { width: `${pct * 100}%` } : styles.fillIndeterminate]} />
                 </View>
