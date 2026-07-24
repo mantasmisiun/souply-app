@@ -1,6 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Image, Text, View } from "react-native";
 import * as ImageManipulator from "expo-image-manipulator";
+import * as FileSystem from "expo-file-system/legacy";
 import Svg, { Defs, ClipPath, Polygon, Image as SvgImage } from "react-native-svg";
 import { useTheme } from "../../constants/theme";
 import { devLog } from "../../utils/devLog";
@@ -13,6 +14,18 @@ export interface BandCropImageProps {
   cardWidth: number;
   /** Fired once when the crop has settled (rendered OR failed OR nothing to crop). */
   onSettled?: () => void;
+  /**
+   * Producer-supplied identity for THIS crop source. The downscale cache below
+   * is module-level and keyed by file path, but a path can be REUSED for
+   * different pixels (the OS document scanner reuses per-scan page filenames; a
+   * retake overwrites the cached receipt-<id>.jpg). Pass a value that changes
+   * whenever the underlying pixels change (a per-build nonce) so a reused path
+   * can never serve a previous receipt's cached downscale.
+   */
+  cacheScope?: string;
+  /** Free-text correlation label for crop-source diagnostics (devLog only) —
+   *  e.g. `r113#l1 "RUKYTAS…"`, so a logged crop can be tied to the exact card. */
+  debugLabel?: string;
 }
 
 /**
@@ -33,12 +46,25 @@ async function getDownscaledPage(
   uri: string,
   pixelWidth: number,
   workingWidth: number,
+  scopeKey: string,
 ): Promise<{ uri: string; scale: number; width: number; height: number }> {
   // No upscaling: if the page is already at/under the working width, crop it directly.
   if (!(workingWidth > 0) || !(pixelWidth > 0) || workingWidth >= pixelWidth) {
     return { uri, scale: 1, width: pixelWidth, height: 0 };
   }
-  const key = `${uri}@${workingWidth}`;
+  // CONTENT IDENTITY (not just the path): the same URI can point at DIFFERENT
+  // pixels across receipts — the OS scanner reuses per-scan page filenames, and a
+  // retake overwrites receipt-<id>.jpg. Folding the file's size+mtime into the key
+  // makes a reused file:// path a cache MISS once its bytes change; the producer
+  // `scopeKey` is the backstop for schemes getInfoAsync can't stat (content://).
+  let ident = "";
+  try {
+    const info = await FileSystem.getInfoAsync(uri);
+    if (info.exists) ident = `${(info as any).size ?? ""}:${(info as any).modificationTime ?? ""}`;
+  } catch {
+    /* unstattable (content:// etc.) → rely on scopeKey to disambiguate */
+  }
+  const key = `${scopeKey}|${uri}@${workingWidth}@${ident}`;
   let p = pageScaleCache.get(key);
   if (!p) {
     if (pageScaleCache.size > 48) pageScaleCache.clear();
@@ -69,7 +95,7 @@ async function getDownscaledPage(
  * builder — the SAME polygon the Kvitas-tab overlay draws, so crop and overlay can
  * never drift. Shared by the receipt-detail "Items" tab and the swipe Card-B crop.
  */
-export function BandCropImage({ pages, region, cardWidth, onSettled }: BandCropImageProps) {
+export function BandCropImage({ pages, region, cardWidth, onSettled, cacheScope, debugLabel }: BandCropImageProps) {
   const themeColors = useTheme();
   const clipId = useId();
   const [croppedUri, setCroppedUri] = useState<string | null>(null);
@@ -148,6 +174,35 @@ export function BandCropImage({ pages, region, cardWidth, onSettled }: BandCropI
       setCropError('invalid crop bounds');
       return;
     }
+    // ── CROP-SOURCE DIAGNOSTICS ──
+    // Where did THIS crop come from, and does its tilt match the printed text?
+    // `topEdgeTiltRight`/`bottomEdgeTiltRight` > 0 ⇒ the clip's edges slope DOWN to
+    // the right; they should match the printed slope. If the on-screen text slopes
+    // the OPPOSITE way, the region belongs to a different photo/orientation than the
+    // pixels being cropped from `pageUri`.
+    const rr = region;
+    devLog('BandCrop.source', {
+      label: debugLabel,
+      cacheScope,
+      pageUri: uri,
+      pageIndexOf: pages.findIndex((p) => p.uri === uri),
+      pageCount: pages.length,
+      page: { pageWidth, pageHeight, yOffsetScaled: cropPlan.cropTopSpace - (originY) },
+      region: {
+        xLeft: rr.xLeft, xRight: rr.xRight, yTop: rr.yTop, yBottom: rr.yBottom,
+        yLeftTop: rr.yLeftTop, yRightTop: rr.yRightTop,
+        yLeftBottom: rr.yLeftBottom, yRightBottom: rr.yRightBottom,
+      },
+      topEdgeTiltRight: (rr.yRightTop ?? rr.yTop) - (rr.yLeftTop ?? rr.yTop),
+      bottomEdgeTiltRight: (rr.yRightBottom ?? rr.yBottom) - (rr.yLeftBottom ?? rr.yBottom),
+      cropRect: { originX, originY, width, height, cropTopSpace: cropPlan.cropTopSpace, cropLeftSpace: cropPlan.cropLeftSpace },
+    });
+    FileSystem.getInfoAsync(uri)
+      .then((info) => devLog('BandCrop.srcFile', {
+        label: debugLabel, uri,
+        exists: info.exists, size: (info as any).size, mtime: (info as any).modificationTime,
+      }))
+      .catch(() => { /* content:// / unstattable */ });
     (async () => {
       // 1) Decode the FULL page ONCE to a downscaled intermediate (cached per page),
       //    so N bands on the same page share a single decode instead of N full-page
@@ -162,7 +217,7 @@ export function BandCropImage({ pages, region, cardWidth, onSettled }: BandCropI
       let interW = pageWidth;
       let interH = pageHeight;
       try {
-        const ds = await getDownscaledPage(uri, pageWidth, workingWidth);
+        const ds = await getDownscaledPage(uri, pageWidth, workingWidth, cacheScope ?? "");
         srcUri = ds.uri;
         scale = ds.scale;
         if (ds.width > 0) interW = ds.width;
@@ -182,7 +237,7 @@ export function BandCropImage({ pages, region, cardWidth, onSettled }: BandCropI
       if (interW > 0) { ox = Math.min(ox, interW - 1); w = Math.min(w, interW - ox); }
       if (interH > 0) { oy = Math.min(oy, interH - 1); h = Math.min(h, interH - oy); }
       const cropArgs = { uri: srcUri, originX: ox, originY: oy, width: w, height: h };
-      devLog('BandCropImage.attempt', cropArgs);
+      devLog('BandCropImage.attempt', { label: debugLabel, ...cropArgs });
       try {
         // JPEG output: PNG via expo-image-manipulator v14 on iOS trips
         // `calling the 'renderAsync' function has failed`. JPEG output works.
@@ -191,7 +246,7 @@ export function BandCropImage({ pages, region, cardWidth, onSettled }: BandCropI
           [{ crop: { originX: ox, originY: oy, width: w, height: h } }],
           { compress: 0.9, format: ImageManipulator.SaveFormat.JPEG },
         );
-        devLog('BandCropImage.success', { uri: srcUri, resultUri: res?.uri });
+        devLog('BandCropImage.success', { label: debugLabel, uri: srcUri, resultUri: res?.uri });
         if (!cancelled) setCroppedUri(res.uri);
       } catch (e: any) {
         const errMsg = e?.message ?? String(e);
@@ -201,7 +256,7 @@ export function BandCropImage({ pages, region, cardWidth, onSettled }: BandCropI
       }
     })();
     return () => { cancelled = true; };
-  }, [cropPlan, cardWidth]);
+  }, [cropPlan, cardWidth, cacheScope, debugLabel, pages, region]);
 
   // Notify the host (e.g. the swipe readiness gate) once the crop has settled —
   // rendered, errored, or there is nothing to crop — so it never hangs waiting.

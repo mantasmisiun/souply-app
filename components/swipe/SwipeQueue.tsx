@@ -47,6 +47,7 @@ import { ProcessingLoader } from "../ProcessingLoader";
 import { MergeArrowsIcon, ParallelArrowsIcon, DivergeArrowsIcon, type VoteIconProps } from "../VoteIcons";
 import { buildReceiptPageMeta, type PageMeta } from "../../utils/receiptImage";
 import { type BandQuadRegion } from "../../utils/bandQuad";
+import { devLog } from "../../utils/devLog";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -112,7 +113,15 @@ interface ReceiptResolveCard {
  *  pageMetas (instant, no network); on a reopen they're downloaded + normalized once
  *  per receipt. Carries the FULL page array so multi-page (long) receipts crop the
  *  correct page. 'loading' until built, 'failed' → fall back to the flat server crop. */
-type ReceiptCropState = { status: "loading" | "ready" | "failed"; pages: PageMeta[]; error?: string | null };
+type ReceiptCropState = { status: "loading" | "ready" | "failed"; pages: PageMeta[]; error?: string | null; scope?: string };
+
+/** Monotonic per-crop-build id. The device scanner reuses per-scan page
+ *  filenames, so back-to-back scans hand BandCropImage the SAME uri string for
+ *  DIFFERENT pixels; a fresh scope per build namespaces the module-level
+ *  downscale cache so the second scan can never crop from the first's cached
+ *  page image (wrong-receipt crop with the right OCR name). */
+let cropBuildScopeSeq = 0;
+const nextCropScope = () => `c${++cropBuildScopeSeq}`;
 
 /**
  * Pending-alias card (Issue H vocabulary): "is this receipt TEXT the same product as
@@ -315,6 +324,7 @@ function OcrReceiptSide({
   styles,
   colors,
   onSettled,
+  debugLabel,
 }: {
   ocr: ReceiptResolveCard["ocr"];
   region?: BandQuadRegion | null;
@@ -323,6 +333,7 @@ function OcrReceiptSide({
   styles: ReturnType<typeof makeStyles>;
   colors: AppTheme;
   onSettled?: () => void;
+  debugLabel?: string;
 }) {
   // SERVER-SIDE CROPPING REMOVED: the OCR side ALWAYS goes through the client BandCropImage
   // — the exact same path as the receipt-detail Items tab (ImageManipulator rect-crop +
@@ -350,6 +361,8 @@ function OcrReceiptSide({
           region={region}
           cardWidth={CROP_CARD_WIDTH}
           onSettled={onSettled}
+          cacheScope={crop.scope}
+          debugLabel={debugLabel}
         />
       </View>
     );
@@ -723,21 +736,33 @@ export function SwipeQueue({
         const regionXBounds = regionXs.length > 0
           ? { left: Math.min(...regionXs.map((r) => r.xLeft)), right: Math.max(...regionXs.map((r) => r.xRight)) }
           : null;
+        // Fresh nonce for THIS build so its crops never reuse a prior scan's
+        // cached page decode (scanner reuses page filenames across scans).
+        const scope = nextCropScope();
+        devLog('SwipeCrop.build', {
+          swipingReceiptId: rid,
+          scope,
+          source: localPages && localPages.receiptId === rid && localPages.pages.length > 0 ? 'local' : resolveImage ? 'download' : 'none',
+          localPagesReceiptId: localPages?.receiptId ?? null,
+          localPagesUris: localPages?.pages.map((p) => p.uri) ?? null,
+          downloadDims: resolveImage ? { w: resolveImage.width, h: resolveImage.height } : null,
+          regionXBounds,
+        });
         if (localPages && localPages.receiptId === rid && localPages.pages.length > 0) {
           // (1) Local fast path — already in OCR space, nothing to download.
           cropBuildIdRef.current = rid;
           cropDimsRef.current = null;
-          setReceiptCrop({ status: "ready", pages: localPages.pages });
+          setReceiptCrop({ status: "ready", pages: localPages.pages, scope });
         } else if (resolveImage) {
           // (2) Download path — guarded build, dims retained for the bounded re-arm.
           const dims = resolveImage;
           cropBuildIdRef.current = rid;
           cropDimsRef.current = { receiptId: rid, width: dims.width, height: dims.height, regionXBounds };
-          setReceiptCrop({ status: "loading", pages: [] });
+          setReceiptCrop({ status: "loading", pages: [], scope });
           buildReceiptPageMeta(rid, dims.width, dims.height, regionXBounds)
             .then((res) => {
               if (cropBuildIdRef.current === rid) {
-                setReceiptCrop({ status: res.pageMeta ? "ready" : "failed", pages: res.pageMeta ? [res.pageMeta] : [], error: res.error });
+                setReceiptCrop({ status: res.pageMeta ? "ready" : "failed", pages: res.pageMeta ? [res.pageMeta] : [], error: res.error, scope });
               }
             })
             .catch((e) => {
@@ -1099,16 +1124,17 @@ export function SwipeQueue({
     const timer = setTimeout(() => {
       if (cropBuildIdRef.current !== rid && cropBuildIdRef.current !== null) return; // user advanced
       cropBuildIdRef.current = rid;
-      setReceiptCrop({ status: "loading", pages: [] });
+      const scope = nextCropScope();
+      setReceiptCrop({ status: "loading", pages: [], scope });
       buildReceiptPageMeta(rid, dims.width, dims.height, dims.regionXBounds)
         .then((res) => {
           if (cropBuildIdRef.current === rid) {
-            setReceiptCrop({ status: res.pageMeta ? "ready" : "failed", pages: res.pageMeta ? [res.pageMeta] : [], error: res.error });
+            setReceiptCrop({ status: res.pageMeta ? "ready" : "failed", pages: res.pageMeta ? [res.pageMeta] : [], error: res.error, scope });
           }
         })
         .catch((e) => {
           if (cropBuildIdRef.current === rid) {
-            setReceiptCrop({ status: "failed", pages: [], error: String(e?.message ?? e) });
+            setReceiptCrop({ status: "failed", pages: [], error: String(e?.message ?? e), scope });
           }
         });
     }, 8000);
@@ -1385,7 +1411,7 @@ export function SwipeQueue({
                 <View style={styles.cardInner} key={cardKey ?? undefined}>
                   {isReceiptCard(currentItem) ? (
                     <>
-                      <OcrReceiptSide key={currentItem.cardId} ocr={currentItem.ocr} region={currentItem.region} crop={receiptCrop} label={t('swipe.cardReceiptLabel')} styles={styles} colors={colors} onSettled={() => handleImageSettled('crop')} />
+                      <OcrReceiptSide key={currentItem.cardId} ocr={currentItem.ocr} region={currentItem.region} crop={receiptCrop} label={t('swipe.cardReceiptLabel')} styles={styles} colors={colors} onSettled={() => handleImageSettled('crop')} debugLabel={`r${currentReceiptId}#l${(currentItem as any).receiptLineIdx ?? '?'} "${String(currentItem.ocr?.name ?? '').slice(0, 20)}" scope=${receiptCrop.scope ?? '-'}`} />
                       <View style={styles.horizontalDivider} />
                       <MatchedProductSide matched={currentItem.matched} sourceChainId={currentItem.sourceChainId} label={t('swipe.cardMatchLabel')} styles={styles} onSettled={() => handleImageSettled('product')} />
                     </>
