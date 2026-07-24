@@ -1,5 +1,5 @@
 import { View, Text, TouchableOpacity, StyleSheet, Modal } from 'react-native';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -9,6 +9,7 @@ import { useBasketSession, discoverOptions, discoverTemplates, type ChooserOptio
 import { useBasketState } from '../../state/basketState';
 import { applyChooserPick } from '../../utils/basketUtils';
 import { BasketListSheet } from './BasketListSheet';
+import { Toast, type ToastHandle } from '../Toast';
 
 /**
  * Souply 2.0 basket-session root host, mounted ONCE at the app root. Owns the
@@ -42,6 +43,14 @@ export function BasketSessionHost() {
     const setDormant = useBasketSession(s => s.setDormant);
     const setDockOptions = useBasketSession(s => s.setDockOptions);
     const setDockTemplates = useBasketSession(s => s.setDockTemplates);
+
+    // Transient add-flow notice (e.g. "already in this basket" when a resumed
+    // basket already holds the product) — surfaced app-wide from one toast.
+    const addNotice = useBasketSession(s => s.addNotice);
+    const toastRef = useRef<ToastHandle>(null);
+    useEffect(() => {
+        if (addNotice) toastRef.current?.show(t(addNotice.key));
+    }, [addNotice, t]);
 
     const onSurface = ROUTE_PREFIXES.some(p => pathname === p || pathname.startsWith(`${p}/`));
 
@@ -108,6 +117,9 @@ export function BasketSessionHost() {
                     </View>
                 </TouchableOpacity>
             </Modal>
+
+            {/* App-wide add-flow toast (already-in-basket etc.). */}
+            <Toast ref={toastRef} />
         </>
     );
 }

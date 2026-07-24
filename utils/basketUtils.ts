@@ -1,7 +1,7 @@
 import { API_BASE_URL } from '../config/api';
 import { getUserId } from '../config/user';
 import type { DisplayMode } from '../contexts/DisplayPreferenceContext';
-import { useBasketSession, discoverOptions, postBasketItem } from '../state/basketSession';
+import { useBasketSession, discoverOptions, postBasketItem, type AddItemResult } from '../state/basketSession';
 import { addTemplateItem } from './basketTemplatesApi';
 
 /**
@@ -76,7 +76,7 @@ export const addProductToBasket = async (
         //    bar even after an X dismissal (user decision 2026-07-16).
         if (session.target) {
             const t = session.target;
-            let r: { success: boolean; message: string };
+            let r: AddItemResult;
             if (t.kind === 'pending-new') {
                 // Lazy cart: the first real add mints the basket.
                 const userId = await getUserId();
@@ -102,8 +102,15 @@ export const addProductToBasket = async (
                 r = await postBasketItem(t.basketId, productId, quantity, matchMode);
             }
             if (r.success) {
-                session.bumpCount(1);
-                session.markNewProduct(productId);
+                // `already` (409): the product was in the basket — count it once,
+                // don't inflate the badge/count for a no-op re-add, and tell the
+                // user (inform-only: existing quantity is kept).
+                if (!r.already) {
+                    session.bumpCount(1);
+                    session.markNewProduct(productId);
+                } else {
+                    session.setAddNotice('basketSession.alreadyInBasket');
+                }
                 session.bumpBasketRev();
                 session.showBar();
             }
@@ -118,8 +125,13 @@ export const addProductToBasket = async (
         //    at all do we create a personal draft silently.
         const options = await discoverOptions();
         if (options == null) {
+            // options == null ⇒ NO resumable basket (nothing fresh enough / not
+            // archived). Start a FRESH basket — never reuse the passed
+            // draftBasketId, which may point at a stale/abandoned draft from a
+            // previous session (the "banana silently landed in an old basket"
+            // bug). ensureDraftBasket(null) mints a new one.
             const userId = await getUserId();
-            const basketId = await ensureDraftBasket(draftBasketId, setDraftBasketId, userId);
+            const basketId = await ensureDraftBasket(null, setDraftBasketId, userId);
             const r = await postBasketItem(basketId, productId, quantity, matchMode);
             if (r.success) {
                 // Bar appears COLLAPSED (BasketListSheet no longer auto-expands).
@@ -208,10 +220,16 @@ export const applyChooserPick = async (
     session.setTarget({ kind: 'basket', basketId, isFamily: option.key === 'family' }, option.itemCount);
     for (const add of pending) {
         const r = await postBasketItem(basketId, add.productId, add.quantity, add.matchMode);
-        if (r.success) {
+        // `already` (409): product was in the resumed basket — setTarget's
+        // itemCount already counts it, so don't bump again. Still resolve as a
+        // success so the queued Add button settles cleanly (no error toast).
+        // Inform-only (user decision): keep the existing quantity, tell the
+        // user it's already there (the root host toasts the notice).
+        if (r.success && !r.already) {
             useBasketSession.getState().bumpCount(1);
             useBasketSession.getState().markNewProduct(add.productId);
         }
+        if (r.already) useBasketSession.getState().setAddNotice('basketSession.alreadyInBasket');
         add.resolve(r);
     }
     useBasketSession.getState().bumpBasketRev();

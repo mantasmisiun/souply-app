@@ -1774,7 +1774,8 @@
     "templateItemsSection": "Recepto prekės",
     "templateEmpty": "Receptas tuščias",
     "newBadge": "Nauja",
-    "add": "Į krepšelį"
+    "add": "Į krepšelį",
+    "alreadyInBasket": "Prekė jau yra šiame krepšelyje"
   },
   "invite": {
     "shareLink": "Dalintis nuoroda",

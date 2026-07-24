@@ -133,6 +133,12 @@ interface BasketSessionState {
     requestDockExpand: () => void;
     setTabBarClearance: (px: number) => void;
     setSessionBarClearance: (px: number | null) => void;
+    /** A transient user-facing notice from the add flow (e.g. "already in this
+     *  basket" when a resumed basket already holds the product). The root
+     *  BasketSessionHost surfaces it as a toast; the nonce re-fires it even
+     *  when the same message repeats. `key` is an i18n key. */
+    addNotice: { key: string; nonce: number } | null;
+    setAddNotice: (key: string) => void;
 }
 
 export const useBasketSession = create<BasketSessionState>((set, get) => ({
@@ -193,7 +199,14 @@ export const useBasketSession = create<BasketSessionState>((set, get) => ({
     requestDockExpand: () => set(s => ({ dockExpandRequest: s.dockExpandRequest + 1 })),
     setTabBarClearance: (px) => set(s => (s.tabBarClearance === px ? s : { tabBarClearance: px })),
     setSessionBarClearance: (px) => set(s => (s.sessionBarClearance === px ? s : { sessionBarClearance: px })),
+    addNotice: null,
+    setAddNotice: (key) => set(s => ({ addNotice: { key, nonce: (s.addNotice?.nonce ?? 0) + 1 } })),
 }));
+
+/** Result of an add; `already` = the product was already in the basket (409),
+ *  treated as success (the desired end-state — product present — holds) but
+ *  flagged so callers skip the optimistic count/new-badge bump. */
+export interface AddItemResult { success: boolean; message: string; already?: boolean }
 
 /** POST one item to a basket; shared by the direct path and the flush. */
 export const postBasketItem = async (
@@ -201,13 +214,18 @@ export const postBasketItem = async (
     productId: number,
     quantity: number,
     matchMode: string,
-): Promise<{ success: boolean; message: string }> => {
+): Promise<AddItemResult> => {
     const res = await fetch(`${API_BASE_URL}/api/basket-items`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ basketId, productId, quantity, matchMode }),
     });
-    if (res.status === 409) return { success: false, message: 'Produktas jau yra krepšelyje' };
+    // 409 = already in this basket. Idempotent: the item IS present, so the add
+    // succeeded in intent. Returning success (not a failure) stops the silent
+    // rollback / "already in basket" toast when a cold-start add resumes a
+    // basket that happens to hold that product; a basketRev refresh then shows
+    // the real stepper. `already` lets callers skip the count bump.
+    if (res.status === 409) return { success: true, already: true, message: 'Produktas jau yra krepšelyje' };
     if (!res.ok) return { success: false, message: 'Nepavyko pridėti produkto' };
     return { success: true, message: 'Produktas pridėtas į krepšelį' };
 };

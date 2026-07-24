@@ -1793,7 +1793,8 @@
     "templateItemsSection": "Recipe items",
     "templateEmpty": "The recipe is empty",
     "newBadge": "New",
-    "add": "Add"
+    "add": "Add",
+    "alreadyInBasket": "Already in this basket"
   },
   "invite": {
     "shareLink": "Share link",
