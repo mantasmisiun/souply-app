@@ -61,7 +61,7 @@ async function ensureDraftBasket(
  * Default 'sku' matches the pre-Phase-1 behavior for call sites that
  * haven't been updated yet.
  */
-export const addProductToBasket = async (
+const addProductToBasketInner = async (
     productId: number,
     draftBasketId: number | null,
     setDraftBasketId: (id: number) => void,
@@ -154,6 +154,26 @@ export const addProductToBasket = async (
     } catch {
         return { success: false, message: 'Nepavyko pridėti produkto' };
     }
+};
+
+/**
+ * Public add — wraps the flow above so a FAILED add is never silent. It used to
+ * be: the server refused (e.g. a priced basket rejected the edit), every caller
+ * did `if (r.success) …` with no else, and the card's spinner simply fell back
+ * to "Add" as though nothing had been tapped. Reporting it here covers every
+ * entry point (catalog card, product detail, search, the queued chooser add)
+ * instead of each screen remembering to handle it.
+ */
+export const addProductToBasket = async (
+    productId: number,
+    draftBasketId: number | null,
+    setDraftBasketId: (id: number) => void,
+    quantity: number = 1,
+    matchMode: DisplayMode = 'sku'
+) => {
+    const r = await addProductToBasketInner(productId, draftBasketId, setDraftBasketId, quantity, matchMode);
+    if (!r.success) useBasketSession.getState().setAddNotice('basketSession.addFailed');
+    return r;
 };
 
 /** The chooser's pick handler: resolve the target (basket OR template — creating

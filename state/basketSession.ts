@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../config/api';
 import { getUserId } from '../config/user';
 
@@ -239,7 +240,22 @@ export const postBasketItem = async (
     // the real stepper. `already` lets callers skip the count bump.
     if (res.status === 409) return { success: true, already: true, message: 'Produktas jau yra krepšelyje' };
     if (!res.ok) return { success: false, message: 'Nepavyko pridėti produkto' };
+    // The server reverts a PRICED ('compared') basket to draft when it's edited,
+    // which invalidates the store results computed for it — drop the caches so
+    // the map recalculates instead of showing prices that predate this item.
+    try {
+        const body = await res.json().catch(() => null);
+        if (body?.revertedToDraft) await dropCachedBasketResults(basketId);
+    } catch { /* the add itself succeeded — cache cleanup is best-effort */ }
     return { success: true, message: 'Produktas pridėtas į krepšelį' };
+};
+
+/** Forget a basket's calculated store results + calc meta (origin/settings
+ *  snapshot). Called whenever an edit invalidates them. */
+export const dropCachedBasketResults = async (basketId: number | string): Promise<void> => {
+    try {
+        await AsyncStorage.multiRemove([`basket_results_${basketId}`, `basket_calc_meta_${basketId}`]);
+    } catch { /* non-fatal */ }
 };
 
 /**

@@ -260,11 +260,12 @@ export function BasketListSheet() {
                         router.push(`/template/${target.templateId}` as any);
                         return;
                     }
-                    // Stores ›: go STRAIGHT to the store-results map. It
-                    // self-calculates (resolves location + POSTs /calculate with
-                    // the loading modal) when the basket isn't compared yet, so
-                    // we skip the basket-edit screen the trip redirector bounces
-                    // a still-forming basket to.
+                    // Stores ›: go STRAIGHT to the store-results map, skipping the
+                    // basket-edit screen the trip redirector bounces a still-
+                    // forming basket to. The map prices the basket itself when it
+                    // has no cached results (StoreResultsSurface.loadResults →
+                    // needsCalc) — until that existed this path landed on a map of
+                    // bare chain logos with no prices.
                     router.push(`/basket/results/${target.basketId}` as any);
                 }}
                 activeOpacity={0.85}
