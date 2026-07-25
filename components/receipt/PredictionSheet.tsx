@@ -122,18 +122,22 @@ export function PredictionSheet({ score, lowQuality }: { score: TripScore; lowQu
                                 <Text style={[styles.pillText, { color: costColor(r.delta) }]}>{signedPct(r.pct)}</Text>
                             </View>
                         </View>
-                        {/* Headline: price per unit (planned → bought). Falls back
-                            to the plain line price when a unit price isn't derivable. */}
+                        {/* Headline: price PER UNIT on both sides, always in the same
+                            unit. Never falls back to a line total — showing "2,58 €"
+                            against "2,49 €/kg" compared two different things and read
+                            as a price drop that wasn't one. The server guarantees a
+                            shared unit; an underivable side shows "—" rather than a
+                            number that can't be compared. */}
                         <View style={styles.flow}>
                             <Text style={styles.seg}>
                                 <Text style={styles.segPrice}>
-                                    {r.planUnitPrice != null ? `${formatEuro(r.planUnitPrice)}/${r.unit}` : formatEuro(r.predicted)}
+                                    {r.planUnitPrice != null ? `${formatEuro(r.planUnitPrice)}/${r.unit}` : '—'}
                                 </Text>
                             </Text>
                             <Ionicons name="arrow-forward" size={13} color={colors.textMuted} />
                             <Text style={styles.seg}>
                                 <Text style={[styles.segPrice, { color: costColor(r.delta) }]}>
-                                    {r.buyUnitPrice != null ? `${formatEuro(r.buyUnitPrice)}/${r.unit}` : formatEuro(r.actual)}
+                                    {r.buyUnitPrice != null ? `${formatEuro(r.buyUnitPrice)}/${r.unit}` : '—'}
                                 </Text>
                             </Text>
                         </View>
