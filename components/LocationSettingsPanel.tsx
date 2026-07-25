@@ -43,11 +43,14 @@ interface Props {
     /** Drop the panel's own title + the store-count block (the host already
      *  shows those) — start straight at the GPS/Place/Route selection. */
     compact?: boolean;
+    /** Basket id: store-search settings are PER SHOPPING, so the panel reads and
+     *  writes this shopping's own settings. Omit only in a global context. */
+    scope?: string | number | null;
 }
 
 const PRESET_KEYS: PresetKey[] = ['home', 'work', 'custom'];
 
-export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onChanged, onLocationCommit, compact }: Props) {
+export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onChanged, onLocationCommit, compact, scope }: Props) {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
@@ -81,7 +84,7 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
 
     useEffect(() => {
         setOpenMenu(null);
-        Promise.all([getLocationSettings(), getPresets()]).then(([s, p]) => {
+        Promise.all([getLocationSettings(scope), getPresets()]).then(([s, p]) => {
             setSettings(s);
             setPresets(p);
             const pending = pendingApplyRef.current;
@@ -95,7 +98,7 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
                 const next = { ...s, ...patch };
                 setSettings(next);
                 onChanged?.(next);
-                void saveLocationSettings(patch);
+                void saveLocationSettings(patch, scope);
                 // A freshly-created preset that completes the location → reprice.
                 if (isLocationComplete(next, p)) onLocationCommit?.();
             }
@@ -119,7 +122,7 @@ export default function LocationSettingsPanel({ refreshKey, onOpenPresetMap, onC
         const next = { ...settings, ...patch };
         setSettings(next);
         onChanged?.(next);
-        await saveLocationSettings(patch);
+        await saveLocationSettings(patch, scope);
         // Reprice ONLY once the change lands on a complete location — never on a
         // half-set selection (e.g. Place tapped but no place chosen yet).
         if (commit && isLocationComplete(next)) onLocationCommit?.();

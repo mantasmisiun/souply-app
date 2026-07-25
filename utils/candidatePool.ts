@@ -197,10 +197,12 @@ export function nearestRoutePool(
  */
 export async function buildCandidatePool(
     resolvedCoords?: { lat: number; lng: number },
+    /** Basket id — settings are per shopping (see locationStorage.settingsKeyFor). */
+    scope?: string | number | null,
 ): Promise<CandidatePool> {
     try {
         const [settings, presets, allStores, history] = await Promise.all([
-            getLocationSettings(),
+            getLocationSettings(scope),
             getPresets(),
             fetchStoresLite(),
             getVisitHistory(),

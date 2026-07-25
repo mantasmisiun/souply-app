@@ -287,7 +287,7 @@ export default function BasketDetailScreen() {
         fetchBasket();
         // Store-search settings moved to the MAP surface — this screen only
         // reads them (storeCount / route completeness gate the Stores pill).
-        getLocationSettings().then(setActiveSettings);
+        getLocationSettings(String(id)).then(setActiveSettings);
         // Hydrate the calc-time settings snapshot for the
         // "settings changed" branch. Missing key → leave null and the
         // button falls back to "Rodyti parduotuves".
@@ -489,8 +489,8 @@ export default function BasketDetailScreen() {
         try {
             // Build candidate pool from location settings (non-blocking on failure)
             const [pool, settings] = await Promise.all([
-                buildCandidatePool({ lat: coords.lat, lng: coords.lng }),
-                getLocationSettings(),
+                buildCandidatePool({ lat: coords.lat, lng: coords.lng }, String(id)),
+                getLocationSettings(String(id)),
             ]);
 
             // The calculate origin must be the SETTINGS-RESOLVED centre (the

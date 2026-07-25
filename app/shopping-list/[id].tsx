@@ -97,23 +97,41 @@ export default function UnifiedShoppingListScreen() {
         (async () => {
             try {
                 const { fetchTrips } = await import('../../utils/tripsApi');
-                const { tryGpsCoords } = await import('../../utils/location');
+                const { loadCachedCoords, tryGpsCoords } = await import('../../utils/location');
                 const trips = await fetchTrips();
                 const trip = trips.find(tr => tr.id === Number(tripId));
                 if (!trip) { setEntriesLoaded(true); return; }
-                const gps = await tryGpsCoords().catch(() => null);
-                const dist = (sl: typeof trip.slots[number]) => gps && sl.latitude != null && sl.longitude != null
-                    ? (sl.latitude - gps.lat) ** 2 + (sl.longitude - gps.lng) ** 2
-                    : Number.MAX_VALUE;
-                const ordered = [...trip.slots].sort((a, b) => dist(a) - dist(b));
-                setEntries(ordered.map(sl => ({
+
+                type Slot = typeof trip.slots[number];
+                const toEntry = (sl: Slot) => ({
                     storeId: sl.storeId,
                     storeName: sl.storeName ?? sl.chainName ?? '?',
                     storeAddress: sl.address ?? undefined,
                     chainName: sl.chainName ?? '?',
                     chainLogoUrl: null,
                     listId: sl.listId,
-                })));
+                });
+                const byDistance = (from: { lat: number; lng: number } | null) => (a: Slot, b: Slot) => {
+                    const d = (sl: Slot) => from && sl.latitude != null && sl.longitude != null
+                        ? (sl.latitude - from.lat) ** 2 + (sl.longitude - from.lng) ** 2
+                        : Number.MAX_VALUE;
+                    return d(a) - d(b);
+                };
+
+                // RENDER FIRST, sort second. Ordering the store tabs nearest-first is
+                // a nicety; waiting on a hardware fix for it is not. Blocking the
+                // render here is what made opening a list take 30 s on a cold fix.
+                // Cached coords (30-min TTL) usually order it correctly with no wait,
+                // and a live fix — if one arrives, and only when it would change
+                // anything — re-sorts afterwards.
+                const cached = await loadCachedCoords().catch(() => null);
+                setEntries([...trip.slots].sort(byDistance(cached)).map(toEntry));
+                setEntriesLoaded(true);
+
+                if (trip.slots.length > 1) {
+                    const gps = await tryGpsCoords().catch(() => null);
+                    if (gps) setEntries([...trip.slots].sort(byDistance(gps)).map(toEntry));
+                }
             } catch {}
             setEntriesLoaded(true);
         })();

@@ -86,9 +86,23 @@ export async function setPreset(key: PresetKey, preset: LocationPreset | null): 
 // Settings
 // ---------------------------------------------------------------------------
 
-export async function getLocationSettings(): Promise<LocationSettings> {
+/**
+ * Store-search settings are PER SHOPPING, not per device. Mode (GPS/place/route),
+ * store count and the chosen endpoints describe *this* trip's plan, so a NEW
+ * shopping must start from DEFAULT_SETTINGS ("fresh": GPS, one store) and only
+ * keep what the user deliberately changed for it — previously one global blob
+ * leaked 2-stores/route from an old trip into every new one, and a new shopping
+ * never started clean. Saved PLACES (home/work/custom) stay global: they're
+ * user-level addresses, not trip state.
+ *
+ * `scope` is the basket id. Omit it only for genuinely global contexts.
+ */
+const settingsKeyFor = (scope?: string | number | null): string =>
+    scope == null ? SETTINGS_KEY : `location_settings_basket_${scope}`;
+
+export async function getLocationSettings(scope?: string | number | null): Promise<LocationSettings> {
     try {
-        const raw = await AsyncStorage.getItem(SETTINGS_KEY);
+        const raw = await AsyncStorage.getItem(settingsKeyFor(scope));
         if (!raw) return DEFAULT_SETTINGS;
         return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
     } catch {
@@ -96,10 +110,13 @@ export async function getLocationSettings(): Promise<LocationSettings> {
     }
 }
 
-export async function saveLocationSettings(settings: Partial<LocationSettings>): Promise<void> {
+export async function saveLocationSettings(
+    settings: Partial<LocationSettings>,
+    scope?: string | number | null,
+): Promise<void> {
     try {
-        const current = await getLocationSettings();
-        await AsyncStorage.setItem(SETTINGS_KEY, JSON.stringify({ ...current, ...settings }));
+        const current = await getLocationSettings(scope);
+        await AsyncStorage.setItem(settingsKeyFor(scope), JSON.stringify({ ...current, ...settings }));
     } catch {
         // non-fatal
     }
