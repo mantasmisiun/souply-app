@@ -19,7 +19,10 @@
     "wrongClosedBody": "Receipts can only be removed from recent trips.",
     "processingTitle": "Processing receipt",
     "processing": "Scanning…",
-    "statsLowQuality": "This receipt did not scan cleanly — the numbers may not match the paper receipt. Retake the photo for accuracy."
+    "statsLowQuality": "This receipt did not scan cleanly — the numbers may not match the paper receipt. Retake the photo for accuracy.",
+    "failedTitle": "Receipt could not be processed",
+    "failedGeneric": "We could not read this receipt. Check the photo is sharp and the receipt is not upside down.",
+    "retry": "Try again"
   },
   "tripFinal": {
     "tabReceipt": "Receipts",
@@ -1411,7 +1414,10 @@
     "products": "{{done}}/{{total}} items",
     "masking": "Masking private info",
     "saving": "Saving...",
-    "uploading": "Uploading photo..."
+    "uploading": "Uploading photo...",
+    "needsDateTitle": "Receipt date needed",
+    "needsDate": "We couldn't read the purchase date. Enter it so the receipt is saved on the right day.",
+    "enterDate": "Enter date"
   },
   "receiptProcess": {
     "tabSummary": "Summary",
@@ -1797,7 +1803,8 @@
     "templateEmpty": "The recipe is empty",
     "newBadge": "New",
     "add": "Add",
-    "alreadyInBasket": "Already in this basket"
+    "alreadyInBasket": "Already in this basket",
+    "addFailed": "Could not add the item. Please try again."
   },
   "invite": {
     "shareLink": "Share link",

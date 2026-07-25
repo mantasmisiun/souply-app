@@ -19,7 +19,10 @@
     "wrongClosedBody": "Kvitus galima šalinti tik iš neseniai vykusių apsipirkimų.",
     "processingTitle": "Apdorojamas kvitas",
     "processing": "Skaitmeninama…",
-    "statsLowQuality": "Kvitas nuskaitytas nepilnai — sumos gali nesutapti su čekiu. Pakartokite nuotrauką tikslesniam rezultatui."
+    "statsLowQuality": "Kvitas nuskaitytas nepilnai — sumos gali nesutapti su čekiu. Pakartokite nuotrauką tikslesniam rezultatui.",
+    "failedTitle": "Nepavyko apdoroti kvito",
+    "failedGeneric": "Kvito nuskaityti nepavyko. Patikrinkite, ar nuotrauka ryški ir kvitas nėra apverstas.",
+    "retry": "Bandyti dar kartą"
   },
   "tripFinal": {
     "tabReceipt": "Kvitai",
@@ -1390,7 +1393,10 @@
     "products": "{{done}}/{{total}} prekės",
     "masking": "Maskuojama privati informacija",
     "saving": "Išsaugoma...",
-    "uploading": "Įkeliama nuotrauka..."
+    "uploading": "Įkeliama nuotrauka...",
+    "needsDateTitle": "Reikia kvito datos",
+    "needsDate": "Nepavyko nuskaityti pirkimo datos. Įveskite ją, kad kvitas būtų išsaugotas teisingą dieną.",
+    "enterDate": "Įvesti datą"
   },
   "receiptProcess": {
     "tabSummary": "Suvestinė",
@@ -1778,7 +1784,8 @@
     "templateEmpty": "Receptas tuščias",
     "newBadge": "Nauja",
     "add": "Į krepšelį",
-    "alreadyInBasket": "Prekė jau yra šiame krepšelyje"
+    "alreadyInBasket": "Prekė jau yra šiame krepšelyje",
+    "addFailed": "Nepavyko pridėti prekės. Bandykite dar kartą."
   },
   "invite": {
     "shareLink": "Dalintis nuoroda",
