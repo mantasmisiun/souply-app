@@ -14,14 +14,22 @@ import {
 // Guarded Skia require — mirrors utils/imagePreprocess.ts. Resolves to null when the package isn't
 // installed or its native side isn't in THIS build; the deskew ReOcrFn then falls back to a rect crop.
 let Skia: any = null;
+/** `ImageFormat` is a TOP-LEVEL export of react-native-skia, NOT a member of `Skia`.
+ *  Reading `Skia.ImageFormat.PNG` threw "Cannot read property 'PNG' of undefined"
+ *  on EVERY deskew, so the warp silently fell back to the plain rect crop and never
+ *  actually ran (see productReocr.deskew.error in the device log). */
+let SkiaImageFormat: any = null;
 try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('@shopify/react-native-skia');
     Skia = mod?.Skia ?? null;
-} catch { Skia = null; }
+    SkiaImageFormat = mod?.ImageFormat ?? null;
+} catch { Skia = null; SkiaImageFormat = null; }
 /** Skia is installed AND its native side is in this (Android) build → the deskew warp can run. */
 function skiaDeskewAvailable(): boolean {
-    return Platform.OS === 'android' && Skia != null && typeof Skia.Surface?.MakeOffscreen === 'function';
+    return Platform.OS === 'android' && Skia != null
+        && typeof Skia.Surface?.MakeOffscreen === 'function'
+        && SkiaImageFormat?.PNG != null;
 }
 
 /**
@@ -188,7 +196,7 @@ export function makeBandDeskewReocr(pageUri: string, pageWidth: number, pageHeig
             const snap = surface.makeImageSnapshot();
             // PNG mirrors imagePreprocess's proven encode (the format enum is guaranteed present) and
             // keeps the upscaled glyph edges crisp for ML Kit; a single small band crop is cheap.
-            const bytes = snap.encodeToBase64(Skia.ImageFormat.PNG, 100);
+            const bytes = snap.encodeToBase64(SkiaImageFormat.PNG, 100);
             const outUri = `${FileSystem.cacheDirectory}reocr-band-${productIndex}-${cropY0}.png`;
             await FileSystem.writeAsStringAsync(outUri, bytes, { encoding: FileSystem.EncodingType.Base64 });
 

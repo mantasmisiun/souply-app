@@ -20,6 +20,10 @@ import { Platform } from 'react-native';
  */
 
 let Skia: any = null;
+/** Top-level module export, NOT `Skia.ImageFormat` — reading it off `Skia` is
+ *  undefined, which made every variant render throw into the silent catch below
+ *  (so destain/contrast have been returning nothing at all). */
+let SkiaImageFormat: any = null;
 try {
     // Guarded require: resolves to null when the package isn't installed (now)
     // or its native side isn't loaded (build predating Skia). Never throws.
@@ -27,13 +31,17 @@ try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('@shopify/react-native-skia');
     Skia = mod?.Skia ?? null;
+    SkiaImageFormat = mod?.ImageFormat ?? null;
 } catch {
     Skia = null;
+    SkiaImageFormat = null;
 }
 
 /** True only when Skia is installed AND its native side is in THIS build (Android). */
 export function preprocessAvailable(): boolean {
-    return Platform.OS === 'android' && Skia != null && typeof Skia.Surface?.MakeOffscreen === 'function';
+    return Platform.OS === 'android' && Skia != null
+        && typeof Skia.Surface?.MakeOffscreen === 'function'
+        && SkiaImageFormat?.PNG != null;
 }
 
 // Broadcast the RED channel into R, G and B (and keep alpha). Erases blue/cyan
@@ -71,7 +79,7 @@ async function renderWithMatrix(uri: string, matrix: number[], tag: string): Pro
         surface.flush();
         const snap = surface.makeImageSnapshot();
         // PNG keeps the recolor lossless (JPEG would re-introduce colour noise).
-        const bytes = snap.encodeToBase64(Skia.ImageFormat.PNG, 100);
+        const bytes = snap.encodeToBase64(SkiaImageFormat.PNG, 100);
         const out = `${FileSystem.cacheDirectory}ocr-${tag}-${w}x${h}.png`;
         await FileSystem.writeAsStringAsync(out, bytes, { encoding: FileSystem.EncodingType.Base64 });
         return out;
