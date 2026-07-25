@@ -7,7 +7,10 @@ export type QueueStatus =
   | "pending"
   | "processing"
   | "error"
-  | "awaiting_network";
+  | "awaiting_network"
+  /** Parked: the receipt parsed, but its purchase date didn't. The card asks
+   *  the user for it; supplying one re-runs the item with the date injected. */
+  | "needs_date";
 
 export interface QueueItem {
   id: string;
@@ -29,6 +32,8 @@ export interface QueueItem {
   healReceiptId?: number;
   /** DEV-ONLY: with healReceiptId, fully REPLACE that receipt's parse instead of merging. */
   devReplace?: boolean;
+  /** User-entered purchase date (YYYY-MM-DD) for an item parked as `needs_date`. */
+  overrideDate?: string;
   status: QueueStatus;
   error?: string;
   /** Failure reason (e.g. "store_unrecognized") — drives the error card's CTA. */
@@ -68,8 +73,13 @@ interface ReceiptQueueState {
     fallbackLinkId?: number | null;
     healReceiptId?: number;
     devReplace?: boolean;
+    overrideDate?: string;
     resolvedStore?: { storeId: number; storeName: string | null; storeAddress: string | null };
   }[]) => void;
+  /** Park an item awaiting a purchase date from the user. */
+  markNeedsDate: (id: string, message: string) => void;
+  /** Supply the date and re-queue the item so the runner picks it up. */
+  resolveDate: (id: string, date: string) => void;
   markProcessing: (id: string, progress?: string) => void;
   updateProgress: (
     id: string,
@@ -116,7 +126,7 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
       // re-upload, so persisting it across cold starts just leaves a dead,
       // un-actionable card sitting around forever.
       const restored = saved
-        .filter((item) => item.status !== "error")
+        .filter((item) => item.status !== "error")   // needs_date SURVIVES: it is actionable
         .map((item) =>
           item.status === "processing"
             ? { ...item, status: "pending" as const, progress: undefined, progressDone: undefined, progressTotal: undefined }
@@ -139,12 +149,38 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
       fallbackLinkId: e.fallbackLinkId,
       healReceiptId: e.healReceiptId,
       devReplace: e.devReplace,
+      overrideDate: e.overrideDate,
       resolvedStore: e.resolvedStore,
       status: "pending",
       addedAt: Date.now(),
     }));
     set((state) => {
       const items = [...state.items, ...newItems];
+      persist(items);
+      return { items };
+    });
+  },
+
+  markNeedsDate: (id, message) => {
+    set((state) => {
+      const items = state.items.map((item) =>
+        item.id === id
+          ? { ...item, status: "needs_date" as const, error: message, errorReason: "needs_date",
+              progress: undefined, progressDone: undefined, progressTotal: undefined }
+          : item,
+      );
+      persist(items);
+      return { items };
+    });
+  },
+
+  resolveDate: (id, date) => {
+    set((state) => {
+      const items = state.items.map((item) =>
+        item.id === id
+          ? { ...item, overrideDate: date, status: "pending" as const, error: undefined, errorReason: undefined }
+          : item,
+      );
       persist(items);
       return { items };
     });

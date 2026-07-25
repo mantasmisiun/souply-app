@@ -85,13 +85,19 @@ export function useReceiptQueueRunner(): void {
         useReceiptQueueStore
           .getState()
           .updateProgress(next.id, step, done, total),
-      { isPdf: next.isPdf === true, linkMap: next.linkMap, fallbackLinkId: next.fallbackLinkId, healReceiptId: next.healReceiptId, devReplace: next.devReplace, resolvedStore: next.resolvedStore },
+      { isPdf: next.isPdf === true, linkMap: next.linkMap, fallbackLinkId: next.fallbackLinkId, healReceiptId: next.healReceiptId, devReplace: next.devReplace, overrideDate: next.overrideDate, resolvedStore: next.resolvedStore },
     )
       .then((result) => {
         useReceiptQueueStore.getState().markDone(next.id, result.receiptId);
       })
       .catch((e) => {
         const s = useReceiptQueueStore.getState();
+        // PARKED, not failed: the parse succeeded but the purchase date didn't
+        // read. The card asks for it and resolveDate() re-queues the item.
+        if (e instanceof ProcessingError && e.reason === "needs_date") {
+          s.markNeedsDate(next.id, e.message);
+          return;
+        }
         const routing = routeQueueError(e, onlineRef.current);
         if (routing.kind === "awaiting_network") {
           s.markAwaitingNetwork(next.id);

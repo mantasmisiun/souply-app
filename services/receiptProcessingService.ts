@@ -63,7 +63,8 @@ export type ProcessingFailReason =
   | "chain_unrecognized"
   | "store_unrecognized"
   | "post_failed"
-  | "mask_failed";
+  | "mask_failed"
+  | "needs_date";
 
 /** Store context attached to a `store_unrecognized` error so the trip card's
  *  "Rasti parduotuvę" CTA can open the chain-scoped map pre-seeded. */
@@ -730,6 +731,9 @@ export async function processOneReceipt(
     healReceiptId?: number;
     /** DEV-ONLY: fully REPLACE healReceiptId's parse with this one (bypass the heal-merge). */
     devReplace?: boolean;
+    /** User-supplied purchase date (YYYY-MM-DD) for a receipt whose date wouldn't
+     *  parse — set when retrying a queue item parked as `needs_date`. */
+    overrideDate?: string;
     /** STORE RESOLUTION: user picked a store from the map after a store_unrecognized
      *  failure — inject it so the parse skips the automatic store match. */
     resolvedStore?: ResolvedStoreInput;
@@ -828,6 +832,21 @@ export async function processOneReceipt(
         filePath: null,
       },
     };
+
+    // MISSING PURCHASE DATE. The interactive scan asks the user (scanSessionService
+    // → ensureKeyReceiptFields); this background path had no such gate, so an
+    // unparsed date was stored as "" and every downstream view silently fell back
+    // to today — a receipt from last week landed on the wrong day with no hint.
+    // The queue is headless, so instead of blocking it PARKS the item: the card
+    // asks for the date, and the retry re-runs with `overrideDate` injected.
+    const parsedFooter = (parsedData as any)?.footer;
+    if (!opts?.overrideDate && !(typeof parsedFooter?.date === "string" && parsedFooter.date.length > 0)) {
+      throw new ProcessingError("needs_date", i18n.t("receiptQueue.needsDate"));
+    }
+    if (opts?.overrideDate && parsedFooter) {
+      parsedFooter.date = opts.overrideDate;
+      if (!parsedFooter.time) parsedFooter.time = "12:00";
+    }
 
     onProgress?.(i18n.t("receiptQueue.saving"));
     // RETAKE → heal the existing receipt (merge into its stored parse); otherwise

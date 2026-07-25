@@ -16,6 +16,7 @@ import {
     RefreshControl,
     Modal,
     Alert,
+    Platform,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated, { LinearTransition, withTiming, Easing } from 'react-native-reanimated';
@@ -31,6 +32,7 @@ import { ProgressGlow } from '../../../components/ProgressGlow';
 import { requestStoreResolution } from '../../../utils/storeResolution';
 import { StoreResolutionOverlay } from '../../../components/receipt/StoreResolutionOverlay';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
 import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
@@ -102,12 +104,20 @@ function ProcessingCard({ item, onResolveStore }: { item: QueueItem; onResolveSt
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const isError = item.status === 'error';
+    // PARKED for a missing purchase date: the scan is fine, only the date didn't
+    // read. Ask for it here rather than defaulting to today — a receipt from last
+    // week would otherwise land on the wrong day with no hint to the user.
+    const needsDate = item.status === 'needs_date';
+    const [showPicker, setShowPicker] = useState(false);
+    const resolveDate = useReceiptQueueStore.getState().resolveDate;
     // Recoverable store_unrecognized failure → offer the "Rasti parduotuvę" map.
     const needsStore = isError && item.errorReason === 'store_unrecognized' && item.storeChainId != null;
     const fraction = item.progressTotal && item.progressTotal > 0
         ? Math.max(0.05, Math.min(1, (item.progressDone ?? 0) / item.progressTotal))
         : 0.08;
-    const title = isError ? (item.error || t('banners.receiptQueue.error')) : t('banners.receiptQueue.processing');
+    const title = needsDate ? t('receiptQueue.needsDateTitle')
+        : isError ? (item.error || t('banners.receiptQueue.error'))
+        : t('banners.receiptQueue.processing');
     const status = item.progress
         ?? (item.status === 'pending' ? t('banners.receiptQueue.queued', { count: 1 })
             : item.status === 'awaiting_network' ? t('banners.receiptQueue.awaitingNetwork')
@@ -122,9 +132,25 @@ function ProcessingCard({ item, onResolveStore }: { item: QueueItem; onResolveSt
                         </View>
                     </View>
                     <Text style={styles.processingTitle} numberOfLines={2}>{title}</Text>
-                    {!isError && <Text style={styles.cardMeta} numberOfLines={1}>{status}</Text>}
+                    {needsDate ? (
+                        <Text style={styles.cardMeta} numberOfLines={2}>{t('receiptQueue.needsDate')}</Text>
+                    ) : !isError && <Text style={styles.cardMeta} numberOfLines={1}>{status}</Text>}
                 </View>
-                {isError ? (
+                {needsDate ? (
+                    <View style={styles.cardActions}>
+                        <TouchableOpacity style={styles.resolveBtn} onPress={() => setShowPicker(true)} hitSlop={6}>
+                            <Ionicons name="calendar-outline" size={14} color={colors.onPrimary} />
+                            <Text style={styles.resolveBtnText}>{t('receiptQueue.enterDate')}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={() => useReceiptQueueStore.getState().removeItem(item.id)}
+                            hitSlop={8}
+                            accessibilityLabel={t('common.close')}
+                        >
+                            <Ionicons name="close" size={20} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    </View>
+                ) : isError ? (
                     <View style={styles.cardActions}>
                         {needsStore && (
                             <TouchableOpacity style={styles.resolveBtn} onPress={() => onResolveStore?.(item)} hitSlop={6}>
@@ -144,7 +170,24 @@ function ProcessingCard({ item, onResolveStore }: { item: QueueItem; onResolveSt
                     <MaterialProgress size="small" color={colors.primary} />
                 )}
             </View>
-            {!isError && <ProgressGlow edge="bottom" fraction={fraction} color={colors.primary} />}
+            {!isError && !needsDate && <ProgressGlow edge="bottom" fraction={fraction} color={colors.primary} />}
+            {showPicker && (
+                <DateTimePicker
+                    value={new Date()}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'inline' : 'calendar'}
+                    // A receipt can't be from the future, and two years back is
+                    // ample — same bounds as the interactive scan's date gate.
+                    maximumDate={new Date()}
+                    minimumDate={new Date(new Date().getFullYear() - 2, new Date().getMonth(), new Date().getDate())}
+                    onChange={(e: DateTimePickerEvent, d?: Date) => {
+                        setShowPicker(false);
+                        if (e.type === 'dismissed' || !d) return;
+                        const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                        resolveDate(item.id, iso);   // re-queues the item with the date injected
+                    }}
+                />
+            )}
         </View>
     );
 }
