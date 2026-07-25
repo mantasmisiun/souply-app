@@ -288,22 +288,48 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     }, [results, lazyResults, id, maxStores]);
 
 
-    // Defer the heavy MapView mount until after the toggle's tap interaction so
-    // switching to Žemėlapis feels instant (the capsule animates immediately,
-    // the map appears a frame later).
+    // Defer the heavy MapView mount past the entry interaction so the screen
+    // paints instantly — but NOT until `loading` clears. Google's GL init +
+    // tile fetch is seconds of work, and gating it on the calc ran the two in
+    // SERIES: entering with no cached results meant waiting for the whole
+    // calculation and only THEN starting the map. The CalcLoadingModal covers
+    // the screen throughout, so the map can initialise behind it and be ready
+    // the moment the modal lifts.
     useEffect(() => {
-        if (loading || mapMounted) return;
+        if (mapMounted) return;
         const task = InteractionManager.runAfterInteractions(() => setMapMounted(true));
         return () => task.cancel();
-    }, [loading, mapMounted]);
+    }, [mapMounted]);
+
+    /** Basket id whose empty cache we already auto-calculated this mount — stops
+     *  a failed calc from relaunching on every screen re-focus. */
+    const autoCalcRef = useRef<string | null>(null);
+
+    /** Location permission refused (or GPS unavailable with nothing cached):
+     *  GPS mode can't produce an origin, so move THIS shopping to Place mode,
+     *  raise the settings sheet and leave the user on the place picker — they
+     *  enter an address manually instead of staring at a map centred on nowhere.
+     *  Only rewrites the mode when we're still in 'current' (never clobbers a
+     *  deliberate place/route choice). */
+    const switchToPlaceForDeniedGps = useCallback(async () => {
+        try {
+            const s = await getLocationSettings(id);
+            if (s.mode !== 'current') return;
+            await saveLocationSettings({ mode: 'specific' }, id);
+            setSettingsRefreshKey(k => k + 1);   // panel re-reads → renders Place
+            requestAnimationFrame(() => dockRef.current?.snapTo(2));
+        } catch { /* non-fatal — the map still renders, just uncentred */ }
+    }, [id]);
 
     const loadResults = async () => {
         // Detail screen now awaits the calc before pushing to this route,
-        // so the cache is always populated on entry. The previous 30-second
-        // polling loop was a workaround for the old fire-and-navigate
-        // pattern and is no longer needed. If we still find an empty cache
-        // (e.g., the user reverted the basket to draft from a parallel
-        // stack, wiping this key), render the empty state immediately.
+        // NOT always populated: the basket screen calculates before navigating,
+        // but the basket dock's "Parduotuvės ›" pushes here DIRECTLY, and editing
+        // a priced basket drops its cached results (they priced a different
+        // basket). Both land here with an empty cache, and this screen used to
+        // just render nothing — a map of bare chain logos you had to tap one by
+        // one to see a price. So an empty cache now CALCULATES (see needsCalc
+        // below) instead of showing an empty map.
         setLoading(true);
         setSelectedStoreId(null);
         setSelectedOptionKey(null);
@@ -313,7 +339,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         const [stored, metaRaw, ls] = await Promise.all([
             AsyncStorage.getItem(`basket_results_${id}`),
             AsyncStorage.getItem(`basket_calc_meta_${id}`),
-            getLocationSettings(),
+            getLocationSettings(id),
         ]);
         // Store-count is the LIVE location setting (single source of truth) — not
         // frozen in the calc meta — so a change from Settings or the map's 1·2·3
@@ -325,25 +351,41 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         } else {
             setResults([]);
         }
-        // Starting location for the map (user dot + the route's first leg) = the
-        // exact search centre the calc used, persisted in the meta. It's the
-        // accurate origin even for preset/bus modes, and unlike the cached GPS
-        // coords it has no TTL. (Route mode has no single centre → null; the
-        // focus effect then falls back to cached GPS coords.)
+        // Starting location for the map (user dot + the route's first leg).
+        //
+        // GPS mode resolves LIVE on every entry. The calc meta's `searchCenter`
+        // is frozen at the last calculation and has no TTL, so reusing it here
+        // dropped the map on wherever you stood days ago — "a random pin across
+        // town" — while the panel still (correctly) read "GPS". Place/route modes
+        // DO keep their stored centre/presets: those are deliberate fixed points.
         let center: { lat: number; lng: number } | null = null;
         let endpoints: typeof routeEndpoints = null;
         let placeMode = false;
+        let gpsDenied = false;
         try {
             const meta = metaRaw ? JSON.parse(metaRaw) : null;
             const c = meta?.searchCenter;
             if (c && Number.isFinite(c.lat) && Number.isFinite(c.lng)) center = { lat: c.lat, lng: c.lng };
-            // Route mode → resolve the two endpoint presets to coordinates.
-            const s = meta?.settings;
-            placeMode = s?.mode === 'specific';
-            if (s?.mode === 'route' && s.routeFrom && s.routeTo) {
+            placeMode = ls.mode === 'specific';
+            if (ls.mode === 'current') {
+                // CACHED fix first (30-min TTL — still "where you are now"), live GPS
+                // only when there is none. Order matters for speed, not correctness:
+                // the bug this fixes was the calc meta's searchCenter, which has NO
+                // TTL and could be days old; a ≤30-min cache is a real position and
+                // avoids making map entry wait on a hardware fix.
+                const live = await loadCachedCoords() ?? await tryGpsCoords().catch(() => null);
+                if (live) {
+                    center = { lat: live.lat, lng: live.lng };
+                    void persistCoords(live);
+                } else if (!center) {
+                    // No permission and nothing cached → we cannot place the user.
+                    gpsDenied = true;
+                }
+            } else if (ls.mode === 'route' && ls.routeFrom && ls.routeTo) {
+                // Route mode → resolve the two endpoint presets to coordinates.
                 const presets = await getPresets();
-                const f = presets[s.routeFrom as 'home' | 'work' | 'custom'];
-                const to = presets[s.routeTo as 'home' | 'work' | 'custom'];
+                const f = presets[ls.routeFrom as 'home' | 'work' | 'custom'];
+                const to = presets[ls.routeTo as 'home' | 'work' | 'custom'];
                 if (f && to) {
                     endpoints = {
                         from: { latitude: f.lat, longitude: f.lng },
@@ -362,6 +404,21 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             if (cached) setUserCoords({ lat: cached.lat, lng: cached.lng });
         }
         setLoading(false);
+        // LOCATION DENIED → we can't search around the user, so hand them the
+        // manual way out instead of a map centred on nothing: flip this shopping
+        // to Place mode, raise the settings sheet and let them enter an address.
+        if (gpsDenied) { await switchToPlaceForDeniedGps(); return; }
+        // NO CACHED PRICES → price the basket now. handleRecalculate resolves the
+        // origin the same way the basket screen does and honours this shopping's
+        // settings (GPS → around you, Place → around the preset, Route → the
+        // corridor), so the pool is the nearest stores for the chosen mode.
+        // Guarded to ONE attempt per basket per mount: a successful calc writes
+        // the cache (so the next focus is a plain read) and a failed one must not
+        // relaunch on every re-focus.
+        if (!stored && autoCalcRef.current !== id) {
+            autoCalcRef.current = id;
+            await handleRecalculate();
+        }
     };
 
     const runRecalcWithCoords = useCallback(async (coords: UserCoords, isPull = false) => {
@@ -375,8 +432,8 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             // recalc posted raw GPS with NO pool, silently reverting a
             // place-mode basket to closest-stores-around-me.
             const [pool, settings] = await Promise.all([
-                buildCandidatePool({ lat: coords.lat, lng: coords.lng }),
-                getLocationSettings(),
+                buildCandidatePool({ lat: coords.lat, lng: coords.lng }, id),
+                getLocationSettings(id),
             ]);
             const origin = pool.searchCenter ?? coords;
             const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
@@ -429,7 +486,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         setSelectedStoreId(null);
         setSelectedOptionKey(null);
         try {
-            const [settings, presets] = await Promise.all([getLocationSettings(), getPresets()]);
+            const [settings, presets] = await Promise.all([getLocationSettings(id), getPresets()]);
 
             // Route mode → resolve both endpoints for the map's route line.
             let endpoints: typeof routeEndpoints = null;
@@ -456,7 +513,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             }
             if (!coords && !endpoints) { if (epoch === recalcEpochRef.current) setRecalcing(false); return; }
 
-            const pool = await buildCandidatePool(coords ?? undefined);
+            const pool = await buildCandidatePool(coords ?? undefined, id);
             const origin = pool.searchCenter
                 ?? (endpoints ? { lat: endpoints.from.latitude, lng: endpoints.from.longitude } : coords!);
             const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
@@ -784,7 +841,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         // Persist to the GLOBAL location setting so the basket's settings button
         // reflects it on back, and it stays in sync everywhere. Store-count no
         // longer affects pricing, so this never forces a recalc.
-        try { await saveLocationSettings({ storeCount: n }); } catch {}
+        try { await saveLocationSettings({ storeCount: n }, id); } catch {}
     }, [maxStores, closeSheet]);
 
     // Stores that already carry a price pill — excluded from the directory layer.
@@ -1094,13 +1151,16 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     return (
         <>
             <View style={styles.container}>
-                {loading && !pullRefreshing ? (
-                    // Plain background while loading — the CalcLoadingModal (below)
-                    // owns the spinner + rotating messages and covers this. The map
-                    // mounts only once `loading` clears, so pills pop AFTER the
-                    // modal lifts (the reveal the user sees).
-                    <View style={styles.loadingContainer} />
-                ) : mapMounted ? (
+                {!mapMounted ? (
+                    // Only until the deferred mount fires. While the calc runs the map
+                    // renders UNDERNEATH the CalcLoadingModal (which owns the spinner +
+                    // rotating messages and covers the screen), so its tiles load in
+                    // parallel with pricing instead of starting afterwards. Pills still
+                    // pop as the modal lifts — the reveal is intact, the wait isn't.
+                    <View style={styles.loadingContainer}>
+                        <MaterialProgress size="large" color={colors.primary} />
+                    </View>
+                ) : (
                     // Full-bleed map fills the content region; the option sheet
                     // floats over it at the bottom. The heavy MapView mount is
                     // deferred a frame past entry so the screen paints instantly.
@@ -1146,10 +1206,6 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                             </View>
                         )}
                     </>
-                ) : (
-                    <View style={styles.loadingContainer}>
-                        <MaterialProgress size="large" color={colors.primary} />
-                    </View>
                 )}
             {/* Box-none overlay above the map: the sheet's own views are the
                 touch targets; empty area falls through to the map (the canonical
@@ -1310,6 +1366,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                                 <DockSection colors={colors} icon="navigate-outline" title={t('tripMap.locationRoute')}>
                                     <LocationSettingsPanel
                                         compact
+                                        scope={id}
                                         refreshKey={settingsRefreshKey}
                                         onOpenPresetMap={openPresetPicker}
                                         onLocationCommit={recalcForLocationChange}
