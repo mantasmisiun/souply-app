@@ -31,6 +31,9 @@ export async function tripStageHref(trip: TripSummary): Promise<string> {
         }
         if (pick) return `/shopping-list/${pick.listId}?tripId=${trip.id}`;
     }
-    if (trip.stage === 4) return `/trip/receipts/${trip.id}`;
+    // Stage 4's whole job is "hand in the receipt", so land with the capture
+    // sheet already up (Fotografuoti / Įkelti) instead of making the user find
+    // the upload button on a screen that exists only for that one action.
+    if (trip.stage === 4) return `/trip/receipts/${trip.id}?upload=1`;
     return `/trip/receipts/${trip.id}?tab=stats`;
 }

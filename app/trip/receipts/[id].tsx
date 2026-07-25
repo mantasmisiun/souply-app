@@ -19,6 +19,7 @@ import { useTranslation } from 'react-i18next';
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { ProgressGlow } from '../../../components/ProgressGlow';
 import { useReceiptQueueStore } from '../../../state/receiptQueueStore';
+import { useTripSeenStore } from '../../../state/tripSeenStore';
 import { ChainLogoChip } from '../../../components/ChainLogoChip';
 import { UserAvatar } from '../../../components/UserAvatar';
 import { ScreenBackButton } from '../../../components/ScreenBackButton';
@@ -75,7 +76,7 @@ export default function TripFinalScreen() {
     const { t, i18n } = useTranslation();
     const router = useRouter();
     const insets = useSafeAreaInsets();
-    const { id, tab: tabParam } = useLocalSearchParams<{ id: string; tab?: string }>();
+    const { id, tab: tabParam, upload: uploadParam } = useLocalSearchParams<{ id: string; tab?: string; upload?: string }>();
     const tripId = Number(id);
 
     const [tab, setTab] = useState<'receipt' | 'stats'>(tabParam === 'stats' ? 'stats' : 'receipt');
@@ -86,7 +87,9 @@ export default function TripFinalScreen() {
     const [tripSpend, setTripSpend] = useState<TripSpendEntry[]>([]);
     const [locked, setLocked] = useState<boolean | null>(null);
 
-    const [uploadSheet, setUploadSheet] = useState(false);
+    // ?upload=1 (the stage-4 "Įkelti kvitą" CTA) opens the capture sheet on
+    // arrival — that CTA exists to upload, so don't make the user hunt for it.
+    const [uploadSheet, setUploadSheet] = useState(uploadParam === '1');
     const [retakeReceiptId, setRetakeReceiptId] = useState<number | null>(null);
     const [voluntaryOpen, setVoluntaryOpen] = useState(false);
     // Voluntary identify-queue card count across the trip's receipts — the pink
@@ -107,11 +110,21 @@ export default function TripFinalScreen() {
     const [predictionOpen, setPredictionOpen] = useState(false);
     const [myId, setMyId] = useState<string | null>(null);
     useEffect(() => { void getUserId().then(setMyId); }, []);
+    // Raises this trip's seen-receipts watermark (never lowers it).
+    const markTripSeen = useTripSeenStore(s => s.markOpened);
 
     const load = useCallback(async () => {
         try {
             const rs = await fetchTripReceipts(tripId);
             setReceipts(rs);
+            // Mark what the user has ACTUALLY seen. The watermark used to be written
+            // only when the card was tapped, recording the count AT THAT MOMENT — so
+            // finishing a list (0 receipts) stamped 0, and the upload you then made
+            // right here pushed the count to 1, flagging your own receipt as "New"
+            // the instant you left. Stamping it from the screen that displays them
+            // means anything you looked at is seen; a receipt a HOUSEHOLD MEMBER adds
+            // later still lifts the count above the watermark and flags correctly.
+            markTripSeen(tripId, rs.length);
             const pending = rs.some(r => r.mandatorySwipesRequired > 0 && !r.mandatorySwipesCompleted);
             setLocked(pending || rs.length === 0);
             // Trip meta (title + anchor month for the trips donut).
@@ -127,13 +140,14 @@ export default function TripFinalScreen() {
                 setStats(st); setScore(sc); setTripSpend(sp);
             }
         } catch { setLocked(true); setReceipts([]); }
-    }, [tripId]);
+    }, [tripId, markTripSeen]);
     useFocusEffect(useCallback(() => { void load(); }, [load]));
 
     // A background heal (retake) of one of this trip's receipts just finished →
     // reload so the merged/renewed lines land (and drive the reveal animation).
     const queueItems = useReceiptQueueStore(s => s.items);
     const addQueueItems = useReceiptQueueStore(s => s.addItems);
+    const removeQueueItem = useReceiptQueueStore(s => s.removeItem);
 
     // DEV-ONLY: re-run the whole OCR→parse→heal pipeline on the receipt's CACHED
     // photo (no camera). Downloads the stored image, then enqueues it exactly
@@ -174,9 +188,14 @@ export default function TripFinalScreen() {
     const tripListIds = useMemo(
         () => new Set((trip?.slots ?? []).map(s => s.listId).filter((n): n is number => n != null)),
         [trip]);
+    // 'error' is INCLUDED: a failed upload must keep its card and explain itself.
+    // Without it the card simply vanished mid-processing and the user was left
+    // guessing whether the receipt had been accepted (it hadn't).
     const pendingUploads = useMemo(() => queueItems.filter(q =>
         q.healReceiptId == null
-        && (q.status === 'processing' || q.status === 'pending' || q.status === 'awaiting_network')
+        && (q.status === 'processing' || q.status === 'pending'
+            || q.status === 'awaiting_network' || q.status === 'error'
+            || q.status === 'needs_date')
         && ((q.fallbackLinkId != null && tripListIds.has(q.fallbackLinkId))
             || (q.linkMap != null && Object.values(q.linkMap).some(lid => tripListIds.has(lid))))
     ), [queueItems, tripListIds]);
@@ -419,6 +438,41 @@ export default function TripFinalScreen() {
                                 const frac = q.progressTotal
                                     ? Math.max(0.05, Math.min(1, (q.progressDone ?? 0) / q.progressTotal))
                                     : 0.08;
+                                // FAILED upload: say what went wrong ON the card and offer a
+                                // retry, instead of the card quietly disappearing.
+                                if (q.status === 'error') {
+                                    return (
+                                        <View key={`pending-${q.id}`} style={styles.rcard}>
+                                            <View style={styles.pendingIcon}>
+                                                <Ionicons name="alert-circle-outline" size={20} color={colors.error} />
+                                            </View>
+                                            <View style={{ flex: 1, minWidth: 0 }}>
+                                                <Text style={styles.rstore} numberOfLines={1}>{t('tripReceipts.failedTitle')}</Text>
+                                                <Text style={styles.rsub} numberOfLines={2}>
+                                                    {q.error || t('tripReceipts.failedGeneric')}
+                                                </Text>
+                                            </View>
+                                            <TouchableOpacity
+                                                style={styles.retryBtn}
+                                                onPress={() => {
+                                                    // Drop the failed row and open the CAPTURE sheet. Replaying the
+                                                    // same pixels would just fail the same way — the photo itself is
+                                                    // usually the problem (blurred, cropped, badly oriented), so the
+                                                    // useful retry is a NEW capture or file.
+                                                    removeQueueItem(q.id);
+                                                    setUploadSheet(true);
+                                                }}
+                                                hitSlop={8}
+                                            >
+                                                <Ionicons name="refresh" size={14} color={colors.onPrimary} />
+                                                <Text style={styles.retryBtnText}>{t('tripReceipts.retry')}</Text>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity onPress={() => removeQueueItem(q.id)} hitSlop={8}>
+                                                <Ionicons name="close" size={18} color={colors.textSecondary} />
+                                            </TouchableOpacity>
+                                        </View>
+                                    );
+                                }
                                 return (
                                     <View key={`pending-${q.id}`} style={styles.rcard}>
                                         <View style={styles.pendingIcon}>
@@ -877,6 +931,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
 
     rcard: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, backgroundColor: c.cardBackground, borderWidth: 1, borderColor: c.border, borderRadius: radius.lg, padding: spacing.md, marginHorizontal: spacing.lg, marginBottom: spacing.sm, overflow: 'hidden' },
     pendingIcon: { width: 38, height: 38, borderRadius: 19, backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center' },
+    retryBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: 10, paddingVertical: 6 },
+    retryBtnText: { fontSize: 12, fontWeight: '800', color: c.onPrimary },
     rstore: { ...typography.bodySmallStrong, color: c.textPrimary },
     rsub: { ...typography.labelSmall, color: c.textSecondary, marginTop: 2 },
     rtot: { ...typography.bodySmallStrong, fontVariant: ['tabular-nums'], color: c.textPrimary },
