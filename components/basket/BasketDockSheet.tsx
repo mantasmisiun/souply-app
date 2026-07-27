@@ -14,6 +14,8 @@ import { formatWeekdayDate } from '../../utils/formatDayDate';
 import { TemplateCoverEditor, type CoverDraft } from '../TemplateCoverEditor';
 import { ShoppingSheet } from './ShoppingSheet';
 import { useShoppingSheet } from '../../state/shoppingSheet';
+import { RecipeDockPane } from '../recipe/RecipeDockPane';
+import { useRecipeDock } from '../../state/recipeDock';
 import { createTemplate } from '../../utils/basketTemplatesApi';
 import { getUserId } from '../../config/user';
 
@@ -57,11 +59,15 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     // Shopping tab root gets its OWN sheet (date filter + family + generate
     // with AI — shared/SMART_BASKET_SPEC.md §1).
     const onShoppingRoot = pathname === '/basket';
+    // Receptai tab root: swipe up to start a recipe (blank, or from a link).
+    // Same dock as the other two tabs — a recipe is created from the bar, not
+    // from a floating button parked over the list.
+    const onTemplatesRoot = pathname === '/templates';
     const sessionActive = target != null && barVisible;
     // Chooser shows whenever a resumable basket exists and no session is live
     // (a live session is owned by the root BasketListSheet, which already spans
     // the whole catalog tree).
-    const hasSheet = (onSurface && !sessionActive && dormant != null) || onShoppingRoot;
+    const hasSheet = (onSurface && !sessionActive && dormant != null) || onShoppingRoot || onTemplatesRoot;
 
     const controls = useRef<DockedSheetControls | null>(null);
     // Current detent (0 collapsed → last = full). At FULL the sheet is
@@ -71,6 +77,13 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     // visible, so collapse-on-scroll stays valid.
     const stageRef = useRef(0);
     const atFull = () => stageRef.current >= 2;
+
+    // The Receptai screen collapses the dock when it acts on a choice.
+    useEffect(() => {
+        if (!onTemplatesRoot) return;
+        useRecipeDock.getState().setCollapse(() => controls.current?.collapse());
+        return () => useRecipeDock.getState().setCollapse(null);
+    }, [onTemplatesRoot]);
 
     // External collapse (browse scroll / L1 toggle) — only while the chooser
     // owns the dock; the active-session List sheet registers its own.
@@ -237,10 +250,14 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                 // generate with AI). Catalog surfaces → the basket chooser.
                 content: onShoppingRoot
                     ? <ShoppingSheet collapse={() => controls.current?.collapse()} />
-                    : chooserContent,
+                    : onTemplatesRoot
+                        ? <RecipeDockPane collapse={() => controls.current?.collapse()} />
+                        : chooserContent,
                 // Full detent so the sections have room; the shared geometry
                 // keeps the collapsed tab bar symmetric + fixed and docks
                 // edge-to-edge only at full.
+                // Every tab's dock behaves identically: medium floats, and only the
+                // full raise docks edge-to-edge.
                 maxStage: 2,
                 // Collapsed back to the bar with adds still queued and no basket
                 // picked ⇒ the user dismissed the chooser: release those adds so
@@ -248,7 +265,8 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                 onStageChange: (stage) => {
                     stageRef.current = stage;
                     if (onShoppingRoot) useShoppingSheet.getState().setSheetStage(stage);
-                    if (stage !== 0 || onShoppingRoot) return;
+                    if (onTemplatesRoot) useRecipeDock.getState().setStage(stage);
+                    if (stage !== 0 || onShoppingRoot || onTemplatesRoot) return;
                     const s = useBasketSession.getState();
                     if (s.target == null && s.pendingAdds.length > 0) cancelPending();
                 },

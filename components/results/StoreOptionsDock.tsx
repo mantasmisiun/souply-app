@@ -11,7 +11,7 @@ import { chainBrandName } from '../../utils/chainBrandName';
 import { formatEuro } from '../../utils/formatCurrency';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
 import { SheetCard } from '../SheetCard';
-import { DockActionCard } from '../dock/DockActionCard';
+import { DockActionRow } from '../dock/DockActionRow';
 import { dockBarBase, dockContentBase } from '../dock/dockLayout';
 
 const SCREEN_H = Dimensions.get('window').height;
@@ -174,26 +174,28 @@ export default function StoreOptionsDock({
     const content = (
         <View style={styles.content} onStartShouldSetResponderCapture={noteTouch}>
             {/* Navigate + List — the same big cards as Basket/Invite. */}
-            <View style={styles.actionRow}>
-                <DockActionCard
-                    colors={colors}
-                    icon="navigate-outline"
-                    title={t('results.sheet.navigate')}
-                    subtitle={journeyKm != null ? formatDistance(journeyKm) : '—'}
-                    onPress={onNavigate}
-                    onPressIn={onInteract}
-                />
-                <DockActionCard
-                    colors={colors}
-                    icon="list-outline"
-                    title={t('results.sheet.list')}
-                    subtitle={creatingList ? t('results.sheet.creating') : t('results.sheet.items', { count: itemCount })}
-                    onPress={onCreateList}
-                    onPressIn={onInteract}
-                    disabled={creatingList}
-                    loading={creatingList}
-                />
-            </View>
+            <DockActionRow
+                colors={colors}
+                gap={14}
+                actions={[
+                    {
+                        icon: 'navigate-outline',
+                        title: t('results.sheet.navigate'),
+                        subtitle: journeyKm != null ? formatDistance(journeyKm) : '—',
+                        onPress: onNavigate,
+                        onPressIn: onInteract,
+                    },
+                    {
+                        icon: 'list-outline',
+                        title: t('results.sheet.list'),
+                        subtitle: creatingList ? t('results.sheet.creating') : t('results.sheet.items', { count: itemCount }),
+                        onPress: onCreateList,
+                        onPressIn: onInteract,
+                        disabled: creatingList,
+                        loading: creatingList,
+                    },
+                ]}
+            />
 
             {/* Single store (no split alternatives): the option card would just
                 repeat the bar — show a "Parduotuvė" FACTS card instead
@@ -418,7 +420,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // Bottom pad so the last option row is never flush against the sheet's
     // bottom edge (where a tap could land on the map below instead).
     content: { ...dockContentBase, paddingBottom: spacing.lg },
-    actionRow: { flexDirection: 'row', gap: 14 },
 
     // ── Store options — a "Stores" section of separate cards ──
     // Single-store facts card — same shadowed SheetCard family as the

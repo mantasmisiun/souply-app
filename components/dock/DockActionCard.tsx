@@ -29,7 +29,7 @@ export function DockActionCard({ colors, icon, iconNode, title, subtitle, onPres
 }) {
     const styles = useMemo(() => makeStyles(colors), [colors]);
     return (
-        <TouchableOpacity style={styles.wrap} onPress={onPress} onPressIn={onPressIn} disabled={disabled} activeOpacity={0.7}>
+        <TouchableOpacity style={[styles.wrap, disabled && styles.disabled]} onPress={onPress} onPressIn={onPressIn} disabled={disabled} activeOpacity={0.7}>
             <SheetCard style={styles.card}>
                 <View>
                     {loading
@@ -46,6 +46,9 @@ export function DockActionCard({ colors, icon, iconNode, title, subtitle, onPres
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     wrap: { flex: 1 },
+    // A dead card that looks live is worse than no card — the press just does
+    // nothing and the user retries. Dim it so `disabled` is visible, not just felt.
+    disabled: { opacity: 0.45 },
     card: { alignItems: 'flex-start', gap: 2, paddingVertical: 14 },
     title: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginTop: 6 },
     sub: { fontSize: 12, fontWeight: '500', color: c.textSecondary },

@@ -22,6 +22,7 @@ import {
     useTheme, useResolvedScheme, spacing, radius, withAlpha, type AppTheme,
 } from '../constants/theme';
 import { concentricRadius, displayCornerRadius } from '../utils/displayCorners';
+import { floatCollapseProgress } from './dock/dockGeometry';
 
 /** The sheet's 0→1 solid/dock progress (0 floating glass → 1 edge-to-edge
  *  solid), published to sheet CONTENT so cards can fade from transparent (they
@@ -33,10 +34,16 @@ export const SheetSolidContext = createContext<SharedValue<number> | null>(null)
  * grows upward into a sheet, through STANDARD detents:
  *
  *   stage 0  collapsed — just the bar row (+ a pill).
- *   stage 1  MEDIUM   — 50 % of the screen (iOS/Material medium detent).
+ *   stage 1  MEDIUM   — 50 % of the screen (iOS/Material medium detent). Still a
+ *                       FLOATING panel: it keeps a gap on left, right and bottom.
  *   stage 2  FULL     — the panel goes SOLID (glass → opaque), its bottom
  *                       corners square and its left/right edges expand to the
  *                       screen edges; the internal list scroll switches on.
+ *
+ * TOUCHING THE SCREEN EDGES IS STAGE 2's ALONE. A sheet capped at medium
+ * (`maxStage: 1`) floats at every stage — see `floatCollapseProgress`, which
+ * measures against the FULL detent rather than against whichever snap happens to
+ * be last, so no configuration can produce a flush-but-not-docked sheet.
  *
  * The detents are FIXED fractions of the screen — the content's size never
  * dictates the height. `sheet.maxStage` picks how far it may open: 1 = medium
@@ -148,6 +155,19 @@ export interface DockedSheetControls {
 interface SheetSpec {
     content: ReactNode;
     /** How far the sheet may open: 1 = medium only, 2 = full. Default 2. */
+    /**
+     * How far the sheet may open:
+     *
+     *   1 — collapsed → MEDIUM. Stays a FLOATING panel throughout: the symmetric
+     *       left/right/bottom gap is kept at every detent, the glass never turns
+     *       solid and the corners never square off. Right for a short pane.
+     *   2 — collapsed → medium → FULL (default). Only the full detent docks
+     *       edge-to-edge, turning the glass solid and squaring the bottom corners
+     *       into the display radius. Medium keeps a (reduced) float.
+     *
+     * Edge-to-edge is a property of FULL, never of "as far as this sheet opens" —
+     * so choosing 1 can never produce a sheet flush to the screen edges.
+     */
     maxStage?: 1 | 2;
     onStageChange?: (stage: number) => void;
     onActiveChange?: (active: boolean) => void;
@@ -278,9 +298,11 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     // height (the float margin shrinks to 0 as it docks).
     useEffect(() => {
         if (!onOcclusion) return;
-        const lo = snaps[0], hi = snaps[snaps.length - 1];
         const height = snaps[Math.min(stage, snaps.length - 1)];
-        const prog = hi > lo ? (height - lo) / (hi - lo) : 0;
+        // Same rule as the clip's own margin: only a sheet with a FULL detent
+        // gives up its float, so a medium-max sheet occludes its margin at every
+        // stage and a map host insets to the frame it can actually see.
+        const prog = floatCollapseProgress(snaps, height);
         onOcclusion(Math.round(COLLAPSED_MARGIN * (1 - prog) + height));
     }, [stage, snaps, onOcclusion]);
 
@@ -451,6 +473,19 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         const lo = sn[0], hi = sn[sn.length - 1];
         return hi > lo ? clamp((h.value - lo) / (hi - lo), 0, 1) : 0;
     });
+    /**
+     * FLOAT-COLLAPSE progress — how far the sheet has given up its floating
+     * margins (0 = full symmetric gap on left/right/bottom, 1 = edge-to-edge).
+     *
+     * Measured against the FULL detent, NOT simply the last snap. A sheet whose
+     * deepest detent is MEDIUM (`maxStage: 1`) keeps its float at every stage:
+     * without this guard `p` reached 1 at medium and the sheet sat flush against
+     * the screen edges while still being a floating panel in every other respect
+     * — no solid surface, no squared display corners, since `solidP` below already
+     * requires a full detent. Docking is a property of being FULL, not of being
+     * as open as this particular sheet goes.
+     */
+    const dockP = useDerivedValue(() => floatCollapseProgress(snapsSV.value, h.value));
     // Glass→solid + square-corner dock fades over the LAST segment (medium→full).
     const solidP = useDerivedValue(() => {
         const sn = snapsSV.value;
@@ -468,7 +503,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     // left/right AND the (visible) bottom gap in lock-step. Bottom corners square
     // off into the display radius as it docks.
     const clipStyle = useAnimatedStyle(() => {
-        const m = COLLAPSED_MARGIN * (1 - p.value);
+        const m = COLLAPSED_MARGIN * (1 - dockP.value);
         const r = Math.round(cornerR + (displayR - cornerR) * solidP.value);
         return {
             height: h.value,
@@ -486,7 +521,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     // offset counter-animate the clip's own shrinking left+bottom, so its screen
     // x AND y are constant at every detent — the glass grows around it.
     const barRowStyle = useAnimatedStyle(() => {
-        const off = COLLAPSED_MARGIN * p.value;
+        const off = COLLAPSED_MARGIN * dockP.value;
         // The bar row is inset by `peek` on left/right/bottom (and the grabber
         // sits in the equal peek strip above) so the content's gap to every dock
         // edge matches. The content itself carries NO extra horizontal padding.
@@ -497,7 +532,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     // so its gap to the bar content matches the bar's side/bottom peek — otherwise
     // it lands flush on the X/Basket buttons, which now fill the whole row.
     const barTopStyle = useAnimatedStyle(() => ({
-        bottom: barRowHeight + 2 * peek + COLLAPSED_MARGIN * p.value,
+        bottom: barRowHeight + 2 * peek + COLLAPSED_MARGIN * dockP.value,
     }));
     // ── barAtTop layout ───────────────────────────────────────────────────────
     // Bar row pinned to the TOP of the clip (just below the pill). Because the
