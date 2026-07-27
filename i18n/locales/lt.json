@@ -22,7 +22,14 @@
     "statsLowQuality": "Kvitas nuskaitytas nepilnai — sumos gali nesutapti su čekiu. Pakartokite nuotrauką tikslesniam rezultatui.",
     "failedTitle": "Nepavyko apdoroti kvito",
     "failedGeneric": "Kvito nuskaityti nepavyko. Patikrinkite, ar nuotrauka ryški ir kvitas nėra apverstas.",
-    "retry": "Bandyti dar kartą"
+    "retry": "Bandyti dar kartą",
+    "attachHere": "Prisegti čia",
+    "detachedTitle": "Kvitas priskirtas kitur",
+    "detachedBody": "Įkeltas kvitas neprisegtas prie šio apsipirkimo — jį rasite Apsipirkimų sąraše kaip atskirą įrašą.",
+    "detachTitle": "Pašalinti kvitą iš apsipirkimo?",
+    "detachBody": "{{store}} kvitas nebebus šio apsipirkimo dalis. Pats kvitas išliks jūsų kvituose.",
+    "detachConfirm": "Pašalinti",
+    "detachFailed": "Nepavyko pašalinti kvito."
   },
   "tripFinal": {
     "tabReceipt": "Kvitai",
@@ -51,7 +58,7 @@
     "helpIdentify": "Padėti atpažinti prekes",
     "identifyTop": "Atpažink",
     "identifyBottom": "Prekes",
-    "promoItems": "Prekės su akcija",
+    "promoItems": "Akcijos",
     "promoSaved": "sutaupyta {{amount}}",
     "promoNone": "šįkart be akcijų",
     "impulse": "Impulsyvumas",
@@ -650,7 +657,8 @@
     "loading": "Įkeliama...",
     "search": "Ieškoti",
     "yes": "Taip",
-    "no": "Ne"
+    "no": "Ne",
+    "store": "Parduotuvė"
   },
   "banners": {
     "offline": "Nėra interneto ryšio",
@@ -759,7 +767,8 @@
       "explainer": "Taupytojo režimas išplečia produktų palyginimą įtraukiant panašias alternatyvas.",
       "example": "Sistema analizuoja susietus produktus tarp parduotuvių ir apskaičiuoja, kuris variantas suteikia geriausią vertę pagal kainą, kiekį ir vartotojo pasirinkimus.",
       "gotIt": "Supratau"
-    }
+    },
+    "loadFailed": "Nepavyko įkelti katalogo"
   },
   "createProduct": {
     "title": "Kurti naują produktą",
@@ -899,7 +908,6 @@
     "templates": {
       "emptyTitle": "Receptų nėra",
       "emptyBody": "Sukurkite receptą iš krepšelio, kad galėtumėte greitai pakartoti pirkimą",
-      "addCard": "Naujas receptas",
       "useCount_one": "{{count}} kartą",
       "useCount_few": "{{count}} kartus",
       "useCount_other": "{{count}} kartų",
@@ -934,6 +942,7 @@
       "emptyItemsBody": "Pridėkite prekių, kad galėtumėte sukurti krepšelį iš šio recepto",
       "autoUpdateLabel": "Automatiškai atnaujinti pagal naujus kvitus",
       "addItemTitle": "Pridėti prekę",
+      "addItemsCta": "Pridėti prekes",
       "addItemPlaceholder": "Ieškoti pagal pavadinimą…",
       "addItemHint": "Įveskite bent 2 simbolius",
       "addItemNoResults": "Nieko nerasta",
@@ -947,25 +956,47 @@
       "errorSave": "Nepavyko išsaugoti",
       "errorDelete": "Nepavyko ištrinti recepto",
       "instantiateCta": "Sukurti krepšelį",
+      "shoppingCta": "Apsipirkimas",
+      "openRecipeTitle": "Atidaryti receptą",
+      "websiteTitle": "Svetainė",
+      "sourceUnknown": "Šaltinis neįrašytas",
       "announceTitle": "Jūsų pirkinių receptas paruoštas!",
       "announceBody": "Pagal jūsų kvitus sukūrėme receptą, kad galėtumėte greitai pakartoti pirkimą.",
       "announceCta": "Peržiūrėti",
       "announceDismiss": "Vėliau",
-      "gateTitle": "Sukurkime jūsų pirkinių sąrašą",
-      "gateBody": "Įkelkite bent 3 kvitus iš 2 skirtingų parduotuvių — suprasime, ką perkate dažniausiai, ir sukursime jūsų asmeninį pirkinių receptą.",
-      "gateBodyDetail": "Kuo daugiau kvitų įkelsite, tuo tiksliau receptas atspindės jūsų įpročius.",
-      "gateUpload": "Įkelti kvitą",
-      "gateLater": "Vėliau",
-      "gateBannerTitle": "Įkelkite kvitus, kad gautumėte savo receptą",
-      "gateBannerBody": "{{progress}} iš 3 kvitų · {{chains}} iš 2 parduotuvių",
-      "gateBannerCta": "Įkelti",
-      "buildOfferTitle": "Galime sukurti jūsų išmanųjį receptą",
-      "buildOfferBody": "Iš jūsų kvitų sudarysime asmeninį receptą su dažniausiai perkamomis prekėmis.",
-      "buildCta": "Sukurti",
-      "buildDismiss": "Ne, ačiū",
-      "buildFailed": "Nepavyko sukurti recepto. Pabandykite vėliau.",
-      "buildingTitle": "Kuriamas išmanusis receptas…",
-      "buildingBody": "Analizuojame jūsų kvitus",
+      "createSheetTitle": "Nuo ko pradedame?",
+      "createBlankTitle": "Naujas receptas",
+      "createBlankSub": "Tuščias sąrašas",
+      "createFromUrlTitle": "Iš nuorodos",
+      "createFromUrlSub": "Įklijuokite adresą",
+      "urlSheetTitle": "Receptas iš nuorodos",
+      "urlSheetBody": "Įklijuokite recepto puslapio nuorodą — perskaitysime ingredientus ir surasime juos atitinkančias prekes.",
+      "urlPlaceholder": "https://www.lamaistas.lt/receptas/...",
+      "urlPaste": "Įklijuoti iš iškarpinės",
+      "urlSubmit": "Įkelti receptą",
+      "urlErrorBadUrl": "Panašu, kad tai ne nuoroda. Įklijuokite visą recepto adresą.",
+      "urlErrorBlockedHost": "Šio adreso atidaryti negalime.",
+      "urlErrorNoRecipe": "Šiame puslapyje recepto neradome. Pabandykite kitą nuorodą.",
+      "urlErrorRateLimited": "Per daug bandymų iš karto. Truputį palaukite ir bandykite vėl.",
+      "urlErrorFetch": "Nepavyko atidaryti puslapio. Patikrinkite nuorodą arba bandykite vėliau.",
+      "urlErrorGeneric": "Nepavyko įkelti recepto. Bandykite vėliau.",
+      "importServings_one": "{{count}} porcija",
+      "importServings_few": "{{count}} porcijos",
+      "importServings_other": "{{count}} porcijų",
+      "importRecipeAmount": "Recepte: {{amount}}",
+      "importReviewChip": "Patikrinkite",
+      "importAltTitle": "Pakeisti prekę",
+      "importAltRawLabel": "Recepte parašyta",
+      "importAltEmpty": "Kitų variantų neradome.",
+      "importPantryTitle": "Turbūt jau turite",
+      "importPantryRemoveAll": "Pašalinti visus",
+      "importSkippedTitle": "Nepridėta",
+      "importSkippedUnmatched": "Atitinkamos prekės neradome",
+      "importSkippedNotIngredient": "Ne ingredientas",
+      "importEmptyTitle": "Prekių neliko",
+      "importEmptyBody": "Palikite bent vieną prekę arba grįžkite atgal.",
+      "importCta": "Sukurti receptą",
+      "importCreateFailed": "Nepavyko sukurti recepto. Bandykite dar kartą.",
       "smartName": "Išmanusis receptas",
       "autoBadge": "Auto",
       "learnLabel": "Mokytis iš kvitų",
@@ -1060,7 +1091,12 @@
       "statsCreatorBullet3": "Kuri mitybos planus ar pirkinių gidus",
       "statsCreatorBullet4": "Nori, kad tavo vardas (@vardas) liktų ant kiekvieno krepšelio, sukurto iš tavo recepto",
       "statsCreatorCta": "Susikurti kūrėjo paskyrą",
-      "statsAlreadyCreator": "Esi prisijungęs kaip @{{handle}}"
+      "statsAlreadyCreator": "Esi prisijungęs kaip @{{handle}}",
+      "pantryTitle": "Ką jau turite?",
+      "pantryBody": "Šių prekių tikriausiai jau turite namuose. Pažymėkite tas, kurių pirkti nereikia.",
+      "pantryKeepAll": "Palikti visas",
+      "pantryRemoveAll": "Pašalinti visas",
+      "pantryConfirm": "Kurti krepšelį"
     },
     "creatorProfile": {
       "title": "Mano profilis",
@@ -1305,8 +1341,7 @@
     "helpBody1": "Čia matosi visi produktų palyginimai, kuriuos atlikai įkeldamas kvitus iš skirtingų parduotuvių.",
     "helpBody2": "Jei atsakei neteisingai — bakstelėk ant įrašo ir pataisyk. Taip naršydamas produktus matysi tikslesnius rezultatus.",
     "helpBody3": "Paieška ir filtrai viršuje padės greičiau rasti, ko ieškai.",
-    "editTitle": "Pakeisti balsavimą",
-    "helpClose": "Supratau"
+    "editTitle": "Pakeisti balsavimą"
   },
   "search": {
     "foundElsewhereTitle": "Kitur rastas produktas",
@@ -1396,7 +1431,14 @@
     "uploading": "Įkeliama nuotrauka...",
     "needsDateTitle": "Reikia kvito datos",
     "needsDate": "Nepavyko nuskaityti pirkimo datos. Įveskite ją, kad kvitas būtų išsaugotas teisingą dieną.",
-    "enterDate": "Įvesti datą"
+    "enterDate": "Įvesti datą",
+    "needsStoreTitle": "Kvitas iš kitos parduotuvės",
+    "needsStore": "Šis kvitas ne iš suplanuotų parduotuvių. Kuriai apsipirkimo daliai jį priskirti?",
+    "needsStoreDetected": "Atpažinta: {{chain}}",
+    "keepSeparate": "Palikti atskirai",
+    "linkFailedTitle": "Kvitas neprisegtas",
+    "linkFailed": "Kvitas išsaugotas, bet nepavyko jo prisegti prie kelionės. Bandykite dar kartą.",
+    "retryLink": "Prisegti"
   },
   "receiptProcess": {
     "tabSummary": "Suvestinė",
@@ -1540,7 +1582,6 @@
     "subtitle": "Prisijunk ir pradėk dalintis",
     "google": "Tęsti su Google",
     "apple": "Tęsti su Apple",
-    "gotIt": "Supratau",
     "introTitle": "Kūrėjo paskyra",
     "introSubtitle": "Kam tai skirta",
     "cards": {
@@ -1596,9 +1637,6 @@
     "savedTotal": "Iš viso sutaupėte",
     "couldHaveSavedTotal": "Iš viso galėjote sutaupyti",
     "pickMonth": "Pasirinkite mėnesį",
-    "savedThisMonth": "Šį mėnesį sutaupėte",
-    "couldHaveSavedThisMonth": "Šį mėnesį galėjote sutaupyti",
-    "vsLastMonth": "nei pr. mėn. iki tos pačios dienos",
     "dataFootnote": "Duomenys pagrįsti įkeltais kvitais",
     "voteHistory": "Balsavimų istorija",
     "devTools": "Kūrėjo įrankiai",
@@ -1621,10 +1659,17 @@
     "testUserRestartTitle": "Reikia perkrauti",
     "testUserRestartBody": "Vartotojo ID bus pakeistas į: {{id}}. Programa bus perkrauta.",
     "testUserRestart": "Perkrauti",
-    "shoppingLists": "Pirkinių sąrašai",
-    "receipts": "Kvitai",
-    "planningScore": "Mano planavimo balas",
-    "vsLastMonthScore": "nei pr. mėn."
+    "savingSkills": "Taupymo įgūdžiai",
+    "planningSkills": "Planavimo įgūdžiai",
+    "savingInfoTitle": "Kaip skaičiuojami taupymo įgūdžiai?",
+    "savingInfoBullet1": "Kiekvieną nupirktą prekę palyginame su tos pačios prekės vidutine kaina visose parduotuvėse.",
+    "savingInfoBullet2": "Skirtumas ir yra sutaupyta suma. Jei sumokėjote daugiau nei vidurkis, suma bus neigiama.",
+    "savingInfoBullet3": "Rodomas šis mėnuo, o pokytis lyginamas su praėjusiu mėnesiu iki tos pačios dienos.",
+    "planningInfoTitle": "Kaip skaičiuojami planavimo įgūdžiai?",
+    "planningInfoBullet1": "Ar nupirkote tai, ką planavote — kiek sąrašo prekių atsirado kvite.",
+    "planningInfoBullet2": "Kiek išleidote ne pagal sąrašą — neplanuoti pirkiniai balą mažina.",
+    "planningInfoBullet3": "Ar pasirinkote pigiausią parduotuvę iš tų, kurias palyginome.",
+    "planningInfoBullet4": "Balas nuo 0 iki 100 už šį mėnesį, pokytis — palyginti su praėjusiu."
   },
   "receiptPhoto": {
     "title": "Atpažinti duomenys",
@@ -1661,14 +1706,6 @@
     "softBody": "Išleista naujesnė versija su patobulinimais. Rekomenduojame atnaujinti.",
     "updateButton": "Atnaujinti",
     "later": "Vėliau"
-  },
-  "profileIdentity": {
-    "setNamePlaceholder": "Nustatyk vardą",
-    "setNameHint": "Kad kiti nariai tave atpažintų",
-    "tapToEdit": "Bakstelėk redaguoti",
-    "editTitle": "Tavo vardas",
-    "namePlaceholder": "Tavo vardas",
-    "save": "Išsaugoti"
   },
   "namePrompt": {
     "title": "Koks tavo vardas?",
@@ -1875,9 +1912,13 @@
     }
   },
   "discountsSheet": {
-    "title": "Prekės su akcija",
+    "title": "Akcijos",
     "thisStore": "ši parduotuvė",
-    "explainer": "Šias akcijas siūlo {{chain}}. Kitos parduotuvės gali turėti didesnių nuolaidų ar mažesnių įprastų kainų — prieš apsipirkdami palyginkite krepšelį, kad rastumėte geriausius pasiūlymus."
+    "explainer": "Šias akcijas siūlo {{chain}}. Kitos parduotuvės gali turėti didesnių nuolaidų ar mažesnių įprastų kainų — prieš apsipirkdami palyginkite krepšelį, kad rastumėte geriausius pasiūlymus.",
+    "loyaltyTitle": "{{brand}} pinigai",
+    "loyaltyTitleGeneric": "Lojalumo pinigai",
+    "loyaltyBalance": "Liko {{balance}}",
+    "loyaltyEarned": "+{{earned}} už šį kvitą"
   },
   "impulseSheet": {
     "title": "Impulsyvumas",

@@ -22,7 +22,14 @@
     "statsLowQuality": "This receipt did not scan cleanly — the numbers may not match the paper receipt. Retake the photo for accuracy.",
     "failedTitle": "Receipt could not be processed",
     "failedGeneric": "We could not read this receipt. Check the photo is sharp and the receipt is not upside down.",
-    "retry": "Try again"
+    "retry": "Try again",
+    "attachHere": "Attach here",
+    "detachedTitle": "Receipt landed elsewhere",
+    "detachedBody": "The uploaded receipt isn't attached to this trip — you'll find it in Shopping as its own entry.",
+    "detachTitle": "Remove this receipt from the trip?",
+    "detachBody": "The {{store}} receipt will no longer be part of this shopping. The receipt itself stays in your receipts.",
+    "detachConfirm": "Remove",
+    "detachFailed": "Couldn't remove the receipt."
   },
   "tripFinal": {
     "tabReceipt": "Receipts",
@@ -51,7 +58,7 @@
     "helpIdentify": "Help identify products",
     "identifyTop": "Identify",
     "identifyBottom": "products",
-    "promoItems": "On sale",
+    "promoItems": "Promotions",
     "promoSaved": "saved {{amount}}",
     "promoNone": "no sales this time",
     "impulse": "Impulse",
@@ -678,7 +685,8 @@
     "loading": "Loading...",
     "search": "Search",
     "yes": "Yes",
-    "no": "No"
+    "no": "No",
+    "store": "Store"
   },
   "banners": {
     "offline": "No internet connection",
@@ -784,7 +792,8 @@
       "explainer": "Saver mode broadens product comparison by including similar alternatives.",
       "example": "The system analyses linked products across stores and calculates which variant offers the best value based on price, quantity, and user preferences.",
       "gotIt": "Got it"
-    }
+    },
+    "loadFailed": "Could not load the catalogue"
   },
   "createProduct": {
     "title": "Create new product",
@@ -924,7 +933,6 @@
     "templates": {
       "emptyTitle": "No recipes yet",
       "emptyBody": "Save a basket as a recipe to reuse it next time",
-      "addCard": "New recipe",
       "useCount_one": "{{count}} time",
       "useCount_other": "{{count}} times",
       "itemCount_one": "{{count}} item",
@@ -958,6 +966,7 @@
       "emptyItemsBody": "Add items to create baskets from this recipe",
       "autoUpdateLabel": "Auto-update from new receipts",
       "addItemTitle": "Add item",
+      "addItemsCta": "Add items",
       "addItemPlaceholder": "Search by name…",
       "addItemHint": "Type at least 2 characters",
       "addItemNoResults": "No results",
@@ -971,25 +980,47 @@
       "errorSave": "Couldn't save",
       "errorDelete": "Couldn't delete recipe",
       "instantiateCta": "Create basket",
+      "shoppingCta": "Shopping",
+      "openRecipeTitle": "Open recipe",
+      "websiteTitle": "Website",
+      "sourceUnknown": "Source not saved",
       "announceTitle": "Your shopping recipe is ready!",
       "announceBody": "Based on your receipts we built a recipe so you can quickly repeat your shop.",
       "announceCta": "View",
       "announceDismiss": "Later",
-      "gateTitle": "Let's build your shopping list",
-      "gateBody": "Upload at least 3 receipts from 2 different stores — we'll figure out what you buy most and build your personal shopping recipe.",
-      "gateBodyDetail": "The more receipts you upload, the more accurately the recipe will reflect your habits.",
-      "gateUpload": "Upload receipt",
-      "gateLater": "Later",
-      "gateBannerTitle": "Upload receipts to get your recipe",
-      "gateBannerBody": "{{progress}}/3 receipts · {{chains}}/2 stores",
-      "gateBannerCta": "Upload",
-      "buildOfferTitle": "We can build your Smart recipe",
-      "buildOfferBody": "We'll turn your receipts into a personal recipe of what you buy most.",
-      "buildCta": "Build it",
-      "buildDismiss": "No thanks",
-      "buildFailed": "Couldn't build the recipe. Try again later.",
-      "buildingTitle": "Building your Smart recipe…",
-      "buildingBody": "Analysing your receipts",
+      "createSheetTitle": "How do you want to start?",
+      "createBlankTitle": "New recipe",
+      "createBlankSub": "Empty list",
+      "createFromUrlTitle": "From a link",
+      "createFromUrlSub": "Paste an address",
+      "urlSheetTitle": "Recipe from a link",
+      "urlSheetBody": "Paste a recipe page's link — we'll read the ingredients and match them to products.",
+      "urlPlaceholder": "https://www.lamaistas.lt/receptas/...",
+      "urlPaste": "Paste from clipboard",
+      "urlSubmit": "Import recipe",
+      "urlErrorBadUrl": "That doesn't look like a link. Paste the full recipe address.",
+      "urlErrorBlockedHost": "We can't open that address.",
+      "urlErrorNoRecipe": "We couldn't find a recipe on that page. Try another link.",
+      "urlErrorRateLimited": "Too many attempts at once. Wait a moment and try again.",
+      "urlErrorFetch": "Couldn't open the page. Check the link or try again later.",
+      "urlErrorGeneric": "Couldn't import the recipe. Try again later.",
+      "importServings_one": "{{count}} serving",
+      "importServings_few": "{{count}} servings",
+      "importServings_other": "{{count}} servings",
+      "importRecipeAmount": "Recipe: {{amount}}",
+      "importReviewChip": "Check this",
+      "importAltTitle": "Swap the product",
+      "importAltRawLabel": "The recipe says",
+      "importAltEmpty": "We found no other options.",
+      "importPantryTitle": "You probably have these",
+      "importPantryRemoveAll": "Remove all",
+      "importSkippedTitle": "Not added",
+      "importSkippedUnmatched": "No matching product found",
+      "importSkippedNotIngredient": "Not an ingredient",
+      "importEmptyTitle": "No products left",
+      "importEmptyBody": "Keep at least one product, or go back.",
+      "importCta": "Create recipe",
+      "importCreateFailed": "Couldn't create the recipe. Try again.",
       "smartName": "Smart recipe",
       "autoBadge": "Auto",
       "learnLabel": "Learn from receipts",
@@ -1083,7 +1114,12 @@
       "statsCreatorBullet3": "You build meal plans or shopping guides",
       "statsCreatorBullet4": "You want your @handle on every basket created from your recipe",
       "statsCreatorCta": "Set up a creator account",
-      "statsAlreadyCreator": "Signed in as @{{handle}}"
+      "statsAlreadyCreator": "Signed in as @{{handle}}",
+      "pantryTitle": "What do you already have?",
+      "pantryBody": "You probably have these at home. Tick the ones you do not need to buy.",
+      "pantryKeepAll": "Keep all",
+      "pantryRemoveAll": "Remove all",
+      "pantryConfirm": "Create basket"
     },
     "creatorProfile": {
       "title": "My profile",
@@ -1326,8 +1362,7 @@
     "helpBody1": "Here are all the product comparisons you've made by uploading receipts from different stores.",
     "helpBody2": "If you answered incorrectly — tap an entry and fix it. This way, browsing products shows you more accurate results.",
     "helpBody3": "Search and filters at the top help you find what you're looking for faster.",
-    "editTitle": "Edit vote",
-    "helpClose": "Got it"
+    "editTitle": "Edit vote"
   },
   "search": {
     "foundElsewhereTitle": "Product found elsewhere",
@@ -1417,7 +1452,14 @@
     "uploading": "Uploading photo...",
     "needsDateTitle": "Receipt date needed",
     "needsDate": "We couldn't read the purchase date. Enter it so the receipt is saved on the right day.",
-    "enterDate": "Enter date"
+    "enterDate": "Enter date",
+    "needsStoreTitle": "Receipt from another store",
+    "needsStore": "This receipt isn't from any planned store. Which part of the trip does it cover?",
+    "needsStoreDetected": "Detected: {{chain}}",
+    "keepSeparate": "Keep separate",
+    "linkFailedTitle": "Receipt not attached",
+    "linkFailed": "The receipt was saved but couldn't be attached to the trip. Try again.",
+    "retryLink": "Attach"
   },
   "receiptProcess": {
     "tabSummary": "Summary",
@@ -1561,7 +1603,6 @@
     "subtitle": "Sign in to start sharing",
     "google": "Continue with Google",
     "apple": "Continue with Apple",
-    "gotIt": "Got it",
     "introTitle": "Creator account",
     "introSubtitle": "Who it's for",
     "cards": {
@@ -1616,9 +1657,6 @@
     "savedTotal": "Saved in total",
     "couldHaveSavedTotal": "Could have saved in total",
     "pickMonth": "Pick a month",
-    "savedThisMonth": "Saved this month",
-    "couldHaveSavedThisMonth": "Could have saved this month",
-    "vsLastMonth": "vs last month to date",
     "dataFootnote": "Data based on uploaded receipts",
     "voteHistory": "Vote history",
     "devTools": "Developer tools",
@@ -1640,10 +1678,17 @@
     "testUserRestartTitle": "Restart required",
     "testUserRestartBody": "The user ID will switch to: {{id}}. The app will restart.",
     "testUserRestart": "Restart",
-    "shoppingLists": "Shopping lists",
-    "receipts": "Receipts",
-    "planningScore": "My planning score",
-    "vsLastMonthScore": "vs last month"
+    "savingSkills": "Saving skills",
+    "planningSkills": "Planning skills",
+    "savingInfoTitle": "How are saving skills calculated?",
+    "savingInfoBullet1": "Every item you buy is compared with the same product’s average price across all stores.",
+    "savingInfoBullet2": "The difference is what you saved. Pay above the average and the figure goes negative.",
+    "savingInfoBullet3": "This month is shown, and the change compares with last month up to the same day.",
+    "planningInfoTitle": "How are planning skills calculated?",
+    "planningInfoBullet1": "Did you buy what you planned — how many list items turned up on the receipt.",
+    "planningInfoBullet2": "How much you spent off-list — unplanned buys pull the score down.",
+    "planningInfoBullet3": "Whether you picked the cheapest of the stores we compared.",
+    "planningInfoBullet4": "A 0–100 score for this month, with the change against last month."
   },
   "receiptPhoto": {
     "title": "Recognised data",
@@ -1680,14 +1725,6 @@
     "softBody": "A newer version with improvements is out. We recommend updating.",
     "updateButton": "Update",
     "later": "Later"
-  },
-  "profileIdentity": {
-    "setNamePlaceholder": "Set your name",
-    "setNameHint": "So other members recognise you",
-    "tapToEdit": "Tap to edit",
-    "editTitle": "Your name",
-    "namePlaceholder": "Your name",
-    "save": "Save"
   },
   "namePrompt": {
     "title": "What's your name?",
@@ -1894,9 +1931,13 @@
     }
   },
   "discountsSheet": {
-    "title": "On sale",
+    "title": "Promotions",
     "thisStore": "this store",
-    "explainer": "These discounts are provided by {{chain}}. Other stores might have bigger discounts or lower regular prices — compare your basket before shopping to find the best deals."
+    "explainer": "These discounts are provided by {{chain}}. Other stores might have bigger discounts or lower regular prices — compare your basket before shopping to find the best deals.",
+    "loyaltyTitle": "{{brand}} money",
+    "loyaltyTitleGeneric": "Loyalty money",
+    "loyaltyBalance": "{{balance}} left",
+    "loyaltyEarned": "+{{earned}} from this receipt"
   },
   "impulseSheet": {
     "title": "Impulse",

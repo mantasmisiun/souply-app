@@ -24,6 +24,9 @@ export interface BasketTemplate {
      *  public share page). null → fall back to a default tint. */
     coverColor: string | null;
     coverImage: TemplateCoverImage | null;
+    /** Set only on imported recipes — drives the "Open recipe" action. */
+    sourceUrl?: string | null;
+    sourceSite?: string | null;
     createdAt: string;
     updatedAt: string;
     /** Set only on content edits (name / cover / items); null = never edited.
@@ -51,6 +54,10 @@ export interface BasketTemplateItem {
     /** Derived from any chain's StoreProduct.isWeighable; signals the
      *  client to render the kg unit + decimal keyboard + 0.1 stepper. */
     isWeighable: 0 | 1;
+    /** Cupboard staple. The recipe keeps these for good — what changes trip to
+     *  trip is whether THIS basket needs them, so they are offered for removal
+     *  at basket creation and nowhere else. */
+    isPantry?: 0 | 1;
 }
 
 export interface BasketTemplateDetail extends BasketTemplate {
@@ -100,7 +107,16 @@ export async function createTemplate(opts: {
     autoUpdate?: boolean;
     coverColor?: string | null;
     coverImage?: TemplateCoverImage | null;
-    items?: { productId: number; quantity: number; unit?: string | null; sortOrder?: number }[];
+    items?: {
+        productId: number; quantity: number; unit?: string | null; sortOrder?: number;
+        /** Cupboard staple — the recipe keeps the grouping, and the keep-or-drop
+         *  choice happens when a basket is made, not when the recipe is saved. */
+        isPantry?: boolean;
+    }[];
+    /** Where an imported recipe was read from. The app stores the shopping list,
+     *  never the method, so this link is the only way back to the instructions. */
+    sourceUrl?: string | null;
+    sourceSite?: string | null;
 }): Promise<{ id: number; userId: string; name: string; itemCount: number }> {
     const res = await tfetch(`${API_BASE_URL}/api/basket-templates`, {
         method: 'POST',
@@ -135,24 +151,27 @@ export async function deleteTemplate(id: number): Promise<void> {
     await jsonOrThrow(await tfetch(`${API_BASE_URL}/api/basket-templates/${id}`, { method: 'DELETE' }));
 }
 
-/** Build (or rebuild) the auto "default" template from the caller's receipts.
- *  Throws on 409 (e.g. not enough receipts / no purchased products). */
-export async function buildDefaultTemplate(): Promise<BasketTemplateDetail> {
-    const res = await tfetch(`${API_BASE_URL}/api/basket-templates/default/build`, { method: 'POST' });
-    return jsonOrThrow(res);
-}
-
 /** Copy any owned template into a new editable (isDefault=0) template. */
 export async function duplicateTemplate(id: number): Promise<{ id: number; name: string; itemCount: number }> {
     const res = await tfetch(`${API_BASE_URL}/api/basket-templates/${id}/duplicate`, { method: 'POST' });
     return jsonOrThrow(res);
 }
 
-export async function instantiateTemplate(id: number, userId: string, opts: { force?: boolean } = {}): Promise<InstantiateResult> {
+export async function instantiateTemplate(
+    id: number,
+    userId: string,
+    opts: { force?: boolean; skipPantryProductIds?: number[] } = {},
+): Promise<InstantiateResult> {
     const res = await tfetch(`${API_BASE_URL}/api/basket-templates/${id}/instantiate`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, force: opts.force ?? false }),
+        body: JSON.stringify({
+            userId,
+            force: opts.force ?? false,
+            // Staples the shopper says they already have. The server ignores any
+            // id that is not a pantry row, so this can never empty a basket.
+            ...(opts.skipPantryProductIds?.length ? { skipPantryProductIds: opts.skipPantryProductIds } : {}),
+        }),
     });
     return jsonOrThrow(res);
 }
