@@ -81,6 +81,15 @@ export interface TripReceiptItem {
 }
 
 export interface TripReceipt {
+    /** Loyalty money moved by this receipt ("Nurašyta MAXIMOS pinigų 0,12").
+     *  `redeemed` was paid from an earned balance instead of cash, so it explains
+     *  a line sum that legitimately exceeds the printed total. */
+    loyalty?: {
+        program: string;
+        redeemed: number;
+        earned: number | null;
+        balance: number | null;
+    } | null;
     id: number;
     storeId: number | null;
     storeName: string | null;
@@ -332,3 +341,59 @@ export interface TripComparison {
 
 export const fetchTripComparison = async (tripId: number): Promise<TripComparison> =>
     jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/comparison`));
+
+/**
+ * TRIP-LEVEL comparison: your spend split by store, and the WHOLE basket priced
+ * at each nearby store as a single shop. Answers the question a split trip
+ * actually raises — "would one shop have been cheaper?" — which the per-receipt
+ * comparison above structurally cannot.
+ */
+export interface TripSpendSegment {
+    storeId: number;
+    storeName: string | null;
+    chainId: number | null;
+    chainName: string | null;
+    chainLogoUrl: string | null;
+    total: number;
+}
+export interface TripCandidateStore {
+    storeId: number;
+    storeName: string;
+    chainId: number;
+    chainName: string;
+    chainLogoUrl: string | null;
+    distanceKm: number;
+    total: number;
+    /** Items this store couldn't price, carried at what you paid. */
+    carriedItems: number;
+    visited: boolean;
+}
+export interface TripBasketComparison {
+    segments: TripSpendSegment[];
+    paidTotal: number;
+    candidates: TripCandidateStore[];
+    bestSingleTotal: number | null;
+    /** paidTotal − bestSingleTotal. Positive ⇒ splitting cost you that much. */
+    splitDelta: number | null;
+    unmatchedLineCount: number;
+    unmatchedLineTotal: number;
+    itemCount: number;
+}
+
+export const fetchTripBasketComparison = async (tripId: number): Promise<TripBasketComparison> =>
+    jsonOrThrow(await fetch(`${API_BASE_URL}/api/trips/${tripId}/basket-comparison`));
+
+/** Attach a receipt to a trip WITHOUT claiming a planned store slot. */
+export const attachReceiptToTripApi = async (tripId: number, receiptId: number): Promise<boolean> => {
+    const res = await fetch(`${API_BASE_URL}/api/trips/${tripId}/attach-receipt`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ receiptId }),
+    });
+    return res.ok;
+};
+
+/** Remove a receipt from a trip (owner, or uploader within the 7-day window). */
+export const detachReceiptFromTrip = async (tripId: number, receiptId: number): Promise<boolean> => {
+    const res = await fetch(`${API_BASE_URL}/api/trips/${tripId}/receipts/${receiptId}`, { method: 'DELETE' });
+    return res.ok;
+};

@@ -30,6 +30,8 @@ import { useTripSeenStore, isTripNew } from '../../../state/tripSeenStore';
 import { ChainLogoChip } from '../../../components/ChainLogoChip';
 import { ProgressGlow } from '../../../components/ProgressGlow';
 import { requestStoreResolution } from '../../../utils/storeResolution';
+import { chainNameById, chainBrandColorById } from '../../../utils/chainBrandName';
+import { linkReceiptToList } from '../../../services/receiptProcessingService';
 import { StoreResolutionOverlay } from '../../../components/receipt/StoreResolutionOverlay';
 import { Ionicons } from '@expo/vector-icons';
 import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
@@ -108,14 +110,32 @@ function ProcessingCard({ item, onResolveStore }: { item: QueueItem; onResolveSt
     // read. Ask for it here rather than defaulting to today — a receipt from last
     // week would otherwise land on the wrong day with no hint to the user.
     const needsDate = item.status === 'needs_date';
+    // PARKED because the receipt's chain isn't one of the trip's planned stores
+    // (planned Maxima + Lidl, shopped at IKI). Silently dropping the link is what
+    // made a perfectly parsed receipt vanish into its own ad-hoc trip.
+    const needsStoreChoice = item.status === 'needs_store';
+    // PARKED after saving: the receipt exists but never attached to its list.
+    const needsLink = item.status === 'needs_link';
+    const [linking, setLinking] = useState(false);
     const [showPicker, setShowPicker] = useState(false);
     const resolveDate = useReceiptQueueStore.getState().resolveDate;
+    const resolveStoreLink = useReceiptQueueStore.getState().resolveStoreLink;
+    const retryLink = useCallback(async () => {
+        if (item.linkReceiptId == null || item.linkListId == null) return;
+        setLinking(true);
+        const ok = await linkReceiptToList(item.linkListId, item.linkReceiptId);
+        setLinking(false);
+        // Success clears the card; failure leaves it so the user can try again.
+        if (ok) useReceiptQueueStore.getState().removeItem(item.id);
+    }, [item.id, item.linkReceiptId, item.linkListId]);
     // Recoverable store_unrecognized failure → offer the "Rasti parduotuvę" map.
     const needsStore = isError && item.errorReason === 'store_unrecognized' && item.storeChainId != null;
     const fraction = item.progressTotal && item.progressTotal > 0
         ? Math.max(0.05, Math.min(1, (item.progressDone ?? 0) / item.progressTotal))
         : 0.08;
     const title = needsDate ? t('receiptQueue.needsDateTitle')
+        : needsStoreChoice ? t('receiptQueue.needsStoreTitle')
+        : needsLink ? t('receiptQueue.linkFailedTitle')
         : isError ? (item.error || t('banners.receiptQueue.error'))
         : t('banners.receiptQueue.processing');
     const status = item.progress
@@ -134,9 +154,44 @@ function ProcessingCard({ item, onResolveStore }: { item: QueueItem; onResolveSt
                     <Text style={styles.processingTitle} numberOfLines={2}>{title}</Text>
                     {needsDate ? (
                         <Text style={styles.cardMeta} numberOfLines={2}>{t('receiptQueue.needsDate')}</Text>
+                    ) : needsStoreChoice ? (
+                        <>
+                            <Text style={styles.cardMeta} numberOfLines={3}>{t('receiptQueue.needsStore')}</Text>
+                            {chainNameById(item.linkDetectedChainId) != null && (
+                                <Text style={styles.cardMeta} numberOfLines={1}>
+                                    {t('receiptQueue.needsStoreDetected', { chain: chainNameById(item.linkDetectedChainId) })}
+                                </Text>
+                            )}
+                        </>
+                    ) : needsLink ? (
+                        <Text style={styles.cardMeta} numberOfLines={3}>{t('receiptQueue.linkFailed')}</Text>
                     ) : !isError && <Text style={styles.cardMeta} numberOfLines={1}>{status}</Text>}
                 </View>
-                {needsDate ? (
+                {needsStoreChoice ? (
+                    <TouchableOpacity
+                        onPress={() => useReceiptQueueStore.getState().removeItem(item.id)}
+                        hitSlop={8}
+                        accessibilityLabel={t('common.close')}
+                    >
+                        <Ionicons name="close" size={20} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                ) : needsLink ? (
+                    <View style={styles.cardActions}>
+                        <TouchableOpacity style={styles.resolveBtn} onPress={retryLink} disabled={linking} hitSlop={6}>
+                            {linking
+                                ? <MaterialProgress size="small" color={colors.onPrimary} />
+                                : <Ionicons name="link-outline" size={14} color={colors.onPrimary} />}
+                            <Text style={styles.resolveBtnText}>{t('receiptQueue.retryLink')}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={() => useReceiptQueueStore.getState().removeItem(item.id)}
+                            hitSlop={8}
+                            accessibilityLabel={t('common.close')}
+                        >
+                            <Ionicons name="close" size={20} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    </View>
+                ) : needsDate ? (
                     <View style={styles.cardActions}>
                         <TouchableOpacity style={styles.resolveBtn} onPress={() => setShowPicker(true)} hitSlop={6}>
                             <Ionicons name="calendar-outline" size={14} color={colors.onPrimary} />
@@ -170,7 +225,38 @@ function ProcessingCard({ item, onResolveStore }: { item: QueueItem; onResolveSt
                     <MaterialProgress size="small" color={colors.primary} />
                 )}
             </View>
-            {!isError && !needsDate && <ProgressGlow edge="bottom" fraction={fraction} color={colors.primary} />}
+            {/* One button per PLANNED store of the trip this receipt was uploaded
+                for, plus the explicit opt-out. Picking a store fulfils that slot
+                (what the interactive scan's chain-gate override does); "keep
+                separate" is today's ad-hoc behaviour, now a choice, not a silent
+                default. */}
+            {needsStoreChoice && (
+                <View style={styles.linkChoices}>
+                    {(item.linkOptions ?? []).map(o => (
+                        <TouchableOpacity
+                            key={o.listId}
+                            style={styles.linkChoiceBtn}
+                            onPress={() => resolveStoreLink(item.id, o.listId)}
+                            hitSlop={6}
+                        >
+                            <View style={[styles.linkChoiceDot, { backgroundColor: chainBrandColorById(o.chainId) }]} />
+                            <Text style={styles.linkChoiceText} numberOfLines={1}>
+                                {chainNameById(o.chainId) ?? t('common.store')}
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity
+                        style={[styles.linkChoiceBtn, styles.linkChoiceGhost]}
+                        onPress={() => resolveStoreLink(item.id, null)}
+                        hitSlop={6}
+                    >
+                        <Text style={[styles.linkChoiceText, { color: colors.textSecondary }]} numberOfLines={1}>
+                            {t('receiptQueue.keepSeparate')}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+            {!isError && !needsDate && !needsStoreChoice && !needsLink && <ProgressGlow edge="bottom" fraction={fraction} color={colors.primary} />}
             {showPicker && (
                 <DateTimePicker
                     value={new Date()}
@@ -221,9 +307,14 @@ export default function TripsScreen() {
     const markTripOpened = useTripSeenStore(s => s.markOpened);
     useEffect(() => { void useTripSeenStore.getState().initialize(); }, []);
     useEffect(() => { void queueInitialize(); }, [queueInitialize]);
+    // PARKED statuses belong here too: a park is a QUESTION, and this is the
+    // screen the user lands on. Without them an item waiting for a date / a store
+    // choice / a link retry had no card at all outside the trip screen — it just
+    // sat in the queue, invisible, which is indistinguishable from a silent fail.
     const processingItems = useMemo(
         () => queueItems.filter(i => i.status === 'processing' || i.status === 'pending'
-            || i.status === 'awaiting_network' || i.status === 'error'),
+            || i.status === 'awaiting_network' || i.status === 'error'
+            || i.status === 'needs_date' || i.status === 'needs_store' || i.status === 'needs_link'),
         [queueItems]);
 
     // Store-unrecognized error → open the chain-scoped store map; on pick, drop the
@@ -610,6 +701,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     cardActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
     resolveBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 7 },
     resolveBtnText: { fontSize: 13, fontWeight: '800', color: c.onPrimary },
+    // needs_store: one pill per planned store of the trip + the "keep separate" opt-out.
+    linkChoices: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingTop: 10 },
+    linkChoiceBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border, backgroundColor: c.surfaceMuted, paddingHorizontal: 12, paddingVertical: 7 },
+    linkChoiceGhost: { backgroundColor: 'transparent' },
+    linkChoiceDot: { width: 8, height: 8, borderRadius: 4 },
+    linkChoiceText: { fontSize: 13, fontWeight: '700', color: c.textPrimary },
     // `stretch` gives the date column the full content height to centre within.
     cardMain: { flexDirection: 'row', alignItems: 'stretch', gap: 10 },
     calCol: { justifyContent: 'center' },
