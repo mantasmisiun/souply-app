@@ -1,5 +1,5 @@
 import React, { createContext, useCallback, useEffect, useMemo, useRef, type ReactNode } from 'react';
-import { StyleSheet, View, Pressable, Dimensions, BackHandler } from 'react-native';
+import { StyleSheet, View, Pressable, Dimensions, BackHandler, Platform } from 'react-native';
 import { Gesture, GestureDetector, ScrollView as GHScrollView, State } from 'react-native-gesture-handler';
 import Animated, {
     runOnJS, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
@@ -34,6 +34,16 @@ import { concentricRadius } from '../utils/displayCorners';
 /** True once the sheet has finished its open animation — content (e.g. bars) reads
  *  this to start its own animation AFTER the sheet settles, avoiding stutter. */
 export const SheetOpenedContext = createContext<SharedValue<boolean> | null>(null);
+
+/** Lets sheet CONTENT request the animated dismiss (an in-sheet X, a "Done"
+ *  action). Calling the host's onClose directly would unmount the sheet mid-air
+ *  and skip its slide-out — this runs the same path as backdrop / drag / back. */
+export const SheetDismissContext = createContext<(() => void) | null>(null);
+
+/** The dismiss for the sheet this component is rendered inside (null outside one). */
+export function useSheetDismiss(): (() => void) | null {
+    return React.useContext(SheetDismissContext);
+}
 
 const SCREEN_H = Dimensions.get('window').height;
 const SNAP_SPRING = { damping: 30, stiffness: 280, mass: 0.9, overshootClamping: true } as const;
@@ -238,6 +248,11 @@ export function GlassSheet({
                         contentContainerStyle={{ paddingBottom: autoHeight ? 0 : insets.bottom + spacing.xl }}
                         scrollEnabled={scrollOn}
                         showsVerticalScrollIndicator={scrollOn}
+                        // A sheet with a text field (the recipe-URL sheet) would
+                        // otherwise lose the first tap on its paste/submit buttons:
+                        // the default 'never' makes THIS scroll swallow any tap that
+                        // dismisses the keyboard, before the child ever sees it.
+                        keyboardShouldPersistTaps="handled"
                         onScroll={onScroll}
                         scrollEventThrottle={16}
                         bounces={false}
@@ -245,9 +260,11 @@ export function GlassSheet({
                     >
                         <SheetSolidContext.Provider value={solidP}>
                             <SheetOpenedContext.Provider value={opened}>
+                              <SheetDismissContext.Provider value={dismiss}>
                                 <View onLayout={autoHeight ? (e => setContentH(e.nativeEvent.layout.height)) : undefined}>
                                     {children}
                                 </View>
+                              </SheetDismissContext.Provider>
                             </SheetOpenedContext.Provider>
                         </SheetSolidContext.Provider>
                     </AnimatedScroll>
@@ -267,7 +284,10 @@ const makeStyles = (c: AppTheme, isDark: boolean) => {
             overflow: 'hidden',
             ...glass.clipEdge,
             shadowOpacity: isDark ? GLASS_SHADOW_OPACITY.dark : GLASS_SHADOW_OPACITY.light,
-            elevation: 3,
+            // Android: 0 — see DockedGlassSheet's shadowStyle. An elevation
+            // shadow under a translucent, overflow-hidden clip washes grey
+            // inward from the edges now that Android has no live blur.
+            elevation: Platform.OS === 'android' ? 0 : 3,
         },
         glassFill: glass.glassFill,
         tint: glass.tint,

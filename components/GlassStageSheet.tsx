@@ -473,6 +473,9 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     // DISCOVERABILITY PULSE: while collapsed (stage 0) an expandable sheet's pill
     // glows pink and flashes on a ~2.7s cadence (grow + brighten, then a long
     // hold) so users notice it lifts. Stops the instant the sheet leaves stage 0.
+    // FINITE — 4 cycles, not withRepeat(-1): an infinite repeat kept idle screens
+    // animating forever (perf audit finding 3; same cap as DockedGlassSheet).
+    // Each return to stage 0 re-arms a fresh hint; the sequence ends at 0.
     const pillHinting = pulseHint && expandable && safeStage === 0;
     useEffect(() => {
         pillPulse.value = pillHinting
@@ -480,7 +483,7 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
                 withTiming(1, { duration: 460 }),
                 withTiming(0, { duration: 460 }),
                 withDelay(1800, withTiming(0, { duration: 0 })),
-            ), -1, false)
+            ), 4, false)
             : withTiming(0, { duration: 200 });
     }, [pillHinting, pillPulse]);
     const pillStyle = useAnimatedStyle(() => ({
@@ -537,15 +540,18 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
             glassFrameStyle]}>
                 {flushBottom && Platform.OS === 'android' ? (
                     // Merge mode: replicate the floating tab bar's EXACT glass
-                    // recipe (real blur + 0.6 surface tint) so sheet and bar
-                    // are indistinguishable where they meet — the default
-                    // near-opaque Android frame reads as a different material.
+                    // recipe so sheet and bar are indistinguishable where they
+                    // meet — the default near-opaque Android frame reads as a
+                    // different material. The bar dropped its LIVE Android blur
+                    // (perf audit finding 3 — dimezis re-renders the sibling
+                    // hierarchy in software per invalidation), so this matches
+                    // its new recipe: expo-blur's cheap translucent fallback
+                    // (no experimentalBlurMethod) + the 0.8 surface tint.
                     <>
                         <BlurView
                             pointerEvents="none"
                             intensity={isDark ? 40 : 55}
                             tint={isDark ? 'dark' : 'light'}
-                            experimentalBlurMethod="dimezisBlurView"
                             style={StyleSheet.absoluteFillObject}
                         />
                         <View

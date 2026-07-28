@@ -1,5 +1,5 @@
 import React, {
-    createContext, forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState,
+    createContext, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState,
     type ReactNode,
 } from 'react';
 import type { SharedValue } from 'react-native-reanimated';
@@ -11,7 +11,7 @@ import {
     Gesture, GestureDetector, ScrollView as GHScrollView, State,
 } from 'react-native-gesture-handler';
 import Animated, {
-    interpolateColor, runOnJS, useAnimatedScrollHandler, useAnimatedStyle,
+    Easing, interpolate, interpolateColor, runOnJS, useAnimatedScrollHandler, useAnimatedStyle,
     useDerivedValue, useSharedValue, withDelay, withRepeat, withSequence, withSpring,
     withTiming, useAnimatedReaction,
 } from 'react-native-reanimated';
@@ -72,6 +72,10 @@ const BAR_CONTENT_W = SCREEN_W - 2 * COLLAPSED_MARGIN;
 const PILL_W = 40;
 const PILL_H = 5;
 const SNAP_SPRING = { damping: 30, stiffness: 280, mass: 0.9, overshootClamping: true } as const;
+// In-sheet pane swap slide — matches the ShoppingSheet pager and the dock's
+// original Actions ↔ Location page slide (withTiming 280ms), so pane
+// navigation keeps that exact feel everywhere.
+const PANE_SLIDE_MS = 280;
 
 const AnimatedScroll = Animated.createAnimatedComponent(GHScrollView);
 
@@ -84,7 +88,15 @@ function clamp(v: number, lo: number, hi: number) {
  *  read as glass. Rendered identically by the full-width panel and the compact
  *  bar so both share ONE recipe (a copied set of constants always drifts). The
  *  rim/solid decoration layers stay with each caller (the panel animates them;
- *  compact keeps them static). */
+ *  compact keeps them static).
+ *
+ *  ANDROID: NO live blur (perf audit finding 3). This fill IS the tab bar —
+ *  mounted on every tab route — and `dimezisBlurView` re-renders the sibling
+ *  hierarchy in software on every window invalidation (continuously, over a
+ *  live MapView or any animation). Without the prop, expo-blur falls back to
+ *  its cheap translucent approximation, and the 0.62 tint layer on top keeps
+ *  the frosted look — the same degrade LiquidGlass/GlassButton already use.
+ *  iOS keeps the real native blur (the prop is Android-only there anyway). */
 export function GlassFill({ isDark, style }: { isDark: boolean; style: any }) {
     return (
         <>
@@ -92,7 +104,7 @@ export function GlassFill({ isDark, style }: { isDark: boolean; style: any }) {
                 pointerEvents="none"
                 intensity={30}
                 tint={isDark ? 'dark' : 'light'}
-                experimentalBlurMethod="dimezisBlurView"
+                experimentalBlurMethod={Platform.OS === 'android' ? undefined : 'dimezisBlurView'}
                 style={style.glassFill}
             />
             <View pointerEvents="none" style={[style.glassFill, style.tint]} />
@@ -122,7 +134,17 @@ export function makeGlassLayerStyles(c: AppTheme, isDark: boolean) {
             ...StyleSheet.absoluteFillObject,
             backgroundColor: Platform.OS === 'android' ? undefined : 'transparent',
         },
-        tint: { backgroundColor: withAlpha(isDark ? c.surfaceContainer : '#FFFFFF', 0.62) },
+        // 0.62 was calibrated to sit ON TOP OF a real blur. Android no longer
+        // has one (perf audit finding 3), so the tint is now the ONLY thing
+        // frosting the surface — at 0.62 the content behind reads straight
+        // through, sharp. Android therefore carries the opacity the blur used
+        // to contribute; iOS keeps the original recipe over its native blur.
+        tint: {
+            backgroundColor: withAlpha(
+                isDark ? c.surfaceContainer : '#FFFFFF',
+                Platform.OS === 'android' ? (isDark ? 0.90 : 0.93) : 0.62,
+            ),
+        },
         solid: { backgroundColor: c.sheetSurface },
         rim: {
             ...StyleSheet.absoluteFillObject,
@@ -152,8 +174,63 @@ export interface DockedSheetControls {
     toggle(): void;
 }
 
-interface SheetSpec {
+/** A sub-pane shown IN PLACE of the sheet's root content — see SheetSpec.pane. */
+export interface SheetPaneSpec {
+    /** Stable name for this pane ('invite', 'share') — a change of key is what
+     *  triggers the page slide, so never regenerate it per render. */
+    key: string;
+    /** The pane's OWN bar row (typically "‹ back · icon · title"). While the
+     *  pane is open it REPLACES the host's action bar row — the sheet's top
+     *  row must read as the pane's title, never as the root actions with a
+     *  second header floating below them. A pane's row is a page HEADER, so it
+     *  is ALWAYS pinned to the sheet's TOP — on a barAtTop host that is the
+     *  root row's own box; on a bottom-bar host (the tab dock) it takes the
+     *  top slot while the root row keeps the bottom one. It shares the root
+     *  row's measured height (`barRowHeight`), so keep it no taller than the
+     *  root bar — the detents never move on a swap. Required: a pane without
+     *  its own top row is the two-headers bug. */
+    barRow: ReactNode;
+    /** The pane's body, shown in place of the root `content`. It gets the full
+     *  detent viewport to lay out in (the scroll content is stretched to the
+     *  sheet height), so a short pane still owns the whole open sheet. */
     content: ReactNode;
+    /** Called whenever the sheet collapses to stage 0 while this pane is open
+     *  — clear the host's pane state here (setSharePane(false)). The sheet
+     *  fires it on EVERY collapse path (drag, pill tap, imperative
+     *  collapse()), which is what guarantees a re-opened sheet can never show
+     *  a stale pane; hosts must not re-implement this in onStageChange. */
+    onDismiss: () => void;
+}
+
+interface SheetSpec {
+    /** The sheet's ROOT view — always the root, even while a pane is open;
+     *  the sheet (not the host) decides which of the two is showing. */
+    content: ReactNode;
+    /**
+     * IN-SHEET PANE NAVIGATION — a sub-page the sheet shows in place of its
+     * root `content` (the map dock's Pakviesti, the recipe dock's Dalintis).
+     * Hand the open pane's spec here (null = root showing) and the sheet owns
+     * the whole exchange:
+     *
+     *   · the swap ANIMATES as the dock's page slide (in from the right going
+     *     deeper, from the left coming back) — the ShoppingSheet pager's
+     *     manual translate, NOT reanimated entering/exiting layout
+     *     animations: those ran inside this sheet's animated-height
+     *     ScrollView, where layout animations misbehave on Fabric (the share
+     *     pane's capped-detent bug), and a snapped swap reads as a different
+     *     component;
+     *   · the BAR ROW swaps in the same slide — the pane brings its own top
+     *     row (`barRow`), replacing the action row while it is open;
+     *   · collapsing to stage 0 calls `onDismiss` on every path, so the pane
+     *     can never be stale on the next open;
+     *   · the content scroll resets to the top on each swap.
+     *
+     * (The previous contract had hosts flip `content` in lock-step with a
+     * string key; the two drifting apart — or the bar row being forgotten —
+     * was an easy bug to write, so this shape makes it unrepresentable. A
+     * future pane host supplies one object and gets all of the above free.)
+     */
+    pane?: SheetPaneSpec | null;
     /** How far the sheet may open: 1 = medium only, 2 = full. Default 2. */
     /**
      * How far the sheet may open:
@@ -266,7 +343,11 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     const collapsedH = barRowHeight + 2 * peek;
     const mediumH = Math.max(Math.round(SCREEN_H * MEDIUM_FRACTION), collapsedH + 160);
     // Full is edge-to-edge (clip bottom → 0), spanning up to just under the
-    // status bar.
+    // status bar. ONE rule, no per-host variant: every dock host hides the
+    // native nav bar and draws its own in-screen chrome (CollapsingHeader's
+    // custom bar, the map's floating chips), which the expanded sheet
+    // legitimately covers (see wrap's zIndex note). A screen wanting a real
+    // native header can't host this sheet — the navigator owns that strip.
     const fullH = SCREEN_H - insets.top;
 
     // Distance from the screen bottom to the TOP of the (screen-fixed) bar row.
@@ -306,10 +387,117 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         onOcclusion(Math.round(COLLAPSED_MARGIN * (1 - prog) + height));
     }, [stage, snaps, onOcclusion]);
 
+    // ── In-sheet pane pager (SheetSpec.pane) ──────────────────────────────────
+    // The ShoppingSheet pager, promoted into the sheet: the incoming page sits
+    // in normal layout and slides to rest, the outgoing page is a frozen
+    // snapshot absolutely stacked on top sliding away, removed when the tween
+    // lands. All manual translate on a shared value — NO reanimated
+    // entering/exiting layout animations, which are unreliable inside this
+    // animated-height ScrollView on Fabric (they were the pane path's only
+    // divergence from the root path, and the share pane misbehaved for it).
+    const paneSpec = sheet?.pane ?? null;
+    const paneKey = paneSpec?.key ?? null;
+    /** Pane machinery in use at all (even when showing the root). */
+    const paneEnabled = hasSheet && sheet!.pane !== undefined;
+    // What the sheet is currently showing — the pane owns BOTH slots at once
+    // (its own bar row replaces the action row; see SheetPaneSpec.barRow).
+    const shownContent = paneSpec ? paneSpec.content : sheet?.content;
+    const shownBarRow = paneSpec ? paneSpec.barRow : barRow;
+    // Latest pane spec for the collapse hook below — a ref so setStageJS need
+    // not rebuild (and re-wire the pan) every time the host re-renders.
+    const paneRef = useRef(paneSpec);
+    paneRef.current = paneSpec;
+    const prevPaneKeyRef = useRef(paneKey);
+    // Previous render's slots — the outgoing snapshot when a swap starts.
+    const lastShownRef = useRef({ content: shownContent, barRow: shownBarRow });
+    const paneSeqRef = useRef(0);
+    const [paneTransition, setPaneTransition] = useState<{
+        content: ReactNode; barRow: ReactNode; dir: 1 | -1; seq: number;
+    } | null>(null);
+    const paneSlide = useSharedValue(1);  // 1 = settled
+    const paneDir = useSharedValue(1);    // +1 forward (in from right), -1 back
+    if (paneKey !== prevPaneKeyRef.current) {
+        // Render-phase state adjustment (the sanctioned React pattern) — the
+        // outgoing snapshot must be LAST render's nodes, which only exist
+        // here. Shared values are NOT written during render (that warns); the
+        // effect below starts the tween. A swap while the sheet is collapsed
+        // (the auto-dismiss on collapse) applies instantly instead — the
+        // content is invisible at stage 0, and the next open must show the
+        // root at rest, not mid-slide.
+        prevPaneKeyRef.current = paneKey;
+        if (stageRef.current > 0) {
+            paneSeqRef.current += 1;
+            setPaneTransition({
+                ...lastShownRef.current,
+                dir: paneKey != null ? 1 : -1,
+                seq: paneSeqRef.current,
+            });
+        }
+    }
+    lastShownRef.current = { content: shownContent, barRow: shownBarRow };
+    const endPaneTransition = useCallback((seq: number) => {
+        // Seq guard: a swap during a swap starts a NEWER transition whose own
+        // completion must be the one that clears it.
+        setPaneTransition(cur => (cur && cur.seq === seq ? null : cur));
+    }, []);
+    // LAYOUT effect, deliberately: it runs in the same commit that swaps the
+    // page nodes in, so the slide's start value is queued to the UI thread
+    // before the frame that mounts the incoming page — a plain effect let
+    // that page paint one settled frame at rest, then jump offscreen and
+    // slide (the ShoppingSheet pager starts its tween in the same task as
+    // its setState for exactly this reason). Shared values are written here,
+    // never in render — that warns.
+    useLayoutEffect(() => {
+        if (!paneTransition) return;
+        paneDir.value = paneTransition.dir;
+        paneSlide.value = 0;
+        const seq = paneTransition.seq;
+        paneSlide.value = withTiming(1, { duration: PANE_SLIDE_MS, easing: Easing.out(Easing.cubic) }, (finished) => {
+            if (finished) runOnJS(endPaneTransition)(seq);
+        });
+        // Each page starts at its own top — a pane must never inherit the
+        // root's scroll offset (or vice versa on the way back).
+        scrollRef.current?.scrollTo?.({ y: 0, animated: false });
+    }, [paneTransition, paneDir, paneSlide, endPaneTransition]);
+    const paneInStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: interpolate(paneSlide.value, [0, 1], [paneDir.value * SCREEN_W, 0]) }],
+    }));
+    const paneOutStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: interpolate(paneSlide.value, [0, 1], [0, -paneDir.value * SCREEN_W]) }],
+    }));
+    // A pane's bar row is a page HEADER — it pins to the sheet's TOP even when
+    // the host's root bar row is a bottom bar (the tab dock). Every earlier
+    // pane host happened to be a `barAtTop` sheet, so the pane bar landing in
+    // the root row's (bottom) slot went unseen until the tab dock hosted a
+    // pane and its "‹ title" row rendered BELOW the pane body. paneTopP
+    // (0 root → 1 pane) morphs the CONTENT region between the two geometries
+    // in step with the page slide; it stays 0 for pane-less sheets, and
+    // barAtTop hosts never read it (their content is below the top bar in
+    // both states already).
+    const paneShowing = paneSpec != null;
+    const paneTopP = useSharedValue(paneShowing ? 1 : 0);
+    // LAYOUT effect for the same reason the page slide uses one: the morph
+    // must be queued in the commit that swaps the rows, or the new page paints
+    // one settled frame in the OLD geometry before the tween starts.
+    useLayoutEffect(() => {
+        // Collapsed swaps are INSTANT, matching the pager's instant swap at
+        // stage 0 — the next open must start at rest, not mid-morph.
+        paneTopP.value = stageRef.current > 0
+            ? withTiming(paneShowing ? 1 : 0, { duration: PANE_SLIDE_MS, easing: Easing.out(Easing.cubic) })
+            : (paneShowing ? 1 : 0);
+    }, [paneShowing, paneTopP]);
+
     // DISCOVERABILITY PULSE: while the sheet sits COLLAPSED (stage 0) the grabber
     // pill glows pink (colors.primary) and flashes on a ~2.7s cadence — a grow +
     // brighten, then a long hold — so users notice the bar lifts. Stops the moment
     // the sheet leaves stage 0 (and never runs on a sheet-less bar).
+    //
+    // FINITE (perf audit finding 3): a small number of cycles, not withRepeat(-1)
+    // — an infinite repeat kept the UI thread (and, before the Android blur was
+    // dropped, a software re-blur) busy FOREVER on idle screens. Each return to
+    // stage 0 re-arms a fresh finite hint, and the sequence ends at 0 so the
+    // pill settles to its plain look. First interaction (leaving stage 0) still
+    // cancels it immediately via the else-branch timing.
     const pillPulse = useSharedValue(0);
     const pillHinting = hasSheet && stage === 0;
     useEffect(() => {
@@ -318,7 +506,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                 withTiming(1, { duration: 460 }),
                 withTiming(0, { duration: 460 }),
                 withDelay(1800, withTiming(0, { duration: 0 })),
-            ), -1, false)
+            ), 4, false)
             : withTiming(0, { duration: 200 });
     }, [pillHinting, pillPulse]);
     const pillPulseStyle = useAnimatedStyle(() => ({
@@ -332,6 +520,13 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         stageRef.current = s;
         setStageState(s);
         onStageChange?.(s);
+        // Collapsing CLOSES any open pane (SheetPaneSpec.onDismiss). This is
+        // the component's guarantee, not the host's: every path to stage 0
+        // (drag snap, pill tap, imperative collapse) funnels through here, so
+        // a re-opened sheet always starts on the root — the collapsed bar
+        // gives no hint a pane is open, and a stale one would be a mystery
+        // screen. Fired after onStageChange so hosts observe the stage first.
+        if (s === 0) paneRef.current?.onDismiss();
     }, [onStageChange]);
     const setActiveJS = useCallback((a: boolean) => {
         draggingRef.current = a;
@@ -555,6 +750,19 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         top: peek + barRowHeight, bottom: 0,
         opacity: clamp(p.value * 6, 0, 1),
     }));
+    // Content region for a BOTTOM-BAR pane host: at the root it is the classic
+    // reveal box (below the pill, above the bottom bar); while a pane is open
+    // it becomes the barAtTop box — below the pane's TOP header, down to the
+    // sheet's bottom edge (the root bar is gone with the pane open, so nothing
+    // reserves the bottom strip). paneTopP tweens the two in step with the
+    // page slide. At paneTopP = 0 this is EXACTLY the pre-pane geometry.
+    const contentPaneAwareStyle = useAnimatedStyle(() => {
+        const rootBottom = barRowHeight + 2 * peek + COLLAPSED_MARGIN * dockP.value;
+        return {
+            top: peek + paneTopP.value * barRowHeight,
+            bottom: rootBottom * (1 - paneTopP.value),
+        };
+    });
     // Scroll fade under the title (barAtTop, full detent): items gradually fade
     // as they slide beneath the title row. Only meaningful once the sheet is
     // solid and actually scrolled (scroll is enabled at full only). Same edge
@@ -568,9 +776,16 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     // clip style). A `progressiveShadow` panel casts NOTHING while collapsed (the
     // dock behind it already does) and fades its own shadow in as it expands;
     // every other panel keeps a constant barely-there shadow.
+    // ANDROID: no `elevation`. An elevation shadow is painted BENEATH the view,
+    // and this clip is `overflow:'hidden'` with a TRANSLUCENT fill — so the
+    // shadow shows through the surface as a grey wash running inward from every
+    // edge. The real blur used to hide it; without one it reads as a grey inner
+    // border. The hairline clipEdge still defines the shape on Android.
     const shadowStyle = useAnimatedStyle(() => {
         const k = progressiveShadow ? p.value : 1;
-        return { shadowOpacity: (isDark ? 0.18 : 0.07) * k, elevation: 3 * k };
+        return Platform.OS === 'android'
+            ? { shadowOpacity: 0, elevation: 0 }
+            : { shadowOpacity: (isDark ? 0.18 : 0.07) * k, elevation: 3 * k };
     });
     const solidStyle = useAnimatedStyle(() => ({ opacity: solidP.value }));
     // Top rim highlight is part of the edge decoration — fades out with the border.
@@ -578,7 +793,10 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     const sepStyle = useAnimatedStyle(() => {
         const sn = snapsSV.value;
         const lo = sn[0], hi = sn[sn.length - 1];
-        return { opacity: hi > lo ? clamp((h.value - lo) / Math.min(70, hi - lo), 0, 1) : 0 };
+        const base = hi > lo ? clamp((h.value - lo) / Math.min(70, hi - lo), 0, 1) : 0;
+        // The separator belongs to the root's BOTTOM bar — while a pane's top
+        // header owns the sheet it fades out with the root row.
+        return { opacity: base * (1 - paneTopP.value) };
     });
 
     const onExpandTap = useCallback(() => {
@@ -644,13 +862,27 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                 barAtTop: revealed BELOW the top title bar. Scrolls only at full. */}
             {hasSheet && (
                 <Animated.View
-                    style={[styles.contentClip, barAtTop ? contentBelowStyle : [{ top: peek }, barTopStyle]]}
+                    style={[styles.contentClip, barAtTop
+                        ? contentBelowStyle
+                        // A bottom-bar PANE host morphs between the root box and
+                        // the pane's below-the-header box; pane-less hosts keep
+                        // the exact static pair (contentPaneAwareStyle equals it
+                        // at paneTopP = 0, but stays off their render path).
+                        : paneEnabled ? contentPaneAwareStyle : [{ top: peek }, barTopStyle]]}
                     pointerEvents="box-none"
                 >
                     <AnimatedScroll
                         ref={scrollRef}
                         style={StyleSheet.absoluteFill}
-                        contentContainerStyle={sheet!.contentContainerStyle}
+                        // A pane host's scroll content is STRETCHED to the
+                        // viewport (flexGrow) so the showing page always spans
+                        // the sheet's full detent — a pane shorter than the
+                        // viewport must still own the whole open sheet, not
+                        // end mid-air at its content's height. Hosts without
+                        // panes keep their exact previous layout.
+                        contentContainerStyle={paneEnabled
+                            ? [styles.paneGrow, sheet!.contentContainerStyle]
+                            : sheet!.contentContainerStyle}
                         scrollEnabled={scrollEnabled}
                         showsVerticalScrollIndicator={scrollEnabled}
                         onScroll={onScroll}
@@ -659,7 +891,27 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                         overScrollMode="never"
                     >
                         <SheetSolidContext.Provider value={solidP}>
-                            {sheet!.content}
+                            {paneEnabled ? (
+                                /* Pane pager (see SheetSpec.pane): the showing
+                                   page slides to rest; during a swap the
+                                   previous page is a frozen snapshot stacked
+                                   absolutely on top, sliding out the other
+                                   way. The sheet's own clip bounds the slide,
+                                   so no extra overflow wrapper is needed. */
+                                <View style={styles.paneGrow}>
+                                    <Animated.View style={[styles.paneGrow, paneInStyle]}>
+                                        {shownContent}
+                                    </Animated.View>
+                                    {paneTransition && (
+                                        <Animated.View
+                                            style={[styles.paneOutgoing, paneOutStyle]}
+                                            pointerEvents="none"
+                                        >
+                                            {paneTransition.content}
+                                        </Animated.View>
+                                    )}
+                                </View>
+                            ) : sheet!.content}
                         </SheetSolidContext.Provider>
                     </AnimatedScroll>
                 </Animated.View>
@@ -688,14 +940,70 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
             {/* BAR ROW — held to a fixed centred box so the content never shifts
                 as the glass widens/raises or the pill toggles. Default: pinned at
                 the bottom. barAtTop: pinned near the top, rising with the sheet as
-                a title. */}
-            <Animated.View
-                style={[styles.barRow, { height: barRowHeight }, barAtTop ? barRowTopStyle : barRowStyle]}
-                onLayout={(e: LayoutChangeEvent) => onBarHeight?.(e.nativeEvent.layout.height)}
-                pointerEvents="box-none"
-            >
-                {barRow}
-            </Animated.View>
+                a title. A pane host's row rides the SAME pager slide as the
+                content (an open pane OWNS the top row — SheetPaneSpec.barRow),
+                so bar and body move as one page. */}
+            {(barAtTop || !paneEnabled) ? (
+                <Animated.View
+                    style={[styles.barRow, { height: barRowHeight }, barAtTop ? barRowTopStyle : barRowStyle]}
+                    onLayout={(e: LayoutChangeEvent) => onBarHeight?.(e.nativeEvent.layout.height)}
+                    pointerEvents="box-none"
+                >
+                    {paneEnabled ? (
+                        <>
+                            <Animated.View style={paneInStyle}>{shownBarRow}</Animated.View>
+                            {paneTransition && (
+                                <Animated.View
+                                    style={[styles.paneBarOutgoing, paneOutStyle]}
+                                    pointerEvents="none"
+                                >
+                                    {paneTransition.barRow}
+                                </Animated.View>
+                            )}
+                        </>
+                    ) : barRow}
+                </Animated.View>
+            ) : (
+                /* BOTTOM-BAR pane host: the two rows live in DIFFERENT slots.
+                   The ROOT row keeps the bottom bar box; the PANE row is a page
+                   header pinned to the sheet's top (barRowTopStyle — the same
+                   box a barAtTop title uses). Each still rides the pager slide
+                   in its own slot, so bar and body move as one page and the
+                   pane's "‹ title" can never render below its body. */
+                <>
+                    <Animated.View
+                        style={[styles.barRow, { height: barRowHeight }, barRowStyle]}
+                        onLayout={(e: LayoutChangeEvent) => onBarHeight?.(e.nativeEvent.layout.height)}
+                        pointerEvents="box-none"
+                    >
+                        {paneSpec == null && <Animated.View style={paneInStyle}>{shownBarRow}</Animated.View>}
+                        {paneTransition?.dir === 1 && (
+                            <Animated.View
+                                style={[styles.paneBarOutgoing, paneOutStyle]}
+                                pointerEvents="none"
+                            >
+                                {paneTransition.barRow}
+                            </Animated.View>
+                        )}
+                    </Animated.View>
+                    {(paneSpec != null || paneTransition?.dir === -1) && (
+                        <Animated.View
+                            style={[styles.barRow, { height: barRowHeight }, barRowTopStyle]}
+                            pointerEvents="box-none"
+                        >
+                            {paneSpec != null && <Animated.View style={paneInStyle}>{shownBarRow}</Animated.View>}
+                            {paneTransition?.dir === -1 && (
+                                <Animated.View
+                                    style={[styles.paneBarOutgoing, paneOutStyle]}
+                                    pointerEvents="none"
+                                >
+                                    {paneTransition.barRow}
+                                </Animated.View>
+                            )}
+                        </Animated.View>
+                    )}
+                </>
+            )}
 
             {/* Grabber pill — rides the clip's top edge. */}
             {hasSheet && (
@@ -748,7 +1056,7 @@ const makeStyles = (c: AppTheme, isDark: boolean) => {
     // row); left/bottom/shadowOpacity are applied inline. `elevation` is static
     // here (the full-width clip animates it via shadowStyle). Height = row + 2·PEEK
     // = the full-width dock's collapsed height, so the two bars stand the same tall.
-    clipCompact: { elevation: 3 },
+    clipCompact: { elevation: Platform.OS === 'android' ? 0 : 3 },
     barRowCompact: { padding: PEEK },
     // Glass fill / tint / solid / rim — the shared frosted-glass layers.
     glassFill: glass.glassFill,
@@ -756,6 +1064,18 @@ const makeStyles = (c: AppTheme, isDark: boolean) => {
     solid: glass.solid,
     rim: glass.rim,
     contentClip: { position: 'absolute', left: 0, right: 0, overflow: 'hidden' },
+    // Pane pager (SheetSpec.pane): the stack and the showing page stretch to
+    // the scroll viewport (paired with the flexGrow contentContainerStyle) so
+    // the visible page always spans the full detent; the outgoing snapshot is
+    // stacked absolutely and keeps its own height for the 280ms slide-away.
+    paneGrow: { flexGrow: 1 },
+    paneOutgoing: { position: 'absolute', top: 0, left: 0, right: 0 },
+    // Outgoing BAR row snapshot: fills the fixed bar box, centred like the
+    // live row (the box's own justifyContent only centres direct children).
+    paneBarOutgoing: {
+        position: 'absolute', top: 0, bottom: 0, left: 0, right: 0,
+        justifyContent: 'center',
+    },
     // Height of the under-title scroll fade (barAtTop mode).
     topFade: { position: 'absolute', height: 32 },
     // The BAR separator (bar ↔ sheet content) — whisper-thin, subtle.
