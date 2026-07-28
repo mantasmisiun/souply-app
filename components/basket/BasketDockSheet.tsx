@@ -71,6 +71,21 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const hasSheet = (onSurface && !sessionActive && dormant != null) || onShoppingRoot || onTemplatesRoot;
 
     const controls = useRef<DockedSheetControls | null>(null);
+
+    // Switching TABS collapses the sheet back to the bar. The dock is one
+    // persistent component shared by every tab, so a sheet raised on Katalogas
+    // stayed raised over Apsipirkimai — content from the tab you left, hanging
+    // over the tab you arrived at. Keyed on the tab SEGMENT, not the pathname,
+    // so navigating within a tab (catalog → category → product) leaves a raised
+    // sheet alone; only crossing tabs closes it.
+    const tabKey = pathname.split('/')[1] ?? '';
+    const prevTabKey = useRef(tabKey);
+    useEffect(() => {
+        if (prevTabKey.current === tabKey) return;
+        prevTabKey.current = tabKey;
+        controls.current?.collapse();
+    }, [tabKey]);
+
     // Current detent (0 collapsed → last = full). At FULL the sheet is
     // edge-to-edge and the list behind it is covered, so a "list scroll" there
     // is really the sheet's own up-drag handing off — collapseDock must ignore

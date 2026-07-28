@@ -20,6 +20,11 @@ const BAR_ROW_H = 48;
 /** Depth of the dissolve under the pinned chrome. Enough to fade a row of text;
  *  shallow enough that it never veils content that is still meant to be read. */
 const FADE_H = 20;
+/** The strip is pulled UP by this much so it overlaps the chrome above instead
+ *  of butting against it — fractional insets/pinned heights otherwise round to a
+ *  1px transparent seam. Its top gradient stop is opaque, so the overlap is
+ *  invisible while the gap was not. */
+const FADE_OVERLAP = 1;
 
 function clamp(v: number, lo: number, hi: number) {
     'worklet';
@@ -206,10 +211,21 @@ export function CollapsingHeader({
                 bottom edge IS its design, so it gets no dissolve. */}
             {background == null && (
                 <View
-                    style={[styles.fade, { top: insets.top + BAR_ROW_H + pinnedHeight }]}
+                    style={[styles.fade, {
+                        // Overlap the chrome above by 1px. `insets.top` and the
+                        // measured `pinnedHeight` are fractional dp, so the
+                        // chrome's bottom edge and this strip's top edge round to
+                        // DIFFERENT physical pixels — leaving a 1px fully
+                        // transparent seam that the list scrolls through (only
+                        // visible against saturated content, e.g. a red product
+                        // image). The first gradient stop is opaque chrome colour,
+                        // so overlapping is invisible; a gap is not.
+                        top: insets.top + BAR_ROW_H + pinnedHeight - FADE_OVERLAP,
+                        height: FADE_H + FADE_OVERLAP,
+                    }]}
                     pointerEvents="none"
                 >
-                    <Svg width="100%" height={FADE_H}>
+                    <Svg width="100%" height={FADE_H + FADE_OVERLAP}>
                         <Defs>
                             <SvgLinearGradient id={fadeId} x1="0" y1="0" x2="0" y2="1">
                                 {/* Starts at the chrome's own colour — no seam. */}
@@ -218,7 +234,7 @@ export function CollapsingHeader({
                                 <Stop offset="1" stopColor={bg} stopOpacity="0" />
                             </SvgLinearGradient>
                         </Defs>
-                        <Rect x="0" y="0" width="100%" height={FADE_H} fill={`url(#${fadeId})`} />
+                        <Rect x="0" y="0" width="100%" height={FADE_H + FADE_OVERLAP} fill={`url(#${fadeId})`} />
                     </Svg>
                 </View>
             )}

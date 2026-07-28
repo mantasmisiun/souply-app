@@ -553,8 +553,11 @@ export default function CategoryScreen() {
                         {/* ALWAYS-PINNED chips (real chrome, not a sticky section
                             header): Fabric mis-hit-tests transformed sticky headers —
                             touches on the stuck chips fell through to the list, so
-                            horizontal chip scrolling died after any vertical scroll. */}
-                        <View style={{ backgroundColor: colors.pageBackground, zIndex: 1 }}>
+                            horizontal chip scrolling died after any vertical scroll.
+                            onPinnedLayout: report the row's height so the header's
+                            dissolve strip lands BELOW it — without this pinnedHeight
+                            stays 0 and the strip washes the chips' top edge. */}
+                        <View onLayout={header.onPinnedLayout} style={{ backgroundColor: colors.pageBackground, zIndex: 1 }}>
                             <CategoryBubbles
                                 categories={l3Categories}
                                 selectedId={selectedL3}
