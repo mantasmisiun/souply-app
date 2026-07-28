@@ -33,6 +33,7 @@ import { Image } from "expo-image";
 import { useTranslation } from "react-i18next";
 import { ProductImage } from "../ProductImage";
 import { ChainLogoChip } from "../ChainLogoChip";
+import { ComparePairContent } from "./SwipeCompareCard";
 import { ProgressGlow } from "../ProgressGlow";
 import { ScreenNavBar } from "../ScreenNavBar";
 import { API_BASE_URL } from "../../config/api";
@@ -173,46 +174,6 @@ const MIN_DWELL_MS = 700;
 const MAX_RECEIPTS_PER_SESSION = 5;
 
 // ── Sub-components ─────────────────────────────────────────────────────────
-
-function CardSide({
-  side,
-  styles,
-  onSettled,
-}: {
-  side: SwipeCardSide;
-  styles: ReturnType<typeof makeStyles>;
-  onSettled?: (ok: boolean) => void;
-}) {
-  return (
-    <View style={styles.half}>
-      <View style={styles.chainRow}>
-        {side.chainLogoUrl ? (
-          <Image
-            source={{ uri: side.chainLogoUrl }}
-            style={styles.chainLogo}
-            contentFit="contain"
-          />
-        ) : null}
-        <Text style={styles.chainName} numberOfLines={1}>
-          {side.chainName}
-        </Text>
-      </View>
-
-      <ProductImage
-        uris={side.imageUrl ? [side.imageUrl] : []}
-        imageStyle={styles.productImg}
-        placeholderStyle={styles.productImgPlaceholder}
-        emojiStyle={styles.productImgEmoji}
-        resizeMode="contain"
-        onSettled={onSettled}
-      />
-
-      <Text style={styles.productName} numberOfLines={5}>
-        {side.name}
-      </Text>
-    </View>
-  );
-}
 
 /** Card-B matched-product side (the candidate to confirm): image centred with the
  *  product name underneath. */
@@ -1422,11 +1383,12 @@ export function SwipeQueue({
                       <MatchedProductSide matched={{ spId: currentItem.sp.spId, name: currentItem.sp.name, imageUrl: currentItem.sp.imageUrl }} label={t('swipe.cardMatchLabel')} styles={styles} onSettled={() => handleImageSettled('product')} />
                     </>
                   ) : (
-                    <>
-                      <CardSide side={currentItem.left} styles={styles} onSettled={() => handleImageSettled('left')} />
-                      <View style={styles.horizontalDivider} />
-                      <CardSide side={currentItem.right} styles={styles} onSettled={() => handleImageSettled('right')} />
-                    </>
+                    <ComparePairContent
+                      left={currentItem.left}
+                      right={currentItem.right}
+                      onSettledLeft={() => handleImageSettled('left')}
+                      onSettledRight={() => handleImageSettled('right')}
+                    />
                   )}
                 </View>
               </Animated.View>
@@ -1737,31 +1699,6 @@ const makeStyles = (c: AppTheme) =>
 
     // ── Card half (vertical layout — content-sized, NOT flex:1 which collapses
     //    to a thin strip in a column with no fixed card height) ──
-    half: {
-      width: "100%",
-      alignItems: "center",
-      paddingVertical: 4,
-    },
-    chainRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 4,
-      marginBottom: 6,
-      width: "100%",
-      justifyContent: "center",
-    },
-    chainLogo: {
-      width: 16,
-      height: 16,
-    },
-    chainName: {
-      fontSize: 10,
-      fontWeight: "700",
-      color: c.textMuted,
-      letterSpacing: 0.8,
-      textTransform: "uppercase",
-      flexShrink: 1,
-    },
     productImg: {
       width: IMG_SIZE,
       height: IMG_SIZE,
