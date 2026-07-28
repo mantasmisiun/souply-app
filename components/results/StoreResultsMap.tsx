@@ -6,6 +6,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Asset } from 'expo-asset';
 import { Ionicons } from '@expo/vector-icons';
 import { spacing, radius, elevation, iconSize, type AppTheme } from '../../constants/theme';
+import { devLog } from '../../utils/devLog';
 import { chainBrandColorById } from '../../utils/chainBrandName';
 import { chainPinImage, chainBadgeImage } from '../../utils/chainLogoAssets';
 import { useBakedPills, useBakedClusters, MapPillMarker, MapClusterMarker, type MapPillSpec, type MapPillVariant, type MapClusterSpec } from '../map/MapPill';
@@ -59,6 +60,9 @@ type Props = {
     /** Route mode: the two trip endpoints (start/end) — drawn as markers and
      *  used as the route line's ends instead of the user dot. */
     routeEndpoints?: { from: LatLng; to: LatLng } | null;
+    /** Last known position — the initial camera when there is nothing else to
+     *  frame yet (beats a hardcoded Vilnius for anyone outside Vilnius). */
+    fallbackCenter?: { lat: number; lng: number } | null;
     /** Place mode: a pin marking the chosen starting area (a saved preset used as
      *  the search origin). Null in GPS mode (blue dot) and route mode (endpoints). */
     originPin?: LatLng | null;
@@ -526,6 +530,7 @@ const DirectoryLayer = React.memo(function DirectoryLayer({
 
 function StoreResultsMap({
     pins, userCoords, focusCoords, recommendedCoords, routeEndpoints, originPin, onSelectStore, colors,
+    fallbackCenter,
     directory, pricedStoreIds, pricingStoreId, onLazyPrice, routeCoords, onMapPress,
     onVisibleUnpricedChange, bottomOverlay = 0, pickMode, mapRef: mapRefProp, onPickTarget,
 }: Props) {
@@ -539,6 +544,8 @@ function StoreResultsMap({
     // The caller may own the MapView ref (to read its camera during a pick);
     // otherwise use our own. Same underlying object either way — every internal
     // mapRef.current call is unaffected.
+    const fallbackCenterRef = useRef(fallbackCenter ?? null);
+    if (fallbackCenter) fallbackCenterRef.current = fallbackCenter;
     const internalMapRef = useRef<MapView>(null);
     const mapRef = mapRefProp ?? internalMapRef;
     const insets = useSafeAreaInsets();
@@ -616,7 +623,14 @@ function StoreResultsMap({
 
     const initialRegion = useMemo(() => {
         const c = allCoords;
-        if (c.length === 0) return { latitude: 54.6872, longitude: 25.2797, latitudeDelta: 0.1, longitudeDelta: 0.1 };
+        // Nothing to frame (denied GPS / empty basket): the LAST KNOWN position
+        // beats a hardcoded Vilnius for everyone who doesn't live in Vilnius.
+        if (c.length === 0) {
+            const f = fallbackCenterRef.current;
+            return f
+                ? { latitude: f.lat, longitude: f.lng, latitudeDelta: 0.08, longitudeDelta: 0.08 }
+                : { latitude: 54.6872, longitude: 25.2797, latitudeDelta: 0.1, longitudeDelta: 0.1 };
+        }
         const lats = c.map(p => p.latitude), lngs = c.map(p => p.longitude);
         const minLat = Math.min(...lats), maxLat = Math.max(...lats);
         const minLng = Math.min(...lngs), maxLng = Math.max(...lngs);
@@ -822,7 +836,27 @@ function StoreResultsMap({
         () => (focusCoords && focusCoords.length ? focusCoords.map(c => `${c.latitude},${c.longitude}`).join('|') : 'all'),
         [focusCoords],
     );
+    // FIRST FRAME IS NOT AN ANIMATION. This component now mounts with real data
+    // (the surface holds it back until the origin/pins exist), so `initialRegion`
+    // already frames the area — re-fitting it on mount was the "map appears, then
+    // flies somewhere else" step the entry used to have. Only LATER changes
+    // (selecting a store, re-pricing, new pins) animate.
+    // `framedReal` = the camera has been set from ACTUAL data (either the initial
+    // region was built from it, or a fit ran once it arrived). Mounting with data
+    // needs no entry animation; mounting empty must still snap to the first data
+    // that lands, or the map sits on its fallback forever.
+    const framedOnceRef = useRef(false);
+    const framedRealRef = useRef(allCoordsRef.current.length > 0);
     useEffect(() => {
+        if (!framedRealRef.current && allCoordsRef.current.length > 0) {
+            framedRealRef.current = true;
+            devLog('map.frame.late', { coords: allCoordsRef.current.length });
+            fitAll(false);            // snap, not a flight: the map was never "somewhere" yet
+            return;
+        }
+        const isFirst = !framedOnceRef.current;
+        framedOnceRef.current = true;
+        if (isFirst && !(focusCoords && focusCoords.length)) return;
         const t = setTimeout(() => {
             if (focusCoords && focusCoords.length === 1) {
                 centerOn(focusCoords[0].latitude, focusCoords[0].longitude, 0.0075);
@@ -840,7 +874,7 @@ function StoreResultsMap({
         // visible area, so dragging the sheet to a new detent must NOT re-frame
         // the map (that read as the map "shifting focus" mid-drag). Fit only when
         // the selection/pins change.
-    }, [focusKey, allKey, focusCoords, centerDefault, centerOn]);
+    }, [focusKey, allKey, focusCoords, centerDefault, centerOn, fitAll]);
 
     // ── iOS overlay pills + tap routing ──────────────────────────────────────
     // MEMOIZED on `images` (stable state identity — changes only when a bake

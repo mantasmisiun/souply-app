@@ -45,13 +45,30 @@ export async function loadCachedCoords(): Promise<UserCoords | null> {
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         if (!Number.isFinite(parsed?.lat) || !Number.isFinite(parsed?.lng)) return null;
-        // TTL check: if the cached coords are older than CACHE_TTL_MS,
-        // discard them so the caller falls through to a fresh GPS query.
+        // TTL check: past CACHE_TTL_MS this is no longer "where you are", so the
+        // caller falls through to a fresh GPS query. The value is KEPT on disk —
+        // an expired fix is still the best guess for a map's fallback camera
+        // (see loadLastKnownCoords); deleting it left the map with nothing but a
+        // hardcoded Vilnius.
         const cachedAt = Number(parsed?.cachedAt);
-        if (!Number.isFinite(cachedAt) || Date.now() - cachedAt > CACHE_TTL_MS) {
-            await clearCachedCoords();
-            return null;
-        }
+        if (!Number.isFinite(cachedAt) || Date.now() - cachedAt > CACHE_TTL_MS) return null;
+        return { lat: parsed.lat, lng: parsed.lng, label: parsed.label, source: 'cache' };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * The last position we ever recorded, TTL ignored. NOT for calculations — an
+ * hours-old fix must never silently price a basket — only for framing a map when
+ * nothing better is available yet.
+ */
+export async function loadLastKnownCoords(): Promise<UserCoords | null> {
+    try {
+        const raw = await AsyncStorage.getItem(CACHE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!Number.isFinite(parsed?.lat) || !Number.isFinite(parsed?.lng)) return null;
         return { lat: parsed.lat, lng: parsed.lng, label: parsed.label, source: 'cache' };
     } catch {
         return null;

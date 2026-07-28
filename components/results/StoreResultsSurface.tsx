@@ -8,6 +8,9 @@ import {
  Switch, Modal, BackHandler } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import CalcLoadingModal from '../CalcLoadingModal';
+import { devLog } from '../../utils/devLog';
+import { calculateBasket, resolveOrigin } from '../../utils/basketCalc';
+import { bootstrapStoreResults } from '../../utils/storeResultsBootstrap';
 import { buildJourneyCoords, sumJourneyKm, journeyKmForStores } from '../../utils/journey';
 import { StoreCountToggle } from '../map/StoreCountToggle';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,14 +25,14 @@ import { API_BASE_URL } from '../../config/api';
 import { useTheme, spacing, radius, elevation, typography, iconSize, type AppTheme } from '../../constants/theme';
 import { useBasketState } from '../../state/basketState';
 import { useProfileStore } from '../../state/profileStore';
-import { loadCachedCoords, tryGpsCoords, persistCoords, type UserCoords } from '../../utils/location';
+import { loadCachedCoords, loadLastKnownCoords, tryGpsCoords, persistCoords, type UserCoords } from '../../utils/location';
 import LocationPromptModal from '../LocationPromptModal';
 import { scoreAllCombinations, type ScoredCombo } from '../../utils/splitBasketScore';
 import { type StoreResult, fetchStorePrices } from '../../utils/basketPricing';
 import { getStoreDirectory } from '../../utils/storeDirectory';
-import { buildCandidatePool, type StoreLite } from '../../utils/candidatePool';
+import { type StoreLite } from '../../utils/candidatePool';
 import { orderStopsNearestFirst, orderStopsAlongRoute, buildGoogleMapsRouteUrl } from '../../utils/multiStopRoute';
-import { getPresets, getLocationSettings, saveLocationSettings } from '../../utils/locationStorage';
+import { getLocationSettings, saveLocationSettings } from '../../utils/locationStorage';
 import StoreResultsMap, { type MapPin } from '../results/StoreResultsMap';
 import StoreOptionsDock from '../results/StoreOptionsDock';
 import { LiquidGlass } from '../LiquidGlass';
@@ -38,7 +41,7 @@ import { fetchTrips, createTripInviteUrl, fetchTripMembers, sendAddressedTripInv
 import { InvitePane } from './InvitePane';
 import { formatEuro } from '../../utils/formatCurrency';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
-import { DockActionCard } from '../dock/DockActionCard';
+import { DockActionRow } from '../dock/DockActionRow';
 import { DockSection } from '../dock/DockSection';
 import { useDockTitleStyle } from '../dock/useDockTitleStyle';
 import LocationSettingsPanel from '../LocationSettingsPanel';
@@ -52,6 +55,8 @@ import type MapView from 'react-native-maps';
 
 /** Hard cap on the single-store list — near a city centre the calc can return
  *  hundreds of stores; we only ever show the top 10 ranked options. */
+/** Absolute backstop: show a map even if the entry never settles. */
+const MAP_MOUNT_FALLBACK_MS = 8000;
 const MAX_SINGLE_STORES = 10;
 
 /** Width (dp) of one digit segment in the 1·2·3 store-count toggle — also the
@@ -101,6 +106,15 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     const [selectedOptionKey, setSelectedOptionKey] = useState<string | null>(null);
     const [mapMounted, setMapMounted] = useState(false);
     const [userCoords, setUserCoords] = useState<{ lat: number; lng: number } | null>(null);
+    // Last known position, read straight from the coords cache on mount. It is
+    // only ever the map's FALLBACK camera — used when the entry resolved nothing
+    // to frame — so the map opens on your city instead of a hardcoded Vilnius.
+    const [lastKnownCenter, setLastKnownCenter] = useState<{ lat: number; lng: number } | null>(null);
+    useEffect(() => {
+        void loadLastKnownCoords()
+            .then(c => { if (c) setLastKnownCenter({ lat: c.lat, lng: c.lng }); })
+            .catch(() => {});
+    }, []);
     // Route mode (location settings) → the two trip endpoints, so the map draws
     // routeFrom → stores → routeTo instead of a single-origin line.
     const [routeEndpoints, setRouteEndpoints] = useState<{
@@ -196,12 +210,24 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         requestAnimationFrame(() => dockRef.current?.snapTo(1));
     }, []);
     // Basket item count for the "Basket" dock button.
+    // The basket's items are read ONCE per basket and reused: the dock's cart
+    // badge needs the count, combo scoring needs which items are critical. Two
+    // effects used to fetch this same (heavy) endpoint independently, and the
+    // combo one re-fetched it on every results / lazy-price / 1·2·3 change.
     const [basketItemCount, setBasketItemCount] = useState(0);
+    const criticalIdsRef = useRef<Set<number>>(new Set());
+    const [itemsRev, setItemsRev] = useState(0);
     useEffect(() => {
         let alive = true;
         fetch(`${API_BASE_URL}/api/baskets/${id}/items`)
             .then(r => (r.ok ? r.json() : []))
-            .then(rows => { if (alive) setBasketItemCount(Array.isArray(rows) ? rows.length : 0); })
+            .then((rows: any[]) => {
+                if (!alive || !Array.isArray(rows)) return;
+                setBasketItemCount(rows.length);
+                criticalIdsRef.current = new Set(
+                    rows.filter(it => it.isCritical).map(it => Number(it.productId)));
+                setItemsRev(v => v + 1);   // combos re-score with the real flags
+            })
             .catch(() => {});
         return () => { alive = false; };
     }, [id]);
@@ -270,22 +296,12 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         // long session can't blow up to thousands of combos.
         const pool = [...results, ...lazyResults.slice(-15)];
         if (pool.length <= 1) { setCombos([]); return; }
-        let alive = true;
-        (async () => {
-            try {
-                const itemsRes = await fetch(`${API_BASE_URL}/api/baskets/${id}/items`);
-                const itemsData = await itemsRes.json();
-                const criticalIds = new Set<number>(
-                    (itemsData as any[]).filter(it => it.isCritical).map(it => Number(it.productId)),
-                );
-                // `maxStores` (1/2/3) is the user's store-count setting — never
-                // score wider combos than they agreed to visit.
-                const scored = maxStores <= 1 ? [] : scoreAllCombinations(pool, criticalIds, maxStores);
-                if (alive) setCombos(scored);
-            } catch { /* non-fatal — stores still tappable as single options */ }
-        })();
-        return () => { alive = false; };
-    }, [results, lazyResults, id, maxStores]);
+        // Pure client-side scoring — no fetch. The critical-item flags come from
+        // the one items read above, so re-pricing or flipping 1·2·3 re-scores
+        // instantly instead of waiting on the network each time.
+        const scored = maxStores <= 1 ? [] : scoreAllCombinations(pool, criticalIdsRef.current, maxStores);
+        setCombos(scored);
+    }, [results, lazyResults, maxStores, itemsRev]);
 
 
     // Defer the heavy MapView mount past the entry interaction so the screen
@@ -295,11 +311,27 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
     // calculation and only THEN starting the map. The CalcLoadingModal covers
     // the screen throughout, so the map can initialise behind it and be ready
     // the moment the modal lifts.
+    // The map mounts when (a) the entry interaction is over AND (b) there is
+    // something real to frame — the origin or at least one pin. Its camera is
+    // set ONCE from that data (initialRegion), which is what removes the old
+    // "opens on Vilnius, then flies to you, then zooms out to the pins" trip:
+    // there is now a single, correct first frame and no entry animation at all.
+    // The fallback timer covers the no-data case (denied GPS, empty basket) so a
+    // map still appears rather than an endless spinner.
+    const hasFrameData = !!userCoords || !!routeEndpoints || results.length > 0;
     useEffect(() => {
         if (mapMounted) return;
+        // Mount when there's something to frame, OR when the entry has finished
+        // and there simply isn't any (denied GPS / empty basket). A blind timer
+        // was wrong: a slow first fix mounted the map mid-resolution, so it
+        // framed the only thing it had — the Vilnius fallback — and the data
+        // arrived to a map that had already committed to a camera.
+        if (!hasFrameData && loading) return;
         const task = InteractionManager.runAfterInteractions(() => setMapMounted(true));
-        return () => task.cancel();
-    }, [mapMounted]);
+        const safety = setTimeout(() => setMapMounted(true), MAP_MOUNT_FALLBACK_MS);
+        return () => { task.cancel(); clearTimeout(safety); };
+    }, [mapMounted, hasFrameData, loading]);
+    useEffect(() => { devLog('map.mount', { mapMounted, hasFrameData, loading }); }, [mapMounted, hasFrameData, loading]);
 
     /** Basket id whose empty cache we already auto-calculated this mount — stops
      *  a failed calc from relaunching on every screen re-focus. */
@@ -321,147 +353,71 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         } catch { /* non-fatal — the map still renders, just uncentred */ }
     }, [id]);
 
+    /**
+     * ENTRY. One pass: settings → origin → cached results (or ONE calculation
+     * from that same origin) — see utils/storeResultsBootstrap for why this is a
+     * single sequence rather than the four interleaved ones it replaced.
+     *
+     * `loading` stays true for the WHOLE call, so the user sees one loading
+     * state, not a modal that closes and immediately reopens for the calc.
+     */
     const loadResults = async () => {
-        // Detail screen now awaits the calc before pushing to this route,
-        // NOT always populated: the basket screen calculates before navigating,
-        // but the basket dock's "Parduotuvės ›" pushes here DIRECTLY, and editing
-        // a priced basket drops its cached results (they priced a different
-        // basket). Both land here with an empty cache, and this screen used to
-        // just render nothing — a map of bare chain logos you had to tap one by
-        // one to see a price. So an empty cache now CALCULATES (see needsCalc
-        // below) instead of showing an empty map.
         setLoading(true);
         setSelectedStoreId(null);
         setSelectedOptionKey(null);
         setCombos([]);
-        setLazyResults([]); // stale once the basket/results change
+        setLazyResults([]);           // stale once the basket/results change
 
-        const [stored, metaRaw, ls] = await Promise.all([
-            AsyncStorage.getItem(`basket_results_${id}`),
-            AsyncStorage.getItem(`basket_calc_meta_${id}`),
-            getLocationSettings(id),
-        ]);
-        // Store-count is the LIVE location setting (single source of truth) — not
-        // frozen in the calc meta — so a change from Settings or the map's 1·2·3
-        // toggle is reflected here without a recalc. Read it BEFORE results so
-        // combo scoring runs once with the right limit (no 2/3-store flash).
-        setMaxStores(ls.storeCount === 1 ? 1 : ls.storeCount === 2 ? 2 : 3);
-        if (stored) {
-            setResults(JSON.parse(stored) as StoreResult[]);
-        } else {
-            setResults([]);
-        }
-        // Starting location for the map (user dot + the route's first leg).
-        //
-        // GPS mode resolves LIVE on every entry. The calc meta's `searchCenter`
-        // is frozen at the last calculation and has no TTL, so reusing it here
-        // dropped the map on wherever you stood days ago — "a random pin across
-        // town" — while the panel still (correctly) read "GPS". Place/route modes
-        // DO keep their stored centre/presets: those are deliberate fixed points.
-        let center: { lat: number; lng: number } | null = null;
-        let endpoints: typeof routeEndpoints = null;
-        let placeMode = false;
-        let gpsDenied = false;
+        // ONE attempt per basket per mount: a successful calc writes the cache
+        // (so the next focus is a plain read) and a failed one must not relaunch
+        // on every re-focus.
+        const allowCalc = autoCalcRef.current !== id;
+        if (allowCalc) autoCalcRef.current = id;
+
+        const startedAt = Date.now();
+        let snap: Awaited<ReturnType<typeof bootstrapStoreResults>> | null = null;
         try {
-            const meta = metaRaw ? JSON.parse(metaRaw) : null;
-            const c = meta?.searchCenter;
-            if (c && Number.isFinite(c.lat) && Number.isFinite(c.lng)) center = { lat: c.lat, lng: c.lng };
-            placeMode = ls.mode === 'specific';
-            if (ls.mode === 'current') {
-                // CACHED fix first (30-min TTL — still "where you are now"), live GPS
-                // only when there is none. Order matters for speed, not correctness:
-                // the bug this fixes was the calc meta's searchCenter, which has NO
-                // TTL and could be days old; a ≤30-min cache is a real position and
-                // avoids making map entry wait on a hardware fix.
-                const live = await loadCachedCoords() ?? await tryGpsCoords().catch(() => null);
-                if (live) {
-                    center = { lat: live.lat, lng: live.lng };
-                    void persistCoords(live);
-                } else if (!center) {
-                    // No permission and nothing cached → we cannot place the user.
-                    gpsDenied = true;
-                }
-            } else if (ls.mode === 'route' && ls.routeFrom && ls.routeTo) {
-                // Route mode → resolve the two endpoint presets to coordinates.
-                const presets = await getPresets();
-                const f = presets[ls.routeFrom as 'home' | 'work' | 'custom'];
-                const to = presets[ls.routeTo as 'home' | 'work' | 'custom'];
-                if (f && to) {
-                    endpoints = {
-                        from: { latitude: f.lat, longitude: f.lng },
-                        to: { latitude: to.lat, longitude: to.lng },
-                    };
-                }
-            }
-        } catch { /* ignore — fall back to single-origin behaviour */ }
-        setRouteEndpoints(endpoints);
-        setOriginPin(placeMode && center ? { latitude: center.lat, longitude: center.lng } : null);
-        if (center) {
-            setUserCoords(center);
-        } else if (!endpoints) {
-            // No single centre (and not route mode) → cached GPS coords.
-            const cached = await loadCachedCoords();
-            if (cached) setUserCoords({ lat: cached.lat, lng: cached.lng });
+            snap = await bootstrapStoreResults(id, { saver: saverModeRef.current, allowCalc });
+            setMaxStores(snap.maxStores);
+            setResults(snap.results);
+            setRouteEndpoints(snap.endpoints);
+            setOriginPin(snap.originPin);
+            setUserCoords(snap.endpoints ? null : snap.origin);
+        } catch (e) {
+            devLog('map.bootstrap.error', { id, error: String(e) });
+        } finally {
+            // ALWAYS: anything thrown above used to strand `loading` at true,
+            // which is a loading tint over the map that never lifts.
+            setLoading(false);
         }
-        setLoading(false);
+        devLog('map.bootstrap', {
+            id, ms: Date.now() - startedAt, allowCalc,
+            origin: snap?.origin ?? null, results: snap?.results?.length ?? -1,
+            calculated: snap?.calculated ?? false, gpsDenied: snap?.gpsDenied ?? null,
+        });
+
         // LOCATION DENIED → we can't search around the user, so hand them the
         // manual way out instead of a map centred on nothing: flip this shopping
         // to Place mode, raise the settings sheet and let them enter an address.
-        if (gpsDenied) { await switchToPlaceForDeniedGps(); return; }
-        // NO CACHED PRICES → price the basket now. handleRecalculate resolves the
-        // origin the same way the basket screen does and honours this shopping's
-        // settings (GPS → around you, Place → around the preset, Route → the
-        // corridor), so the pool is the nearest stores for the chosen mode.
-        // Guarded to ONE attempt per basket per mount: a successful calc writes
-        // the cache (so the next focus is a plain read) and a failed one must not
-        // relaunch on every re-focus.
-        if (!stored && autoCalcRef.current !== id) {
-            autoCalcRef.current = id;
-            await handleRecalculate();
-        }
+        if (snap?.gpsDenied) await switchToPlaceForDeniedGps();
     };
 
     const runRecalcWithCoords = useCallback(async (coords: UserCoords, isPull = false) => {
         if (!isPull) setLoading(true);
         setSelectedStoreId(null);
         try {
-            // SAME contract as the basket screen's calc: honour the location
-            // settings — candidate pool from the settings, and the calculate
-            // origin = the settings-resolved centre (place/bus), falling back
-            // to the resolved coords (current/route modes). Previously this
-            // recalc posted raw GPS with NO pool, silently reverting a
-            // place-mode basket to closest-stores-around-me.
-            const [pool, settings] = await Promise.all([
-                buildCandidatePool({ lat: coords.lat, lng: coords.lng }, id),
-                getLocationSettings(id),
-            ]);
-            const origin = pool.searchCenter ?? coords;
-            const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
-            if (pool.storeIds.length > 0) body.storeIds = pool.storeIds;
-            if (saverModeRef.current) body.saver = true;
-            const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
+            const { results: fresh, origin, settings } = await calculateBasket(id, {
+                coords, saver: saverModeRef.current,
             });
-            const newResults = await res.json();
-            await Promise.all([
-                AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults)),
-                AsyncStorage.setItem(`basket_calc_meta_${id}`, JSON.stringify({
-                    storeCount: settings.storeCount,
-                    searchCenter: pool.searchCenter,
-                    settings,
-                })),
-            ]);
             await persistCoords(coords);
             setUserCoords({ lat: origin.lat, lng: origin.lng });
             setOriginPin(settings.mode === 'specific' ? { latitude: origin.lat, longitude: origin.lng } : null);
-            setResults(newResults);
+            setResults(fresh);
             setSelectedOptionKey(null);
-            setLazyResults([]); // re-priced basket → old lazy prices are stale
-            setLoading(false);
+            setLazyResults([]);        // re-priced basket → old lazy prices are stale
         } catch {
             Alert.alert(t('results.errorTitle'), t('results.errorRecalc'));
+        } finally {
             setLoading(false);
         }
     }, [id]);
@@ -486,67 +442,31 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         setSelectedStoreId(null);
         setSelectedOptionKey(null);
         try {
-            const [settings, presets] = await Promise.all([getLocationSettings(id), getPresets()]);
+            // Same resolution as entry — mode-aware, one GPS read at most.
+            const origin = await resolveOrigin(id);
+            if (!origin.coords && !origin.endpoints) return;
 
-            // Route mode → resolve both endpoints for the map's route line.
-            let endpoints: typeof routeEndpoints = null;
-            if (settings.mode === 'route' && settings.routeFrom && settings.routeTo) {
-                const f = presets[settings.routeFrom];
-                const to = presets[settings.routeTo];
-                if (f && to) endpoints = {
-                    from: { latitude: f.lat, longitude: f.lng },
-                    to: { latitude: to.lat, longitude: to.lng },
-                };
-            }
-
-            // Calc origin: place → its preset coords; otherwise cached/GPS. The
-            // real GPS fix is kept separately so only 'current' mode persists it.
-            let coords: { lat: number; lng: number } | null = null;
-            let gpsCoords: UserCoords | null = null;
-            if (settings.mode === 'specific' && settings.specificPreset) {
-                const p = presets[settings.specificPreset];
-                if (p) coords = { lat: p.lat, lng: p.lng };
-            }
-            if (!coords) {
-                gpsCoords = (await loadCachedCoords()) ?? (await tryGpsCoords());
-                coords = gpsCoords;
-            }
-            if (!coords && !endpoints) { if (epoch === recalcEpochRef.current) setRecalcing(false); return; }
-
-            const pool = await buildCandidatePool(coords ?? undefined, id);
-            const origin = pool.searchCenter
-                ?? (endpoints ? { lat: endpoints.from.latitude, lng: endpoints.from.longitude } : coords!);
-            const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
-            if (pool.storeIds.length > 0) body.storeIds = pool.storeIds;
-            if (saverModeRef.current) body.saver = true;
-
-            const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
+            const calc = await calculateBasket(id, {
+                coords: origin.coords,
+                endpoints: origin.endpoints,
+                saver: saverModeRef.current,
+                settings: origin.settings,
             });
-            const newResults = await res.json();
             // A newer location change started while we were fetching → drop this
             // stale result rather than clobbering the fresher one.
             if (epoch !== recalcEpochRef.current) return;
 
-            await Promise.all([
-                AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults)),
-                AsyncStorage.setItem(`basket_calc_meta_${id}`, JSON.stringify({
-                    storeCount: settings.storeCount,
-                    searchCenter: pool.searchCenter,
-                    settings,
-                })),
-            ]);
-            // Only 'current' mode reflects the user's real position → persist it.
-            // A preset/route origin must NOT overwrite the cached GPS coords.
-            if (settings.mode === 'current' && gpsCoords) await persistCoords(gpsCoords);
+            // Only a real device fix is "where the user is" — a preset/route
+            // origin must never overwrite the cached GPS coords.
+            if (origin.settings.mode === 'current' && origin.gpsFix) await persistCoords(origin.gpsFix);
 
-            setRouteEndpoints(endpoints);
-            setUserCoords(endpoints ? null : { lat: origin.lat, lng: origin.lng });
-            setOriginPin(settings.mode === 'specific' ? { latitude: origin.lat, longitude: origin.lng } : null);
-            setResults(newResults as StoreResult[]);
-            setLazyResults([]); // re-priced basket → old lazy prices are stale
+            setRouteEndpoints(origin.endpoints);
+            setUserCoords(origin.endpoints ? null : { lat: calc.origin.lat, lng: calc.origin.lng });
+            setOriginPin(origin.settings.mode === 'specific'
+                ? { latitude: calc.origin.lat, longitude: calc.origin.lng }
+                : null);
+            setResults(calc.results);
+            setLazyResults([]);        // re-priced basket → old lazy prices are stale
         } catch {
             // Non-fatal — keep the previous prices/map on a failed reprice.
         } finally {
@@ -1152,14 +1072,12 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         <>
             <View style={styles.container}>
                 {!mapMounted ? (
-                    // Only until the deferred mount fires. While the calc runs the map
-                    // renders UNDERNEATH the CalcLoadingModal (which owns the spinner +
-                    // rotating messages and covers the screen), so its tiles load in
-                    // parallel with pricing instead of starting afterwards. Pills still
-                    // pop as the modal lifts — the reveal is intact, the wait isn't.
-                    <View style={styles.loadingContainer}>
-                        <MaterialProgress size="large" color={colors.primary} />
-                    </View>
+                    // NOT a second screen: just the page background under the
+                    // CalcLoadingModal, which owns the whole entry (spinner +
+                    // rotating messages) until the map is ready to draw its one
+                    // and only frame. A spinner here would be a second loading
+                    // UI for the same wait.
+                    <View style={styles.loadingContainer} />
                 ) : (
                     // Full-bleed map fills the content region; the option sheet
                     // floats over it at the bottom. The heavy MapView mount is
@@ -1171,6 +1089,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                             onPickTarget={handlePickTarget}
                             pins={pins}
                             userCoords={userCoords}
+                            fallbackCenter={lastKnownCenter}
                             focusCoords={focusCoords}
                             recommendedCoords={recommendedCoords}
                             routeEndpoints={routeEndpoints}
@@ -1256,21 +1175,13 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                             style={styles.dockBar}
                             onLayout={e => { const h = Math.round(e.nativeEvent.layout.height); if (h > 0) setDockBarH(h); }}
                         >
-                            {invitePane ? (
-                                <View style={styles.summaryHero}>
-                                    <TouchableOpacity
-                                        onPress={() => setInvitePane(false)}
-                                        hitSlop={10}
-                                        accessibilityLabel={t('common.back')}
-                                    >
-                                        <Ionicons name="chevron-back" size={26} color={colors.primary} />
-                                    </TouchableOpacity>
-                                    <Ionicons name="person-add" size={17} color={colors.primary} />
-                                    <Animated.Text style={[styles.summaryText, titleStyle]} numberOfLines={1}>
-                                        {t('basketDetail.inviteTitle')}
-                                    </Animated.Text>
-                                </View>
-                            ) : cheapestTotal != null ? (
+                            {/* The invite pane's "‹ Pakviesti" row is NOT here
+                                any more — a pane brings its own bar row via the
+                                sheet's pane contract (SheetPaneSpec.barRow),
+                                which also un-guards the spinner/more-prices
+                                pips below: this row simply never renders while
+                                the pane is open. */}
+                            {cheapestTotal != null ? (
                                 <View style={styles.summaryHero}>
                                     <Animated.Text style={[styles.summaryPrice, priceGrowStyle]} numberOfLines={1}>
                                         {formatEuro(cheapestTotal)}
@@ -1289,8 +1200,8 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                                     {t('results.mapSummaryEmpty')}
                                 </Animated.Text>
                             )}
-                            {!invitePane && recalcing && <MaterialProgress size="small" color={colors.primary} />}
-                            {!invitePane && visibleUnpriced.length > 0 && (
+                            {recalcing && <MaterialProgress size="small" color={colors.primary} />}
+                            {visibleUnpriced.length > 0 && (
                                 <TouchableOpacity
                                     style={styles.morePricesRound}
                                     accessibilityLabel={t('results.morePrices')}
@@ -1309,58 +1220,87 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                     sheet={{
                         maxStage: 2,
                         onStageChange: (st) => { setDockExpanded(st > 0); },
-                        content: invitePane && tripId != null ? (
-                            <View style={styles.dockContent}>
-                                <InvitePane
-                                    inviteUrl={inviteUrl}
-                                    members={members}
-                                    colors={colors}
-                                    onSendInvite={(target) => sendAddressedTripInvite(tripId, target)}
-                                    onRemoveMember={(userId) => removeTripMember(tripId, userId)}
-                                    onInvitesSent={() => void refreshMembers(tripId)}
-                                />
-                            </View>
-                        ) : (
-                            <View style={styles.dockContent}>
-                                <View style={styles.bigBtnRow}>
-                                    <DockActionCard
+                        // Invite = the sheet's own pane contract: the bar row
+                        // swaps to "‹ Pakviesti", the body page-slides, and the
+                        // sheet clears the pane (onDismiss) on every collapse —
+                        // this surface no longer branches its bar row or resets
+                        // pane state by hand.
+                        pane: invitePane && tripId != null ? {
+                            key: 'invite',
+                            barRow: (
+                                <View style={styles.dockBar}>
+                                    <View style={styles.summaryHero}>
+                                        <TouchableOpacity
+                                            onPress={() => setInvitePane(false)}
+                                            hitSlop={10}
+                                            accessibilityLabel={t('common.back')}
+                                        >
+                                            <Ionicons name="chevron-back" size={26} color={colors.primary} />
+                                        </TouchableOpacity>
+                                        <Ionicons name="person-add" size={17} color={colors.primary} />
+                                        <Animated.Text style={[styles.summaryText, titleStyle]} numberOfLines={1}>
+                                            {t('basketDetail.inviteTitle')}
+                                        </Animated.Text>
+                                    </View>
+                                </View>
+                            ),
+                            content: (
+                                <View style={styles.dockContent}>
+                                    <InvitePane
+                                        inviteUrl={inviteUrl}
+                                        members={members}
                                         colors={colors}
-                                        icon="cart-outline"
-                                        title={t('tripMap.basketBtn')}
-                                        subtitle={t('tripMap.basketBtnSub')}
-                                        // REPLACE (not push): swap the map for the
-                                        // basket so the back stack stays [Shopping,
-                                        // <map|basket>] — Back always returns to
-                                        // Shopping, never a stale stack of maps.
-                                        onPress={() => router.replace(`/basket/${id}` as any)}
-                                        badge={basketItemCount > 0
-                                            ? <View style={styles.cartCount}><Text style={styles.cartCountText}>{basketItemCount}</Text></View>
-                                            : undefined}
-                                    />
-                                    <DockActionCard
-                                        colors={colors}
-                                        icon="person-add"
-                                        title={t('basketDetail.inviteTitle')}
-                                        subtitle={t('basketDetail.inviteSub')}
-                                        onPress={() => void openInvite()}
-                                        badge={members.length > 1 ? (
-                                            <View style={styles.memberStack}>
-                                                {members.slice(0, 3).map((m, i) => (
-                                                    <View key={m.userId} style={[styles.memberDot, i > 0 && styles.memberDotOverlap]}>
-                                                        <Text style={styles.memberDotText}>
-                                                            {m.label.replace(/^@/, '').charAt(0).toUpperCase()}
-                                                        </Text>
-                                                    </View>
-                                                ))}
-                                                {members.length > 3 && (
-                                                    <View style={[styles.memberDot, styles.memberDotOverlap, styles.memberDotMore]}>
-                                                        <Text style={styles.memberDotText}>+{members.length - 3}</Text>
-                                                    </View>
-                                                )}
-                                            </View>
-                                        ) : undefined}
+                                        onSendInvite={(target) => sendAddressedTripInvite(tripId, target)}
+                                        onRemoveMember={(userId) => removeTripMember(tripId, userId)}
+                                        onInvitesSent={() => void refreshMembers(tripId)}
                                     />
                                 </View>
+                            ),
+                            onDismiss: () => setInvitePane(false),
+                        } : null,
+                        content: (
+                            <View style={styles.dockContent}>
+                                <DockActionRow
+                                    colors={colors}
+                                    gap={14}
+                                    actions={[
+                                        {
+                                            icon: 'cart-outline',
+                                            title: t('tripMap.basketBtn'),
+                                            subtitle: t('tripMap.basketBtnSub'),
+                                            // REPLACE (not push): swap the map for the
+                                            // basket so the back stack stays [Shopping,
+                                            // <map|basket>] — Back always returns to
+                                            // Shopping, never a stale stack of maps.
+                                            onPress: () => router.replace(`/basket/${id}` as any),
+                                            badge: basketItemCount > 0
+                                                ? <View style={styles.cartCount}><Text style={styles.cartCountText}>{basketItemCount}</Text></View>
+                                                : undefined,
+                                        },
+                                        {
+                                            icon: 'person-add',
+                                            title: t('basketDetail.inviteTitle'),
+                                            subtitle: t('basketDetail.inviteSub'),
+                                            onPress: () => void openInvite(),
+                                            badge: members.length > 1 ? (
+                                                <View style={styles.memberStack}>
+                                                    {members.slice(0, 3).map((m, i) => (
+                                                        <View key={m.userId} style={[styles.memberDot, i > 0 && styles.memberDotOverlap]}>
+                                                            <Text style={styles.memberDotText}>
+                                                                {m.label.replace(/^@/, '').charAt(0).toUpperCase()}
+                                                            </Text>
+                                                        </View>
+                                                    ))}
+                                                    {members.length > 3 && (
+                                                        <View style={[styles.memberDot, styles.memberDotOverlap, styles.memberDotMore]}>
+                                                            <Text style={styles.memberDotText}>+{members.length - 3}</Text>
+                                                        </View>
+                                                    )}
+                                                </View>
+                                            ) : undefined,
+                                        },
+                                    ]}
+                                />
 
                                 {/* Location & Route — GPS / Place / Route selection inline. */}
                                 <DockSection colors={colors} icon="navigate-outline" title={t('tripMap.locationRoute')}>
@@ -1410,7 +1350,11 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
             {/* Calc loading modal — spinner + rotating messages while the initial
                 load OR any recalc (saver toggle / location change) runs. It lifts
                 when the data lands; the map/pills then reveal underneath. */}
-            <CalcLoadingModal visible={(loading && !pullRefreshing) || recalcing} />
+            {/* ONE loading state for the whole entry: cache read → origin →
+                calculation → the map's first frame. It lifts when the map is
+                mounted with real data underneath it, so the reveal is the map
+                already framed on your area — never a re-navigation. */}
+            <CalcLoadingModal visible={((loading || !mapMounted) && !pullRefreshing) || recalcing} />
 
             <LocationPromptModal
                 visible={locationPromptVisible}
@@ -1477,7 +1421,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         backgroundColor: c.primaryMuted,
     },
     dockContent: { paddingHorizontal: 16, paddingTop: 22, gap: 14 },
-    bigBtnRow: { flexDirection: 'row', gap: 14 },
     // Item-count pip overlaid on the Basket action card's cart icon.
     cartCount: {
         position: 'absolute', top: -6, right: -10, minWidth: 18, height: 18, borderRadius: 9,
