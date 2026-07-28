@@ -55,6 +55,7 @@ import {
 } from '../../../utils/tripsApi';
 import { tripStageHref } from '../../../utils/tripStageRoute';
 import { ShoppingFilterChips } from '../../../components/basket/ShoppingFilterChips';
+import { shouldRefetchOnFocus } from '../../../utils/focusStaleness';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
 
@@ -73,6 +74,22 @@ function cardExit() {
 const STAGE_ICONS: Record<number, keyof typeof Ionicons.glyphMap> = {
     1: 'cart-outline', 2: 'storefront-outline', 3: 'list-outline', 4: 'receipt-outline', 5: 'stats-chart-outline',
 };
+
+/** Flattened, virtualisable rows (same pattern as app/shopping-list/index.tsx
+ *  and ShoppingListDetail): every card used to mount at once inside an
+ *  Animated.ScrollView, which is what made switching to this tab feel slow. */
+type TripRow =
+    | { kind: 'processing'; key: string; item: QueueItem }
+    | { kind: 'trip'; key: string; trip: TripSummary }
+    | { kind: 'empty'; key: string }
+    | { kind: 'archiveHeader'; key: string }
+    | { kind: 'archived'; key: string; trip: TripSummary; isLast: boolean };
+const tripRowKey = (r: TripRow) => r.key;
+
+/** One list-level transition (FlatList itemLayoutAnimation) replaces the old
+ *  per-card `layout` prop — identical 240ms cubic-out motion, but Reanimated
+ *  no longer snapshots every card on mount. */
+const rowLayout = LinearTransition.duration(240).easing(Easing.out(Easing.cubic));
 
 /** Overlapping member-avatar circles for a shared card (up to 3 + "+N"). */
 function MemberStack({ members, total, styles }: {
@@ -344,6 +361,10 @@ export default function TripsScreen() {
     const [pullRefreshing, setPullRefreshing] = useState(false);
     const [archiveOpen, setArchiveOpen] = useState(false);
     const hasFetchedRef = useRef(false);
+    // Success timestamp for the focus-staleness gate (profileStore's
+    // `lastFetched` shape). A failed fetch leaves it untouched so the next
+    // focus retries immediately.
+    const lastFetchedAtRef = useRef<number | null>(null);
 
     const fetchAll = useCallback(async (silent: boolean) => {
         if (silent) setRefreshing(true);
@@ -359,6 +380,7 @@ export default function TripsScreen() {
             setHousehold(hhRes);
             const draft = Array.isArray(basketRes) ? basketRes.find((b: any) => b.status === 'draft' && b.householdId == null) : null;
             setDraftBasketId(draft ? draft.id : null);
+            lastFetchedAtRef.current = Date.now();
         } catch (error) {
             console.error('Failed to fetch trips:', error);
         } finally {
@@ -368,6 +390,12 @@ export default function TripsScreen() {
     }, [setDraftBasketId]);
 
     useFocusEffect(useCallback(() => {
+        // Staleness gate: a tab switch within the TTL reuses state instead of
+        // re-firing all three requests (with freezeOnBlur, EVERY switch used to
+        // pay for them). Explicit refreshes — pull-to-refresh, the
+        // receipt-completed effect, unarchive, the dock sheet's refreshTrips —
+        // call fetchAll directly and always hit the network.
+        if (!shouldRefetchOnFocus(lastFetchedAtRef.current)) return;
         const silent = hasFetchedRef.current;
         hasFetchedRef.current = true;
         fetchAll(silent);
@@ -413,6 +441,31 @@ export default function TripsScreen() {
 
     const active = useMemo(() => trips.filter(tr => tr.archivedAt == null && byDate(tr) && notHidden(tr)), [trips, byDate, notHidden]);
     const archived = useMemo(() => trips.filter(tr => tr.archivedAt != null && byDate(tr) && notHidden(tr)), [trips, byDate, notHidden]);
+
+    // Archyvas expands on tap, or auto-expands when a calendar day filter
+    // matched only archived trips (same condition the old inline JSX used).
+    const archiveExpanded = archiveOpen || (selectedDate != null && active.length === 0);
+
+    // Flattened row model for the virtualised list. Stable keys (never index):
+    // `q:` queue items, `trip:`/`arch:` trips.
+    const rows = useMemo<TripRow[]>(() => {
+        const out: TripRow[] = [];
+        for (const item of processingItems) out.push({ kind: 'processing', key: `q:${item.id}`, item });
+        if (active.length === 0 && processingItems.length === 0) {
+            out.push({ kind: 'empty', key: 'empty' });
+        } else {
+            for (const trip of active) out.push({ kind: 'trip', key: `trip:${trip.id}`, trip });
+        }
+        if (archived.length > 0) {
+            out.push({ kind: 'archiveHeader', key: 'archiveHeader' });
+            if (archiveExpanded) {
+                archived.forEach((trip, i) => out.push({
+                    kind: 'archived', key: `arch:${trip.id}`, trip, isLast: i === archived.length - 1,
+                }));
+            }
+        }
+        return out;
+    }, [processingItems, active, archived, archiveExpanded]);
 
     // ONE screen per stage (simplified flow): the card resolves straight to
     // the stage's screen — basket detail / comparison map / closest
@@ -476,6 +529,136 @@ export default function TripsScreen() {
         }).join(' · ');
     };
 
+    const renderRow = ({ item: row }: { item: TripRow }) => {
+        switch (row.kind) {
+            case 'processing':
+                return <ProcessingCard item={row.item} onResolveStore={onResolveStore} />;
+            case 'empty':
+                return (
+                    <View style={styles.centered}>
+                        <Ionicons name="cart-outline" size={56} color={colors.textMuted} />
+                        <Text style={styles.emptyText}>{t('trips.empty')}</Text>
+                        <Text style={styles.emptySubText}>{t('trips.emptyBody')}</Text>
+                        <ScalePressable style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/catalog' as any)}>
+                            <Text style={styles.emptyButtonText}>{t('basketTab.emptyCta')}</Text>
+                        </ScalePressable>
+                    </View>
+                );
+            case 'archiveHeader':
+                // Archyvas — collapsed by default; tap a row = explicit resume.
+                return (
+                    <TouchableOpacity
+                        style={[styles.archiveHeader, archiveExpanded ? styles.archiveHeaderOpen : styles.archiveHeaderClosed]}
+                        onPress={() => setArchiveOpen(v => !v)}
+                    >
+                        <Text style={styles.archiveTitle}>{t('trips.archive')}</Text>
+                        <Text style={styles.archiveCount}>{archived.length}</Text>
+                        <Ionicons name={archiveExpanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                );
+            case 'archived': {
+                const trip = row.trip;
+                return (
+                    <TouchableOpacity
+                        style={[styles.archiveRow, row.isLast && styles.archiveRowLast]}
+                        onPress={() => onArchivedTap(trip)}
+                    >
+                        <Ionicons name={STAGE_ICONS[trip.stage]} size={18} color={colors.textMuted} />
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.archiveRowTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
+                            <Text style={styles.archiveRowMeta} numberOfLines={1}>
+                                {trip.isAdHoc ? t('trips.adHocMeta', { count: trip.receiptCount }) : stageLabel(trip.stage)}
+                            </Text>
+                        </View>
+                        <Text style={styles.archiveRowDate}>{formatDate(trip.anchorDate)}</Text>
+                    </TouchableOpacity>
+                );
+            }
+            case 'trip': {
+                const trip = row.trip;
+                const hasReceipt = trip.receiptCount > 0;
+                // Once the trip has LISTS, they are the source of truth for the
+                // card's count + preview: the basket is consumed into the lists,
+                // so its own itemCount/itemPreview go stale (an emptied basket
+                // rendered "0" and a blank preview row on a stage-3/4 card).
+                const listItems = trip.slots.reduce((n, s) => n + (s.itemCount ?? 0), 0);
+                const listPreview = trip.slots.flatMap(s => s.itemPreview ?? []);
+                const preview = trip.slots.length > 0 ? listPreview : (trip.basket?.itemPreview ?? []);
+                const plannedCount = trip.slots.length > 0 ? listItems : (trip.basket?.itemCount ?? 0);
+                const isNew = seenInit && isTripNew(seenTrips, trip.id, trip.receiptCount);
+                const chains = trip.chains ?? [];
+                const shownChains = chains.slice(0, 4);
+                const chainOverflow = chains.length - shownChains.length;
+                return (
+                    <AnimatedTouchable
+                        style={[styles.card, isNew && styles.cardNew]}
+                        onPress={() => openTrip(trip)}
+                        activeOpacity={0.8}
+                        exiting={cardExit}
+                    >
+                        <View style={styles.cardMain}>
+                            {/* Date column: every row (count/logos, title, preview) sits to
+                                its RIGHT, so the calendar reads as the card's anchor rather
+                                than a chip glued to the title. The badge keeps its natural
+                                near-square tear-off proportions and centres in the column —
+                                stretching it to the full row height read as a tall ribbon. */}
+                            <View style={styles.calCol}>
+                                <CalendarBadge date={trip.anchorDate} size={60} />
+                            </View>
+                            <View style={styles.cardBody}>
+                                <View style={styles.cardTop}>
+                                    <View style={styles.cardTopLeft}>
+                                        {/* Uploaded receipt → receipt icon + recognised line count;
+                                            otherwise the planned shopping-list count. */}
+                                        <View style={styles.cartChip}>
+                                            <Ionicons name={hasReceipt ? 'receipt-outline' : 'cart-outline'} size={14} color={colors.primary} />
+                                            <Text style={styles.cartChipText}>{hasReceipt ? trip.recognisedItemCount : plannedCount}</Text>
+                                        </View>
+                                        {/* Chain logos: receipt chains full colour, planned-only dimmed. */}
+                                        {shownChains.length > 0 && (
+                                            <View style={styles.logoStrip}>
+                                                {shownChains.map(c => (
+                                                    <ChainLogoChip key={c.chainId} chainId={c.chainId} name={c.chainName ?? undefined} size={22} dimmed={!c.hasReceipt} style={styles.logoChip} />
+                                                ))}
+                                                {chainOverflow > 0 && <Text style={styles.logoMore}>+{chainOverflow}</Text>}
+                                            </View>
+                                        )}
+                                    </View>
+                                    <View style={styles.cardTopRight}>
+                                        {isNew && (
+                                            <View style={styles.newBadge}><Text style={styles.newBadgeText}>{t('trips.newBadge')}</Text></View>
+                                        )}
+                                        {trip.memberCount > 1 && (
+                                            <MemberStack members={trip.members ?? []} total={trip.memberCount} styles={styles} />
+                                        )}
+                                    </View>
+                                </View>
+                                <Text style={styles.cardTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
+                                {preview.length > 0 ? (
+                                    // Newest items first — each name caps and ellipsises so 3+ fit.
+                                    <View style={styles.previewRow}>
+                                        {preview.slice(0, 3).map((name, i) => (
+                                            <React.Fragment key={i}>
+                                                {i > 0 && <Text style={styles.previewDot}>·</Text>}
+                                                <Text style={styles.previewName} numberOfLines={1}>{name}</Text>
+                                            </React.Fragment>
+                                        ))}
+                                    </View>
+                                ) : slotLine(trip) ? (
+                                    <Text style={styles.cardMeta} numberOfLines={1}>{slotLine(trip)}</Text>
+                                ) : null}
+                            </View>
+                            <View style={styles.ctaBtn}>
+                                <Text style={styles.ctaText}>{stageCta(trip.stage)}</Text>
+                                <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+                            </View>
+                        </View>
+                    </AnimatedTouchable>
+                );
+            }
+        }
+    };
+
     if (loading) return (
         <View style={styles.container}>
             <CollapsingHeader controller={header} smallTitle={t('tabs.trips')} />
@@ -493,11 +676,28 @@ export default function TripsScreen() {
         <View style={styles.container}>
             <CollapsingHeader controller={header} smallTitle={t('tabs.trips')} />
             {backToExitToast}
-            <Animated.ScrollView
+            {/* ALWAYS-PINNED filter chips (the repo's CollapsingHeader pinned-row
+                pattern — shopping-list/discounts do the same): a real row ABOVE
+                the list, not stickyHeaderIndices — RN sticky cells don't mix with
+                the FlatList's itemLayoutAnimation cell renderer. The family card
+                deliberately scrolls away with the title: it's a navigation
+                shortcut, not a list control, and pinning it would eat viewport.
+                onPinnedLayout drops the header's dissolve strip below the chips. */}
+            <View onLayout={header.onPinnedLayout} style={{ backgroundColor: colors.pageBackground }}>
+                <ShoppingFilterChips />
+            </View>
+            <Animated.FlatList
                 {...header.scroll}
                 style={styles.container}
+                data={rows}
+                keyExtractor={tripRowKey}
+                renderItem={renderRow}
+                // Cell moves (a trip disappearing, archive expand/collapse)
+                // animate at the list level — same motion the per-card `layout`
+                // prop used to provide.
+                itemLayoutAnimation={rowLayout}
+                initialNumToRender={12}
                 contentInsetAdjustmentBehavior="never"
-                stickyHeaderIndices={[1]}
                 contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: tabBarHeight + 24 }]}
                 refreshControl={
                     <RefreshControl
@@ -507,150 +707,31 @@ export default function TripsScreen() {
                         tintColor={colors.primary}
                     />
                 }
-            >
-                {/* index 0: large title (scrolls away) */}
-                <ScreenHeading title={t('tabs.trips')} onLayout={header.onTitleLayout} />
-                {/* index 1: pinned family card (when enabled) + filter chips —
-                    native sticky, pin under the bar as one opaque unit */}
-                <View style={{ backgroundColor: colors.pageBackground }}>
-                    {household && (
-                        <TouchableOpacity
-                            style={styles.familyCard}
-                            activeOpacity={0.85}
-                            onPress={() => router.push('/family' as any)}
-                        >
-                            <View style={styles.familyIcon}>
-                                <Ionicons name="home" size={22} color={colors.onPrimary} />
-                            </View>
-                            <View style={{ flex: 1 }}>
-                                <Text style={styles.familyCardTitle}>{t('family.cardTitle')}</Text>
-                                <Text style={styles.familyCardSub}>{t('trips.householdMembers', { count: household.members.length })}</Text>
-                            </View>
-                            <Ionicons name="chevron-forward" size={20} color={colors.primary} />
-                        </TouchableOpacity>
-                    )}
-                    <ShoppingFilterChips />
-                </View>
-                {/* In-flight receipt uploads — cards at the very top */}
-                {processingItems.map(item => <ProcessingCard key={item.id} item={item} onResolveStore={onResolveStore} />)}
-                {active.length === 0 && processingItems.length === 0 ? (
-                    <View style={styles.centered}>
-                        <Ionicons name="cart-outline" size={56} color={colors.textMuted} />
-                        <Text style={styles.emptyText}>{t('trips.empty')}</Text>
-                        <Text style={styles.emptySubText}>{t('trips.emptyBody')}</Text>
-                        <ScalePressable style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/catalog' as any)}>
-                            <Text style={styles.emptyButtonText}>{t('basketTab.emptyCta')}</Text>
-                        </ScalePressable>
-                    </View>
-                ) : (
-                    active.map(trip => {
-                        const hasReceipt = trip.receiptCount > 0;
-                        // Once the trip has LISTS, they are the source of truth for the
-                        // card's count + preview: the basket is consumed into the lists,
-                        // so its own itemCount/itemPreview go stale (an emptied basket
-                        // rendered "0" and a blank preview row on a stage-3/4 card).
-                        const listItems = trip.slots.reduce((n, s) => n + (s.itemCount ?? 0), 0);
-                        const listPreview = trip.slots.flatMap(s => s.itemPreview ?? []);
-                        const preview = trip.slots.length > 0 ? listPreview : (trip.basket?.itemPreview ?? []);
-                        const plannedCount = trip.slots.length > 0 ? listItems : (trip.basket?.itemCount ?? 0);
-                        const isNew = seenInit && isTripNew(seenTrips, trip.id, trip.receiptCount);
-                        const chains = trip.chains ?? [];
-                        const shownChains = chains.slice(0, 4);
-                        const chainOverflow = chains.length - shownChains.length;
-                        return (
-                        <AnimatedTouchable
-                            key={trip.id}
-                            style={[styles.card, isNew && styles.cardNew]}
-                            onPress={() => openTrip(trip)}
-                            activeOpacity={0.8}
-                            exiting={cardExit}
-                            layout={LinearTransition.duration(240).easing(Easing.out(Easing.cubic))}
-                        >
-                            <View style={styles.cardMain}>
-                                {/* Date column: every row (count/logos, title, preview) sits to
-                                    its RIGHT, so the calendar reads as the card's anchor rather
-                                    than a chip glued to the title. The badge keeps its natural
-                                    near-square tear-off proportions and centres in the column —
-                                    stretching it to the full row height read as a tall ribbon. */}
-                                <View style={styles.calCol}>
-                                    <CalendarBadge date={trip.anchorDate} size={60} />
+                ListHeaderComponent={
+                    <>
+                        {/* Large title (scrolls away — the collapsing bar takes over) */}
+                        <ScreenHeading title={t('tabs.trips')} onLayout={header.onTitleLayout} />
+                        {/* Family card (when enabled) — scrolls with the content;
+                            only the chips row above the list stays pinned. */}
+                        {household && (
+                            <TouchableOpacity
+                                style={styles.familyCard}
+                                activeOpacity={0.85}
+                                onPress={() => router.push('/family' as any)}
+                            >
+                                <View style={styles.familyIcon}>
+                                    <Ionicons name="home" size={22} color={colors.onPrimary} />
                                 </View>
-                                <View style={styles.cardBody}>
-                                    <View style={styles.cardTop}>
-                                        <View style={styles.cardTopLeft}>
-                                            {/* Uploaded receipt → receipt icon + recognised line count;
-                                                otherwise the planned shopping-list count. */}
-                                            <View style={styles.cartChip}>
-                                                <Ionicons name={hasReceipt ? 'receipt-outline' : 'cart-outline'} size={14} color={colors.primary} />
-                                                <Text style={styles.cartChipText}>{hasReceipt ? trip.recognisedItemCount : plannedCount}</Text>
-                                            </View>
-                                            {/* Chain logos: receipt chains full colour, planned-only dimmed. */}
-                                            {shownChains.length > 0 && (
-                                                <View style={styles.logoStrip}>
-                                                    {shownChains.map(c => (
-                                                        <ChainLogoChip key={c.chainId} chainId={c.chainId} name={c.chainName ?? undefined} size={22} dimmed={!c.hasReceipt} style={styles.logoChip} />
-                                                    ))}
-                                                    {chainOverflow > 0 && <Text style={styles.logoMore}>+{chainOverflow}</Text>}
-                                                </View>
-                                            )}
-                                        </View>
-                                        <View style={styles.cardTopRight}>
-                                            {isNew && (
-                                                <View style={styles.newBadge}><Text style={styles.newBadgeText}>{t('trips.newBadge')}</Text></View>
-                                            )}
-                                            {trip.memberCount > 1 && (
-                                                <MemberStack members={trip.members ?? []} total={trip.memberCount} styles={styles} />
-                                            )}
-                                        </View>
-                                    </View>
-                                    <Text style={styles.cardTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
-                                    {preview.length > 0 ? (
-                                        // Newest items first — each name caps and ellipsises so 3+ fit.
-                                        <View style={styles.previewRow}>
-                                            {preview.slice(0, 3).map((name, i) => (
-                                                <React.Fragment key={i}>
-                                                    {i > 0 && <Text style={styles.previewDot}>·</Text>}
-                                                    <Text style={styles.previewName} numberOfLines={1}>{name}</Text>
-                                                </React.Fragment>
-                                            ))}
-                                        </View>
-                                    ) : slotLine(trip) ? (
-                                        <Text style={styles.cardMeta} numberOfLines={1}>{slotLine(trip)}</Text>
-                                    ) : null}
-                                </View>
-                                <View style={styles.ctaBtn}>
-                                    <Text style={styles.ctaText}>{stageCta(trip.stage)}</Text>
-                                    <Ionicons name="chevron-forward" size={16} color={colors.primary} />
-                                </View>
-                            </View>
-                        </AnimatedTouchable>
-                        );
-                    })
-                )}
-
-                {/* Archyvas — collapsed by default; tap a row = explicit resume. */}
-                {archived.length > 0 && (
-                    <View style={styles.archiveSection}>
-                        <TouchableOpacity style={styles.archiveHeader} onPress={() => setArchiveOpen(v => !v)}>
-                            <Text style={styles.archiveTitle}>{t('trips.archive')}</Text>
-                            <Text style={styles.archiveCount}>{archived.length}</Text>
-                            <Ionicons name={archiveOpen ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textSecondary} />
-                        </TouchableOpacity>
-                        {(archiveOpen || (selectedDate != null && active.length === 0)) && archived.map(trip => (
-                            <TouchableOpacity key={trip.id} style={styles.archiveRow} onPress={() => onArchivedTap(trip)}>
-                                <Ionicons name={STAGE_ICONS[trip.stage]} size={18} color={colors.textMuted} />
                                 <View style={{ flex: 1 }}>
-                                    <Text style={styles.archiveRowTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
-                                    <Text style={styles.archiveRowMeta} numberOfLines={1}>
-                                        {trip.isAdHoc ? t('trips.adHocMeta', { count: trip.receiptCount }) : stageLabel(trip.stage)}
-                                    </Text>
+                                    <Text style={styles.familyCardTitle}>{t('family.cardTitle')}</Text>
+                                    <Text style={styles.familyCardSub}>{t('trips.householdMembers', { count: household.members.length })}</Text>
                                 </View>
-                                <Text style={styles.archiveRowDate}>{formatDate(trip.anchorDate)}</Text>
+                                <Ionicons name="chevron-forward" size={20} color={colors.primary} />
                             </TouchableOpacity>
-                        ))}
-                    </View>
-                )}
-            </Animated.ScrollView>
+                        )}
+                    </>
+                }
+            />
 
             {/* Store-resolution map (chain-scoped pills) for a store_unrecognized upload. */}
             {resolveOpen && (
@@ -666,7 +747,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { alignItems: 'center', justifyContent: 'center', padding: 32 },
     // No horizontal pad here: the title + sticky chips span full width; the
-    // cards carry their own side margin (see `card` / `archiveSection`).
+    // cards carry their own side margin (see `card` / `archiveHeader`).
     list: { paddingBottom: 16 },
 
     filterRow: {
@@ -759,20 +840,34 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     ctaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 2, marginTop: 8 },
     ctaText: { fontSize: 13, fontWeight: '700', color: c.primary },
 
-    archiveSection: {
-        marginTop: 12, marginHorizontal: 16, borderRadius: radius.lg, overflow: 'hidden',
-        borderWidth: 1, borderColor: c.border, backgroundColor: c.cardBackground,
-    },
+    // The archive card is split across FlatList rows (header row + N trip
+    // rows), so each row draws its slice of the old single-container border:
+    // the header owns the top edge + corners, every row the sides, the last
+    // row the bottom edge + corners.
     archiveHeader: {
         flexDirection: 'row', alignItems: 'center', gap: 8,
         paddingHorizontal: 14, paddingVertical: 12,
+        marginTop: 12, marginHorizontal: 16,
+        backgroundColor: c.cardBackground,
+        borderWidth: 1, borderColor: c.border,
+        borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
     },
+    archiveHeaderClosed: { borderBottomLeftRadius: radius.lg, borderBottomRightRadius: radius.lg },
+    archiveHeaderOpen: { borderBottomWidth: 0 },
     archiveTitle: { flex: 1, fontSize: 14, fontWeight: '700', color: c.textPrimary },
     archiveCount: { fontSize: 13, fontWeight: '600', color: c.textSecondary },
     archiveRow: {
         flexDirection: 'row', alignItems: 'center', gap: spacing.md,
         paddingHorizontal: 14, paddingVertical: 10,
+        marginHorizontal: 16,
+        backgroundColor: c.cardBackground,
+        borderLeftWidth: 1, borderRightWidth: 1,
+        borderLeftColor: c.border, borderRightColor: c.border,
         borderTopWidth: 0.5, borderTopColor: c.borderSubtle,
+    },
+    archiveRowLast: {
+        borderBottomWidth: 1, borderBottomColor: c.border,
+        borderBottomLeftRadius: radius.lg, borderBottomRightRadius: radius.lg,
     },
     archiveRowTitle: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
     archiveRowMeta: { fontSize: 12, color: c.textMuted, marginTop: 1 },
