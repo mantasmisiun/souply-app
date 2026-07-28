@@ -27,8 +27,8 @@ import { BarChart, type BarSlice } from '../../../components/BarChart';
 import { useLevelStore } from '../../../state/levelStore';
 import { useProfileStore, fetchProfileIfStale } from '../../../state/profileStore';
 import { useAuthState } from '../../../state/authState';
-import CreatorProfileHeader from '../../../components/CreatorProfileHeader';
-import { ProfileIdentityCard } from '../../../components/ProfileIdentityCard';
+import { ProfileIdentityHeader } from '../../../components/ProfileIdentityHeader';
+import { CreatorStatsCards } from '../../../components/CreatorStatsCards';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatEuro } from '../../../utils/formatCurrency';
 import { formatMonthKey, formatMonthRange, monthAbbr, parseMonthKey } from '../../../utils/monthNames';
@@ -181,14 +181,14 @@ export default function ProfilisScreen() {
 
     const devItems: { label: string; icon: keyof typeof Ionicons.glyphMap; route: string }[] = [
         { label: t('profilis.devReceiptBatch'), icon: 'flask-outline', route: '/dev/receipt-batch' },
-        { label: 'Admin', icon: 'shield-outline', route: '/dev/admin' },
-        { label: 'Sheet stack demo', icon: 'layers-outline', route: '/dev/sheet-stack' },
     ];
 
     const progressPercent = profile ? Math.round(profile.progressFraction * 100) : 0;
     const level = profile?.level ?? 1;
     // "How do I earn points?" explainer for the level card's ? button.
     const [pointsInfoOpen, setPointsInfoOpen] = useState(false);
+    // Which skill card's "how does this work?" modal is open.
+    const [skillInfo, setSkillInfo] = useState<null | 'saving' | 'planning'>(null);
     // Inbox bell badge — polled on focus (the inbox is the source of truth).
     const [unread, setUnread] = useState(0);
     useFocusEffect(useCallback(() => {
@@ -532,23 +532,114 @@ export default function ProfilisScreen() {
             contentContainerStyle={[styles.content, { paddingTop: 0, paddingBottom: tabBarHeight + 24 }]}
         >
             <ScreenHeading title={t('tabs.profilis')} bleedX={spacing.lg} onLayout={header.onTitleLayout} />
-            {/* Creator header — avatar (tap to upload) + name + @handle +
-                aggregate template stats. Only once signed in as a creator. */}
-            {authUser && profile && (
-                <CreatorProfileHeader
+            {/* ONE identity row for every account: avatar + editable name. A
+                creator gets their photo and @handle; everyone else gets the pink
+                initial circle and "Souplyman" until they name themselves. */}
+            {profile && (
+                <ProfileIdentityHeader
                     profile={profile}
-                    onAvatarChanged={() => { invalidateProfile(); fetchProfile(); }}
-                />
-            )}
-            {/* Anonymous users have no creator header — give them an identity
-                card to set a name + colour (so joining a shared trip/home won't
-                prompt for one). */}
-            {!authUser && profile && (
-                <ProfileIdentityCard
-                    profile={profile}
+                    creator={!!authUser}
                     onChanged={() => { invalidateProfile(); fetchProfile(); }}
                 />
             )}
+            {/* Aggregate template stats — creator accounts only. */}
+            {authUser && profile && <CreatorStatsCards profile={profile} />}
+
+            {/* SKILLS ROW — Saving skills (left) + Planning skills (right), side by
+                side. Each renders only when it has a figure; a lone card still
+                fills the row, so the pair never leaves a hole. */}
+            {(() => {
+                const saved = stats?.savingsThisMonth ?? 0;
+                const lastMonth = stats?.savingsLastMonth ?? 0;
+                const showSaving = !statsLoading && saved !== 0;
+                const cur = planScore && planScore.length > 0 ? planScore[planScore.length - 1] : null;
+                const prev = planScore && planScore.length > 1 ? planScore[planScore.length - 2] : null;
+                const showPlanning = cur?.score != null;
+                if (!showSaving && !showPlanning) return null;
+
+                const positive = saved > 0;
+                const savingDelta = saved - lastMonth;
+                const savingDeltaUp = savingDelta >= 0;
+                const planDelta = cur?.score != null && prev?.score != null ? cur.score - prev.score : null;
+                const planGood = (cur?.score ?? 0) >= 70;
+
+                return (
+                    <View style={styles.skillsRow}>
+                        {showSaving && (
+                            <View style={styles.skillCard}>
+                                <View style={styles.skillHead}>
+                                    <Ionicons
+                                        name={positive ? 'trending-up-outline' : 'trending-down-outline'}
+                                        size={18}
+                                        color={positive ? colors.success : colors.textSecondary}
+                                    />
+                                    <Text style={styles.skillLabel} numberOfLines={2}>{t('profilis.savingSkills')}</Text>
+                                    <TouchableOpacity
+                                        onPress={() => setSkillInfo('saving')}
+                                        hitSlop={10}
+                                        accessibilityLabel={t('profilis.savingInfoTitle')}
+                                    >
+                                        <Ionicons name="help-circle-outline" size={18} color={colors.textMuted} />
+                                    </TouchableOpacity>
+                                </View>
+                                <Text style={[styles.skillValue, { color: positive ? colors.success : colors.textPrimary }]} numberOfLines={1}>
+                                    {formatEuro(Math.abs(saved))}
+                                </Text>
+                                {lastMonth !== 0 && (
+                                    <View style={styles.skillDeltaRow}>
+                                        <View style={styles.savingsChangeChip}>
+                                            <Ionicons
+                                                name={savingDeltaUp ? 'arrow-up' : 'arrow-down'}
+                                                size={12}
+                                                color={savingDeltaUp ? colors.success : colors.textSecondary}
+                                            />
+                                            <Text style={[styles.savingsChangePct, { color: savingDeltaUp ? colors.success : colors.textSecondary }]}>
+                                                {formatEuro(Math.abs(savingDelta))}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                )}
+                            </View>
+                        )}
+                        {showPlanning && (
+                            <View style={styles.skillCard}>
+                                <View style={styles.skillHead}>
+                                    <Ionicons
+                                        name={planGood ? 'ribbon-outline' : 'compass-outline'}
+                                        size={18}
+                                        color={planGood ? colors.success : colors.textSecondary}
+                                    />
+                                    <Text style={styles.skillLabel} numberOfLines={2}>{t('profilis.planningSkills')}</Text>
+                                    <TouchableOpacity
+                                        onPress={() => setSkillInfo('planning')}
+                                        hitSlop={10}
+                                        accessibilityLabel={t('profilis.planningInfoTitle')}
+                                    >
+                                        <Ionicons name="help-circle-outline" size={18} color={colors.textMuted} />
+                                    </TouchableOpacity>
+                                </View>
+                                <Text style={[styles.skillValue, { color: planGood ? colors.success : colors.textPrimary }]} numberOfLines={1}>
+                                    {cur!.score}/100
+                                </Text>
+                                {planDelta != null && planDelta !== 0 && (
+                                    <View style={styles.skillDeltaRow}>
+                                        <View style={styles.savingsChangeChip}>
+                                            <Ionicons
+                                                name={planDelta > 0 ? 'arrow-up' : 'arrow-down'}
+                                                size={12}
+                                                color={planDelta > 0 ? colors.success : colors.textSecondary}
+                                            />
+                                            <Text style={[styles.savingsChangePct, { color: planDelta > 0 ? colors.success : colors.textSecondary }]}>
+                                                {Math.abs(planDelta)}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                )}
+                            </View>
+                        )}
+                    </View>
+                );
+            })()}
 
             {/* Level card */}
             <View style={styles.levelCard}>
@@ -608,92 +699,32 @@ export default function ProfilisScreen() {
                 </Pressable>
             </Modal>
 
-            {/* Savings card — current month only, with a change-vs-last-month
-                chip. Only shown when this month has a non-zero figure. */}
-            {!statsLoading && (stats?.savingsThisMonth ?? 0) !== 0 && (() => {
-                const saved = stats?.savingsThisMonth ?? 0;
-                const positive = saved > 0;
-                const lastMonth = stats?.savingsLastMonth ?? 0;
-                // € change vs last month's savings figure. Hidden when there's
-                // no last-month baseline. Up = savings improved (delta ≥ 0).
-                const hasBaseline = lastMonth !== 0;
-                const delta = saved - lastMonth;
-                const deltaUp = delta >= 0;
-                return (
-                    <View style={styles.savingsCard}>
-                        <Ionicons
-                            name={positive ? 'trending-up-outline' : 'trending-down-outline'}
-                            size={22}
-                            color={positive ? colors.success : colors.textSecondary}
-                            style={{ marginRight: spacing.md }}
-                        />
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.savingsLabel}>
-                                {positive ? t('profilis.savedThisMonth') : t('profilis.couldHaveSavedThisMonth')}
-                            </Text>
-                            <Text style={[styles.savingsAmount, { color: positive ? colors.success : colors.textPrimary }]}>
-                                {formatEuro(Math.abs(saved))}
-                            </Text>
-                        </View>
-                        {hasBaseline && (
-                            <View style={styles.savingsChange}>
-                                <View style={styles.savingsChangeChip}>
-                                    <Ionicons
-                                        name={deltaUp ? 'arrow-up' : 'arrow-down'}
-                                        size={12}
-                                        color={deltaUp ? colors.success : colors.textSecondary}
-                                    />
-                                    <Text style={[styles.savingsChangePct, { color: deltaUp ? colors.success : colors.textSecondary }]}>
-                                        {formatEuro(Math.abs(delta))}
-                                    </Text>
-                                </View>
-                                <Text style={styles.savingsChangeCaption}>{t('profilis.vsLastMonth')}</Text>
+            {/* How each skill figure is computed — one line per input, so the
+                number is never a black box. Replaces the caption that used to
+                bleed out of the (now half-width) card. */}
+            <Modal visible={skillInfo !== null} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setSkillInfo(null)}>
+                <Pressable style={styles.infoOverlay} onPress={() => setSkillInfo(null)}>
+                    <Pressable style={styles.infoCard} onPress={() => {}}>
+                        <Text style={styles.infoTitle}>
+                            {skillInfo === 'planning' ? t('profilis.planningInfoTitle') : t('profilis.savingInfoTitle')}
+                        </Text>
+                        {(skillInfo === 'planning'
+                            ? ['✅', '🛒', '📍', '📅']
+                            : ['🧾', '💶', '📅']
+                        ).map((icon, i) => (
+                            <View key={i} style={styles.infoBulletRow}>
+                                <View style={styles.infoBulletLead}><Text style={styles.infoBulletIcon}>{icon}</Text></View>
+                                <Text style={styles.infoBulletText}>
+                                    {t(`profilis.${skillInfo === 'planning' ? 'planning' : 'saving'}InfoBullet${i + 1}`)}
+                                </Text>
                             </View>
-                        )}
-                    </View>
-                );
-            })()}
-
-            {/* Planning score card (2.0) — current month + Δ vs previous. */}
-            {(() => {
-                if (!planScore || planScore.length < 1) return null;
-                const cur = planScore[planScore.length - 1];
-                const prev = planScore.length > 1 ? planScore[planScore.length - 2] : null;
-                if (cur.score == null) return null;
-                const delta = prev?.score != null ? cur.score - prev.score : null;
-                const good = cur.score >= 70;
-                return (
-                    <View style={styles.savingsCard}>
-                        <Ionicons
-                            name={good ? 'ribbon-outline' : 'compass-outline'}
-                            size={22}
-                            color={good ? colors.success : colors.textSecondary}
-                            style={{ marginRight: spacing.md }}
-                        />
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.savingsLabel}>{t('profilis.planningScore')}</Text>
-                            <Text style={[styles.savingsAmount, { color: good ? colors.success : colors.textPrimary }]}>
-                                {cur.score}/100
-                            </Text>
-                        </View>
-                        {delta != null && delta !== 0 && (
-                            <View style={styles.savingsChange}>
-                                <View style={styles.savingsChangeChip}>
-                                    <Ionicons
-                                        name={delta > 0 ? 'arrow-up' : 'arrow-down'}
-                                        size={12}
-                                        color={delta > 0 ? colors.success : colors.textSecondary}
-                                    />
-                                    <Text style={[styles.savingsChangePct, { color: delta > 0 ? colors.success : colors.textSecondary }]}>
-                                        {Math.abs(delta)}
-                                    </Text>
-                                </View>
-                                <Text style={styles.savingsChangeCaption}>{t('profilis.vsLastMonthScore')}</Text>
-                            </View>
-                        )}
-                    </View>
-                );
-            })()}
+                        ))}
+                        <TouchableOpacity style={styles.infoButton} onPress={() => setSkillInfo(null)} activeOpacity={0.85}>
+                            <Text style={styles.infoButtonText}>{t('common.gotIt')}</Text>
+                        </TouchableOpacity>
+                    </Pressable>
+                </Pressable>
+            </Modal>
 
             {/* Stats carousel */}
             <View style={styles.statsCard}>
@@ -765,24 +796,8 @@ export default function ProfilisScreen() {
 
             {/* Quick links */}
             <View style={{ marginTop: spacing.sm }}>
-                {/* 2.0 re-homes: the former Sąrašas + Analizė tabs live here as
-                    management/history views (spec: above Voting history). */}
-                <TouchableOpacity
-                    style={styles.row}
-                    onPress={() => router.push('/shopping-list' as any)}
-                >
-                    <Ionicons name="list-outline" size={iconSize.lg} color={colors.textSecondary} />
-                    <Text style={styles.rowText}>{t('profilis.shoppingLists')}</Text>
-                    <Ionicons name="chevron-forward" size={iconSize.md} color={colors.textMuted} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                    style={styles.row}
-                    onPress={() => router.push('/receipt' as any)}
-                >
-                    <Ionicons name="receipt-outline" size={iconSize.lg} color={colors.textSecondary} />
-                    <Text style={styles.rowText}>{t('profilis.receipts')}</Text>
-                    <Ionicons name="chevron-forward" size={iconSize.md} color={colors.textMuted} />
-                </TouchableOpacity>
+                {/* Lists and receipts are managed entirely from Apsipirkimai —
+                    they had shortcuts here while the 2.0 trip flow was landing. */}
                 <TouchableOpacity
                     style={styles.row}
                     onPress={() => router.push('/profile/vote-history')}
@@ -935,20 +950,24 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: radius.pill },
     progressLabel: { ...typography.labelSmall, fontWeight: '400', color: c.textMuted },
 
-    savingsCard: {
+    // Two half-width skill cards sitting side by side. Vertical inside (label →
+    // figure → delta) because half the width can't hold the old row layout.
+    skillsRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+    skillCard: {
+        flex: 1,
         backgroundColor: c.cardBackground,
         borderRadius: radius.lg,
         paddingVertical: spacing.lg,
-        paddingHorizontal: spacing.xl,
-        marginBottom: spacing.md,
-        flexDirection: 'row',
-        alignItems: 'center',
+        paddingHorizontal: spacing.lg,
+        gap: 4,
         borderWidth: 1,
         borderColor: c.borderSubtle,
     },
-    savingsLabel: { ...typography.label, fontWeight: '500', color: c.textSecondary, marginBottom: 2 },
-    savingsAmount: { ...typography.heading, fontWeight: '700' },
-    savingsChange: { alignItems: 'flex-end', marginLeft: spacing.sm },
+    skillHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    // The label flexes so the ? button pins to the card's right edge.
+    skillLabel: { ...typography.label, fontWeight: '500', color: c.textSecondary, flex: 1 },
+    skillValue: { ...typography.heading, fontWeight: '700' },
+    skillDeltaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     savingsChangeChip: {
         flexDirection: 'row', alignItems: 'center', gap: 2,
         backgroundColor: c.primaryMuted,
@@ -956,7 +975,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderRadius: radius.pill,
     },
     savingsChangePct: { ...typography.labelSmall, fontWeight: '700' },
-    savingsChangeCaption: { ...typography.caption, color: c.textMuted, marginTop: 2 },
 
     statsCard: {
         backgroundColor: c.cardBackground,

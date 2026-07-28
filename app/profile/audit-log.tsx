@@ -133,7 +133,7 @@ export default function AuditLogScreen() {
                 <>
                 {/* Always-pinned filter row: Fabric mis-hit-tests transformed
                     sticky headers (touches fall through to the list). */}
-                        <View style={[styles.chipsSurface, { marginHorizontal: -12 }]}>
+                        <View onLayout={header.onPinnedLayout} style={[styles.chipsSurface, { marginHorizontal: -12 }]}>
                             <ScrollView
                                 horizontal
                                 showsHorizontalScrollIndicator={false}

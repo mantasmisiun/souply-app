@@ -1,6 +1,6 @@
 import {
-    View, Text, ScrollView, TouchableOpacity, StyleSheet,
-    Modal, Platform, Alert,
+    View, Text, TouchableOpacity, StyleSheet,
+    Platform, Alert,
 } from 'react-native';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'expo-router';
@@ -17,6 +17,8 @@ import { signInWithGoogle, signInWithApple, isAppleSignInAvailable } from '../..
 import { exchangeOauthToken } from '../../utils/authApi';
 import { useAuthState, DEV_SESSION_TOKEN } from '../../state/authState';
 import { CreateUsernameModal } from '../../components/CreateUsernameModal';
+import { GlassSheet } from '../../components/GlassSheet';
+import { SheetCloseButton } from '../../components/SheetCloseButton';
 import { OAuthButton } from '../../components/OAuthButton';
 
 const INTRO_SEEN_KEY = 'creator_intro_seen_v1';
@@ -202,35 +204,40 @@ export default function CreatorAuthScreen() {
                 </TouchableOpacity>
             </Animated.ScrollView>
 
-            {/* First-open benefits modal */}
-            <Modal visible={showIntro} transparent animationType="slide" onRequestClose={dismissIntro}>
-                <View style={styles.modalBackdrop}>
-                    <View style={styles.modalSheet}>
-                        <Text style={styles.modalTitle}>{t('creatorAuth.introTitle')}</Text>
-                        <Text style={styles.modalSub}>{t('creatorAuth.introSubtitle')}</Text>
-                        <ScrollView style={styles.cardsScroll} showsVerticalScrollIndicator={false}>
-                            {CARDS.map(({ key, icon, disclaimer }) => (
-                                <View key={key} style={[styles.card, disclaimer && styles.cardDisclaimer]}>
-                                    <View style={[styles.cardIcon, disclaimer && styles.cardIconDisclaimer]}>
-                                        <Ionicons
-                                            name={icon}
-                                            size={20}
-                                            color={disclaimer ? colors.textSecondary : colors.primary}
-                                        />
-                                    </View>
-                                    <View style={styles.cardTextWrap}>
-                                        <Text style={styles.cardTitle}>{t(`creatorAuth.cards.${key}.title`)}</Text>
-                                        <Text style={styles.cardBody}>{t(`creatorAuth.cards.${key}.body`)}</Text>
-                                    </View>
-                                </View>
-                            ))}
-                        </ScrollView>
-                        <TouchableOpacity style={styles.gotItBtn} onPress={dismissIntro} activeOpacity={0.85}>
-                            <Text style={styles.gotItText}>{t('creatorAuth.gotIt')}</Text>
-                        </TouchableOpacity>
+            {/* First-open benefits sheet — the app's ONE glass sheet, not a bare
+                RN <Modal> with a hand-rolled panel. Mounted only while open (the
+                sheet animates itself in and calls onClose after animating out).
+                Dismissal is the X in the title row, the backdrop, a drag-down or
+                hardware back — no full-width button eating the bottom. */}
+            {showIntro && (
+                <GlassSheet autoHeight onClose={dismissIntro}>
+                    {/* GlassSheet's scroll is edge-to-edge — content owns its padding. */}
+                    <View style={styles.sheetBody}>
+                    <View style={styles.sheetTitleRow}>
+                        <View style={styles.sheetTitleCol}>
+                            <Text style={styles.modalTitle}>{t('creatorAuth.introTitle')}</Text>
+                            <Text style={styles.modalSub}>{t('creatorAuth.introSubtitle')}</Text>
+                        </View>
+                        <SheetCloseButton />
                     </View>
-                </View>
-            </Modal>
+                    {CARDS.map(({ key, icon, disclaimer }) => (
+                        <View key={key} style={[styles.card, disclaimer && styles.cardDisclaimer]}>
+                            <View style={[styles.cardIcon, disclaimer && styles.cardIconDisclaimer]}>
+                                <Ionicons
+                                    name={icon}
+                                    size={20}
+                                    color={disclaimer ? colors.textSecondary : colors.primary}
+                                />
+                            </View>
+                            <View style={styles.cardTextWrap}>
+                                <Text style={styles.cardTitle}>{t(`creatorAuth.cards.${key}.title`)}</Text>
+                                <Text style={styles.cardBody}>{t(`creatorAuth.cards.${key}.body`)}</Text>
+                            </View>
+                        </View>
+                    ))}
+                    </View>
+                </GlassSheet>
+            )}
 
             {/* Required first-sign-in username picker. */}
             <CreateUsernameModal
@@ -279,14 +286,11 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     whoLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8 },
     whoLinkText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
 
-    modalBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
-    modalSheet: {
-        backgroundColor: c.pageBackground, borderTopLeftRadius: 24, borderTopRightRadius: 24,
-        padding: 20, maxHeight: '85%',
-    },
+    sheetBody: { paddingHorizontal: 20, paddingBottom: 20 },
+    sheetTitleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 16 },
+    sheetTitleCol: { flex: 1, minWidth: 0 },
     modalTitle: { fontSize: 20, fontWeight: '800', color: c.textPrimary },
-    modalSub: { fontSize: 13, color: c.textSecondary, marginTop: 2, marginBottom: 16, textTransform: 'uppercase', letterSpacing: 1, fontWeight: '700' },
-    cardsScroll: { flexGrow: 0 },
+    modalSub: { fontSize: 13, color: c.textSecondary, marginTop: 2, textTransform: 'uppercase', letterSpacing: 1, fontWeight: '700' },
     card: {
         flexDirection: 'row', gap: 14, padding: 14, borderRadius: 16,
         backgroundColor: c.cardBackground, marginBottom: 10,
@@ -300,8 +304,4 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     cardTextWrap: { flex: 1 },
     cardTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary, marginBottom: 2 },
     cardBody: { fontSize: 13, color: c.textSecondary, lineHeight: 18 },
-    gotItBtn: {
-        marginTop: 8, backgroundColor: c.primary, borderRadius: 14, paddingVertical: 15, alignItems: 'center',
-    },
-    gotItText: { color: '#fff', fontSize: 16, fontWeight: '700' },
 });

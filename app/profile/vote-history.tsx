@@ -5,21 +5,23 @@ import {
     SectionList,
     ScrollView,
     TouchableOpacity,
-    Modal,
-    Pressable,
     TextInput,
+    Keyboard,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useFocusEffect } from 'expo-router';
 import Animated from 'react-native-reanimated';
 import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { ScreenHeading } from '../../components/ScreenHeading';
 import { GlassIconButton } from '../../components/GlassIconButton';
+import { GlassSheet } from '../../components/GlassSheet';
+import { SheetCloseButton } from '../../components/SheetCloseButton';
+import { SwipeCompareCard } from '../../components/swipe/SwipeCompareCard';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { Ionicons } from '@expo/vector-icons';
-import { useTheme, type AppTheme } from '../../constants/theme';
+import { useTheme, spacing, radius, elevation, type AppTheme } from '../../constants/theme';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { formatDate as formatLocalisedDate } from '../../utils/formatCurrency';
@@ -48,6 +50,13 @@ interface VoteRow {
     chainNameA: string;
     nameB: string;
     chainNameB: string;
+    // The history endpoint has always returned these (getVoteHistory selects
+    // sp.imageUrl + sc.logoUrl for both sides); the screen simply never declared
+    // them. They're what lets the sheet render the real swipe card.
+    imageUrlA?: string | null;
+    chainLogoUrlA?: string | null;
+    imageUrlB?: string | null;
+    chainLogoUrlB?: string | null;
 }
 
 interface VotePage {
@@ -98,6 +107,10 @@ export default function VoteHistoryScreen() {
     const [saving, setSaving] = useState(false);
 
 
+    // Uncontrolled (defaultValue + ref) like the discounts search: the input
+    // lives in the list header, and a controlled value would re-render it on
+    // every keystroke.
+    const searchInputRef = useRef<TextInput>(null);
     const searchDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
     const [debouncedSearch, setDebouncedSearch] = useState('');
 
@@ -217,6 +230,58 @@ export default function VoteHistoryScreen() {
         );
     };
 
+    const clearSearch = useCallback(() => {
+        setSearch('');
+        searchInputRef.current?.clear();
+    }, []);
+
+    // Title + search pill + filter chips — the same search pill the discounts /
+    // catalog lists use, so every searchable list looks like one family.
+    const listHeader = (
+        <>
+            <ScreenHeading title={t('screens.voteHistory')} onLayout={header.onTitleLayout} />
+            <View style={styles.searchFieldWrap}>
+                <View style={styles.searchPill}>
+                    <Ionicons name="search" size={18} color={colors.textMuted} />
+                    <TextInput
+                        ref={searchInputRef}
+                        defaultValue={search}
+                        onChangeText={setSearch}
+                        placeholder={t('voteHistory.searchPlaceholder')}
+                        placeholderTextColor={colors.textMuted}
+                        returnKeyType="search"
+                        onSubmitEditing={() => Keyboard.dismiss()}
+                        style={styles.searchField}
+                    />
+                    {search.length > 0 ? (
+                        <TouchableOpacity onPress={clearSearch} hitSlop={10}>
+                            <Ionicons name="close" size={18} color={colors.textMuted} />
+                        </TouchableOpacity>
+                    ) : null}
+                </View>
+            </View>
+            <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                style={styles.bubblesRow}
+                contentContainerStyle={styles.bubblesContainer}
+                keyboardShouldPersistTaps="handled"
+            >
+                {FILTERS.map(f => (
+                    <TouchableOpacity
+                        key={f.key}
+                        style={[styles.bubble, filter === f.key && styles.bubbleActive]}
+                        onPress={() => setFilter(f.key)}
+                    >
+                        <Text style={[styles.bubbleText, filter === f.key && styles.bubbleTextActive]}>
+                            {f.label}
+                        </Text>
+                    </TouchableOpacity>
+                ))}
+            </ScrollView>
+        </>
+    );
+
     const listFooter = loadingMore ? (
         <MaterialProgress color={colors.primary} style={{ marginVertical: 16 }} />
     ) : null;
@@ -239,132 +304,116 @@ export default function VoteHistoryScreen() {
 
             {loading ? (
                 <MaterialProgress color={colors.primary} style={{ marginTop: 48 }} />
-            ) : votes.length === 0 ? (
-                <View style={[styles.empty, { paddingTop: 24 }]}>
-                    <Ionicons name="layers-outline" size={48} color={colors.textMuted} />
-                    <Text style={styles.emptyText}>
-                        {debouncedSearch || filter !== 'all' ? t('voteHistory.emptyFiltered') : t('voteHistory.emptyNone')}
-                    </Text>
-                </View>
             ) : (
-                <>
-                {/* Always-pinned filter row: Fabric mis-hit-tests transformed
-                    sticky headers (touches fall through to the list). */}
-                        <View style={{ backgroundColor: colors.pageBackground, marginHorizontal: -16 }}>
-                            <View style={styles.searchRow}>
-                                <Ionicons name="search-outline" size={18} color={colors.textMuted} style={styles.searchIcon} />
-                                <TextInput
-                                    style={styles.searchInput}
-                                    placeholder={t('voteHistory.searchPlaceholder')}
-                                    placeholderTextColor={colors.textMuted}
-                                    value={search}
-                                    onChangeText={setSearch}
-                                    returnKeyType="search"
-                                    clearButtonMode="while-editing"
-                                />
-                            </View>
-                            <ScrollView
-                                horizontal
-                                showsHorizontalScrollIndicator={false}
-                                style={styles.bubblesRow}
-                                contentContainerStyle={styles.bubblesContainer}
-                            >
-                                {FILTERS.map(f => (
-                                    <TouchableOpacity
-                                        key={f.key}
-                                        style={[styles.bubble, filter === f.key && styles.bubbleActive]}
-                                        onPress={() => setFilter(f.key)}
-                                    >
-                                        <Text style={[styles.bubbleText, filter === f.key && styles.bubbleTextActive]}>
-                                            {f.label}
-                                        </Text>
-                                    </TouchableOpacity>
-                                ))}
-                            </ScrollView>
-                        </View>
                 <AnimatedSectionList
                     {...header.scroll}
-                    ListHeaderComponent={<ScreenHeading title={t('screens.voteHistory')} onLayout={header.onTitleLayout} />}
+                    // Screen order, top to bottom: big title (scrolls away under
+                    // the bar) → search → filter chips → rows. All of it rides in
+                    // the list header, so the chips can never sit ABOVE the title
+                    // the way they did when they were pinned outside the list.
+                    // ELEMENT, not a function component: a new component type each
+                    // render would remount the search input and drop its focus.
+                    ListHeaderComponent={listHeader}
                     sections={[{ data: votes }]}
                     keyExtractor={(v: any) => `${v.spIdA}-${v.spIdB}`}
                     renderItem={renderItem}
                     contentContainerStyle={[styles.list, { paddingTop: 0 }]}
+                    keyboardDismissMode="on-drag"
+                    keyboardShouldPersistTaps="handled"
                     onEndReached={loadMore}
                     onEndReachedThreshold={0.3}
+                    ListEmptyComponent={
+                        <View style={styles.empty}>
+                            <Ionicons name="layers-outline" size={48} color={colors.textMuted} />
+                            <Text style={styles.emptyText}>
+                                {debouncedSearch || filter !== 'all' ? t('voteHistory.emptyFiltered') : t('voteHistory.emptyNone')}
+                            </Text>
+                        </View>
+                    }
                     ListFooterComponent={listFooter}
                 />
-                </>
             )}
 
-            {/* Help modal */}
-            <Modal
-                visible={showHelp}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setShowHelp(false)}
-            >
-                <Pressable style={styles.backdrop} onPress={() => setShowHelp(false)}>
-                    <Pressable style={styles.sheet} onPress={e => e.stopPropagation()}>
-                        <View style={styles.helpIconRow}>
-                            <Ionicons name="layers-outline" size={32} color={colors.primary} />
+            {/* Help — the app's glass sheet (blur, grabber, drag/backdrop/back
+                dismiss), with the X in the title row instead of a full-width
+                close button. */}
+            {showHelp && (
+                <GlassSheet autoHeight onClose={() => setShowHelp(false)}>
+                    {/* GlassSheet's scroll is edge-to-edge — content owns its padding. */}
+                    <View style={styles.sheetBody}>
+                    <View style={styles.sheetTitleRow}>
+                        <View style={styles.helpIconBadge}>
+                            <Ionicons name="layers-outline" size={22} color={colors.primary} />
                         </View>
                         <Text style={styles.sheetTitle}>{t('voteHistory.helpTitle')}</Text>
-                        <Text style={styles.helpText}>{t('voteHistory.helpBody1')}</Text>
-                        <Text style={styles.helpText}>{t('voteHistory.helpBody2')}</Text>
-                        <Text style={styles.helpText}>{t('voteHistory.helpBody3')}</Text>
-                        <TouchableOpacity style={styles.helpCloseBtn} onPress={() => setShowHelp(false)}>
-                            <Text style={styles.helpCloseBtnText}>{t('voteHistory.helpClose')}</Text>
-                        </TouchableOpacity>
-                    </Pressable>
-                </Pressable>
-            </Modal>
+                        <SheetCloseButton />
+                    </View>
+                    <Text style={styles.helpText}>{t('voteHistory.helpBody1')}</Text>
+                    <Text style={styles.helpText}>{t('voteHistory.helpBody2')}</Text>
+                    <Text style={styles.helpText}>{t('voteHistory.helpBody3')}</Text>
+                    </View>
+                </GlassSheet>
+            )}
 
-            {/* Edit modal */}
-            <Modal
-                visible={editing !== null}
-                transparent
-                animationType="fade"
-                onRequestClose={() => !saving && setEditing(null)}
-            >
-                <Pressable style={styles.backdrop} onPress={() => !saving && setEditing(null)}>
-                    <Pressable style={styles.sheet} onPress={e => e.stopPropagation()}>
-                        <Text style={styles.sheetTitle}>{t('voteHistory.editTitle')}</Text>
-                        {editing && (
-                            <Text style={styles.sheetPair} numberOfLines={2}>
-                                {editing.nameA} · {editing.nameB}
-                            </Text>
-                        )}
-
-                        {saving ? (
-                            <MaterialProgress color={colors.primary} style={{ marginVertical: 24 }} />
-                        ) : (
-                            <View style={styles.optionList}>
-                                {(['identical', 'similar', 'different'] as VoteValue[]).map(v => {
-                                    const active = editing?.vote === v;
-                                    const color = voteColor(v, colors);
-                                    return (
-                                        <TouchableOpacity
-                                            key={v}
-                                            style={[styles.option, active && { borderColor: color, backgroundColor: color + '18' }]}
-                                            onPress={() => submitEdit(v)}
-                                        >
-                                            <Ionicons name={VOTE_ICONS[v]} size={20} color={color} />
-                                            <Text style={[styles.optionLabel, active && { color }]}>
-                                                {voteLabel(v, t)}
-                                            </Text>
-                                            {active && <Ionicons name="checkmark" size={18} color={color} />}
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                            </View>
-                        )}
-
-                        <TouchableOpacity style={styles.cancelBtn} onPress={() => setEditing(null)} disabled={saving}>
-                            <Text style={styles.cancelText}>{t('common.cancel')}</Text>
-                        </TouchableOpacity>
-                    </Pressable>
-                </Pressable>
-            </Modal>
+            {/* Re-vote — same glass sheet, so the screen doesn't mix two sheet
+                looks. Picking an option saves and closes; X / backdrop cancels. */}
+            {editing !== null && (
+                // Opens tall (not autoHeight): the pair card is the point of this
+                // sheet, so it gets the room the swipe queue gives it.
+                <GlassSheet mediumFraction={0.88} onClose={() => { if (!saving) setEditing(null); }}>
+                    <View style={styles.sheetBody}>
+                    <View style={styles.sheetTitleRow}>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                            <Text style={styles.sheetTitle}>{t('voteHistory.editTitle')}</Text>
+                        </View>
+                        <SheetCloseButton />
+                    </View>
+                    {/* THE swipe-queue card, same component — minus the swipe
+                        gestures and the action bar. The current vote is shown as
+                        the selected option below and can be changed there. */}
+                    {editing && (
+                        <SwipeCompareCard
+                            style={styles.pairCard}
+                            left={{
+                                name: editing.nameA,
+                                chainName: editing.chainNameA,
+                                chainLogoUrl: editing.chainLogoUrlA,
+                                imageUrl: editing.imageUrlA,
+                            }}
+                            right={{
+                                name: editing.nameB,
+                                chainName: editing.chainNameB,
+                                chainLogoUrl: editing.chainLogoUrlB,
+                                imageUrl: editing.imageUrlB,
+                            }}
+                        />
+                    )}
+                    {saving ? (
+                        <MaterialProgress color={colors.primary} style={{ marginVertical: 24 }} />
+                    ) : (
+                        <View style={styles.optionList}>
+                            {(['identical', 'similar', 'different'] as VoteValue[]).map(v => {
+                                const active = editing?.vote === v;
+                                const color = voteColor(v, colors);
+                                return (
+                                    <TouchableOpacity
+                                        key={v}
+                                        style={[styles.option, active && { borderColor: color, backgroundColor: color + '18' }]}
+                                        onPress={() => submitEdit(v)}
+                                    >
+                                        <Ionicons name={VOTE_ICONS[v]} size={20} color={color} />
+                                        <Text style={[styles.optionLabel, active && { color }]}>
+                                            {voteLabel(v, t)}
+                                        </Text>
+                                        {active && <Ionicons name="checkmark" size={18} color={color} />}
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </View>
+                    )}
+                    </View>
+                </GlassSheet>
+            )}
         </View>
     );
 }
@@ -373,15 +422,17 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     list: { padding: 16, gap: 10 },
 
-    searchRow: {
-        flexDirection: 'row', alignItems: 'center',
-        marginHorizontal: 12, marginTop: 10,
+    // Same search pill as the discounts / catalog lists.
+    searchFieldWrap: { paddingTop: 2, paddingBottom: 8 },
+    searchPill: {
+        flexDirection: 'row', alignItems: 'center', gap: 8,
         backgroundColor: c.cardBackground,
-        borderRadius: 10, borderWidth: 1, borderColor: c.borderSubtle,
-        paddingHorizontal: 10, paddingVertical: 8,
+        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+        borderRadius: radius.pill,
+        paddingHorizontal: 14, height: 44,
+        elevation: 2,
     },
-    searchIcon: { marginRight: 6 },
-    searchInput: { flex: 1, fontSize: 14, color: c.textPrimary },
+    searchField: { flex: 1, fontSize: 15, color: c.textPrimary, paddingVertical: 0 },
 
     card: {
         backgroundColor: c.cardBackground,
@@ -404,45 +455,36 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     cardMeta: { alignItems: 'flex-end', gap: 4 },
     dateText: { fontSize: 12, color: c.textMuted },
 
-    bubblesRow: { flexGrow: 0, flexShrink: 0 },
-    bubblesContainer: { paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
+    bubblesRow: { flexGrow: 0, flexShrink: 0, marginHorizontal: -16 },
+    bubblesContainer: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
     bubble: {
-        paddingHorizontal: 14, paddingVertical: 7,
-        borderRadius: 20, borderWidth: 1,
+        paddingHorizontal: 16, paddingVertical: 8,
+        borderRadius: radius.pill, borderWidth: 1,
         borderColor: c.border, backgroundColor: c.cardBackground,
     },
-    bubbleActive: { backgroundColor: c.primary, borderColor: c.primary },
+    bubbleActive: { backgroundColor: c.primary, borderColor: c.primary, ...elevation.level1 },
     bubbleText: { fontSize: 13, color: c.textPrimary },
     bubbleTextActive: { color: c.onPrimary, fontWeight: '600' },
 
-    empty: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12, paddingVertical: 48 },
+    empty: { alignItems: 'center', justifyContent: 'center', gap: 12, paddingVertical: 48 },
     emptyText: { fontSize: 15, color: c.textMuted },
 
-    backdrop: { flex: 1, backgroundColor: c.overlayBackdrop, justifyContent: 'flex-end' },
-    sheet: {
-        backgroundColor: c.cardBackground,
-        borderTopLeftRadius: 20,
-        borderTopRightRadius: 20,
-        padding: 24,
-        paddingBottom: 40,
-    },
-    sheetTitle: { fontSize: 17, fontWeight: '700', color: c.textPrimary, marginBottom: 4 },
-    sheetPair: { fontSize: 13, color: c.textSecondary, marginBottom: 20 },
-    optionList: { gap: 10, marginBottom: 16 },
+    // Sheet chrome (backdrop, panel, corners) belongs to GlassSheet now — what
+    // remains here is only the CONTENT of those sheets.
+    sheetBody: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
+    sheetTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md },
+    sheetTitle: { flex: 1, fontSize: 17, fontWeight: '700', color: c.textPrimary },
+    pairCard: { alignSelf: 'center', marginBottom: spacing.lg },
+    optionList: { gap: 10 },
     option: {
         flexDirection: 'row', alignItems: 'center', gap: 12,
         paddingVertical: 14, paddingHorizontal: 16,
         borderRadius: 10, borderWidth: 1.5, borderColor: c.borderSubtle,
     },
     optionLabel: { flex: 1, fontSize: 15, fontWeight: '500', color: c.textPrimary },
-    cancelBtn: { marginTop: 4, alignItems: 'center', paddingVertical: 12 },
-    cancelText: { fontSize: 15, color: c.textSecondary },
-
-    helpIconRow: { alignItems: 'center', marginBottom: 12 },
-    helpText: { fontSize: 14, color: c.textSecondary, lineHeight: 21, marginBottom: 10 },
-    helpCloseBtn: {
-        marginTop: 8, backgroundColor: c.primary,
-        borderRadius: 10, paddingVertical: 13, alignItems: 'center',
+    helpIconBadge: {
+        width: 40, height: 40, borderRadius: radius.pill,
+        backgroundColor: c.primaryMuted, alignItems: 'center', justifyContent: 'center',
     },
-    helpCloseBtnText: { fontSize: 15, fontWeight: '600', color: c.onPrimary },
+    helpText: { fontSize: 14, color: c.textSecondary, lineHeight: 21, marginBottom: 10 },
 });
