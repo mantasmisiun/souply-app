@@ -1,15 +1,14 @@
 import {
     Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect ,
+    useLocalSearchParams,
+    useRouter } from "expo-router";
 import { useTranslation } from "react-i18next";
 import * as Haptics from "expo-haptics";
 import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
-import {
-    useLocalSearchParams,
-    useRouter } from "expo-router";
 import Animated from "react-native-reanimated";
 import { memo,
     useCallback,

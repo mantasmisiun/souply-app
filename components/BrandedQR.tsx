@@ -78,7 +78,7 @@ const styles = StyleSheet.create({
     },
     // In-sheet: the glass clip would cut a drop-shadow at the sides — flat
     // card (no shadow, no border), tighter frame.
-    logoOverlayBox: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+    logoOverlayBox: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
     cardFlat: {
         shadowOpacity: 0, shadowRadius: 0, elevation: 0, padding: 12,
     },

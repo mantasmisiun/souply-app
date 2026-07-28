@@ -277,8 +277,8 @@ export function GlassSheet({
 const makeStyles = (c: AppTheme, isDark: boolean) => {
     const glass = makeGlassLayerStyles(c, isDark);
     return StyleSheet.create({
-        root: { ...StyleSheet.absoluteFillObject, zIndex: 30, elevation: 30, justifyContent: 'flex-end' },
-        backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: c.overlayBackdrop },
+        root: { ...StyleSheet.absoluteFill, zIndex: 30, elevation: 30, justifyContent: 'flex-end' },
+        backdrop: { ...StyleSheet.absoluteFill, backgroundColor: c.overlayBackdrop },
         panel: {
             position: 'absolute', left: 0, right: 0, bottom: 0,
             overflow: 'hidden',

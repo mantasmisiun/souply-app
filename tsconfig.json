@@ -9,7 +9,11 @@
       "@shared/*": [
         "./shared/*"
       ]
-    }
+    },
+    "types": [
+      "jest",
+      "node"
+    ]
   },
   "include": [
     "**/*.ts",

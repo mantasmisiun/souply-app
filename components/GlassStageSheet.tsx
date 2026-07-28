@@ -552,20 +552,20 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
                             pointerEvents="none"
                             intensity={isDark ? 40 : 55}
                             tint={isDark ? 'dark' : 'light'}
-                            style={StyleSheet.absoluteFillObject}
+                            style={StyleSheet.absoluteFill}
                         />
                         <View
                             pointerEvents="none"
-                            style={[StyleSheet.absoluteFillObject, { backgroundColor: withAlpha(colors.surfaceContainer, 0.8) }]}
+                            style={[StyleSheet.absoluteFill, { backgroundColor: withAlpha(colors.surfaceContainer, 0.8) }]}
                         />
                     </>
                 ) : (
-                    <LiquidGlass fallback="blur" style={[StyleSheet.absoluteFillObject, { borderRadius: cornerR }]} />
+                    <LiquidGlass fallback="blur" style={[StyleSheet.absoluteFill, { borderRadius: cornerR }]} />
                 )}
                 {dockAtLast && (
                     <Animated.View
                         pointerEvents="none"
-                        style={[StyleSheet.absoluteFillObject, { backgroundColor: colors.pageBackground }, solidBgStyle]}
+                        style={[StyleSheet.absoluteFill, { backgroundColor: colors.pageBackground }, solidBgStyle]}
                     />
                 )}
             </Animated.View>
@@ -580,7 +580,7 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
             </Animated.View>
 
             {/* Counter-scale wrapper (identity in float mode). */}
-            <Animated.View style={[StyleSheet.absoluteFillObject, counterScaleStyle]} pointerEvents="box-none">
+            <Animated.View style={[StyleSheet.absoluteFill, counterScaleStyle]} pointerEvents="box-none">
                 {/* Body viewport: root-fixed, ends at the bar's top edge. The
                     page-stack row slides horizontally inside it (plain children
                     = a 1-page stack, so this is the only body code path). */}

@@ -419,7 +419,7 @@ export default function UnifiedShoppingListScreen() {
             {/* Whole-trip completion confirm — every store's items are checked. */}
             <Modal visible={tripCompleteModal} transparent animationType="fade" onRequestClose={() => setTripCompleteModal(false)}>
                 <View style={mStyles(colors).overlay}>
-                    <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setTripCompleteModal(false)} />
+                    <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setTripCompleteModal(false)} />
                     <View style={mStyles(colors).card}>
                         <Text style={mStyles(colors).title}>{t('shoppingListDetail.completeTitle')}</Text>
                         <Text style={mStyles(colors).body}>{t('shoppingListDetail.completeConfirm')}</Text>
@@ -439,7 +439,7 @@ export default function UnifiedShoppingListScreen() {
                 this list from the basket, so the current progress is lost. */}
             <Modal visible={changeStoreConfirm} transparent animationType="fade" onRequestClose={() => setChangeStoreConfirm(false)}>
                 <View style={mStyles(colors).overlay}>
-                    <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setChangeStoreConfirm(false)} />
+                    <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setChangeStoreConfirm(false)} />
                     <View style={mStyles(colors).card}>
                         <Text style={mStyles(colors).title}>{t('shoppingListDetail.changeStoreTitle')}</Text>
                         <Text style={mStyles(colors).body}>{t('shoppingListDetail.changeStoreConfirm')}</Text>
@@ -458,7 +458,7 @@ export default function UnifiedShoppingListScreen() {
             {/* View-receipts with unchecked items — completing is irreversible. */}
             <Modal visible={viewConfirm} transparent animationType="fade" onRequestClose={() => setViewConfirm(false)}>
                 <View style={mStyles(colors).overlay}>
-                    <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setViewConfirm(false)} />
+                    <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setViewConfirm(false)} />
                     <View style={mStyles(colors).card}>
                         <Text style={mStyles(colors).title}>{t('shoppingListDetail.viewReceiptsTitle')}</Text>
                         <Text style={mStyles(colors).body}>{t('shoppingListDetail.viewReceiptsBody')}</Text>

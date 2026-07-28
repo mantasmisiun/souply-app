@@ -1,9 +1,9 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack, useRouter } from 'expo-router';
+// SDK 57: expo-router forked react-navigation — theming now comes from expo-router itself.
+import { DarkTheme, DefaultTheme, ThemeProvider, Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { useEffect } from 'react';
-import { InteractionManager, Linking, Platform, View } from 'react-native';
+import { Linking, Platform, View } from 'react-native';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
@@ -93,9 +93,12 @@ function ShareHandler() {
    *  second defer is imperceptible next to the share-sheet handoff itself. */
   const pushSettled = (route: { pathname: string; params: Record<string, string> }) => {
     if (Platform.OS === 'ios') {
-      InteractionManager.runAfterInteractions(() => {
+      // requestIdleCallback (InteractionManager is deprecated in RN 0.86) —
+      // wait for the JS thread to stop being busy with the share-sheet handoff,
+      // then the existing 400ms lets UITabBarController finish its first layout.
+      requestIdleCallback(() => {
         setTimeout(() => router.push(route as any), 400);
-      });
+      }, { timeout: 1000 });
     } else {
       router.push(route as any);
     }

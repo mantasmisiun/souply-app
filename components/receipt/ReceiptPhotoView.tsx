@@ -751,7 +751,7 @@ const makeStyles = (c: AppTheme) =>
             overflow: 'hidden',
         },
         imgLoadingOverlay: {
-            ...StyleSheet.absoluteFillObject,
+            ...StyleSheet.absoluteFill,
             alignItems: 'center',
             justifyContent: 'center',
             backgroundColor: c.surfaceMuted,

@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
-import type { NativeStackNavigationOptions } from '@react-navigation/native-stack';
+// SDK 57: expo-router forked react-navigation; @react-navigation/native-stack is
+// no longer installed — the options type is exported by expo-router itself.
+import type { NativeStackNavigationOptions } from 'expo-router';
 import type { AppTheme } from './theme';
 import { ScreenBackButton } from '../components/ScreenBackButton';
 

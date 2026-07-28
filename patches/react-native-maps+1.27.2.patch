@@ -1,0 +1,112 @@
+diff --git a/node_modules/react-native-maps/ios/AirMaps/AIRMap.mm b/node_modules/react-native-maps/ios/AirMaps/AIRMap.mm
+index f7da1e0..3032bc5 100644
+--- a/node_modules/react-native-maps/ios/AirMaps/AIRMap.mm
++++ b/node_modules/react-native-maps/ios/AirMaps/AIRMap.mm
+@@ -128,6 +128,14 @@ const NSInteger AIRMapMaxZoomLevel = 20;
+ - (void)insertReactSubview:(id<RCTComponent>)subview atIndex:(NSInteger)atIndex {
+     // Our desired API is to pass up markers/overlays as children to the mapview component.
+     // This is where we intercept them and do the appropriate underlying mapview action.
++    // PATCH(souply): nil-guard. A marker mount/remove storm can hand us a nil subview and the
++    // unchecked `[_reactSubviews insertObject:nil]` below throws NSInvalidArgumentException
++    // ("object cannot be nil") -> SIGABRT (crash log 2026-07-10, results map zoom/combo churn).
++    // Re-derived for 1.27.2: the original Fabric-interop trigger is gone (the map is a real
++    // Fabric component now), but RNMapsMapView.mm:445 passes `[fabricMarker marker]` here with
++    // no nil check, and RNMapsMarkerView.mm:43-49 (prepareForRecycle) nils that `_view`.
++    // Nothing to insert -> just bail.
++    if (subview == nil) { return; }
+     if ([subview isKindOfClass:[AIRMapMarker class]]) {
+         [self addAnnotation:(id <MKAnnotation>) subview];
+     } else if ([subview isKindOfClass:[AIRMapPolyline class]]) {
+@@ -157,7 +165,16 @@ const NSInteger AIRMapMaxZoomLevel = 20;
+             [self insertReactSubview:(UIView *)childSubviews[i] atIndex:atIndex];
+         }
+     }
+-    [_reactSubviews insertObject:(UIView *)subview atIndex:(NSUInteger) atIndex];
++    // PATCH(souply): clamp the index. `atIndex` is the child index handed down by the mounting
++    // layer (RNMapsMapView.mm:442/445/448 pass Fabric's index verbatim; under 1.20.1 it was
++    // RCTLegacyViewManagerInteropComponentView) and has no bounds relationship to _reactSubviews:
++    // the recursion branch above inserts (grandchildren + 1) entries per mount while
++    // removeReactSubview removes the child's *current* subviews, so the counts drift and the
++    // unchecked insert throws NSRangeException -> SIGABRT (crash log 2026-07-04,
++    // store-resolution map). _reactSubviews is bookkeeping only — annotations/overlays are
++    // added to MKMapView above — so clamping is safe.
++    NSUInteger safeIndex = MIN((NSUInteger)MAX(atIndex, 0), _reactSubviews.count);
++    [_reactSubviews insertObject:(UIView *)subview atIndex:safeIndex];
+ }
+ #pragma clang diagnostic pop
+ 
+diff --git a/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m b/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
+index 89dfd9a..e8df859 100644
+--- a/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
++++ b/node_modules/react-native-maps/ios/AirMaps/AIRMapMarker.m
+@@ -73,10 +73,21 @@ NSInteger const AIR_CALLOUT_OPEN_ZINDEX_BASELINE = 999;
+ }
+ 
+ - (void)insertReactSubview:(id<RCTComponent>)subview atIndex:(NSInteger)atIndex {
++    // PATCH(souply): nil-guard — a mount/remove storm can hand us a nil subview, which throws
++    // "object cannot be nil" downstream (see AIRMap.mm). Bail early.
++    if (subview == nil) { return; }
+     if ([subview isKindOfClass:[AIRMapCallout class]]) {
+         self.calloutView = (AIRMapCallout *)subview;
+     } else {
+-        [super insertReactSubview:(UIView *)subview atIndex:atIndex];
++        // PATCH(souply): clamp the index — same out-of-bounds race as AIRMap.mm (see patch
++        // there). The callout branch above consumes a child index WITHOUT adding to
++        // reactSubviews, so the mounting layer's index (RNMapsMarkerView.mm:292/294 pass
++        // Fabric's index verbatim) runs ahead of reactSubviews.count. Child-VIEW markers
++        // (price pills) exercise this path on every marker remount; an unchecked index
++        // throws NSRangeException -> SIGABRT (silent crash switching the 1/2-store option,
++        // 2026-07-05).
++        NSInteger safeIndex = MIN(MAX(atIndex, 0), (NSInteger)self.reactSubviews.count);
++        [super insertReactSubview:(UIView *)subview atIndex:safeIndex];
+         [self addSubview:subview];
+     }
+ }
+@@ -368,8 +379,14 @@ NSInteger const AIR_CALLOUT_OPEN_ZINDEX_BASELINE = 999;
+     }
+     __weak __typeof(self) weakSelf = self;
+ 
++    // PATCH(souply): decode at NATURAL size (CGSizeZero skips the resize - see
++    // RCTImageLoader.mm). Passing self.bounds.size decodes the new image INTO the
++    // marker's CURRENT bounds, so upgrading a small badge marker to a wide pill
++    // image in place produced a pill at badge size ("super tiny" address pills,
++    // iOS store-resolution map 2026-07-04). MKAnnotationView sizes itself to the
++    // image, so the natural-size decode is what the bounds should follow, not lead.
+     _reloadImageCancellationBlock = [[[RCTBridge currentBridge] moduleForName:@"ImageLoader"] loadImageWithURLRequest:[RCTConvert NSURLRequest:_imageSrc]
+-                                                                                                                 size:self.bounds.size
++                                                                                                                 size:CGSizeZero
+                                                                                                                 scale:RCTScreenScale()
+                                                                                                               clipped:YES
+                                                                                                            resizeMode:RCTResizeModeCenter
+diff --git a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
+index ebf8780..5a64a15 100644
+--- a/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
++++ b/node_modules/react-native-maps/android/src/main/java/com/rnmaps/maps/MapView.java
+@@ -1325,7 +1325,9 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+     }
+ 
+     public void updateExtraData(Object extraData) {
+-        if (setPaddingDeferred && super.getHeight() > 0 && super.getWidth() > 0) {
++        // PATCH(souply): `map != null` — same deferred-padding flush can run
++        // before the GoogleMap exists; getCameraPosition() would NPE identically.
++        if (map != null && setPaddingDeferred && super.getHeight() > 0 && super.getWidth() > 0) {
+             CameraUpdate cu = CameraUpdateFactory.newCameraPosition(map.getCameraPosition());
+ 
+             map.setPadding(edgeLeftPadding + baseLeftMapPadding,
+@@ -1492,7 +1494,15 @@ public class MapView extends com.google.android.gms.maps.MapView implements Goog
+     int edgeBottomPadding;
+ 
+     public void applyBaseMapPadding(int left, int top, int right, int bottom) {
+-        if (super.getHeight() <= 0 || super.getWidth() <= 0) {
++        // PATCH(souply): `map == null` added to the guard. Upstream only defers
++        // while UNLAID-OUT, but under Fabric (RN 0.86 / maps 1.27.2) the
++        // mapPadding prop is applied AFTER layout and BEFORE onMapReady, so
++        // `map` is still null here and `map.setPadding(...)` below threw
++        // NullPointerException -> ReactHost teardown (crash 2026-07-28, opening
++        // Shopping -> trip -> map). Deferring is upstream's OWN mechanism: the
++        // onMapReady path re-calls this method whenever setPaddingDeferred is
++        // set, so the padding still lands, just once the map exists.
++        if (map == null || super.getHeight() <= 0 || super.getWidth() <= 0) {
+             // the map is not laid out yet and calling setPadding() now has no effect
+             baseLeftMapPadding = left;
+             baseRightMapPadding = right;

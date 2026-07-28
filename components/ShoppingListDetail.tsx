@@ -1039,7 +1039,7 @@ export function ShoppingListDetail({
             <Modal visible={quantityModal !== null} transparent animationType="fade" onRequestClose={() => setQuantityModal(null)}>
                 {quantityModal && (
                     <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-                        <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setQuantityModal(null)} />
+                        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setQuantityModal(null)} />
                         <View style={styles.modalContainer}>
                             <Text style={styles.modalTitle}>{quantityModal.name}</Text>
 
@@ -1154,7 +1154,7 @@ export function ShoppingListDetail({
             {/* Coupon reminder modal */}
             <Modal visible={couponQueue.length > 0} transparent animationType="slide" onRequestClose={dismissCoupon}>
                 <View style={styles.shareOverlay}>
-                    <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={dismissCoupon} />
+                    <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={dismissCoupon} />
                     <View style={styles.couponModalContainer}>
                         <View style={styles.couponBadgeLarge}>
                             <Text style={styles.couponBadgeLargeText}>{t('shoppingListDetail.couponBadge', { name: couponQueue[0] })}</Text>
@@ -1179,7 +1179,7 @@ export function ShoppingListDetail({
             {/* Completion confirmation — styled to match app, replaces stock Alert */}
             <Modal visible={completionModal} transparent animationType="fade" onRequestClose={() => setCompletionModal(false)}>
                 <View style={styles.shareOverlay}>
-                    <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setCompletionModal(false)} />
+                    <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setCompletionModal(false)} />
                     <View style={styles.modalContainer}>
                         <Text style={styles.modalTitle}>{t('shoppingListDetail.completeTitle')}</Text>
                         <Text style={styles.completeModalBody}>{t('shoppingListDetail.completeConfirm')}</Text>

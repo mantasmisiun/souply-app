@@ -10,7 +10,9 @@ import Animated, {
 } from 'react-native-reanimated';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
-import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+// SDK 57: expo-router forked react-navigation — this type must come from
+// expo-router/js-tabs (same identity as the `Tabs` component in the tab layout).
+import type { BottomTabBarProps } from 'expo-router/js-tabs';
 import { useTabBarOverride } from '../state/tabBarOverride';
 import { BasketDockSheet } from './basket/BasketDockSheet';
 import {

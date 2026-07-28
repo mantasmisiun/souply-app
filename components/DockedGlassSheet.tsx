@@ -131,7 +131,7 @@ export function makeGlassLayerStyles(c: AppTheme, isDark: boolean) {
             shadowOffset: { width: 0, height: 2 },
         },
         glassFill: {
-            ...StyleSheet.absoluteFillObject,
+            ...StyleSheet.absoluteFill,
             backgroundColor: Platform.OS === 'android' ? undefined : 'transparent',
         },
         // 0.62 was calibrated to sit ON TOP OF a real blur. Android no longer
@@ -147,7 +147,7 @@ export function makeGlassLayerStyles(c: AppTheme, isDark: boolean) {
         },
         solid: { backgroundColor: c.sheetSurface },
         rim: {
-            ...StyleSheet.absoluteFillObject,
+            ...StyleSheet.absoluteFill,
             borderTopWidth: 1.2,
             borderTopColor: isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.9)',
         },
@@ -1039,7 +1039,7 @@ const makeStyles = (c: AppTheme, isDark: boolean) => {
         // by device logs: onBegin fires, then onFinalize success=false, no
         // onStart). Full-screen bounds let the panel consume its own area while
         // box-none passes empty areas through to the map.
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         // Above screen chrome (CollapsingHeader overlay = 10): an expanded
         // sheet must cover floating back/search chips, not slide under them.
         zIndex: 20, elevation: 20,

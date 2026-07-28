@@ -358,7 +358,7 @@ const makeControlStyles = (c: AppTheme) => StyleSheet.create({
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     modalRoot: { flex: 1, justifyContent: 'flex-end' },
-    backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.5)' },
+    backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(0,0,0,0.5)' },
     sheet: { backgroundColor: c.pageBackground, borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl, maxHeight: '90%', paddingBottom: 12 },
     grabArea: { alignItems: 'center', paddingTop: 10, paddingBottom: 4 },
     pill: { width: 40, height: 5, borderRadius: 3, backgroundColor: c.border },

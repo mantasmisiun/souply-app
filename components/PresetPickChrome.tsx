@@ -213,7 +213,7 @@ export function PresetPickChrome({ mapRef, presetKey, label, existing, pickTarge
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    pinWrapper: { ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' },
+    pinWrapper: { ...StyleSheet.absoluteFill, alignItems: 'center', justifyContent: 'center' },
     pinIcon: { marginTop: -22 },
     pinShadow: { width: 10, height: 5, borderRadius: 5, backgroundColor: 'rgba(0,0,0,0.18)', marginTop: -6 },
     mapHintBar: {

@@ -185,7 +185,13 @@ export type { ThemeMode };
  * scheme. Exported so non-React contexts (e.g., crash reporters, status
  * bar setup) can resolve the same way.
  */
-export function resolveScheme(mode: ThemeMode, systemScheme: 'light' | 'dark' | null | undefined): ResolvedScheme {
+export function resolveScheme(
+  mode: ThemeMode,
+  // RN 0.86: useColorScheme() returns 'light' | 'dark' | 'unspecified' (no more
+  // null); Appearance.getColorScheme() can still yield null/undefined. Anything
+  // that is not exactly 'dark' resolves to 'light' below.
+  systemScheme: 'light' | 'dark' | 'unspecified' | null | undefined
+): ResolvedScheme {
   if (mode === 'light' || mode === 'dark') return mode;
   return systemScheme === 'dark' ? 'dark' : 'light';
 }

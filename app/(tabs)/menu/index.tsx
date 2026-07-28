@@ -15,7 +15,7 @@ import { useCollapsingHeader, CollapsingHeader } from '../../../components/Colla
 import { useBackToExit } from '../../../hooks/useBackToExit';
 import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { fetchMonthlyPlanningScore, type PlanningScoreMonth } from '../../../utils/tripsApi';
 import { API_BASE_URL } from '../../../config/api';
@@ -118,7 +118,10 @@ export default function ProfilisScreen() {
     const [monthEndOffset, setMonthEndOffset] = useState(0); // months back from newest that the window END sits
     // Which carousel card's month-picker sheet is open (null = closed).
     const [pickerTarget, setPickerTarget] = useState<null | 'store' | 'category' | 'monthly'>(null);
-    const scrollRef = useRef<ComponentRef<typeof Animated.ScrollView>>(null);
+    // Reanimated 4.5: Animated.ScrollView is a function component (React 19
+    // ref-as-prop), so ComponentRef<> no longer resolves — its ref accepts a
+    // plain Ref<ScrollView>, which also exposes scrollTo().
+    const scrollRef = useRef<ScrollView>(null);
 
     // Per-page measured heights. The carousel wrapper animates to the
     // active page's natural height so the card shrinks when content is
@@ -744,7 +747,7 @@ export default function ProfilisScreen() {
                             <Text style={styles.carouselTitle}>{pages[activePage].title}</Text>
                         </View>
                         <Animated.ScrollView
-                            ref={scrollRef as any}
+                            ref={scrollRef}
                             horizontal
                             pagingEnabled
                             showsHorizontalScrollIndicator={false}

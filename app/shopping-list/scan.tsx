@@ -135,7 +135,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     cornerBR: { position: 'absolute', bottom: 0, right: 0, width: 32, height: 32, borderBottomWidth: 4, borderRightWidth: 4, borderColor: c.onPrimary, borderBottomRightRadius: 8 },
     hint: { marginTop: 20, color: c.onPrimary, fontSize: 14, fontWeight: '500' },
     claimingOverlay: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         backgroundColor: 'rgba(0,0,0,0.5)',
         alignItems: 'center',
         justifyContent: 'center',

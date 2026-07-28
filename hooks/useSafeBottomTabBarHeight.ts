@@ -1,7 +1,10 @@
 import { useContext } from 'react';
 import { Platform } from 'react-native';
 import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
-import { BottomTabBarHeightContext } from '@react-navigation/bottom-tabs';
+// SDK 57: expo-router forked react-navigation — the context the JS Tabs bar
+// actually provides is the fork's, so it MUST be imported from expo-router/js-tabs
+// (the standalone package's context would be a different React context instance).
+import { BottomTabBarHeightContext } from 'expo-router/js-tabs';
 import { FLOATING_TAB_BAR_CLEARANCE } from '../components/FloatingPillTabBar';
 import { useBasketSession } from '../state/basketSession';
 

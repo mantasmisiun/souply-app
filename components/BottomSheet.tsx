@@ -91,7 +91,7 @@ export function BottomSheet({
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     root: { flex: 1, justifyContent: 'flex-end' },
-    backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: c.overlayBackdrop },
+    backdrop: { ...StyleSheet.absoluteFill, backgroundColor: c.overlayBackdrop },
     sheet: {
         backgroundColor: c.cardBackground,
         borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,

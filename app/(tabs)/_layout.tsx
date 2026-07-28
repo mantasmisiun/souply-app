@@ -1,5 +1,10 @@
-import { Tabs, Redirect, useFocusEffect } from 'expo-router';
-import { NativeTabs, Icon, Label, Badge } from 'expo-router/unstable-native-tabs';
+import { Redirect, useFocusEffect } from 'expo-router';
+// SDK 57: `Tabs` moved to the js-tabs entry (the main-entry export is deprecated),
+// and the type must come from the SAME entry — expo-router forked react-navigation,
+// so `BottomTabBarProps` from the standalone @react-navigation/bottom-tabs package
+// is a different (incompatible) type identity.
+import { Tabs, type BottomTabBarProps } from 'expo-router/js-tabs';
+import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import { BlurView } from 'expo-blur';
 import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { AppState, Platform, View, Text, StyleSheet } from 'react-native';
@@ -12,8 +17,11 @@ import { useAdminModeStore } from '../../state/adminModeStore';
 import { HapticTab } from '../../components/haptic-tab';
 import { FloatingPillTabBar } from '../../components/FloatingPillTabBar';
 import { BeetrootIcon, BasketGlyph, ChefToqueGlyph, PiggyBankGlyph } from '../../components/icons/tabGlyphs';
-import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { devLog } from '../../utils/devLog';
+
+// SDK 57: Icon/Label/Badge are no longer standalone exports of
+// expo-router/unstable-native-tabs — they live under NativeTabs.Trigger.
+const { Icon, Label, Badge } = NativeTabs.Trigger;
 
 class NativeTabsBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { hasError: boolean }> {
     state = { hasError: false };

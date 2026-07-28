@@ -503,7 +503,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'center',
     },
     emptyOverlay: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         alignItems: 'center',
         justifyContent: 'center',
         zIndex: 0,

@@ -160,7 +160,8 @@ export default {
         'expo-build-properties',
         {
           ios: {
-            deploymentTarget: '16.0',
+            // SDK 57 floor — expo-build-properties rejects anything below 16.4.
+            deploymentTarget: '16.4',
             // GoogleSignIn 9.x pulls AppCheckCore (a Swift pod) whose deps
             // GoogleUtilities + RecaptchaInterop are Obj-C pods that don't define
             // a module map — so a static-library build fails ("Swift pods cannot
