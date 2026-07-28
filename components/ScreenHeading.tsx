@@ -17,6 +17,7 @@ import { useTheme } from '../constants/theme';
 export function ScreenHeading({
     title,
     subtitle,
+    leading,
     trailing,
     topInset,
     bleed,
@@ -26,6 +27,10 @@ export function ScreenHeading({
     title: string;
     /** Optional second line — a plain string or custom JSX (e.g. a breadcrumb). */
     subtitle?: ReactNode;
+    /** Optional node LEFT of the title (e.g. a recipe's cover-emoji chip). Same
+     *  row as the title, so the screen keeps ONE heading component instead of
+     *  hand-rolling a title row with its own (smaller, drifting) type. */
+    leading?: ReactNode;
     /** Optional node on the right of the TITLE line (e.g. an info button). */
     trailing?: ReactNode;
     /** Status-bar inset to reserve when this heading sits at the very top with
@@ -60,8 +65,9 @@ export function ScreenHeading({
                 topInset ? { paddingTop: topInset + 6 } : null,
             ]}
         >
-            {trailing != null ? (
+            {(trailing != null || leading != null) ? (
                 <View style={styles.titleRow}>
+                    {leading}
                     <Text style={[styles.title, styles.titleFlex, { color: colors.textPrimary }]} numberOfLines={2}>
                         {title}
                     </Text>
@@ -87,7 +93,10 @@ export function ScreenHeading({
 
 const styles = StyleSheet.create({
     wrap: { paddingHorizontal: 16, paddingTop: 6, paddingBottom: 12 },
-    title: { fontSize: 22, fontWeight: '700' },
+    // THE large screen title (Kategorijos, Apsipirkimai, Receptai, a recipe's
+    // name …). Deliberately a different level from the sheet titles
+    // (SheetTitle, 22) — those must NOT follow this.
+    title: { fontSize: 33, lineHeight: 38, fontWeight: '700' },
     titleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
     titleFlex: { flex: 1 },
     subtitle: { fontSize: 12, marginTop: 3 },
