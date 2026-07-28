@@ -1,6 +1,7 @@
 import React, { type ComponentProps } from 'react';
 import { View, type StyleProp, type ViewStyle } from 'react-native';
 import { DockActionCard } from './DockActionCard';
+import { dockRowGhostSlots } from './dockLayout';
 import { spacing, type AppTheme } from '../../constants/theme';
 
 /**
@@ -42,6 +43,13 @@ export function DockActionRow({ colors, actions, gap = spacing.md, style }: {
         <View style={[{ flexDirection: 'row', gap }, style]}>
             {live.map(({ key, ...card }) => (
                 <DockActionCard key={key ?? card.title} colors={colors} {...card} />
+            ))}
+            {/* A lone card must NOT stretch across the row: ghost slots pad it
+                out to the two-up grid, so a single action keeps exactly the
+                width it would have with a neighbour, left-aligned
+                (dockRowGhostSlots — the rule holds for every caller). */}
+            {Array.from({ length: dockRowGhostSlots(live.length) }, (_, i) => (
+                <View key={`ghost-${i}`} style={{ flex: 1 }} pointerEvents="none" />
             ))}
         </View>
     );

@@ -1,4 +1,4 @@
-import { View, Text, TouchableOpacity, StyleSheet, Alert } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -6,15 +6,16 @@ import { useTranslation } from 'react-i18next';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
 import { SheetCard, SHEET_CARD_SHADOW_RADIUS } from '../SheetCard';
 import { useTheme, useResolvedScheme, spacing, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
-import { useBasketSession, type ChooserOption } from '../../state/basketSession';
+import { useBasketSession, templateChooserOption, type ChooserOption } from '../../state/basketSession';
 import { useBasketState } from '../../state/basketState';
 import { applyChooserPick } from '../../utils/basketUtils';
-import { formatDate } from '../../utils/formatCurrency';
 import { formatWeekdayDate } from '../../utils/formatDayDate';
-import { TemplateCoverEditor, type CoverDraft } from '../TemplateCoverEditor';
+import { type CoverDraft } from '../TemplateCoverEditor';
+import { DockActionRow } from '../dock/DockActionRow';
 import { ShoppingSheet } from './ShoppingSheet';
 import { useShoppingSheet } from '../../state/shoppingSheet';
 import { RecipeDockPane } from '../recipe/RecipeDockPane';
+import { RecipeCreatePane } from '../recipe/RecipeCreatePane';
 import { useRecipeDock } from '../../state/recipeDock';
 import { createTemplate } from '../../utils/basketTemplatesApi';
 import { getUserId } from '../../config/user';
@@ -85,6 +86,25 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
         return () => useRecipeDock.getState().setCollapse(null);
     }, [onTemplatesRoot]);
 
+    // The catalog chooser variant of this sheet (neither the Shopping nor the
+    // Receptai root) — it now hosts the recipe create pane too, so it needs a
+    // name of its own.
+    const onCatalogChooser = hasSheet && !onShoppingRoot && !onTemplatesRoot;
+
+    // Recipe create pane — an IN-SHEET page (SheetPaneSpec), the share pane's
+    // navigation model: an action card swaps the dock's content to the
+    // combined create pane (URL + cover) and raises the sheet to full so the
+    // fields sit high, clear of the keyboard. ONE pane definition, TWO entry
+    // points: the Receptai root's lone card and the catalog chooser's Receptas
+    // card (which lands the created recipe in the catalog session instead of
+    // navigating — see createRecipeIntoSession). The sheet itself clears the
+    // pane on every collapse (onDismiss); leaving the hosting surface clears
+    // it too so a return can't resurrect a stale pane.
+    const paneSurface = onTemplatesRoot ? 'templates' : onCatalogChooser ? 'catalog' : null;
+    const [recipePane, setRecipePane] = useState(false);
+    const openRecipeCreate = () => { setRecipePane(true); controls.current?.snapTo(2); };
+    useEffect(() => { setRecipePane(false); }, [paneSurface]);
+
     // External collapse (browse scroll / L1 toggle) — only while the chooser
     // owns the dock; the active-session List sheet registers its own.
     useEffect(() => {
@@ -115,28 +135,21 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
         controls.current?.expand();
     }, [dockExpandRequest, hasSheet]);
 
-    // "Add new" template: opens the SAME identity sheet the Templates tab uses
-    // (name/emoji/cover) → creates the template, adds it to the chooser list and
-    // TARGETS it (queued adds flush into it via the normal pick path).
-    const [createOpen, setCreateOpen] = useState(false);
+    // Recipe create from the CATALOG chooser (RecipeCreatePane.onCreateBlank):
+    // create the template, then run the chooser's own template-pick path —
+    // applyChooserPick targets it and flushes any queued adds — so the catalog
+    // stays put and shows the session bar with the new recipe active
+    // (✕ Prekės: 0 · Parduotuvės ›), exactly like resuming an existing one.
+    // Errors propagate: the pane owns the alert + spinner.
     const setDockTemplates = useBasketSession(s => s.setDockTemplates);
-    const onAddTemplate = () => setCreateOpen(true);
-    const handleCreateTemplate = async (next: CoverDraft) => {
-        try {
-            const userId = await getUserId();
-            const created = await createTemplate({
-                userId, name: next.name, coverColor: next.coverColor, coverImage: next.coverImage,
-            });
-            setCreateOpen(false);
-            const option: ChooserOption = {
-                key: 'template', templateId: created.id, name: created.name,
-                basketId: null, itemCount: 0, label: created.name, updatedAt: null,
-            };
-            setDockTemplates([...(dockTemplates ?? []), option]);
-            await applyChooserPick(option, setDraftBasketId);
-        } catch {
-            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
-        }
+    const createRecipeIntoSession = async (draft: CoverDraft) => {
+        const userId = await getUserId();
+        const created = await createTemplate({
+            userId, name: draft.name, coverColor: draft.coverColor, coverImage: draft.coverImage,
+        });
+        const option = templateChooserOption(created);
+        setDockTemplates([...(dockTemplates ?? []), option]);
+        await applyChooserPick(option, setDraftBasketId);
     };
 
     const baskets = (dockOptions ?? []).filter(o => o.key !== 'new');
@@ -172,15 +185,6 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
         </TouchableOpacity>
     );
 
-    const addNewRow = (keyId: string, onPress: () => void) => (
-        <TouchableOpacity key={keyId} style={styles.row} onPress={onPress}>
-            <View style={[styles.rowIcon, styles.addIcon]}>
-                <Ionicons name="add" size={22} color={colors.onPrimary} />
-            </View>
-            <Text style={styles.addLabel}>{t('basketSession.addNew')}</Text>
-        </TouchableOpacity>
-    );
-
     const sectionCard = (title: string, rows: ReactNode[]) => (
         <SheetCard>
             <Text style={styles.cardTitle}>{title}</Text>
@@ -194,16 +198,38 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const chooserContent = (
         <View style={styles.body}>
             {/* Sheet title (screen-title font) — frames the whole sheet as a
-                destination choice: pick a basket/template or add a new one. */}
+                destination choice: pick a basket/template or start a new one. */}
             <Text style={styles.sheetHeading}>{t('basketSession.chooserPrompt')}</Text>
-            {sectionCard(t('basketSession.sheetTitle'), withSeps([
-                addNewRow('add-basket', () => { applyChooserPick({ key: 'new', basketId: null, itemCount: 0 }, setDraftBasketId).catch(() => {}); }),
-                ...baskets.map(o => itemRow(o, o.basketId != null ? `b${o.basketId}` : o.key)),
-            ]))}
-            {sectionCard(t('tabs.templates'), withSeps([
-                addNewRow('add-template', onAddTemplate),
-                ...templates.map(o => itemRow(o, o.templateId != null ? `t${o.templateId}` : 'tpl')),
-            ]))}
+            {/* CREATE pair — the standard dock cards. Krepšelis runs the
+                chooser's old "add new basket" pick verbatim; Receptas opens
+                the SAME in-sheet create pane the Receptai dock uses (the
+                sheet.pane contract), landing the recipe in the catalog
+                session. The old per-section "+ Pridėti naują" rows folded
+                into these cards, so the sections below list EXISTING
+                baskets/templates only (and hide when empty). */}
+            <DockActionRow
+                colors={colors}
+                actions={[
+                    {
+                        icon: 'cart-outline',
+                        title: t('basketSession.createBasketTitle'),
+                        subtitle: t('basketSession.createBasketSub'),
+                        onPress: () => { applyChooserPick({ key: 'new', basketId: null, itemCount: 0 }, setDraftBasketId).catch(() => {}); },
+                    },
+                    {
+                        icon: 'add-circle-outline',
+                        title: t('basketTab.templates.createTitle'),
+                        subtitle: t('basketTab.templates.createSub'),
+                        onPress: openRecipeCreate,
+                    },
+                ]}
+            />
+            {baskets.length > 0 && sectionCard(t('basketSession.sheetTitle'), withSeps(
+                baskets.map(o => itemRow(o, o.basketId != null ? `b${o.basketId}` : o.key)),
+            ))}
+            {templates.length > 0 && sectionCard(t('tabs.templates'), withSeps(
+                templates.map(o => itemRow(o, o.templateId != null ? `t${o.templateId}` : 'tpl')),
+            ))}
         </View>
     );
 
@@ -213,31 +239,13 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     // edge — and its tab icons would ghost through the transparent glass.
     if (sessionActive && onSurface) return null;
 
-    // The identity sheet is an RN Modal — rendered alongside whichever dock
-    // variant is live so it survives the chooser mounting/unmounting.
-    const createEditor = (
-        <TemplateCoverEditor
-            visible={createOpen}
-            onClose={() => setCreateOpen(false)}
-            name=""
-            coverColor={null}
-            coverImage={null}
-            submitLabel={t('basketTab.templates.createConfirm')}
-            onSubmit={handleCreateTemplate}
-        />
-    );
-
     if (!hasSheet) {
         return (
-            <>
-                <DockedGlassSheet barRow={tabsRow} barRowHeight={tabsRowHeight} colors={colors} onCollapsedClearance={setTabBarClearance} />
-                {createEditor}
-            </>
+            <DockedGlassSheet barRow={tabsRow} barRowHeight={tabsRowHeight} colors={colors} onCollapsedClearance={setTabBarClearance} />
         );
     }
 
     return (
-        <>
         <DockedGlassSheet
             ref={controls}
             colors={colors}
@@ -251,8 +259,46 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                 content: onShoppingRoot
                     ? <ShoppingSheet collapse={() => controls.current?.collapse()} />
                     : onTemplatesRoot
-                        ? <RecipeDockPane collapse={() => controls.current?.collapse()} />
+                        ? <RecipeDockPane openCreate={openRecipeCreate} />
                         : chooserContent,
+                // The create pane, in the sheet's own pane contract (the recipe
+                // share pane's shape): its bar row — "‹ Naujas receptas" —
+                // REPLACES the tab row while open (pinned to the sheet's TOP,
+                // per the SheetPaneSpec contract), the body page-slides in, and
+                // the sheet fires onDismiss on every collapse so a re-opened
+                // dock always lands on the root. `pane` is DEFINED only on the
+                // two surfaces that host it — the Receptai root and the catalog
+                // chooser — so the Shopping sheet (and every other variant)
+                // keeps its exact pre-pane layout (paneEnabled stays off).
+                pane: paneSurface != null
+                    ? (recipePane ? {
+                        key: 'recipe-create',
+                        barRow: (
+                            <View style={styles.paneHeaderRow}>
+                                <TouchableOpacity
+                                    onPress={() => setRecipePane(false)}
+                                    hitSlop={10}
+                                    accessibilityLabel={t('common.back')}
+                                >
+                                    <Ionicons name="chevron-back" size={26} color={colors.primary} />
+                                </TouchableOpacity>
+                                <Text style={styles.paneTitle} numberOfLines={1}>
+                                    {t('basketTab.templates.createPaneTitle')}
+                                </Text>
+                            </View>
+                        ),
+                        content: (
+                            <RecipeCreatePane
+                                collapse={() => controls.current?.collapse()}
+                                // Catalog entry point: blank create lands in the
+                                // catalog session bar, not on /template/{id}.
+                                // Imports keep the review-screen path either way.
+                                onCreateBlank={paneSurface === 'catalog' ? createRecipeIntoSession : undefined}
+                            />
+                        ),
+                        onDismiss: () => setRecipePane(false),
+                    } : null)
+                    : undefined,
                 // Full detent so the sections have room; the shared geometry
                 // keeps the collapsed tab bar symmetric + fixed and docks
                 // edge-to-edge only at full.
@@ -272,8 +318,6 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                 },
             }}
         />
-        {createEditor}
-        </>
     );
 }
 
@@ -290,7 +334,6 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
         backgroundColor: c.primaryMuted ?? c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
     },
-    addIcon: { backgroundColor: c.primary },
     // Count "dot" badge riding the icon's top-right corner.
     countBadge: {
         position: 'absolute', top: -3, right: -5,
@@ -299,8 +342,12 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
         borderWidth: 2, borderColor: isDark ? c.surfaceContainer : c.cardBackground,
     },
     countBadgeText: { color: c.onPrimary, fontSize: 9, fontWeight: '800' },
-    addLabel: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
     rowTitle: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
     rowPreview: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
     sep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem },
+    // Create-pane BAR row (‹ back · title) — the template share pane's header
+    // row shape, riding the dock's bar slot (SheetPaneSpec.barRow) in place of
+    // the tab row while the pane is open.
+    paneHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 4 },
+    paneTitle: { flex: 1, fontSize: 17, fontWeight: '700', color: c.textPrimary },
 });

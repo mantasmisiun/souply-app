@@ -214,6 +214,20 @@ export async function generateShareLink(templateId: number): Promise<ShareLinkRe
     return jsonOrThrow(res);
 }
 
+/** Addressed template invite (mirrors sendAddressedTripInvite): registered
+ *  user → in-app notification, unknown email → branded invite email, both
+ *  delivering the /t/:slug share page. Oracle-free response either way. */
+export async function sendAddressedTemplateInvite(
+    templateId: number,
+    target: { email?: string; handle?: string },
+): Promise<void> {
+    await jsonOrThrow(await tfetch(`${API_BASE_URL}/api/basket-templates/${templateId}/invites`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(target),
+    }));
+}
+
 export async function revokeShareLink(templateId: number): Promise<void> {
     await jsonOrThrow(await tfetch(`${API_BASE_URL}/api/basket-templates/${templateId}/share`, {
         method: 'DELETE',
@@ -225,6 +239,11 @@ export interface SharedTemplate {
         id: number;
         name: string;
         creatorHandle: string | null;
+        /** Where an imported recipe was read from. Optional: the resolve
+         *  endpoint only includes these once the server is updated to send
+         *  them — absent, the preview falls back to creator attribution. */
+        sourceUrl?: string | null;
+        sourceSite?: string | null;
         useCount: number;
         visibility: 'unlisted' | 'public' | 'private';
     };

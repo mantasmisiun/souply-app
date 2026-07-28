@@ -23,3 +23,13 @@ export const dockContentBase = {
     paddingTop: 22,
     gap: 14,
 };
+
+/**
+ * Invisible flex siblings that pad a DockActionRow out to the standard two-up
+ * grid. A LONE action must keep exactly the width it would have with a second
+ * card beside it — half the row minus half the gap, left-aligned — because a
+ * full-width single card reads as a different component. Rows with two or
+ * more cards already define the grid and need no padding.
+ */
+export const dockRowGhostSlots = (liveActionCount: number): number =>
+    liveActionCount === 1 ? 1 : 0;

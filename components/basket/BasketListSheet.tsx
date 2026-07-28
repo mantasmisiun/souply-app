@@ -7,10 +7,13 @@ import { useTranslation } from 'react-i18next';
 import { MaterialProgress } from '@/components/MaterialProgress';
 import { AddOrStepper } from '@/components/AddOrStepper';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
+import { SheetCloseButton } from '../SheetCloseButton';
 import { useTheme, useResolvedScheme, radius, spacing, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_BASE_URL } from '../../config/api';
 import { useBasketSession, targetKey } from '../../state/basketSession';
+import { useTemplateAddState } from '../../state/templateAddState';
+import { useTemplateShop } from '../../hooks/useTemplateShop';
 import { getTemplate, patchTemplateItem, deleteTemplateItem } from '../../utils/basketTemplatesApi';
 
 /**
@@ -235,11 +238,58 @@ export function BasketListSheet() {
         color: interpolateColor(countFlash.value, [0, 1], [colors.textPrimary, colors.primary]),
     }));
 
+    /**
+     * Landing for the template session's "Parduotuvės ›": the recipe just
+     * became a real shopping basket, so the collecting session is over — clear
+     * the template-add overlay + session target, then build the back-stack
+     * EXPLICITLY instead of trusting whatever the tab switch leaves behind:
+     * Shopping tab (a tab switch, no stack entry) → the new basket's screen →
+     * (when the calc succeeded) the stores map. Back from the map lands on the
+     * basket, back again on the Shopping tab — the stack a basket born on the
+     * Shopping tab would have had.
+     */
+    const finishToShopping = useCallback((basketId: number, compared: boolean) => {
+        useTemplateAddState.getState().clear();
+        useBasketSession.getState().endSession();
+        router.navigate('/(tabs)/basket' as any);
+        router.push(`/basket/${basketId}` as any);
+        if (compared) router.push(`/basket/results/${basketId}` as any);
+    }, [router]);
+
+    /**
+     * "Parduotuvės ›" while the session targets a RECIPE = the SAME create →
+     * compare → map flow as the recipe detail pill (hooks/useTemplateShop —
+     * pantry keep-or-drop, resume-or-new, spinner over the whole leg,
+     * calc-failure fallback). Only the landings differ: every exit rebuilds
+     * the Shopping-tab stack above, because the session surface (catalog) is
+     * not where the resulting basket lives.
+     */
+    const shop = useTemplateShop({
+        // Fetched fresh at tap time — the bar only knows the template's id, and
+        // this session's adds must be in the basket that gets created.
+        getDetail: async () => {
+            const tgt = useBasketSession.getState().target;
+            if (tgt?.kind !== 'template') throw new Error('no active recipe session');
+            return getTemplate(tgt.templateId);
+        },
+        nav: {
+            onCompared: (basketId) => finishToShopping(basketId, true),
+            onCalcFailed: (basketId) => finishToShopping(basketId, false),
+            onResume: (basketId) => finishToShopping(basketId, false),
+        },
+    });
+
+    // An EMPTY recipe cannot become a basket (nothing to compare) — the same
+    // guard as the recipe detail pill. Basket targets never disable: their
+    // button just opens the results map.
+    const canShop = target?.kind !== 'template' || itemCount > 0;
+
     const sessionHeader = (
         <View style={styles.header} onLayout={onHeaderLayout}>
-            <TouchableOpacity onPress={() => dismissBar()} hitSlop={8} style={styles.xBtn}>
-                <Ionicons name="close" size={22} color={colors.textPrimary} />
-            </TouchableOpacity>
+            {/* THE sheet ✕ (SheetCloseButton) — outside a GlassSheet it renders
+                the same 40px surfaceMuted chip and falls back to onPress, so the
+                session bar's close is the one system-wide close, not a copy. */}
+            <SheetCloseButton onPress={dismissBar} />
             <View style={styles.headerTitleRow}>
                 <Animated.Text style={[styles.headerText, titleAnimStyle]} numberOfLines={1}>
                     {t('basketSession.itemsLabel')}
@@ -253,11 +303,15 @@ export function BasketListSheet() {
                 </Animated.Text>
             </View>
             <TouchableOpacity
-                style={styles.basketBtn}
-                onPress={async () => {
+                style={[styles.basketBtn, (!canShop || shop.busy) && styles.basketBtnDisabled]}
+                disabled={!canShop || shop.busy}
+                onPress={() => {
                     if (!target || target.kind === 'pending-new') return;
                     if (target.kind === 'template') {
-                        router.push(`/template/${target.templateId}` as any);
+                        // Parduotuvės › on a recipe session — the shared shop
+                        // flow (see `shop` above), NOT a hop back to the recipe
+                        // screen: collecting is done, shopping starts.
+                        void shop.start();
                         return;
                     }
                     // Stores ›: go STRAIGHT to the store-results map, skipping the
@@ -270,10 +324,14 @@ export function BasketListSheet() {
                 }}
                 activeOpacity={0.85}
             >
-                <Text style={styles.basketBtnText}>
-                    {t(target?.kind === 'template' ? 'basketSession.openTemplate' : 'basketSession.openStores')}
-                </Text>
-                <Ionicons name="chevron-forward" size={14} color={colors.onPrimary} />
+                {shop.busy
+                    ? <MaterialProgress size="small" color={colors.onPrimary} />
+                    : (
+                        <>
+                            <Text style={styles.basketBtnText}>{t('basketSession.openStores')}</Text>
+                            <Ionicons name="chevron-forward" size={14} color={colors.onPrimary} />
+                        </>
+                    )}
             </TouchableOpacity>
         </View>
     );
@@ -347,6 +405,7 @@ export function BasketListSheet() {
     if (!visible) return null;
 
     return (
+        <>
         <DockedGlassSheet
             ref={controls}
             colors={colors}
@@ -367,6 +426,11 @@ export function BasketListSheet() {
                 onStageChange: (s) => { stageRef.current = s; titleP.value = withTiming(s > 0 ? 1 : 0, { duration: 200 }); },
             }}
         />
+        {/* The shop flow's pantry + resume modals. Only reachable from this
+            bar's Parduotuvės pill, so unmounting with the bar (visible=false)
+            can never strand an open sheet. */}
+        {shop.modals}
+        </>
     );
 }
 
@@ -378,12 +442,8 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
         flexDirection: 'row', alignItems: 'center', gap: spacing.md,
     },
     // Compact controls, centred in the row — the row is a sheet TITLE bar now,
-    // so the X / Stores chips sit smaller than the row height by design.
-    xBtn: {
-        width: 40, height: 40, borderRadius: 20,
-        alignItems: 'center', justifyContent: 'center',
-        backgroundColor: c.surfaceMuted,
-    },
+    // so the ✕ (SheetCloseButton's own 40px chip) / Stores pill sit smaller
+    // than the row height by design.
     // fontSize is ANIMATED (16 collapsed → 22, the ScreenHeading size, when the
     // sheet settles open) — the base here is the collapsed size.
     headerTitleRow: { flex: 1, flexDirection: 'row', alignItems: 'baseline' },
@@ -394,6 +454,8 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
         paddingLeft: 14, paddingRight: 10, paddingVertical: 10,
     },
     basketBtnText: { color: c.onPrimary, fontSize: 14, fontWeight: '800' },
+    // Empty recipe / flow in flight — same dimming as the recipe detail pill.
+    basketBtnDisabled: { opacity: 0.45 },
 
     // The separator starts where the name/stepper column starts (past the
     // image + gap) and runs to the trash can's right edge — never under the

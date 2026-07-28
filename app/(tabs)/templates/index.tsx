@@ -1,31 +1,26 @@
 /**
  * Šablonai tab — Souply 2.0 promotes the templates top-tab (formerly a
  * chip view inside the basket tab) to its own tab, behavior unchanged.
- * The auto-template onboarding gate/build banners live here because this
- * is where the earned template lands.
  */
 import {
     View,
     Text,
     TouchableOpacity,
     StyleSheet,
-    Alert,
     RefreshControl,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
 import { useBackToExit } from '../../../hooks/useBackToExit';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { API_BASE_URL } from '../../../config/api';
 import { coverEmoji } from '../../../utils/templateCover';
 import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
-import { TemplateCoverEditor, type CoverDraft } from '../../../components/TemplateCoverEditor';
+import { useRecipeDock } from '../../../state/recipeDock';
 import { useAuthState } from '../../../state/authState';
 import { ltPluralSuffix } from '../../../utils/ltPlural';
 import { getUserId } from '../../../config/user';
@@ -33,12 +28,8 @@ import { useTheme, radius, elevation, type AppTheme } from '../../../constants/t
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import {
     listTemplates,
-    createTemplate,
-    buildDefaultTemplate,
     type BasketTemplate,
 } from '../../../utils/basketTemplatesApi';
-import { SystemNoticeCard } from '../../../components/SystemNoticeCard';
-import { BuildingTemplateCard } from '../../../components/BuildingTemplateCard';
 
 export default function TemplatesScreen() {
     const colors = useTheme();
@@ -47,20 +38,21 @@ export default function TemplatesScreen() {
     const router = useRouter();
     const header = useCollapsingHeader();
     const tabBarHeight = useSafeBottomTabBarHeight();
-    const { backToExitToast } = useBackToExit();
+    // Android back: collapse the dock sheet first, then fall through to
+    // press-back-again-to-exit — otherwise back with the sheet open starts
+    // leaving the app while a sheet is still covering the screen.
+    const sheetIntercept = useCallback(() => {
+        const s = useRecipeDock.getState();
+        if (s.stage > 0 && s.collapse) { s.collapse(); return true; }
+        return false;
+    }, []);
+    const { backToExitToast } = useBackToExit(sheetIntercept);
     const authUsername = useAuthState((s: any) => s.user?.username ?? null);
 
     const [templates, setTemplates] = useState<BasketTemplate[]>([]);
-    // Receipt counts power the onboarding gate: 3 receipts × 2 chains.
-    const [receiptCount, setReceiptCount] = useState(0);
-    const [distinctChainCount, setDistinctChainCount] = useState(0);
-    const [gateDismissed, setGateDismissed] = useState(false);
-    const [buildDismissed, setBuildDismissed] = useState(false);
-    const [building, setBuilding] = useState(false);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [pullRefreshing, setPullRefreshing] = useState(false);
-    const [coverSheetOpen, setCoverSheetOpen] = useState(false);
 
     const hasFetchedRef = useRef(false);
 
@@ -68,15 +60,7 @@ export default function TemplatesScreen() {
         if (silent) setRefreshing(true);
         try {
             const userId = await getUserId();
-            const [templateRes, receiptRes] = await Promise.all([
-                listTemplates(userId).catch(() => []),
-                fetch(`${API_BASE_URL}/api/users/${userId}/receipts`).then(r => r.json()).catch(() => []),
-            ]);
-            setTemplates(templateRes);
-            const receipts: { chainName?: string | null }[] = Array.isArray(receiptRes) ? receiptRes : [];
-            setReceiptCount(receipts.length);
-            const distinctChains = new Set(receipts.map(r => r.chainName).filter(c => !!c));
-            setDistinctChainCount(distinctChains.size);
+            setTemplates(await listTemplates(userId).catch(() => []));
         } catch (error) {
             console.error('Failed to fetch templates:', error);
         } finally {
@@ -91,70 +75,12 @@ export default function TemplatesScreen() {
         fetchAll(silent);
     }, [fetchAll]));
 
-    const defaultTemplate = useMemo(
-        () => templates.find(t => t.isDefault === 1) ?? null,
-        [templates],
-    );
-
-    // Onboarding gate dismissal persists across sessions (same keys as the
-    // pre-2.0 basket-tab placement, so prior dismissals carry over).
-    useEffect(() => {
-        AsyncStorage.getItem('template_gate_dismissed')
-            .then(v => { if (v === '1') setGateDismissed(true); });
-    }, []);
-    const dismissGate = useCallback(async () => {
-        setGateDismissed(true);
-        try { await AsyncStorage.setItem('template_gate_dismissed', '1'); } catch {}
-    }, []);
-
-    const meetsThreshold = receiptCount >= 3 && distinctChainCount >= 2;
-    const showGate = !defaultTemplate && !meetsThreshold && !gateDismissed;
-    const showGateBanner = !defaultTemplate && !meetsThreshold && gateDismissed;
-
-    useEffect(() => {
-        AsyncStorage.getItem('default_build_dismissed')
-            .then(v => { if (v === '1') setBuildDismissed(true); });
-    }, []);
-    const dismissBuild = useCallback(async () => {
-        setBuildDismissed(true);
-        try { await AsyncStorage.setItem('default_build_dismissed', '1'); } catch {}
-    }, []);
-    const showBuildBanner = meetsThreshold && !defaultTemplate && !buildDismissed && !building;
-
-    const handleBuild = useCallback(async () => {
-        if (building) return;
-        setBuilding(true);
-        // Artificial floor so the "AI working" card is visible even if the
-        // server answers instantly (per spec — pretend to think for ~5s).
-        const minDelay = new Promise(resolve => setTimeout(resolve, 5000));
-        try {
-            await Promise.all([buildDefaultTemplate(), minDelay]);
-            await fetchAll(true); // refetch → the new default card appears
-        } catch {
-            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.buildFailed'));
-        } finally {
-            setBuilding(false);
-        }
-    }, [building, t, fetchAll]);
-
     const handleTemplateTap = (template: BasketTemplate) => {
         // Tap opens the editor so the user can verify items before
         // spawning a basket. The "Create basket" CTA inside the editor
         // (template/[id].tsx) calls POST /instantiate.
         router.push(`/template/${template.id}` as any);
     };
-
-    // FAB → identity sheet → create the template with the chosen name/emoji/
-    // colour, then route into the editor to add items.
-    const handleCreateTemplate = useCallback(async (next: CoverDraft) => {
-        try {
-            const userId = await getUserId();
-            const created = await createTemplate({ userId, name: next.name, coverColor: next.coverColor, coverImage: next.coverImage });
-            router.push(`/template/${created.id}` as any);
-        } catch {
-            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
-        }
-    }, [router, t]);
 
     if (loading) return (
         <View style={styles.container}>
@@ -197,53 +123,6 @@ export default function TemplatesScreen() {
                             <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
                         </View>
                     )}
-                    {// "Įkelkite kvitus, kad gautumėte savo šabloną" lives here —
-                    // this is where the auto-generated template lands, so the
-                    // prompt to earn it belongs on this tab.
-                    <>
-                        {showGate && (
-                            <SystemNoticeCard
-                                variant="info"
-                                icon="sparkles"
-                                title={t('basketTab.templates.gateTitle')}
-                                body={`${t('basketTab.templates.gateBody')}\n\n${t('basketTab.templates.gateBodyDetail')}`}
-                                onDismiss={dismissGate}
-                                actions={[
-                                    { label: t('basketTab.templates.gateLater'), onPress: dismissGate, style: 'secondary' },
-                                    { label: t('basketTab.templates.gateUpload'), onPress: () => router.navigate('/receipt' as any), style: 'primary' },
-                                ]}
-                            />
-                        )}
-                        {showGateBanner && (
-                            <SystemNoticeCard
-                                layout="banner"
-                                variant="info"
-                                icon="receipt-outline"
-                                title={t('basketTab.templates.gateBannerTitle')}
-                                body={t('basketTab.templates.gateBannerBody', {
-                                    progress: Math.min(receiptCount, 3),
-                                    chains: Math.min(distinctChainCount, 2),
-                                })}
-                                actions={[{ label: t('basketTab.templates.gateBannerCta'), onPress: () => router.navigate('/receipt' as any) }]}
-                            />
-                        )}
-                        {/* Qualified → offer to build the auto template. */}
-                        {showBuildBanner && (
-                            <SystemNoticeCard
-                                variant="success"
-                                icon="sparkles"
-                                title={t('basketTab.templates.buildOfferTitle')}
-                                body={t('basketTab.templates.buildOfferBody')}
-                                onDismiss={dismissBuild}
-                                actions={[
-                                    { label: t('basketTab.templates.buildDismiss'), onPress: dismissBuild, style: 'secondary' },
-                                    { label: t('basketTab.templates.buildCta'), onPress: handleBuild, style: 'primary' },
-                                ]}
-                            />
-                        )}
-                        {/* While building → AI placeholder card. */}
-                        {building && <BuildingTemplateCard />}
-                    </>}
                     </>
                 }
                 ListEmptyComponent={
@@ -257,6 +136,7 @@ export default function TemplatesScreen() {
                     const itemCount = Number(item.itemCount ?? 0);
                     const visitCount = Number(item.visitCount ?? 0);
                     const emoji = coverEmoji(item.coverImage);
+                    const sourceSite = (item as any).sourceSite as string | null | undefined;
                     // Explicit LT plural suffix — RN Intl doesn't resolve LT `few`.
                     const itemsStr = t(`basketTab.templates.itemCount_${ltPluralSuffix(itemCount)}`, { count: itemCount });
                     const visitsStr = t(`basketTab.templates.visitCount_${ltPluralSuffix(visitCount)}`, { count: visitCount });
@@ -289,7 +169,11 @@ export default function TemplatesScreen() {
                                 </Text>
                                 <Text style={styles.cardDate}>
                                     {itemsStr}
-                                    {visitCount > 0 && ` · ${visitsStr}`}
+                                    {/* Where an imported recipe came from. `sourceSite` is
+                                        the bare hostname the server stored at import time, so
+                                        the byline needs no parsing — a hand-made recipe has
+                                        none and simply shows nothing extra. */}
+                                    {sourceSite ? ` · ${sourceSite}` : visitCount > 0 ? ` · ${visitsStr}` : ''}
                                 </Text>
                                 {/* Smart template → "auto-renews" pill, shown ONLY while
                                     learning is on (autoUpdate=1). Otherwise, for creators,
@@ -322,25 +206,6 @@ export default function TemplatesScreen() {
                     );
                 }}
             />
-            <TemplateCoverEditor
-                visible={coverSheetOpen}
-                onClose={() => setCoverSheetOpen(false)}
-                name=""
-                coverColor={null}
-                coverImage={null}
-                submitLabel={t('basketTab.templates.createConfirm')}
-                onSubmit={handleCreateTemplate}
-            />
-
-            {/* FAB — pink "+" matching the other tabs. */}
-            <TouchableOpacity
-                style={[styles.fab, { bottom: tabBarHeight + 16 }]}
-                onPress={() => setCoverSheetOpen(true)}
-                activeOpacity={0.85}
-                accessibilityLabel={t('basketTab.templates.addCard')}
-            >
-                <Ionicons name="add" size={28} color={colors.onPrimary} />
-            </TouchableOpacity>
         </View>
     );
 }
@@ -380,18 +245,13 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     templateIcon: {
         width: 36, height: 36, borderRadius: radius.md,
-        backgroundColor: c.primaryMuted ?? c.surfaceMuted,
+        // The light-pink chip this card has always had — and now the source of
+        // truth for the sheets' ✕ chip too (SheetCloseButton), so the cover
+        // emoji and every close button read as one family.
+        backgroundColor: (c as any).primaryMuted ?? c.surfaceMuted,
         alignItems: 'center', justifyContent: 'center',
     },
     templateCoverEmoji: { fontSize: 20 },
-    fab: {
-        position: 'absolute', right: 20,
-        width: 56, height: 56, borderRadius: 28,
-        backgroundColor: c.primary,
-        alignItems: 'center', justifyContent: 'center',
-        elevation: 4, shadowColor: c.primary,
-        shadowOpacity: 0.35, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
-    },
 
     emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', marginTop: 16, textAlign: 'center' },
     emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 6, textAlign: 'center', lineHeight: 18 },

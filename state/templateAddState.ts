@@ -58,6 +58,15 @@ interface State {
     /** Called on full flow dismissal so re-entry with a different
      *  templateId triggers a fresh hydrate. */
     clear: () => void;
+    /** One-shot transition flag for the "Pridėti prekes" leave (recipe →
+     *  catalog). While true, the ROOT layout statically declares
+     *  animation:'none' on the template/[id] screen so the concurrent
+     *  pop + tab switch commits without a native transition (see the
+     *  template/[id] declaration in app/_layout.tsx for the full story).
+     *  Set by startAddingItems one commit BEFORE the navigate; reset by
+     *  the template screen's unmount cleanup once the pop has committed. */
+    leaveInstant: boolean;
+    setLeaveInstant: (v: boolean) => void;
 }
 
 export const useTemplateAddState = create<State>((set, get) => ({
@@ -140,5 +149,12 @@ export const useTemplateAddState = create<State>((set, get) => ({
         syncSession(tid, get().items.length);
     },
 
-    clear: () => set({ templateId: null, items: [], loaded: false }),
+    clear: () => set({ templateId: null, items: [], loaded: false, leaveInstant: false }),
+
+    leaveInstant: false,
+    setLeaveInstant: (v) => {
+        // Guarded — the unmount cleanup fires on EVERY recipe close, and an
+        // unconditional set would re-render the root layout each time.
+        if (get().leaveInstant !== v) set({ leaveInstant: v });
+    },
 }));

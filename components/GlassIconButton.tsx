@@ -97,7 +97,13 @@ export function GlassIconButton({
             onPressOut={() => { pressP.value = withSpring(0, motion.springExpressive); }}
             style={({ pressed }) => ({
                 opacity: disabled ? 0.5 : (pressed && Platform.OS === 'ios' ? 0.5 : 1),
-                marginHorizontal: 4,
+                // PADDING, not margin: the shadow/elevation halo draws OUTSIDE the
+                // disc, and hosts that size themselves exactly to this button
+                // (react-native-screens measures headerLeft/right subviews to
+                // content) clip at that box — margin left the halo no vertical
+                // room at all, guillotining the circle's shadow top and bottom.
+                // Same 4pt on the sides, so nothing shifts horizontally.
+                padding: 4,
             })}
         >
             {showGlass ? (

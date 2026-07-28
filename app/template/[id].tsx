@@ -2,46 +2,46 @@ import {
     View,
     Text,
     FlatList,
-    ScrollView,
     TouchableOpacity,
     StyleSheet,
     Alert,
-    TextInput,
     RefreshControl,
     Switch,
-    Modal,
-    Pressable,
-    Platform,
     Linking,
+    BackHandler,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
 import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
+import { useLocalSearchParams, useRouter, useFocusEffect } from 'expo-router';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { useTheme, radius, elevation, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
-import ProductLineCard from '../../components/ProductLineCard';
+import { useTheme, radius, elevation, spacing, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
+import { AddOrStepper } from '../../components/AddOrStepper';
 import { TemplateCoverEditor } from '../../components/TemplateCoverEditor';
 import { coverEmoji } from '../../utils/templateCover';
 import { inkOn } from '../../utils/contrastColor';
 import { isWeighableDisplay } from '../../utils/weighable';
+import { formatItemAmount } from '../../utils/amountDisplay';
 import { formatEuro } from '../../utils/formatCurrency';
-import { ScreenBackButton } from '../../components/ScreenBackButton';
+import { GlassIconButton } from '../../components/GlassIconButton';
+import { GlassSheet } from '../../components/GlassSheet';
+import { SheetCloseButton } from '../../components/SheetCloseButton';
 import { ProductImage } from '../../components/ProductImage';
 import { SkeletonBox } from '../../components/SkeletonBox';
 import { ScalePressable } from '../../components/ScalePressable';
 import { DockedGlassSheet, type DockedSheetControls } from '../../components/DockedGlassSheet';
 import { DockActionRow } from '../../components/dock/DockActionRow';
 import { DockSection } from '../../components/dock/DockSection';
-import { SheetCard, SHEET_CARD_SHADOW_RADIUS } from '../../components/SheetCard';
-import { TemplateShareSheet } from '../../components/TemplateShareSheet';
+import { SHEET_CARD_SHADOW_RADIUS } from '../../components/SheetCard';
+import { TemplateSharePane } from '../../components/TemplateSharePane';
 import { PublishWallModal } from '../../components/PublishWallModal';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { StatsHelpModal } from '../../components/StatsHelpModal';
-import { StoreChipBar } from '../../components/StoreChipBar';
 import { authedFetch } from '../../utils/authApi';
+import { useTemplateShop } from '../../hooks/useTemplateShop';
 import { useAuthState, DEV_SESSION_TOKEN } from '../../state/authState';
 import { useBasketSession } from '../../state/basketSession';
 import { useTemplateAddState } from '../../state/templateAddState';
@@ -51,7 +51,6 @@ import {
     getTemplate,
     patchTemplate,
     deleteTemplate as deleteTemplateApi,
-    instantiateTemplate,
     duplicateTemplate,
     patchTemplateItem,
     deleteTemplateItem,
@@ -67,6 +66,7 @@ export default function TemplateDetailScreen() {
     const header = useCollapsingHeader();
     const { t } = useTranslation();
     const router = useRouter();
+    const insets = useSafeAreaInsets();
     const styles = useMemo(() => makeStyles(colors), [colors]);
     const { id: rawId } = useLocalSearchParams<{ id: string }>();
     const templateId = Number(rawId);
@@ -75,10 +75,6 @@ export default function TemplateDetailScreen() {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
 
-    // Per-row local input buffer so the user can type "0" or "12" without
-    // the optimistic-update fight clobbering their input mid-keystroke.
-    const [qtyInputs, setQtyInputs] = useState<Record<number, string>>({});
-
     // The bottom dock: bar row collapsed, actions sheet expanded. Its measured
     // bar height feeds the detents and its collapsed clearance pads the list, so
     // the last item is never stranded under the floating bar.
@@ -86,15 +82,20 @@ export default function TemplateDetailScreen() {
     const [barRowH, setBarRowH] = useState(44);
     const [dockClearance, setDockClearance] = useState(120);
 
-    const [shareSheetOpen, setShareSheetOpen] = useState(false);
+    // Share = an IN-SHEET pane (dock content swap), not a modal — the map
+    // dock's Pakviesti already navigates this way, and the recipe dock must
+    // not be the one sheet that throws a modal on top of itself instead.
+    const [sharePane, setSharePane] = useState(false);
+    // Mirror of the dock's stage, so hardware back can peel ONE layer at a
+    // time (share pane → expanded sheet → default navigation) — the map
+    // surface's invite-pane back model.
+    const [dockExpanded, setDockExpanded] = useState(false);
     const [publishWallOpen, setPublishWallOpen] = useState(false);
     const [coverEditorOpen, setCoverEditorOpen] = useState(false);
-    // Tabs at the top of the editor — "Prekės" = items list (default),
-    // "Statistika" = creator-account explainer + CTA. Renamed from the
-    // visibility selector; visibility is now derived implicitly (templates
-    // become unlisted on first share via the nav-bar share icon, and
-    // public via the Statistika tab's sign-up flow).
-    const [tab, setTab] = useState<'items' | 'stats'>('items');
+    // Creator stats (Statistika) — used to be a second tab that swapped the
+    // whole body out; now a glass sheet raised from the nav-bar stats icon, so
+    // the items list never leaves the screen. Same tiles, same data.
+    const [statsOpen, setStatsOpen] = useState(false);
 
     const authedUser = useAuthState(s => s.user);
 
@@ -121,9 +122,10 @@ export default function TemplateDetailScreen() {
                 if (auth.token && auth.user?.username) {
                     return auth.token === DEV_SESSION_TOKEN ? 'dev' : 'error';
                 }
-                // Close the share sheet first — two RN Modals stacked (sheet +
-                // wall) flicker on Android. The wall reopens the sheet on success.
-                setShareSheetOpen(false);
+                // The wall is the ONLY RN Modal in this flow now (the share
+                // pane lives inside the dock, not a second Modal), so the old
+                // two-stacked-Modals Android flicker can't happen — the pane
+                // stays put behind the wall and is right there on success.
                 setPublishWallOpen(true);
                 return 'wall';
             }
@@ -137,30 +139,38 @@ export default function TemplateDetailScreen() {
     }, [template]);
 
     // After OAuth + username flow completes, retry the 'public' upgrade and
-    // reopen the share sheet so the now-public QR/link is right there.
+    // re-raise the share pane so the now-public QR/link is right there.
     const handlePublishWallComplete = useCallback(async () => {
         setPublishWallOpen(false);
         if (template && template.visibility !== 'public') {
             const r = await setVisibility('public');
-            if (r === 'ok') setShareSheetOpen(true);
+            if (r === 'ok') { setSharePane(true); sheetRef.current?.snapTo(2); }
         }
     }, [template, setVisibility]);
 
-    const [instantiating, setInstantiating] = useState(false);
-    // Set to an existing in-progress basket's id when the server says one is
-    // resumable → opens the Souply-themed "continue or start new" choice.
-    const [resumeBasketId, setResumeBasketId] = useState<number | null>(null);
     /**
-     * Staples the shopper says they already have, chosen JUST BEFORE the basket
-     * is made. The recipe itself is never edited by this — salt is part of the
-     * recipe whether or not the cupboard has any today — so the set lives here
-     * and dies with the screen. `null` means the choice has not been offered
-     * yet, which is what makes the sheet open exactly once per attempt.
+     * Dalintis → swap the dock's CONTENT to the share pane and raise the
+     * sheet to full, exactly like the map dock's Pakviesti. The dock must NOT
+     * collapse: the tap is a navigation WITHIN the sheet, and collapsing first
+     * (the old modal flow) read as the sheet dismissing itself.
      */
-    const [pantryChoice, setPantryChoice] = useState<Set<number> | null>(null);
-    const [pantryOpen, setPantryOpen] = useState(false);
-    /** Ticked-off staples while the sheet is open; committed on confirm. */
-    const [pantryDraft, setPantryDraft] = useState<Set<number>>(new Set());
+    const openSharePane = useCallback(() => {
+        setSharePane(true);
+        sheetRef.current?.snapTo(2);
+    }, []);
+
+    // Hardware back peels ONE layer: share pane → expanded sheet → (default
+    // navigation). Registered only while a layer is open so normal back is
+    // untouched otherwise — same shape as the map surface's invite pane.
+    useEffect(() => {
+        if (!sharePane && !dockExpanded) return;
+        const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+            if (sharePane) { setSharePane(false); return true; }
+            if (dockExpanded) { sheetRef.current?.collapse(); return true; }
+            return false;
+        });
+        return () => sub.remove();
+    }, [sharePane, dockExpanded]);
 
     // ── Data load ─────────────────────────────────────────────────────────
     const fetchTemplate = useCallback(async (silent: boolean) => {
@@ -182,12 +192,13 @@ export default function TemplateDetailScreen() {
     const setQty = useCallback(async (itemId: number, raw: number) => {
         if (!template) return;
         const item = template.items.find(it => it.id === itemId);
-        // Round to integer for piece-counted items, 1 decimal place for
-        // weighable. Mirrors the basket detail UX so the template editor
-        // behaves the same way for the same product class.
+        // Round to integer for piece-counted items, 2 decimal places for
+        // weighable — the AmountPickerModal legitimately hands back 0.25 kg,
+        // which the old 1-decimal rounding (a TextInput-era rule) corrupted
+        // to 0.3. Mirrors basket detail's updateQuantity for the same class.
         const isWeighable = isWeighableDisplay(item?.isWeighable, item?.quantity ?? raw);
         let rounded = isWeighable
-            ? Math.round(raw * 10) / 10
+            ? Math.round(raw * 100) / 100
             : Math.round(raw);
         const next = Math.max(0, Math.min(9999, rounded));
         if (next <= 0) {
@@ -242,79 +253,95 @@ export default function TemplateDetailScreen() {
     }, [template, deleting, router, t]);
 
     // ── Instantiate ───────────────────────────────────────────────────────
-    const runInstantiate = useCallback(async (force: boolean, skip?: number[]) => {
-        if (!template) return;
-        try {
-            setInstantiating(true);
-            const userId = await getUserId();
-            const result = await instantiateTemplate(template.id, userId, {
-                force,
-                skipPantryProductIds: skip ?? [...(pantryChoice ?? [])],
-            });
-            router.replace(`/basket/${result.basketId}` as any);
-        } catch {
-            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorInstantiate'));
-        } finally {
-            setInstantiating(false);
-        }
-    }, [template, router, t, pantryChoice]);
+    /**
+     * "Parduotuvės ›" = the shared recipe → shopping-basket flow
+     * (hooks/useTemplateShop): pantry keep-or-drop, instantiate with the
+     * resume-or-new choice, then the silent comparison. Only the landings are
+     * this screen's: `router.replace` keeps the half-finished flow off the
+     * stack — back from the map lands where the recipe was opened from
+     * (Receptai). The catalog session bar runs the SAME hook with its own
+     * landings (an explicit Shopping-tab stack).
+     */
+    const shop = useTemplateShop({
+        // The live copy this screen is editing — the pill is disabled until it
+        // has loaded, so the throw is a can't-happen guard, not a user path.
+        getDetail: async () => {
+            if (!template) throw new Error('template not loaded');
+            return template;
+        },
+        nav: {
+            onCompared: (basketId) => router.replace(`/basket/results/${basketId}` as any),
+            // The calc failed after creation — the basket screen's own
+            // "Rasti parduotuves" button is the retry.
+            onCalcFailed: (basketId) => router.replace(`/basket/${basketId}` as any),
+            onResume: (basketId) => router.replace(`/basket/${basketId}` as any),
+        },
+    });
 
     /**
      * Build the recipe through the normal Catalog: point the session at this
      * template, then drop into the tab — adds land in the template via
-     * addProductToBasket's target branch. Shared by the dashed row inside the list
-     * and the footer's primary action on an empty recipe, so both cannot drift.
+     * addProductToBasket's target branch. The dock bar's "Pridėti prekes" is
+     * the ONLY entry point (the top-of-screen dashed row is gone — one action,
+     * one affordance).
      */
     const startAddingItems = useCallback(() => {
         if (!template) return;
         useTemplateAddState.getState().hydrate(template.id);
         useBasketSession.getState().setTarget({ kind: 'template', templateId: template.id, name: template.name });
-        router.navigate('/(tabs)/catalog' as any);
+        /**
+         * Leave WITHOUT a pop transition — this is the grey/white-tint fix; do
+         * not "simplify" it back to a plain navigate.
+         *
+         * router.navigate here is a root-stack POP that runs CONCURRENTLY with
+         * a tab switch (Receptai → Katalogas) and the catalog's freezeOnBlur
+         * unfreeze, with the session sheet mounting its glass dock in the same
+         * frames. Under that load the pop's native close transition is
+         * interrupted mid-flight and the REVEALED root (tabs) screen is
+         * stranded at partial alpha — a wash over EVERY screen inside the tab
+         * group (device-probe confirmed: the wash sampled as the root
+         * backdrop bleeding through the semi-transparent tab container).
+         *
+         * A runtime navigation.setOptions({ animation: 'none' }) did NOT
+         * survive into the native pop transaction (the on-device wash matched
+         * the DEFAULT close tween cancelled mid-flight), so the 'none' now
+         * travels through the STATIC screen options instead: leaveInstant
+         * flips app/_layout.tsx's template/[id] declaration to
+         * animation:'none', React commits that options render THIS frame, and
+         * the one-frame-deferred navigate pops on the next — by which point
+         * the native screen's stackAnimation prop is already 'none'. Android
+         * maps 'none' to a 1→1 alpha tween, so even an interrupted commit
+         * cannot strand a wash. The flag resets in this screen's unmount
+         * cleanup, so the ordinary push into a recipe keeps the platform
+         * animation. The user reads the switch as a mode change (recipe →
+         * catalog picking), where an instant cut is fine.
+         */
+        useTemplateAddState.getState().setLeaveInstant(true);
+        requestAnimationFrame(() => router.navigate('/(tabs)/catalog' as any));
     }, [template, router]);
 
-    /** The recipe's cupboard staples, in list order. */
+    // Reset the instant-leave flag once this screen is actually GONE: the
+    // unmount happens in the same commit as the root-stack pop, and the
+    // native transaction is created from that commit's props, so restoring
+    // the default here cannot re-animate the leave — it only hands the NEXT
+    // recipe push its ordinary platform transition back. Also covers the
+    // normal back-pop (no-op — the flag is already false).
+    useEffect(() => () => useTemplateAddState.getState().setLeaveInstant(false), []);
+
+    /** The recipe's cupboard staples (isPantry = 1), in list order. Feeds BOTH
+     *  the keep-or-drop sheet at basket creation (unchanged) and the bordered
+     *  "Įprastos prekės" section at the bottom of the item list — the flag's
+     *  meaning at creation time is untouched; only the grouping is visual. */
     const pantryItems = useMemo(
         () => (template?.items ?? []).filter(it => Number(it.isPantry) === 1),
         [template],
     );
-
-    const handleInstantiate = useCallback(async () => {
-        if (!template || instantiating) return;
-        /**
-         * ASK BEFORE BUYING SALT AGAIN. A recipe carries its staples for good;
-         * whether THIS trip needs them is a different question, and it is the
-         * shopper's to answer. Offered once per attempt — `pantryChoice` is set
-         * (possibly to an empty set) by the sheet, so confirming twice does not
-         * re-open it.
-         */
-        if (pantryItems.length > 0 && pantryChoice === null) {
-            setPantryOpen(true);
-            return;
-        }
-        try {
-            setInstantiating(true);
-            const userId = await getUserId();
-            // First attempt: no force flag — server returns action='resume'
-            // when an in-progress instance already exists for this template.
-            // That's the signal to ask the user whether they want to
-            // continue the existing basket or start fresh.
-            const result = await instantiateTemplate(template.id, userId, {
-                skipPantryProductIds: [...(pantryChoice ?? [])],
-            });
-            if (result.action === 'resume') {
-                setInstantiating(false);
-                // Souply-themed choice (not the native Alert).
-                setResumeBasketId(result.basketId);
-                return;
-            }
-            router.replace(`/basket/${result.basketId}` as any);
-        } catch {
-            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorInstantiate'));
-            setInstantiating(false);
-            return;
-        }
-        setInstantiating(false);
-    }, [template, instantiating, router, t, runInstantiate, pantryItems, pantryChoice]);
+    /** Everything else — the main list renders only these; staples live in
+     *  their own section AFTER them, so the recipe reads ingredients-first. */
+    const regularItems = useMemo(
+        () => (template?.items ?? []).filter(it => Number(it.isPantry) !== 1),
+        [template],
+    );
 
     // ── Copy (duplicate into an editable template) ────────────────────────
     const [duplicating, setDuplicating] = useState(false);
@@ -343,19 +370,44 @@ export default function TemplateDetailScreen() {
     }, [template, t]);
 
     // ── Skeleton ──────────────────────────────────────────────────────────
+    // Mirrors the LOADED layout (the product-detail skeleton's approach: real
+    // containers — styles.card, styles.titleRow — holding SkeletonBox
+    // placeholders shaped like the content), so the data arriving is a
+    // fill-in, not a re-layout: cover band (emoji chip + title), the item
+    // cards (image · name · stepper pill), and the floating dock bar.
     if (loading || !template) {
         return (
             <>
-                <Stack.Screen options={{
-                    title: t('basketTab.templates.editTitle'),
-                    headerStyle: { backgroundColor: colors.cardBackground },
-                    headerShadowVisible: false,
-                    headerLeft: () => <ScreenBackButton />,
-                }} />
-                <View style={[styles.container, { padding: 16, gap: 12 }]}>
-                    {Array.from({ length: 5 }).map((_, i) => (
-                        <SkeletonBox key={i} width="100%" height={62} borderRadius={12} />
-                    ))}
+                {/* Same chrome as the loaded branch (the standard custom bar,
+                    native header hidden) on the neutral card colour — the cover
+                    colour isn't known yet, and swapping bar TYPES on load would
+                    re-layout the whole screen instead of just tinting the bar. */}
+                <CollapsingHeader controller={header} background={colors.cardBackground} back />
+                <View style={styles.container}>
+                    <View style={styles.list}>
+                        {/* Title band: emoji chip + a name-width bar. */}
+                        <View style={styles.titleRow}>
+                            <SkeletonBox width={34} height={34} borderRadius={10} />
+                            <SkeletonBox width={210} height={20} borderRadius={7} />
+                        </View>
+                        {/* Item cards: image square, two-line name, stepper pill. */}
+                        {Array.from({ length: 6 }).map((_, i) => (
+                            <View key={i} style={styles.card}>
+                                <SkeletonBox width={44} height={44} borderRadius={radius.md} />
+                                <View style={styles.cardContent}>
+                                    <SkeletonBox width="75%" height={13} borderRadius={5} />
+                                    <SkeletonBox width={150} height={30} borderRadius={radius.pill} />
+                                </View>
+                            </View>
+                        ))}
+                    </View>
+                    {/* The dock's collapsed bar: same float margins/height as the
+                        real DockedGlassSheet (26 ≈ its COLLAPSED_MARGIN, 72 =
+                        bar row + peeks), holding the two bar affordances. */}
+                    <View style={styles.skeletonDock}>
+                        <SkeletonBox width={130} height={16} borderRadius={7} />
+                        <SkeletonBox width={140} height={38} borderRadius={radius.pill} />
+                    </View>
                 </View>
             </>
         );
@@ -375,8 +427,14 @@ export default function TemplateDetailScreen() {
     // Ink is CHOSEN against the cover, not assumed white. The palette's amber
     // (#F0AE3F) gives white text a 1.94:1 contrast ratio — below WCAG's 3:1 floor
     // even for large text — which is why a yellow cover's title was unreadable.
+    // The dark ink is the FIXED near-black, not colors.textPrimary: the cover
+    // colour never changes with the theme, but textPrimary flips to white in
+    // dark mode — which handed amber covers white-on-yellow "dark" ink.
+    // onCover is ONLY for elements sitting on the cover-coloured bar (the
+    // CollapsingHeader titleColor); the body title sits on the page background
+    // and takes textPrimary.
     const onCover = template.coverColor
-        ? inkOn(template.coverColor, colors.textPrimary)
+        ? inkOn(template.coverColor)
         : colors.textPrimary;
     const headerEmoji = coverEmoji(template.coverImage) ?? '🫜';
 
@@ -386,8 +444,8 @@ export default function TemplateDetailScreen() {
      * `BasketTemplate.sourceUrl`/`sourceSite` are real columns now, written by
      * the import flow — so this reads the row instead of the hardcoded null that
      * stood here while the server had nowhere to put the address. A hand-made
-     * recipe still has none, which is what keeps the source cards disabled for
-     * those; the layout stays honest either way.
+     * recipe still has none, which is what keeps the Svetainė card disabled
+     * for those; the layout stays honest either way.
      *
      * `sourceSite` is stored alongside the URL so the byline needs no parsing,
      * but it is derived here as a fallback for rows written before that column.
@@ -403,57 +461,108 @@ export default function TemplateDetailScreen() {
     // nothing to compare — so the shopping action stays dead until it has items.
     const canShop = template.items.length > 0;
 
+    // ONE item-card renderer for both the main list and the staples section
+    // below it — the pantry rows must be the same card, just grouped, so the
+    // markup cannot drift between the two placements.
+    const renderItemCard = (item: BasketTemplateDetail['items'][number]) => {
+        const qty = Number(item.quantity) || 0;
+        return (
+            <View style={styles.card}>
+                <ProductImage
+                    uris={item.imageUrls}
+                    imageStyle={styles.productImage}
+                    placeholderStyle={styles.productImagePlaceholder}
+                    emojiStyle={styles.productImageEmoji}
+                />
+                <View style={styles.cardContent}>
+                    <Text style={styles.itemName} numberOfLines={2}>{item.productName}</Text>
+                    {isDefault ? (
+                        // The auto template is read-only — same static
+                        // amount string basket detail's locked rows use.
+                        <Text style={styles.readonlyQty}>
+                            {formatItemAmount({ quantity: qty, isWeighable: item.isWeighable, unit: item.unit }, t)}
+                        </Text>
+                    ) : (
+                        // THE app-wide "Add ⇄ stepper" control (basket
+                        // detail, product card/detail, search, discounts)
+                        // — the recipe editor must not be the one screen
+                        // with a bespoke quantity UI. The API's template
+                        // items don't carry canonicalUnit/Step/Family
+                        // (getTemplateItems selects bti.* + derived
+                        // isWeighable only), so `isWeighable` alone
+                        // drives the weight-vs-count decision — signal
+                        // #2 in utils/amountDisplay's priority order.
+                        <AddOrStepper
+                            product={{
+                                id: item.productId,
+                                name: item.productName,
+                                isWeighable: Number(item.isWeighable) === 1,
+                                unit: item.unit,
+                            }}
+                            quantity={qty}
+                            onCommit={(next) => {
+                                if (next <= 0) { void removeItem(item.id); return; }
+                                void setQty(item.id, next);
+                            }}
+                            style={styles.itemStepper}
+                        />
+                    )}
+                </View>
+                {!isDefault && (
+                    <TouchableOpacity style={styles.removeButton} onPress={() => removeItem(item.id)}>
+                        <Ionicons name="trash-outline" size={20} color={colors.error} />
+                    </TouchableOpacity>
+                )}
+            </View>
+        );
+    };
+
     return (
         <>
-            {/* Unified header: cover-coloured bar carrying ONLY back + the
-                tappable emoji/name title that collapses on scroll; the Items/Stats
-                tabs stay pinned. The actions live in the bottom dock — glass pills
-                on a coloured bar wash out into empty white outlines. */}
+            {/* Unified header — the STANDARD CollapsingHeader custom bar
+                (native header hidden), the same hosting shape as basket detail
+                and every other DockedGlassSheet screen: the dock's full detent
+                spans the window up to the status bar, and only in-screen chrome
+                can be covered by it (a native bar lives in the navigator's own
+                container, where screen content can never paint over it).
+                Cover-coloured bar carrying back and the stats icon (creator
+                recipes); the collapsed title fades in only once the body title
+                scrolls under the bar — the component's own measured-title rule,
+                fed by header.onTitleLayout on the title row, so a two-line
+                cover title fades the bar copy in later. `titleColor` flips the
+                title ink WHITE-or-dark by the COVER's contrast (it sits on the
+                cover-coloured bar, unlike the body title below, which sits on
+                the page). The back chevron keeps the component default — ALWAYS
+                the app pink inside its own circle, never the cover ink, which
+                handed it white-on-white on pink covers. The actions live in the
+                bottom dock — glass pills on a coloured bar wash out into empty
+                white outlines. */}
             <CollapsingHeader
                 controller={header}
                 background={headerColor}
-                headerOptions={{
-                    headerShown: true,
-                    title: '',
-                    headerTitle: () => null,
-                    headerStyle: { backgroundColor: headerColor },
-                    headerTintColor: onCover,
-                    headerShadowVisible: false,
-                    headerLeft: () => <ScreenBackButton color={template.coverColor ? onCover : colors.primary} />,
-                }}
+                titleColor={onCover}
+                back
+                smallTitle={titleText}
+                // Creator stats — shown exactly where the Stats tab used to be
+                // (signed-in, non-default recipes); raises the glass sheet.
+                right={authedUser && !isDefault
+                    ? (
+                        <GlassIconButton
+                            icon="stats-chart-outline"
+                            onPress={() => setStatsOpen(true)}
+                            accessibilityLabel={t('basketTab.templates.tabStats')}
+                        />
+                    )
+                    : undefined}
             />
 
-            {/* Items/Stats switcher — always-pinned real element under the native
-                bar (a tab switcher must not scroll away). */}
-            {authedUser && !isDefault && (
-                <View style={[styles.tabBar, { backgroundColor: colors.cardBackground }]}>
-                    <StoreChipBar
-                        chips={[
-                            { id: 'items', label: t('basketTab.templates.tabItems') },
-                            { id: 'stats', label: t('basketTab.templates.tabStats') },
-                        ]}
-                        selectedId={tab}
-                        onSelect={id => { if (id != null) setTab(id as 'items' | 'stats'); }}
-                    />
-                    {tab === 'stats' && (
-                        <TouchableOpacity
-                            onPress={() => setStatsHelpOpen(true)}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                            style={styles.tabHelpBtn}
-                        >
-                            <Ionicons name="help-circle-outline" size={22} color={colors.textMuted} />
-                        </TouchableOpacity>
-                    )}
-                </View>
-            )}
-
             <View style={styles.container}>
-                {!(authedUser && tab === 'stats') ? (
-                <>
                 <Animated.FlatList
                     {...header.scroll}
                     style={{ flex: 1 }}
-                    data={template.items}
+                    // Staples (isPantry) are pulled OUT of the main list and
+                    // grouped in their own section after it (ListFooter below).
+                    data={regularItems}
                     keyExtractor={(item: any) => `i-${item.id}`}
                     contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: dockClearance + 28 }]}
                     refreshControl={
@@ -466,24 +575,39 @@ export default function TemplateDetailScreen() {
                     }
                     ListHeaderComponent={
                         <>
+                        {/* The body title sits on the PAGE background (it scrolls
+                            with the list), so it takes textPrimary — onCover here
+                            painted it white-on-cream whenever the cover was pink
+                            (white passes on pink, and the ink followed the cover
+                            instead of the surface it actually sits on). Same for
+                            the emoji chip: the translucent-white fill was designed
+                            for a coloured band it no longer sits on. */}
                         {<TouchableOpacity
                         onPress={isDefault ? undefined : () => setCoverEditorOpen(true)}
                         activeOpacity={isDefault ? 1 : 0.7}
                         disabled={isDefault}
                         style={styles.titleRow}
+                        // Feeds the bar-title fade threshold — a two-line title
+                        // fades the bar copy in later (CollapsingHeader measures
+                        // this row via the controller).
+                        onLayout={header.onTitleLayout}
                     >
                         <View style={[styles.titleEmoji, {
-                            backgroundColor: template.coverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
+                            backgroundColor: colors.surfaceMuted ?? colors.cardBackground,
                         }]}>
                             {isDefault
                                 ? <Ionicons name="sparkles" size={20} color={colors.primary} />
                                 : <Text style={{ fontSize: 20 }}>{headerEmoji}</Text>}
                         </View>
-                        <Text style={[styles.titleText, { color: onCover }]} numberOfLines={2}>
+                        <Text style={[styles.titleText, { color: colors.textPrimary }]} numberOfLines={2}>
                             {titleText}
                         </Text>
                     </TouchableOpacity>}
-                        {isDefault ? (
+                        {/* No top-of-screen add button: the dock's "Pridėti prekes"
+                            is THE entry point for adding — two affordances for the
+                            same action had one of them (this one) pushing the list
+                            down on every recipe. */}
+                        {isDefault && (
                             <View style={styles.settingRow}>
                                 <View style={{ flex: 1, marginRight: 12 }}>
                                     <Text style={styles.settingLabel}>{t('basketTab.templates.learnLabel')}</Text>
@@ -496,92 +620,251 @@ export default function TemplateDetailScreen() {
                                     thumbColor={colors.onPrimary}
                                 />
                             </View>
-                        ) : (
-                            <TouchableOpacity
-                                style={styles.addItemBtn}
-                                onPress={startAddingItems}
-                                activeOpacity={0.7}
-                            >
-                                <Ionicons name="add" size={18} color={colors.primary} />
-                                <Text style={styles.addItemBtnText}>{t('basketTab.templates.addItemTitle')}</Text>
-                            </TouchableOpacity>
                         )}
                         </>
                     }
-                    ListEmptyComponent={
+                    // Only a truly item-less recipe shows the empty state — an
+                    // all-staples recipe has an empty MAIN list but real items
+                    // in the section below, and "no items yet" would be a lie.
+                    ListEmptyComponent={template.items.length === 0 ? (
                         <View style={styles.centered}>
                             <Ionicons name="albums-outline" size={56} color={colors.textMuted} />
                             <Text style={styles.emptyText}>{t('basketTab.templates.emptyItemsTitle')}</Text>
                             <Text style={styles.emptySubText}>{t('basketTab.templates.emptyItemsBody')}</Text>
                         </View>
+                    ) : null}
+                    renderItem={({ item }) => renderItemCard(item)}
+                    // The cupboard staples, grouped AFTER the ingredients in a
+                    // pink-bordered section of the same item cards. Display
+                    // only: the flag still drives the keep-or-drop choice at
+                    // basket creation (pantryItems feeds that sheet unchanged).
+                    ListFooterComponent={pantryItems.length > 0 ? (
+                        <View style={styles.pantrySection}>
+                            <View style={styles.pantrySectionHeader}>
+                                <Ionicons name="home-outline" size={15} color={colors.primary} />
+                                <Text style={styles.pantrySectionTitle}>
+                                    {t('basketTab.templates.commonSection')}
+                                </Text>
+                            </View>
+                            {pantryItems.map(it => (
+                                <View key={`p-${it.id}`}>{renderItemCard(it)}</View>
+                            ))}
+                        </View>
+                    ) : null}
+                />
+
+                {/* Bottom dock — the recipe's actions, mirroring basket detail:
+                    collapsed it is a bar (add items · Parduotuvės), swiped up it
+                    is the sheet that took over from the nav bar's glass pills. */}
+                <DockedGlassSheet
+                    ref={sheetRef}
+                    colors={colors}
+                    onCollapsedClearance={setDockClearance}
+                    barRowHeight={barRowH}
+                    // The bar row RIDES THE SHEET'S TOP EDGE as it expands — the
+                    // catalog list sheet's layout. Without this the dock ran the
+                    // default Find-My layout: the glass grew ABOVE a bottom-pinned
+                    // bar, so on a drag the sheet CONTENT travelled with the top
+                    // edge while "+ Pridėti prekes"/"Parduotuvės" sat still — the
+                    // wrong row moved with the sheet.
+                    barAtTop
+                    barRow={
+                        <View
+                            style={styles.barRow}
+                            onLayout={e => { const h = Math.round(e.nativeEvent.layout.height); if (h > 0) setBarRowH(h); }}
+                        >
+                            {/* The auto template is read-only — nothing to add to. */}
+                            {!isDefault && (
+                                <TouchableOpacity style={styles.addMoreBtn} onPress={startAddingItems} activeOpacity={0.7}>
+                                    <Ionicons name="add" size={20} color={colors.primary} />
+                                    <Text style={styles.addMoreText}>{t('basketTab.templates.addItemsCta')}</Text>
+                                </TouchableOpacity>
+                            )}
+                            <ScalePressable
+                                style={[styles.shopPill, isDefault && { flex: 1 }, (!canShop || shop.busy) && styles.shopPillDisabled]}
+                                onPress={shop.start}
+                                disabled={!canShop || shop.busy}
+                                scaleTo={!canShop || shop.busy ? 1 : 0.95}
+                            >
+                                {shop.busy
+                                    ? <MaterialProgress size="small" color={colors.onPrimary} />
+                                    : (
+                                        <>
+                                            <Text style={styles.shopPillText}>{t('basketTab.templates.storesCta')}</Text>
+                                            <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
+                                        </>
+                                    )}
+                            </ScalePressable>
+                        </View>
                     }
-                    renderItem={({ item }) => {
-                        // Format the displayed quantity by class. Weighable
-                        // items (kg) show one decimal; piece items strip the
-                        // trailing ".0" the DB stores (DECIMAL(10,3)).
-                        const numeric = Number(item.quantity);
-                        const isWeighable = isWeighableDisplay(item.isWeighable, numeric);
-                        const fallbackQty = isWeighable
-                            ? numeric.toFixed(1).replace('.', ',')
-                            : String(Math.round(numeric));
-                        const qty = qtyInputs[item.id] ?? fallbackQty;
-                        const step = isWeighable ? 0.1 : 1;
-                        return (
-                            <ProductLineCard
-                                name={item.productName}
-                                imageUrls={item.imageUrls}
-                                readOnly={isDefault}
-                                readOnlyQtyText={`${fallbackQty} ${isWeighable ? 'kg' : 'vnt.'}`}
-                                quantityText={qty}
-                                unit={isWeighable ? 'kg' : 'vnt.'}
-                                weighable={isWeighable}
-                                onChangeQuantity={(v) => {
-                                    // Piece items: digits only. Weighable: digits +
-                                    // one decimal separator with <= 1 digit after it.
-                                    if (isWeighable) {
-                                        if (!/^[0-9]*[.,]?[0-9]?$/.test(v)) return;
-                                    } else {
-                                        if (/[^0-9]/.test(v)) return;
-                                    }
-                                    setQtyInputs(p => ({ ...p, [item.id]: v }));
-                                }}
-                                onCommitQuantity={(text) => {
-                                    const txt = text.replace(',', '.');
-                                    const val = isWeighable ? parseFloat(txt) : parseInt(txt, 10);
-                                    if (!val || val <= 0) removeItem(item.id);
-                                    else setQty(item.id, val);
-                                    setQtyInputs(p => { const c = { ...p }; delete c[item.id]; return c; });
-                                }}
-                                onDecrement={() => setQty(item.id, Number(item.quantity) - step)}
-                                onIncrement={() => setQty(item.id, Number(item.quantity) + step)}
-                                onRemove={() => removeItem(item.id)}
-                            />
-                        );
+                    sheet={{
+                        maxStage: 2,
+                        // barAtTop clips content at the sheet's BOTTOM edge (the
+                        // screen bottom once docked at full) instead of above a
+                        // bottom bar, so the last row needs the safe-area pad —
+                        // same contract as the catalog list sheet's content.
+                        contentContainerStyle: { paddingTop: spacing.xs, paddingBottom: insets.bottom + spacing.lg },
+                        onStageChange: (st) => setDockExpanded(st > 0),
+                        // The share pane, in the sheet's own pane contract: it
+                        // swaps the TOP ROW to "‹ Dalintis" (replacing the
+                        // add/shop action row), page-slides the body, and — via
+                        // onDismiss — is cleared by the sheet on every collapse,
+                        // so re-expanding the dock always lands on the action
+                        // cards, never a stale share view (the collapsed bar
+                        // gives no hint one is open). None of that is this
+                        // screen's job any more.
+                        pane: sharePane ? {
+                            key: 'share',
+                            // ‹ back · share icon · title — the map invite
+                            // pane's header row, so the way back out of the
+                            // pane is where the map already taught it.
+                            barRow: (
+                                <View style={styles.paneHeaderRow}>
+                                    <TouchableOpacity
+                                        onPress={() => setSharePane(false)}
+                                        hitSlop={10}
+                                        accessibilityLabel={t('common.back')}
+                                    >
+                                        <Ionicons name="chevron-back" size={26} color={colors.primary} />
+                                    </TouchableOpacity>
+                                    <Ionicons name="share-social-outline" size={18} color={colors.primary} />
+                                    <Text style={styles.sheetTitle} numberOfLines={1}>
+                                        {t('basketTab.templates.shareNative')}
+                                    </Text>
+                                </View>
+                            ),
+                            content: (
+                                <View style={styles.sheetPanelContent}>
+                                    <TemplateSharePane
+                                        templateId={template.id}
+                                        templateName={template.name}
+                                        itemCount={template.items.length}
+                                        visibility={template.visibility}
+                                        isCreator={!!authedUser?.username}
+                                        onSetVisibility={(next) => setVisibility(next)}
+                                    />
+                                </View>
+                            ),
+                            onDismiss: () => setSharePane(false),
+                        } : null,
+                        content: (
+                            <View style={styles.sheetPanelContent}>
+                                <Text style={styles.sheetTitle}>{t('basketDetail.actionsTitle')}</Text>
+                                {/* Svetainė + Dalintis — the map dock's card pair,
+                                    verbatim (DockActionRow). Svetainė opens the RECIPE
+                                    page, not the site's front page: it is the only way
+                                    back to the instructions, and a shopper tapping the
+                                    source wants the page they imported, not lamaistas.lt.
+                                    A hand-made recipe has no sourceUrl, so the card sits
+                                    disabled rather than lying about where it came from. */}
+                                <DockActionRow
+                                    colors={colors}
+                                    gap={14}
+                                    actions={[
+                                        {
+                                            icon: 'globe-outline',
+                                            title: t('basketTab.templates.websiteTitle'),
+                                            subtitle: sourceSite ?? t('basketTab.templates.sourceUnknown'),
+                                            onPress: () => openSource(sourceUrl),
+                                            disabled: !sourceUrl,
+                                        },
+                                        // Share — same card design as the map's Pakviesti,
+                                        // and now the same NAVIGATION too: the tap swaps
+                                        // the dock's content to the share pane (QR ·
+                                        // link · download) and raises the sheet to full.
+                                        // The map dock does this for Pakviesti; the
+                                        // recipe dock must not be the one sheet that
+                                        // collapses itself to throw a modal instead. The
+                                        // auto template has no card at all (it was never
+                                        // shareable); an empty recipe keeps the card but
+                                        // disabled — nothing to share.
+                                        !isDefault && {
+                                            icon: 'share-social-outline',
+                                            title: t('basketTab.templates.shareNative'),
+                                            subtitle: t('basketTab.templates.shareCardSub'),
+                                            onPress: openSharePane,
+                                            disabled: !canShop,
+                                        },
+                                    ]}
+                                />
+
+                                {/* What the nav bar's ellipsis used to hold, under the
+                                    same section chrome every dock uses (DockSection —
+                                    map dock's Settings, invite roster). Copy is
+                                    available for every recipe — it is the only way to
+                                    "edit" the auto one; the auto one can't be deleted. */}
+                                <DockSection
+                                    colors={colors}
+                                    icon="settings-outline"
+                                    title={t('basketTab.templates.settingsSection')}
+                                >
+                                    <TouchableOpacity
+                                        style={styles.sheetRow}
+                                        onPress={() => { sheetRef.current?.collapse(); handleDuplicate(); }}
+                                    >
+                                        <Text style={[styles.sheetRowText, { color: colors.textPrimary }]}>
+                                            {t('basketTab.templates.copyTemplate')}
+                                        </Text>
+                                    </TouchableOpacity>
+                                    {!isDefault && (
+                                        <>
+                                            <View style={styles.sectionSep} />
+                                            <TouchableOpacity
+                                                style={styles.sheetRow}
+                                                onPress={() => { sheetRef.current?.collapse(); confirmDelete(); }}
+                                            >
+                                                <Text style={[styles.sheetRowText, { color: colors.error }]}>
+                                                    {t('basketTab.templates.deleteConfirm')}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        </>
+                                    )}
+                                </DockSection>
+                            </View>
+                        ),
                     }}
                 />
-                </>
-                ) : (
-                    // Statistika — real creator metrics. Same data the website
-                    // shows on the template card. Only reachable when signed in
-                    // (tabs are hidden otherwise).
-                    <Animated.ScrollView {...header.scroll} style={{ flex: 1 }} contentContainerStyle={[styles.statsScroll, { paddingTop: 0, paddingBottom: dockClearance + 28 }]}>
-                        {<TouchableOpacity
-                        onPress={isDefault ? undefined : () => setCoverEditorOpen(true)}
-                        activeOpacity={isDefault ? 1 : 0.7}
-                        disabled={isDefault}
-                        style={styles.titleRow}
-                    >
-                        <View style={[styles.titleEmoji, {
-                            backgroundColor: template.coverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
-                        }]}>
-                            {isDefault
-                                ? <Ionicons name="sparkles" size={20} color={colors.primary} />
-                                : <Text style={{ fontSize: 20 }}>{headerEmoji}</Text>}
+            </View>
+
+            <PublishWallModal
+                visible={publishWallOpen}
+                onClose={() => setPublishWallOpen(false)}
+                onComplete={handlePublishWallComplete}
+            />
+
+            <ConfirmModal
+                visible={deleteOpen}
+                title={t('basketTab.templates.deleteTitle')}
+                body={template ? t('basketTab.templates.deleteBody', { name: template.name }) : undefined}
+                confirmLabel={t('basketTab.templates.deleteConfirm')}
+                cancelLabel={t('basketTab.templates.deleteCancel')}
+                destructive
+                busy={deleting}
+                onConfirm={handleDelete}
+                onClose={() => setDeleteOpen(false)}
+            />
+
+            {/* Statistika — real creator metrics, same tiles the website shows on
+                the template card, in the app's glass sheet (autoHeight: four
+                tiles, no scroll needed). Only reachable when signed in — the
+                nav-bar stats icon is hidden otherwise. The help icon rides the
+                sheet's title row so the explainer survived the tab's removal;
+                StatsHelpModal is an RN Modal, so it stacks fine over this
+                non-Modal sheet (the two-Modal Android flicker doesn't apply). */}
+            {statsOpen && (
+                <GlassSheet autoHeight onClose={() => setStatsOpen(false)}>
+                    {/* GlassSheet's scroll is edge-to-edge — content owns its padding. */}
+                    <View style={styles.statsSheetBody}>
+                        <View style={styles.statsSheetTitleRow}>
+                            <Text style={[styles.sheetTitle, { flex: 1 }]}>{t('basketTab.templates.tabStats')}</Text>
+                            <TouchableOpacity
+                                onPress={() => setStatsHelpOpen(true)}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            >
+                                <Ionicons name="help-circle-outline" size={22} color={colors.textMuted} />
+                            </TouchableOpacity>
+                            <SheetCloseButton />
                         </View>
-                        <Text style={[styles.titleText, { color: onCover }]} numberOfLines={2}>
-                            {titleText}
-                        </Text>
-                    </TouchableOpacity>}
                         <View style={styles.metricsGrid}>
                             <View style={styles.metricTile}>
                                 <Text style={styles.metricValue}>{Number(template.visitCount ?? 0).toLocaleString('lt-LT')}</Text>
@@ -615,293 +898,16 @@ export default function TemplateDetailScreen() {
                                 })()}
                             </View>
                         </View>
-                    </Animated.ScrollView>
-                )}
-
-                {/* Bottom dock — the recipe's actions, mirroring basket detail:
-                    collapsed it is a bar (add items · Apsipirkimas), swiped up it
-                    is the sheet that took over from the nav bar's glass pills. */}
-                <DockedGlassSheet
-                    ref={sheetRef}
-                    colors={colors}
-                    onCollapsedClearance={setDockClearance}
-                    barRowHeight={barRowH}
-                    barRow={
-                        <View
-                            style={styles.barRow}
-                            onLayout={e => { const h = Math.round(e.nativeEvent.layout.height); if (h > 0) setBarRowH(h); }}
-                        >
-                            {/* The auto template is read-only — nothing to add to. */}
-                            {!isDefault && (
-                                <TouchableOpacity style={styles.addMoreBtn} onPress={startAddingItems} activeOpacity={0.7}>
-                                    <Ionicons name="add" size={20} color={colors.primary} />
-                                    <Text style={styles.addMoreText}>{t('basketTab.templates.addItemsCta')}</Text>
-                                </TouchableOpacity>
-                            )}
-                            <ScalePressable
-                                style={[styles.shopPill, isDefault && { flex: 1 }, (!canShop || instantiating) && styles.shopPillDisabled]}
-                                onPress={handleInstantiate}
-                                disabled={!canShop || instantiating}
-                                scaleTo={!canShop || instantiating ? 1 : 0.95}
-                            >
-                                {instantiating
-                                    ? <MaterialProgress size="small" color={colors.onPrimary} />
-                                    : (
-                                        <>
-                                            <Text style={styles.shopPillText}>{t('basketTab.templates.shoppingCta')}</Text>
-                                            <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
-                                        </>
-                                    )}
-                            </ScalePressable>
-                        </View>
-                    }
-                    sheet={{
-                        maxStage: 2,
-                        content: (
-                            <View style={styles.sheetPanelContent}>
-                                <Text style={styles.sheetTitle}>{t('basketDetail.actionsTitle')}</Text>
-                                {/* Source of the recipe. Both cards need the imported
-                                    page's address, which no template row carries — see
-                                    `sourceUrl` above — so they sit disabled rather than
-                                    lying about where this recipe came from. */}
-                                <DockActionRow
-                                    colors={colors}
-                                    gap={14}
-                                    actions={[
-                                        {
-                                            icon: 'reader-outline',
-                                            title: t('basketTab.templates.openRecipeTitle'),
-                                            subtitle: sourceSite ?? t('basketTab.templates.sourceUnknown'),
-                                            onPress: () => openSource(sourceUrl),
-                                            disabled: !sourceUrl,
-                                        },
-                                        {
-                                            icon: 'globe-outline',
-                                            title: t('basketTab.templates.websiteTitle'),
-                                            subtitle: sourceSite ?? t('basketTab.templates.sourceUnknown'),
-                                            // Opens the RECIPE, not the site's front page. There
-                                            // used to be a separate "open recipe" card for that;
-                                            // with it gone this is the only way back to the
-                                            // instructions, and a shopper tapping the source
-                                            // wants the page they imported, not lamaistas.lt.
-                                            onPress: () => openSource(sourceUrl),
-                                            disabled: !sourceUrl,
-                                        },
-                                    ]}
-                                />
-
-                                {/* Share — the trip invite pane's structure (section
-                                    card, then ONE filled primary button; the link is
-                                    never printed here). The consecutive views — QR,
-                                    copyable link, download — live in TemplateShareSheet,
-                                    which the button opens. The sheet must collapse
-                                    first: a Modal over an expanded dock stacks two
-                                    surfaces and flickers on Android. */}
-                                {!isDefault && (
-                                    <DockSection
-                                        colors={colors}
-                                        icon="share-social-outline"
-                                        title={t('basketTab.templates.shareTitle')}
-                                    >
-                                        <TouchableOpacity
-                                            style={[styles.shareBtn, !canShop && styles.shareBtnDisabled]}
-                                            onPress={() => { sheetRef.current?.collapse(); setShareSheetOpen(true); }}
-                                            disabled={!canShop}
-                                            activeOpacity={0.85}
-                                        >
-                                            <Ionicons
-                                                name={Platform.OS === 'ios' ? 'share-outline' : 'share-social'}
-                                                size={17}
-                                                color={colors.onPrimary}
-                                            />
-                                            <Text style={styles.shareBtnText}>{t('basketTab.templates.shareNative')}</Text>
-                                        </TouchableOpacity>
-                                        {!canShop && (
-                                            <Text style={styles.shareHint}>{t('basketTab.templates.shareNoItems')}</Text>
-                                        )}
-                                    </DockSection>
-                                )}
-
-                                {/* What the nav bar's ellipsis used to hold. Copy is
-                                    available for every recipe — it is the only way to
-                                    "edit" the auto one; the auto one can't be deleted. */}
-                                <SheetCard>
-                                    <TouchableOpacity
-                                        style={styles.sheetRow}
-                                        onPress={() => { sheetRef.current?.collapse(); handleDuplicate(); }}
-                                    >
-                                        <Text style={[styles.sheetRowText, { color: colors.textPrimary }]}>
-                                            {t('basketTab.templates.copyTemplate')}
-                                        </Text>
-                                    </TouchableOpacity>
-                                    {!isDefault && (
-                                        <>
-                                            <View style={styles.sectionSep} />
-                                            <TouchableOpacity
-                                                style={styles.sheetRow}
-                                                onPress={() => { sheetRef.current?.collapse(); confirmDelete(); }}
-                                            >
-                                                <Text style={[styles.sheetRowText, { color: colors.error }]}>
-                                                    {t('basketTab.templates.deleteConfirm')}
-                                                </Text>
-                                            </TouchableOpacity>
-                                        </>
-                                    )}
-                                </SheetCard>
-                            </View>
-                        ),
-                    }}
-                />
-            </View>
-
-            <TemplateShareSheet
-                visible={shareSheetOpen}
-                templateId={template.id}
-                templateName={template.name}
-                itemCount={template.items.length}
-                visibility={template.visibility}
-                isCreator={!!authedUser?.username}
-                onSetVisibility={(next) => setVisibility(next)}
-                onClose={() => setShareSheetOpen(false)}
-            />
-
-            <PublishWallModal
-                visible={publishWallOpen}
-                onClose={() => setPublishWallOpen(false)}
-                onComplete={handlePublishWallComplete}
-            />
-
-            <ConfirmModal
-                visible={deleteOpen}
-                title={t('basketTab.templates.deleteTitle')}
-                body={template ? t('basketTab.templates.deleteBody', { name: template.name }) : undefined}
-                confirmLabel={t('basketTab.templates.deleteConfirm')}
-                cancelLabel={t('basketTab.templates.deleteCancel')}
-                destructive
-                busy={deleting}
-                onConfirm={handleDelete}
-                onClose={() => setDeleteOpen(false)}
-            />
+                    </View>
+                </GlassSheet>
+            )}
 
             <StatsHelpModal visible={statsHelpOpen} onClose={() => setStatsHelpOpen(false)} />
 
-            {/*
-              * "What do you already have?" — the ONLY place a staple can be
-              * dropped. Default is keep: nothing leaves the basket unless the
-              * shopper says so, and the recipe is untouched either way.
-              */}
-            <Modal
-                visible={pantryOpen}
-                transparent
-                animationType="fade"
-                statusBarTranslucent
-                onRequestClose={() => setPantryOpen(false)}
-            >
-                <Pressable style={styles.resumeBackdrop} onPress={() => setPantryOpen(false)}>
-                    <Pressable style={styles.resumeCard} onPress={() => {}}>
-                        <Text style={styles.resumeTitle}>{t('basketTab.templates.pantryTitle')}</Text>
-                        <Text style={styles.resumeBody}>{t('basketTab.templates.pantryBody')}</Text>
-
-                        <ScrollView style={styles.pantryList} bounces={false}>
-                            {pantryItems.map(it => {
-                                const dropped = pantryDraft.has(it.productId);
-                                return (
-                                    <TouchableOpacity
-                                        key={it.id}
-                                        style={styles.pantryRow}
-                                        activeOpacity={0.7}
-                                        onPress={() => setPantryDraft(prev => {
-                                            const next = new Set(prev);
-                                            if (next.has(it.productId)) next.delete(it.productId);
-                                            else next.add(it.productId);
-                                            return next;
-                                        })}
-                                    >
-                                        <Ionicons
-                                            name={dropped ? 'checkbox' : 'square-outline'}
-                                            size={22}
-                                            color={dropped ? colors.primary : colors.textSecondary}
-                                        />
-                                        <Text
-                                            style={[styles.pantryName, dropped && styles.pantryNameDropped]}
-                                            numberOfLines={1}
-                                        >
-                                            {it.productName}
-                                        </Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </ScrollView>
-
-                        <TouchableOpacity
-                            style={styles.resumeCancelBtn}
-                            activeOpacity={0.7}
-                            onPress={() => setPantryDraft(prev =>
-                                prev.size === pantryItems.length
-                                    ? new Set()
-                                    : new Set(pantryItems.map(it => it.productId)))}
-                        >
-                            <Text style={styles.resumeCancelText}>
-                                {t(pantryDraft.size === pantryItems.length
-                                    ? 'basketTab.templates.pantryKeepAll'
-                                    : 'basketTab.templates.pantryRemoveAll')}
-                            </Text>
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={styles.resumePrimaryBtn}
-                            activeOpacity={0.85}
-                            onPress={() => {
-                                setPantryOpen(false);
-                                // Set the choice AND carry it into this attempt:
-                                // state has not committed yet when handleInstantiate
-                                // reads it, so the list is passed explicitly.
-                                setPantryChoice(new Set(pantryDraft));
-                                runInstantiate(false, [...pantryDraft]);
-                            }}
-                        >
-                            <Text style={styles.resumePrimaryText}>{t('basketTab.templates.pantryConfirm')}</Text>
-                        </TouchableOpacity>
-                    </Pressable>
-                </Pressable>
-            </Modal>
-
-            {/* Resume-or-new choice (Souply-themed, replaces the native Alert). */}
-            <Modal
-                visible={resumeBasketId !== null}
-                transparent
-                animationType="fade"
-                statusBarTranslucent
-                onRequestClose={() => setResumeBasketId(null)}
-            >
-                <Pressable style={styles.resumeBackdrop} onPress={() => setResumeBasketId(null)}>
-                    <Pressable style={styles.resumeCard} onPress={() => {}}>
-                        <Text style={styles.resumeTitle}>{t('basketTab.templates.resumeTitle')}</Text>
-                        <Text style={styles.resumeBody}>{t('basketTab.templates.resumeBody')}</Text>
-                        <TouchableOpacity
-                            style={styles.resumePrimaryBtn}
-                            activeOpacity={0.85}
-                            onPress={() => {
-                                const bid = resumeBasketId;
-                                setResumeBasketId(null);
-                                if (bid != null) router.replace(`/basket/${bid}` as any);
-                            }}
-                        >
-                            <Text style={styles.resumePrimaryText}>{t('basketTab.templates.resumeContinue')}</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={styles.resumeSecondaryBtn}
-                            activeOpacity={0.85}
-                            onPress={() => { setResumeBasketId(null); runInstantiate(true); }}
-                        >
-                            <Text style={styles.resumeSecondaryText}>{t('basketTab.templates.resumeNew')}</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity style={styles.resumeCancelBtn} activeOpacity={0.7} onPress={() => setResumeBasketId(null)}>
-                            <Text style={styles.resumeCancelText}>{t('basketTab.templates.resumeBasketCancel')}</Text>
-                        </TouchableOpacity>
-                    </Pressable>
-                </Pressable>
-            </Modal>
+            {/* Pantry keep-or-drop + resume-or-new — the shared shop flow's
+                modals (hooks/useTemplateShop owns their state and confirm
+                wiring; this screen only picks the landings above). */}
+            {shop.modals}
 
             <TemplateCoverEditor
                 visible={coverEditorOpen}
@@ -931,25 +937,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     settingLabel: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
     settingHint: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
 
-    // Resume-or-new choice modal.
-    pantryList: { maxHeight: 260, marginBottom: 12 },
-    pantryRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 11 },
-    pantryName: { flex: 1, fontSize: 15, fontWeight: '600', color: c.textPrimary },
-    pantryNameDropped: { color: c.textSecondary, textDecorationLine: 'line-through' },
-    resumeBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', alignItems: 'center', justifyContent: 'center', padding: 28 },
-    resumeCard: { width: '100%', maxWidth: 420, backgroundColor: c.cardBackground, borderRadius: 22, padding: 22 },
-    resumeTitle: { fontSize: 18, fontWeight: '800', color: c.textPrimary, textAlign: 'center' },
-    resumeBody: { fontSize: 14, color: c.textSecondary, textAlign: 'center', marginTop: 8, marginBottom: 18, lineHeight: 20 },
-    resumePrimaryBtn: { backgroundColor: c.primary, borderRadius: 14, paddingVertical: 14, alignItems: 'center' },
-    resumePrimaryText: { color: c.onPrimary, fontSize: 15, fontWeight: '700' },
-    resumeSecondaryBtn: { marginTop: 10, borderRadius: 14, paddingVertical: 14, alignItems: 'center', borderWidth: 1.5, borderColor: c.primary },
-    resumeSecondaryText: { color: c.primary, fontSize: 15, fontWeight: '700' },
-    resumeCancelBtn: { marginTop: 6, paddingVertical: 12, alignItems: 'center' },
-    resumeCancelText: { color: c.textSecondary, fontSize: 15, fontWeight: '600' },
-
-    // ── Statistika tab — creator-account explainer ────────────────────────
-    statsScroll: { padding: 16, paddingBottom: 32 },
-    // Title band (emoji + name), collapses on scroll. Sits on the cover colour.
+    // ── Title band + collapsed bar title ──────────────────────────────────
+    // Title band (emoji + name), scrolls with the list. Sits on the PAGE
+    // background — its ink is textPrimary, never the cover's (see render).
     titleRow: {
         flexDirection: 'row', alignItems: 'center', gap: 10,
         paddingHorizontal: 16, paddingTop: 4, paddingBottom: 12,
@@ -959,12 +949,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         alignItems: 'center', justifyContent: 'center',
     },
     titleText: { flex: 1, fontSize: 18, fontWeight: '700' },
-    tabBar: { position: 'relative' },
-    tabHelpBtn: {
-        position: 'absolute', right: 0, top: 0, bottom: 0,
-        justifyContent: 'center', paddingHorizontal: 14,
-        backgroundColor: c.cardBackground,
-    },
+
+    // ── Statistika sheet — creator metrics ────────────────────────────────
+    statsSheetBody: { paddingHorizontal: 16, paddingTop: 4, gap: 14 },
+    statsSheetTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
     metricsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
     metricTile: {
         width: '47%', flexGrow: 1, backgroundColor: c.cardBackground,
@@ -1006,34 +994,34 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     productImageEmoji: { fontSize: 24, opacity: 0.5 },
     cardContent: { flex: 1, gap: 6 },
     itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
-    controls: {
-        flexDirection: 'row', alignItems: 'center', gap: 8,
-    },
-    controlButton: {
-        width: 28, height: 28, borderRadius: radius.md,
-        alignItems: 'center', justifyContent: 'center',
-        backgroundColor: c.primaryMuted,
-    },
-    // Box owns the visual border + corner clipping; the TextInput inside
-    // is borderless so the Android system underline has nothing to draw
-    // against and can't bleed through.
-    quantityInputBox: {
-        minWidth: 48, borderWidth: 1, borderColor: c.border, borderRadius: radius.md,
-        overflow: 'hidden', backgroundColor: c.cardBackground,
-    },
-    quantityInput: {
-        paddingHorizontal: 8, paddingVertical: 4,
-        textAlign: 'center', fontSize: 14, fontWeight: '600',
-        color: c.textPrimary,
-        // Belt-and-braces for the underline: padding ate the underline area
-        // already, but on a few skinned Android keyboards the accent line
-        // still tries to render — keep these zero to defeat any leftover.
-        borderWidth: 0,
-        ...(({} as any)),
-    },
-    unitLabel: { fontSize: 13, fontWeight: '600', color: c.textSecondary, minWidth: 28 },
+    // Cap the stepper's footprint (basket detail's itemStepper, verbatim) —
+    // AddOrStepper stretches to its parent otherwise, and a full-width
+    // QuantityControl reads as a bar, not a control.
+    itemStepper: { alignSelf: 'flex-start', minWidth: 150 },
     readonlyQty: { fontSize: 13, fontWeight: '600', color: c.textSecondary },
     removeButton: { padding: 4 },
+
+    // ── "Įprastos prekės" (cupboard staples) section ──────────────────────
+    // A pink-bordered group after the main list, holding the SAME item cards.
+    // No section/card component in the app draws a full outlined group on the
+    // page body (DockSection is dock-sheet chrome, SheetCard a shadowed
+    // surface), so this is a plain bordered View on the app pink. The outer
+    // radius is concentric with the cards' radius.lg at 8px padding, and the
+    // bottom pad is 0 because the last card's own marginBottom (8) closes the
+    // gap — a full pad there doubled it.
+    pantrySection: {
+        marginTop: 10, marginBottom: 4,
+        borderWidth: 1.5, borderColor: c.primary, borderRadius: radius.xl,
+        padding: 8, paddingBottom: 0,
+    },
+    pantrySectionHeader: {
+        flexDirection: 'row', alignItems: 'center', gap: 6,
+        paddingHorizontal: 6, paddingTop: 2, paddingBottom: 8,
+    },
+    pantrySectionTitle: {
+        fontSize: 13, fontWeight: '800', color: c.primary,
+        textTransform: 'uppercase', letterSpacing: 0.5,
+    },
 
     // ── Bottom dock ───────────────────────────────────────────────────────
     // Row layout only — the sheet owns the glass surface, pill and radii.
@@ -1059,25 +1047,25 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         gap: 14,
     },
     sheetTitle: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
+    // Share-pane BAR row (‹ back · icon · title) — the map invite pane's row.
+    // Lives in the dock's bar slot now (SheetPaneSpec.barRow), replacing the
+    // add/shop action row while the pane is open; same side inset as barRow.
+    paneHeaderRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 4 },
     sheetRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
     sheetRowText: { fontSize: 15, fontWeight: '400' },
     sectionSep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem },
-    // The trip invite pane's primary share button, verbatim.
-    shareBtn: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8,
-        alignSelf: 'stretch', backgroundColor: c.primary, borderRadius: radius.md,
-        paddingVertical: 11, marginTop: 12,
-    },
-    shareBtnDisabled: { opacity: 0.5 },
-    shareBtnText: { color: c.onPrimary, fontSize: 14, fontWeight: '700' },
-    shareHint: { fontSize: 12, color: c.textSecondary, textAlign: 'center', marginTop: 8 },
 
-    addItemBtn: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        gap: 6, paddingVertical: 12, borderRadius: radius.lg, marginBottom: 12,
-        borderWidth: 1, borderColor: c.primary, borderStyle: 'dashed',
+    // ── Skeleton-only: the collapsed dock's stand-in ──────────────────────
+    // Mirrors DockedGlassSheet's collapsed geometry (symmetric 26px float
+    // margin, 72px = bar row + 2·peek) as a flat card — no glass, it lives
+    // for one load.
+    skeletonDock: {
+        position: 'absolute', left: 26, right: 26, bottom: 26, height: 72,
+        borderRadius: radius.xl, backgroundColor: c.cardBackground,
+        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        paddingHorizontal: 18,
     },
-    addItemBtnText: { fontSize: 14, fontWeight: '600', color: c.primary },
 
     // ── Empty states ──────────────────────────────────────────────────────
     emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', textAlign: 'center' },
