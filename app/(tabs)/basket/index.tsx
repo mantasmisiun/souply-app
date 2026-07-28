@@ -49,6 +49,7 @@ import { formatWeekday } from '../../../utils/formatDayDate';
 import CalendarBadge from '../../../components/CalendarBadge';
 import { useShoppingSheet } from '../../../state/shoppingSheet';
 import { buildReceiptDotMap, parseLooseDate, sameDay } from '../../../utils/receiptDots';
+import { groupBySection, type TripSection } from '../../../utils/tripSections';
 import {
     fetchTrips, unarchiveTrip, fetchOwnHousehold,
     type TripSummary, type HouseholdInfo,
@@ -80,7 +81,8 @@ const STAGE_ICONS: Record<number, keyof typeof Ionicons.glyphMap> = {
  *  Animated.ScrollView, which is what made switching to this tab feel slow. */
 type TripRow =
     | { kind: 'processing'; key: string; item: QueueItem }
-    | { kind: 'trip'; key: string; trip: TripSummary }
+    | { kind: 'sectionHeader'; key: string; section: TripSection }
+    | { kind: 'trip'; key: string; trip: TripSummary; section: TripSection; isLast: boolean }
     | { kind: 'empty'; key: string }
     | { kind: 'archiveHeader'; key: string }
     | { kind: 'archived'; key: string; trip: TripSummary; isLast: boolean };
@@ -447,14 +449,24 @@ export default function TripsScreen() {
     const archiveExpanded = archiveOpen || (selectedDate != null && active.length === 0);
 
     // Flattened row model for the virtualised list. Stable keys (never index):
-    // `q:` queue items, `trip:`/`arch:` trips.
+    // `q:` queue items, `sec:` section headers, `trip:`/`arch:` trips. Active
+    // trips group into recency sections (Šiandien … Anksčiau); like Archyvas,
+    // each section's outline is sliced across its rows so every card stays an
+    // independently virtualised row. A trip's key never changes when it moves
+    // between sections, so itemLayoutAnimation animates the move.
     const rows = useMemo<TripRow[]>(() => {
         const out: TripRow[] = [];
         for (const item of processingItems) out.push({ kind: 'processing', key: `q:${item.id}`, item });
         if (active.length === 0 && processingItems.length === 0) {
             out.push({ kind: 'empty', key: 'empty' });
         } else {
-            for (const trip of active) out.push({ kind: 'trip', key: `trip:${trip.id}`, trip });
+            for (const g of groupBySection(active, tr => parseLooseDate(tr.anchorDate))) {
+                out.push({ kind: 'sectionHeader', key: `sec:${g.section}`, section: g.section });
+                g.items.forEach((trip, i) => out.push({
+                    kind: 'trip', key: `trip:${trip.id}`, trip,
+                    section: g.section, isLast: i === g.items.length - 1,
+                }));
+            }
         }
         if (archived.length > 0) {
             out.push({ kind: 'archiveHeader', key: 'archiveHeader' });
@@ -544,6 +556,19 @@ export default function TripsScreen() {
                         </ScalePressable>
                     </View>
                 );
+            case 'sectionHeader': {
+                // Recency section header — owns the outline's top edge + corners
+                // (trip rows below carry the sides, the last one the bottom).
+                // Today is pink (the pantrySection treatment), the rest grey.
+                const pink = row.section === 'today';
+                return (
+                    <View style={[styles.sectionHeader, pink ? styles.sectionPink : styles.sectionGrey]}>
+                        <Text style={[styles.sectionTitle, pink ? styles.sectionTitlePink : styles.sectionTitleGrey]}>
+                            {t(`trips.sections.${row.section}`)}
+                        </Text>
+                    </View>
+                );
+            }
             case 'archiveHeader':
                 // Archyvas — collapsed by default; tap a row = explicit resume.
                 return (
@@ -590,8 +615,18 @@ export default function TripsScreen() {
                 const shownChains = chains.slice(0, 4);
                 const chainOverflow = chains.length - shownChains.length;
                 return (
+                    // Section-outline slice: this wrapper draws the box's side
+                    // edges (+ bottom edge/corners on the last row) so the card
+                    // itself stays a plain virtualised row inside it.
+                    <View
+                        style={[
+                            styles.sectionBody,
+                            row.isLast && styles.sectionBodyLast,
+                            row.section === 'today' ? styles.sectionPink : styles.sectionGrey,
+                        ]}
+                    >
                     <AnimatedTouchable
-                        style={[styles.card, isNew && styles.cardNew]}
+                        style={[styles.card, styles.cardInSection, isNew && styles.cardNew]}
                         onPress={() => openTrip(trip)}
                         activeOpacity={0.8}
                         exiting={cardExit}
@@ -654,6 +689,7 @@ export default function TripsScreen() {
                             </View>
                         </View>
                     </AnimatedTouchable>
+                    </View>
                 );
             }
         }
@@ -839,6 +875,36 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     cardMeta: { fontSize: 13, color: c.textSecondary, marginTop: 3 },
     ctaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 2, marginTop: 8 },
     ctaText: { fontSize: 13, fontWeight: '700', color: c.primary },
+
+    // Recency sections (Šiandien/Vakar/…): same row-sliced outline as the
+    // archive box below, but with the pantrySection geometry from the recipe
+    // screen — 1.5 border, radius.xl, 8px inner side padding (concentric with
+    // the cards' radius.lg). Header owns the top edge + corners; every trip
+    // row the sides; the last row the bottom edge + corners. Colour comes from
+    // sectionPink (today) / sectionGrey variants applied alongside.
+    sectionHeader: {
+        marginTop: 12, marginHorizontal: 16,
+        paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8,
+        borderWidth: 1.5, borderBottomWidth: 0,
+        borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,
+    },
+    sectionTitle: { fontSize: 13, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
+    sectionTitlePink: { color: c.primary },
+    sectionTitleGrey: { color: c.textSecondary },
+    sectionPink: { borderColor: c.primary },
+    sectionGrey: { borderColor: c.border },
+    sectionBody: {
+        marginHorizontal: 16, paddingHorizontal: 8,
+        borderLeftWidth: 1.5, borderRightWidth: 1.5,
+    },
+    // No paddingBottom: the last card's own marginBottom closes the gap inside
+    // the border (the pantrySection paddingBottom:0 trick).
+    sectionBodyLast: {
+        borderBottomWidth: 1.5,
+        borderBottomLeftRadius: radius.xl, borderBottomRightRadius: radius.xl,
+    },
+    // Inside a section the wrapper row carries the 16px screen margin.
+    cardInSection: { marginHorizontal: 0 },
 
     // The archive card is split across FlatList rows (header row + N trip
     // rows), so each row draws its slice of the old single-container border:
