@@ -25,6 +25,7 @@ interface InboxRow {
 
 const TYPE_ICONS: Record<string, string> = {
     trip_invite: 'mail-unread-outline',
+    template_invite: 'mail-unread-outline',
     trip_member_joined: 'people-outline',
     household_member_joined: 'home-outline',
     trip_receipt_in: 'receipt-outline',

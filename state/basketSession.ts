@@ -53,6 +53,15 @@ export interface ChooserOption {
     itemPreview?: string[];
 }
 
+/** Chooser option for a JUST-CREATED template (0 items). The dock's create
+ *  paths feed this straight to `applyChooserPick`, so a fresh recipe is
+ *  targeted — and queued adds are flushed into it — through the exact same
+ *  pick path an existing one takes. */
+export const templateChooserOption = (t: { id: number; name: string }): ChooserOption => ({
+    key: 'template', templateId: t.id, name: t.name,
+    basketId: null, itemCount: 0, label: t.name, updatedAt: null,
+});
+
 /** Split the API's `~|~`-joined preview into a name list (newest-first). */
 const parsePreview = (raw: unknown): string[] =>
     typeof raw === 'string' && raw.length > 0 ? raw.split('~|~').filter(Boolean) : [];
@@ -114,6 +123,12 @@ interface BasketSessionState {
     setTarget: (t: SessionTarget, itemCount?: number) => void;
     /** End the basket session (basket graduated to a list / was deleted). */
     clearTarget: () => void;
+    /** End the session for ANY target kind — the session-bar "Parduotuvės ›"
+     *  turned a recipe into a real basket, so the collecting session is over.
+     *  clearTarget can't be used for this: it deliberately spares templates
+     *  (its callers are basket self-heal paths that must not kill a template
+     *  session mid-add). */
+    endSession: () => void;
     setDormant: (d: { count: number } | null) => void;
     setCollapseDock: (fn: (() => void) | null) => void;
     setDockOptions: (o: ChooserOption[] | null) => void;
@@ -179,6 +194,7 @@ export const useBasketSession = create<BasketSessionState>((set, get) => ({
             ? s
             : { target: null, barVisible: false, itemCount: 0, newProductIds: [] }
     )),
+    endSession: () => set({ target: null, barVisible: false, itemCount: 0, newProductIds: [] }),
     setDormant: (d) => set({ dormant: d }),
     setCollapseDock: (fn) => set({ collapseDock: fn }),
     setDockOptions: (o) => set({ dockOptions: o }),

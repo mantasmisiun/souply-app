@@ -64,6 +64,44 @@ function normalizeUris(input: UriInput): string[] {
 }
 
 /**
+ * URL → "is this a real image?" verdict, remembered for the session.
+ *
+ * The HEAD pre-check below is what catches CDN placeholders (a 200 with
+ * `x-cld-error`, or a 300-byte "not found" PNG) that no decoder can spot. It ran
+ * on EVERY mount, so scrolling a product grid fired a HEAD request per card per
+ * pass — dozens of round trips and as many state updates on the JS thread, which
+ * is exactly what made the list stutter. A URL's verdict can't change mid
+ * session, so it's cached here and each one is checked at most once.
+ */
+const verdicts = new Map<string, boolean>();
+/** In-flight checks, so two cards showing the same URL share one request. */
+const pending = new Map<string, Promise<boolean>>();
+
+function verifyUri(uri: string): Promise<boolean> {
+    const known = verdicts.get(uri);
+    if (known !== undefined) return Promise.resolve(known);
+    const existing = pending.get(uri);
+    if (existing) return existing;
+    const p = (async () => {
+        let ok = true;
+        try {
+            const res = await fetch(uri, { method: 'HEAD' });
+            const len = Number(res.headers.get('content-length') || 0);
+            // Not found, an explicit Cloudinary error, or too small to be a real
+            // product image (a placeholder served with a 200).
+            ok = res.ok && !res.headers.get('x-cld-error') && !(len > 0 && len < 1024);
+        } catch {
+            ok = false;
+        }
+        verdicts.set(uri, ok);
+        pending.delete(uri);
+        return ok;
+    })();
+    pending.set(uri, p);
+    return p;
+}
+
+/**
  * Product-level image with fallback chain: tries each URL in `uris` in order
  * and swaps in a 🫜 placeholder once all have failed or there are no URIs.
  * For single-URL views, pass `uris={[single]}`.
@@ -110,32 +148,17 @@ export function ProductImage({
   const verifyTokenRef = useRef(0);
   useEffect(() => {
     if (idx >= list.length) return;
-    const token = ++verifyTokenRef.current;
     const uri = list[idx];
-    (async () => {
-      try {
-        const res = await fetch(uri, { method: "HEAD" });
-        if (token !== verifyTokenRef.current) return;
-        if (!res.ok) {
-          setIdx((i) => i + 1);
-          return;
-        }
-        if (res.headers.get("x-cld-error")) {
-          // Cloudinary explicitly signals the resource wasn't found.
-          setIdx((i) => i + 1);
-          return;
-        }
-        const len = Number(res.headers.get("content-length") || 0);
-        if (len > 0 && len < 1024) {
-          // Too small to be a real product image — almost certainly a placeholder.
-          setIdx((i) => i + 1);
-        }
-      } catch {
-        if (token === verifyTokenRef.current) {
-          setIdx((i) => i + 1);
-        }
-      }
-    })();
+    // Already judged (this session) → decide synchronously, no request, no
+    // re-render churn as the grid recycles this card.
+    const known = verdicts.get(uri);
+    if (known === false) { setIdx(i => i + 1); return; }
+    if (known === true) return;
+    const token = ++verifyTokenRef.current;
+    void verifyUri(uri).then(ok => {
+      if (token !== verifyTokenRef.current) return;
+      if (!ok) setIdx(i => i + 1);
+    });
   }, [idx, list]);
 
   if (idx >= list.length) {
@@ -153,12 +176,13 @@ export function ProductImage({
       style={imageStyle}
       contentFit={resizeModeToContentFit(resizeMode)}
       transition={0}
-      onError={() => setIdx((i) => i + 1)}
+      onError={() => { verdicts.set(list[idx], false); setIdx((i) => i + 1); }}
       onLoad={(event) => {
         const w = event?.source?.width ?? 0;
         const h = event?.source?.height ?? 0;
         // Decoded but suspiciously tiny → treat as a placeholder/broken image.
         if (w > 0 && h > 0 && (w < 16 || h < 16)) {
+          verdicts.set(list[idx], false);
           setIdx((i) => i + 1);
           return;
         }
