@@ -47,6 +47,7 @@ import { useReceiptQueueStore } from "../state/receiptQueueStore";
 import { useProfileStore } from "../state/profileStore";
 import { REGIONS_VERSION } from "./regionsRehydrationService";
 import { RECOGNITION } from "@shared/recognitionConfig";
+import { detectLoyaltyMoney } from "@shared/parsers/loyaltyMoney";
 import { parseProductName } from "@shared/parsers/productNameParser";
 import {
   detectCardMaskBands,
@@ -599,6 +600,10 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
       return;
     }
 
+    // Loyalty-money lines WITH geometry (Rimi splits label and amount across two
+    // OCR lines in the same row — see @shared/parsers/loyaltyMoney).
+    const loyaltyLines = mergedLines.map((l: any) => ({ text: l.text, yTop: l.yTop, yBottom: l.yBottom }));
+
     // Chain-match gate + auto store-link resolution (list-upload flow only).
     let linkListId: number | null = fallbackLinkId;
     const expectedChainIds = Object.keys(linkMap).map(Number);
@@ -728,6 +733,7 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
         receiptNos: parsed.footer.receiptNos,
         totalSavings: parsed.footer.totalSavings,
         comboDiscount: null,
+        loyalty: detectLoyaltyMoney(loyaltyLines),
         rawText: parsed.footer.rawText,
         region: parsed.footer.region,
         // lineRegions deliberately omitted — see the header note above.
@@ -818,6 +824,7 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
         receiptNos: parsed.footer.receiptNos,
         totalSavings: parsed.footer.totalSavings,
         comboDiscount: parsed.footer.comboDiscount ?? null,
+        loyalty: detectLoyaltyMoney(loyaltyLines),
         rawText: parsed.footer.rawText,
         region: parsed.footer.region,
         lineRegions: parsed.footer.lineRegions,

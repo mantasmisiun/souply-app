@@ -136,7 +136,7 @@ export default function ReceiptsScreen() {
                 <>
                 {/* Always-pinned filter row: Fabric mis-hit-tests transformed
                     sticky headers (touches fall through to the list). */}
-                        <View style={styles.chipBar}>
+                        <View onLayout={header.onPinnedLayout} style={styles.chipBar}>
                             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipBarContent}>
                                 {chips.map(chip => {
                                     const active = chip.id === filter;

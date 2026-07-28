@@ -41,6 +41,7 @@ import {
   type Region,
 } from "@shared/parsers/rimiParser";
 import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
+import { detectLoyaltyMoney } from "@shared/parsers/loyaltyMoney";
 import { REGIONS_VERSION } from "./regionsRehydrationService";
 import { pdfToImageUris } from "../utils/pdfToImages";
 import { mapLimit } from "../utils/concurrency";
@@ -55,6 +56,9 @@ const PARSER_OPTS = { iosOcr: Platform.OS === "ios" };
 export interface ProcessingResult {
   receiptId: number;
   mandatorySwipesRequired: number;
+  /** Shopping list this receipt was attached to (null = ad-hoc trip). Lets the
+   *  trip screen tell "landed here" from "landed somewhere else". */
+  linkedListId?: number | null;
 }
 
 export type ProcessingFailReason =
@@ -64,7 +68,13 @@ export type ProcessingFailReason =
   | "store_unrecognized"
   | "post_failed"
   | "mask_failed"
-  | "needs_date";
+  | "needs_date"
+  /** Parked: the upload came from a trip, but the receipt's chain matches none
+   *  of that trip's planned stores. The card asks which store slot it fulfils. */
+  | "needs_store"
+  /** The receipt saved, but attaching it to its shopping list failed. Parked so
+   *  the link can be retried on its own — never silently dropped. */
+  | "link_failed";
 
 /** Store context attached to a `store_unrecognized` error so the trip card's
  *  "Rasti parduotuvę" CTA can open the chain-scoped map pre-seeded. */
@@ -82,11 +92,28 @@ export interface ResolvedStoreInput {
   storeAddress: string | null;
 }
 
+/** Context for a `needs_store` park: what we detected vs what the trip planned,
+ *  so the card can offer one button per planned store slot. */
+export interface LinkChoiceContext {
+  detectedChainId: number | null;
+  /** chainId → listId of the trip's planned stores (the enqueued linkMap). */
+  options: { chainId: number; listId: number }[];
+}
+
+/** Context for a `link_failed` park: everything the retry needs, and nothing
+ *  that would make it re-run OCR (the receipt already exists server-side). */
+export interface LinkFailureContext {
+  receiptId: number;
+  listId: number;
+}
+
 export class ProcessingError extends Error {
   constructor(
     public readonly reason: ProcessingFailReason,
     message: string,
     public readonly storeContext?: StoreErrorContext,
+    public readonly linkChoice?: LinkChoiceContext,
+    public readonly linkFailure?: LinkFailureContext,
   ) {
     super(message);
     this.name = "ProcessingError";
@@ -697,18 +724,43 @@ async function processIki(
  * score can then pair list ↔ receipt). Mirrors scanSessionService's private
  * linkReceiptToList so the background queue links exactly like the live scan.
  */
-function linkReceiptToList(listId: number, receiptId: number): void {
-  fetch(`${API_BASE_URL}/api/shopping-lists/${listId}/link-receipt`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ receiptId }),
-  }).catch(() => {});
+/**
+ * Attach a receipt to its shopping list — AWAITED and RETRIED, never
+ * fire-and-forget.
+ *
+ * This call is what moves the receipt onto the trip (the server relinks it and
+ * drops the churn ad-hoc trip the bare upload minted seconds earlier). It used
+ * to be `.catch(() => {})`, so a failure here detached the receipt from the
+ * user's trip with no error anywhere: the card completed, the trip refetched
+ * without it, and the receipt turned up as a stray "Neplanuotas pirkinys".
+ * Returns whether the link is confirmed; the caller parks the item when false.
+ */
+export async function linkReceiptToList(listId: number, receiptId: number): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/shopping-lists/${listId}/link-receipt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ receiptId }),
+      });
+      if (res.ok) return true;
+      // 4xx is deterministic (wrong owner, list gone) — retrying can't help.
+      if (res.status >= 400 && res.status < 500) {
+        console.warn(`[LINK] list ${listId} ← receipt ${receiptId} refused (${res.status})`);
+        return false;
+      }
+    } catch (e) {
+      console.warn(`[LINK] attempt ${attempt + 1} failed:`, e);
+    }
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+  }
+  return false;
 }
 
 /** Pick which list a background receipt links to, from its detected chain and
  *  the enqueued link context. Same precedence as the interactive scan:
  *  chain-matched map entry → single-store map value → explicit fallback. */
-function resolveLinkListId(
+export function resolveLinkListId(
   chainId: number | null,
   linkMap: Record<number, number> | undefined,
   fallbackLinkId: number | null | undefined,
@@ -717,6 +769,29 @@ function resolveLinkListId(
   const values = linkMap ? Object.values(linkMap) : [];
   if (values.length === 1) return values[0];
   return fallbackLinkId ?? null;
+}
+
+/**
+ * Does this upload need the user to say WHICH planned store it covers?
+ *
+ * The upload carried a trip context (linkMap) but the detected chain matches no
+ * slot — you planned Maxima + Lidl and shopped at IKI. The interactive scan asks
+ * ("chainGate", scanSessionService); the headless queue used to just resolve to
+ * null and let the receipt fall into a fresh ad-hoc trip, which is how a receipt
+ * could parse perfectly and then vanish from the trip it was uploaded for.
+ *
+ * Only fires when there is a real choice to make: no link context (a bare upload
+ * from the Shopping sheet) stays ad-hoc by design, and a single-store trip is
+ * already resolved by resolveLinkListId's single-value rule.
+ */
+export function needsStoreChoice(
+  chainId: number | null,
+  linkMap: Record<number, number> | undefined,
+  fallbackLinkId: number | null | undefined,
+): boolean {
+  const planned = linkMap ? Object.keys(linkMap).length : 0;
+  if (planned === 0) return false;
+  return resolveLinkListId(chainId, linkMap, fallbackLinkId) == null;
 }
 
 export async function processOneReceipt(
@@ -737,6 +812,14 @@ export async function processOneReceipt(
     /** STORE RESOLUTION: user picked a store from the map after a store_unrecognized
      *  failure — inject it so the parse skips the automatic store match. */
     resolvedStore?: ResolvedStoreInput;
+    /** The store slot the user picked for an item parked as `needs_store`. */
+    linkChoiceListId?: number | null;
+    /** The user chose "keep it separate" on a `needs_store` park — upload as an
+     *  ad-hoc trip and don't ask again. */
+    linkAdHoc?: boolean;
+    /** The user put it on THIS trip without claiming a planned store slot (the
+     *  receipt's chain matched none of them). */
+    linkTripId?: number;
   },
 ): Promise<ProcessingResult> {
   try {
@@ -784,6 +867,25 @@ export async function processOneReceipt(
       isLidlReceipt(lineTexts) ? 5 :
       isIkiReceipt(lineTexts) ? 3 :
       (detectChainByVatCode(lineTexts)?.chainId ?? null);
+
+    // CHAIN GATE (queue equivalent of the interactive scan's chainGate prompt).
+    // Asked BEFORE parsing: the answer can't change the parse, and parking here
+    // means the user is asked seconds in rather than after a full parse that the
+    // resume would then have to redo.
+    if (!opts?.healReceiptId && !opts?.linkAdHoc && opts?.linkChoiceListId == null
+        && needsStoreChoice(chainId, opts?.linkMap, opts?.fallbackLinkId)) {
+      throw new ProcessingError(
+        "needs_store",
+        i18n.t("receiptQueue.needsStore"),
+        undefined,
+        {
+          detectedChainId: chainId,
+          options: Object.entries(opts?.linkMap ?? {})
+            .map(([c, listId]) => ({ chainId: Number(c), listId }))
+            .filter((o) => Number.isFinite(o.chainId) && Number.isFinite(o.listId)),
+        },
+      );
+    }
 
     if (chainId === 2) {
       parsedData = await processRimi(allLines, signal, reportMatch, opts?.resolvedStore);
@@ -839,6 +941,19 @@ export async function processOneReceipt(
     // to today — a receipt from last week landed on the wrong day with no hint.
     // The queue is headless, so instead of blocking it PARKS the item: the card
     // asks for the date, and the retry re-runs with `overrideDate` injected.
+    // LOYALTY MONEY ("Nurašyta MAXIMOS pinigų 0,12"): part of the bill paid from
+    // an earned balance, deducted AFTER the lines — so the line sum legitimately
+    // exceeds the printed total by that much. Recorded on the footer next to the
+    // set-deal discount, which behaves the same way, so reconciliation and the
+    // savings stats can both account for it.
+    // Geometry included: Rimi prints the loyalty label and its amount as two
+    // separate OCR lines in the same row.
+    const loyaltyLines = (chainId === 3 ? mergedLines : allLines).map((l: any) => ({
+        text: l.text, yTop: l.yTop, yBottom: l.yBottom,
+    }));
+    const loyalty = detectLoyaltyMoney(loyaltyLines);
+    if (loyalty && (parsedData as any)?.footer) (parsedData as any).footer.loyalty = loyalty;
+
     const parsedFooter = (parsedData as any)?.footer;
     if (!opts?.overrideDate && !(typeof parsedFooter?.date === "string" && parsedFooter.date.length > 0)) {
       throw new ProcessingError("needs_date", i18n.t("receiptQueue.needsDate"));
@@ -859,9 +974,35 @@ export async function processOneReceipt(
 
     // Link to the originating shopping list (background scan/upload from a list
     // or trip). Skipped for a heal (the receipt already has its trip/list).
-    if (!opts?.healReceiptId) {
-      const linkListId = resolveLinkListId(chainId, opts?.linkMap, opts?.fallbackLinkId);
-      if (linkListId) linkReceiptToList(linkListId, postResult.receiptId);
+    // A failed link is REMEMBERED, not swallowed: the image still uploads (the
+    // receipt exists either way), and the item is parked afterwards so the link
+    // can be retried on its own.
+    let linkedListId: number | null = null;
+    let linkFailure: LinkFailureContext | null = null;
+    // TRIP-ONLY attach: the receipt belongs to this shopping but fulfils no
+    // planned store. Slot membership and trip membership are separate statements
+    // — claiming an unrelated slot just to join the trip is what made a Maxima
+    // receipt read as "the IKI stop is done".
+    if (!opts?.healReceiptId && opts?.linkTripId != null) {
+        const res = await fetch(`${API_BASE_URL}/api/trips/${opts.linkTripId}/attach-receipt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ receiptId: postResult.receiptId }),
+        }).catch(() => null);
+        if (!res?.ok) {
+            linkFailure = { receiptId: postResult.receiptId, listId: 0 };
+        }
+    } else if (!opts?.healReceiptId) {
+      const linkListId = opts?.linkAdHoc
+        ? null
+        : (opts?.linkChoiceListId ?? resolveLinkListId(chainId, opts?.linkMap, opts?.fallbackLinkId));
+      if (linkListId) {
+        if (await linkReceiptToList(linkListId, postResult.receiptId)) {
+          linkedListId = linkListId;
+        } else {
+          linkFailure = { receiptId: postResult.receiptId, listId: linkListId };
+        }
+      }
     }
 
     // Burn the black redaction boxes into the image BEFORE upload (via the
@@ -884,7 +1025,15 @@ export async function processOneReceipt(
       await uploadReceiptImage(postResult.receiptId, uploadUri, signal);
     }
 
-    return postResult;
+    // The receipt is saved and its image is up, but it never reached the trip —
+    // park it (the card retries just the link) rather than reporting success on
+    // a receipt the user won't find where they put it.
+    if (linkFailure) {
+      throw new ProcessingError(
+        "link_failed", i18n.t("receiptQueue.linkFailed"), undefined, undefined, linkFailure);
+    }
+
+    return { ...postResult, linkedListId };
   } catch (e) {
     if (e instanceof ProcessingError) throw e;
     // Surface network failures distinctly so the queue runner can pause

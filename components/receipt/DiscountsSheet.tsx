@@ -11,12 +11,20 @@ import { mergeReceiptItems, mergedQtyLabel } from '../../utils/mergeReceiptItems
 import type { TripReceipt } from '../../utils/tripsApi';
 
 /**
- * Contents of the "Prekės su akcija" bottom sheet (hosted in an autoHeight
+ * Contents of the "Akcijos" bottom sheet (hosted in an autoHeight
  * <GlassSheet>). Lists this trip's discounted lines as product cards in the
  * same shape as the Kvitai identified-items list — thumbnail · name · qty — but
  * the right column shows the promo total in souply pink over the crossed-out
  * regular price. A note reminds the shopper that these are the CHAIN's own
  * discounts and that comparing the basket elsewhere can still win.
+ *
+ * Below the products, one FOOTER ROW per loyalty programme the trip used
+ * ("MAXIMOS pinigai −0,12"). Deliberately not a product row: the rows above mean
+ * "cheaper than usual", while loyalty money means "paid from a balance you
+ * already had". Folding it into the list would inflate Akcijos with something
+ * that isn't a discount; leaving it out entirely leaves the receipt's arithmetic
+ * unexplained — the printed total sits BELOW the line sum by exactly this much.
+ * Money EARNED rides the muted subline: it doesn't reduce this bill.
  */
 export function DiscountsSheet({ receipts }: { receipts: TripReceipt[] }) {
     const colors = useTheme();
@@ -36,6 +44,34 @@ export function DiscountsSheet({ receipts }: { receipts: TripReceipt[] }) {
             .map(chainBrandName);
         return names.length ? names.join(', ') : t('discountsSheet.thisStore');
     }, [discounted, t]);
+
+    // One row per loyalty programme: redeemed sums across the trip's receipts
+    // (you can pay from the balance twice), while the balance is the LATEST
+    // reading — an older receipt's leftover is not news.
+    const loyaltyRows = useMemo(() => {
+        const byProgram = new Map<string, { program: string; chainId: number | null; chainName: string | null; redeemed: number; earned: number; balance: number | null }>();
+        for (const r of receipts) {
+            const l = r.loyalty;
+            if (!l || (l.redeemed ?? 0) <= 0) continue;
+            const key = l.program || 'unknown';
+            const held = byProgram.get(key);
+            if (held) {
+                held.redeemed = Math.round((held.redeemed + l.redeemed) * 100) / 100;
+                held.earned = Math.round((held.earned + (l.earned ?? 0)) * 100) / 100;
+                if (l.balance != null) held.balance = l.balance;
+            } else {
+                byProgram.set(key, {
+                    program: key,
+                    chainId: r.chainId ?? chainIdByName(r.chainName ?? '') ?? null,
+                    chainName: r.chainName ?? null,
+                    redeemed: l.redeemed,
+                    earned: l.earned ?? 0,
+                    balance: l.balance,
+                });
+            }
+        }
+        return [...byProgram.values()];
+    }, [receipts]);
 
     // Multi-store trip → stamp each thumb with its chain badge (as in Kvitai).
     const multi = useMemo(
@@ -78,6 +114,34 @@ export function DiscountsSheet({ receipts }: { receipts: TripReceipt[] }) {
                     </View>
                 );
             })}
+
+            {loyaltyRows.map(l => {
+                const brand = l.chainName ? chainBrandName(l.chainName) : null;
+                const sub = [
+                    l.balance != null ? t('discountsSheet.loyaltyBalance', { balance: formatEuro(l.balance) }) : null,
+                    l.earned > 0 ? t('discountsSheet.loyaltyEarned', { earned: formatEuro(l.earned) }) : null,
+                ].filter(Boolean).join(' · ');
+                return (
+                    <View key={`loyalty-${l.program}`} style={[styles.itemRow, styles.loyaltyRow]}>
+                        <View style={styles.thumbWrap}>
+                            <View style={styles.loyaltyLogo}>
+                                <ChainLogoChip chainId={l.chainId ?? 0} name={l.chainName ?? undefined} size={34} />
+                            </View>
+                        </View>
+                        <View style={{ flex: 1, minWidth: 0 }}>
+                            <Text style={styles.itemName} numberOfLines={1}>
+                                {brand
+                                    ? t('discountsSheet.loyaltyTitle', { brand })
+                                    : t('discountsSheet.loyaltyTitleGeneric')}
+                            </Text>
+                            {!!sub && <Text style={styles.itemMeta} numberOfLines={1}>{sub}</Text>}
+                        </View>
+                        <View style={styles.priceCol}>
+                            <Text style={styles.promoPrice}>{`−${formatEuro(l.redeemed)}`}</Text>
+                        </View>
+                    </View>
+                );
+            })}
         </View>
     );
 }
@@ -99,6 +163,15 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     itemBadge: { position: 'absolute', top: -5, left: -5, borderRadius: 11, padding: 1.5, backgroundColor: c.cardBackground },
     itemName: { ...typography.bodySmall, fontWeight: '600', color: c.textPrimary },
     itemMeta: { ...typography.labelSmall, color: c.textSecondary, marginTop: 1 },
+
+    // A footer adjustment, not a product: hairline above, logo where the
+    // thumbnail would be, so it aligns with the list without pretending to be
+    // one of its rows.
+    loyaltyRow: {
+        borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: c.border,
+        marginTop: spacing.xs, paddingTop: spacing.md,
+    },
+    loyaltyLogo: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
 
     priceCol: { alignItems: 'flex-end' },
     promoPrice: { ...typography.bodySmall, fontWeight: '800', color: c.primary, fontVariant: ['tabular-nums'] },

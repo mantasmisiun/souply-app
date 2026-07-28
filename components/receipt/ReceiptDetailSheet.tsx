@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Alert } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { MaterialIcons, Ionicons } from '@expo/vector-icons';
 import { ChainLogoChip } from '../ChainLogoChip';
-import { DockActionCard } from '../dock/DockActionCard';
+import { DockActionRow } from '../dock/DockActionRow';
 import ReceiptPhotoView from './ReceiptPhotoView';
 import { useSavedReceiptPhoto } from '../../hooks/useSavedReceiptPhoto';
 import { useTheme, spacing, radius, typography, avatarSize, withAlpha, type AppTheme } from '../../constants/theme';
@@ -155,35 +155,32 @@ export function ReceiptDetailSheet({
 
                 {/* Actions — uploader may delete (label morphs by swipe state); a
                     trip owner who didn't upload may remove it; everyone downloads. */}
-                <View style={styles.actionRow}>
-                    {isUploader ? (
-                        <DockActionCard
-                            colors={colors}
-                            icon="trash-outline"
-                            title={t('receiptSheet.delete')}
-                            subtitle={swipesCleared ? t('receiptSheet.deletePhotoSub') : t('receiptSheet.deleteSub')}
-                            onPress={handleDelete}
-                            loading={busy === 'delete'}
-                        />
-                    ) : canModerate ? (
-                        <DockActionCard
-                            colors={colors}
-                            icon="exit-outline"
-                            title={t('receiptSheet.removeFromTrip')}
-                            subtitle={t('receiptSheet.removeFromTripSub')}
-                            onPress={handleRemoveFromTrip}
-                            loading={busy === 'delete'}
-                        />
-                    ) : null}
-                    <DockActionCard
-                        colors={colors}
-                        iconNode={<MaterialIcons name="file-download" size={24} color={colors.primary} />}
-                        title={t('tripFinal.download')}
-                        subtitle={t('receiptSheet.downloadSub')}
-                        onPress={handleDownload}
-                        loading={busy === 'download'}
-                    />
-                </View>
+                <DockActionRow
+                    colors={colors}
+                    actions={[
+                        // The uploader may delete; a moderator may only detach.
+                        isUploader ? {
+                            icon: 'trash-outline',
+                            title: t('receiptSheet.delete'),
+                            subtitle: swipesCleared ? t('receiptSheet.deletePhotoSub') : t('receiptSheet.deleteSub'),
+                            onPress: handleDelete,
+                            loading: busy === 'delete',
+                        } : canModerate ? {
+                            icon: 'exit-outline',
+                            title: t('receiptSheet.removeFromTrip'),
+                            subtitle: t('receiptSheet.removeFromTripSub'),
+                            onPress: handleRemoveFromTrip,
+                            loading: busy === 'delete',
+                        } : null,
+                        {
+                            iconNode: <MaterialIcons name="file-download" size={24} color={colors.primary} />,
+                            title: t('tripFinal.download'),
+                            subtitle: t('receiptSheet.downloadSub'),
+                            onPress: handleDownload,
+                            loading: busy === 'download',
+                        },
+                    ]}
+                />
             </View>
 
             {/* Full receipt photo + parser legend (scrolls into view at full). */}
@@ -209,7 +206,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     titleName: { ...typography.bodyStrong, color: c.textPrimary },
     titleSub: { ...typography.labelSmall, color: c.textSecondary, marginTop: 2 },
     titlePaid: { fontSize: 22, fontWeight: '800', color: c.textPrimary, fontVariant: ['tabular-nums'] },
-    actionRow: { flexDirection: 'row', gap: spacing.md },
     // Red old-receipt banner at the top of the sheet.
     staleNote: {
         flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
