@@ -156,3 +156,45 @@ describe('TRIP_RADIUS_KM', () => {
         expect(TRIP_RADIUS_KM).toBe(10);
     });
 });
+
+// ── bestSplitOption: the ringed stores must be the ones a tap opens ─────────
+// Regression (2026-07-28, reported on device): with the 2-store option the map
+// ringed Rimi + the FURTHER Maxima, while tapping Rimi opened Rimi + the CLOSER
+// Maxima. Two selection rules disagreed on a price tie between two branches of
+// the same chain pair. bestSplitOption now collapses "same offer" duplicates to
+// the closest branch BEFORE picking, so ring and sheet agree by construction.
+describe('bestSplitOption — equal-priced branches of one chain pair', () => {
+    const RIMI = 1, MAXIMA_FAR = 2, MAXIMA_NEAR = 3;
+    const results = [
+        store(RIMI, 30, { chainId: 10, distance: 1 }),
+        store(MAXIMA_FAR, 31, { chainId: 20, distance: 9 }),
+        store(MAXIMA_NEAR, 31, { chainId: 20, distance: 2 }),
+    ];
+    // Same chain pair, same split total — only the branch (and travel) differs.
+    // The FURTHER one is listed first, as the pre-ranked `combos` array had it.
+    const combos = [
+        combo([RIMI, MAXIMA_FAR], 20, { extraDistanceKm: 6, chainIds: [10, 20] }),
+        combo([RIMI, MAXIMA_NEAR], 20, { extraDistanceKm: 1, chainIds: [10, 20] }),
+    ];
+
+    it('returns the closest branch, not the first-listed one', () => {
+        const best = bestSplitOption(combos, results, []);
+        expect(best).not.toBeNull();
+        expect(best!.storeIds).toContain(MAXIMA_NEAR);
+        expect(best!.storeIds).not.toContain(MAXIMA_FAR);
+    });
+
+    it('never returns null just because the top combo was collapsed away', () => {
+        // The old implementation looked the FIRST raw combo up by key inside the
+        // already-collapsed list; when that combo was the further branch the
+        // lookup missed and the caller fell back to the single-store baseline.
+        expect(bestSplitOption(combos, results, [])).not.toBeNull();
+    });
+
+    it('agrees with what the tap-sheet surfaces for the anchor store', () => {
+        const best = bestSplitOption(combos, results, [])!;
+        const sheet = buildSplitOptions(combos, results, [], RIMI);
+        const topMulti = sheet.find(o => o.combo != null)!;
+        expect(best.key).toBe(topMulti.key);
+    });
+});

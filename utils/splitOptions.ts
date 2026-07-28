@@ -167,8 +167,34 @@ export function bestSplitOption(
     opts: { tripRadiusKm?: number } = {},
 ): SheetOption | null {
     const tripRadiusKm = opts.tripRadiusKm ?? TRIP_RADIUS_KM;
-    const top = combos.find(c => c.stores.length > 1 && c.extraDistanceKm <= tripRadiusKm);
-    if (!top) return null;
+
+    // Collapse "same offer" duplicates FIRST, exactly as buildSplitOptions does:
+    // a Maxima+Rimi split at €X is one deal regardless of which physical branch,
+    // so keep the CLOSEST variant per (chain-set | total).
+    //
+    // Picking `top` straight off `combos` and then looking it up in the collapsed
+    // list returned null whenever `top` was the further variant (the collapse had
+    // already replaced it with its closer sibling) — so the caller silently fell
+    // back to the single-store baseline. Collapse, THEN pick.
+    // `combos` is pre-ranked best→worst, so the FIRST offer key we meet is the
+    // winning offer; the map then resolves which physical branch represents it.
+    let topKey: string | null = null;
+    const bestByOffer = new Map<string, ScoredCombo>();
+    for (const c of combos) {
+        if (c.stores.length <= 1 || c.extraDistanceKm > tripRadiusKm) continue;
+        const chainSig = [...new Set(c.stores.map(s => s.chainId))].sort((a, b) => a - b).join('-');
+        const key = `${chainSig}|${Math.round(c.splitTotal * 100)}`;
+        const prev = bestByOffer.get(key);
+        if (!prev) bestByOffer.set(key, c);
+        else if (c.extraDistanceKm < prev.extraDistanceKm) bestByOffer.set(key, c);
+        if (topKey == null) topKey = key;
+    }
+    if (topKey == null) return null;
+    const top = bestByOffer.get(topKey)!;
+
+    // Anchor on a store of the winning variant: it is the closest branch for its
+    // offer globally, so the anchored collapse resolves to the same combo and the
+    // key lookup below always hits.
     const anchored = buildSplitOptions(combos, results, lazyResults, top.storeIds[0], { tripRadiusKm });
     return anchored.find(o => o.key === comboKey(top.storeIds)) ?? null;
 }

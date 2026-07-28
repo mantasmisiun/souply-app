@@ -4,7 +4,6 @@ import {
     TouchableOpacity,
     StyleSheet,
     Alert,
-    InteractionManager,
  Switch, Modal, BackHandler } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
 import CalcLoadingModal from '../CalcLoadingModal';
@@ -36,7 +35,7 @@ import { getLocationSettings, saveLocationSettings } from '../../utils/locationS
 import StoreResultsMap, { type MapPin } from '../results/StoreResultsMap';
 import StoreOptionsDock from '../results/StoreOptionsDock';
 import { LiquidGlass } from '../LiquidGlass';
-import { buildSplitOptions, TRIP_RADIUS_KM, type SheetOption } from '../../utils/splitOptions';
+import { buildSplitOptions, bestSplitOption, TRIP_RADIUS_KM, type SheetOption } from '../../utils/splitOptions';
 import { fetchTrips, createTripInviteUrl, fetchTripMembers, sendAddressedTripInvite, removeTripMember, type TripMemberInfo } from '../../utils/tripsApi';
 import { InvitePane } from './InvitePane';
 import { formatEuro } from '../../utils/formatCurrency';
@@ -327,9 +326,13 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         // framed the only thing it had — the Vilnius fallback — and the data
         // arrived to a map that had already committed to a camera.
         if (!hasFrameData && loading) return;
-        const task = InteractionManager.runAfterInteractions(() => setMapMounted(true));
+        // requestIdleCallback, not InteractionManager (deprecated in RN 0.86).
+        // Same intent — mount the heavy native MapView once the entry animation
+        // has stopped competing for the JS thread — and the `timeout` option
+        // makes it self-limiting, so a never-idle thread still mounts.
+        const task = requestIdleCallback(() => setMapMounted(true), { timeout: MAP_MOUNT_FALLBACK_MS });
         const safety = setTimeout(() => setMapMounted(true), MAP_MOUNT_FALLBACK_MS);
-        return () => { task.cancel(); clearTimeout(safety); };
+        return () => { cancelIdleCallback(task); clearTimeout(safety); };
     }, [mapMounted, hasFrameData, loading]);
     useEffect(() => { devLog('map.mount', { mapMounted, hasFrameData, loading }); }, [mapMounted, hasFrameData, loading]);
 
@@ -584,11 +587,7 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
         // total, so show WHO it splits with.
         const comboByStore = new Map<number, ScoredCombo>();
 
-        // Global best starts as the recommended single store; a cheaper in-radius
-        // split takes over.
-        let best: { price: number; ids: number[]; stores: StoreResult[] } | null =
-            results[0] ? { price: results[0].total, ids: [results[0].storeId], stores: [results[0]] } : null;
-
+        // Per-store cheapest split (drives each pill's price + partner badge).
         for (const c of combos) {
             if (c.stores.length <= 1 || c.extraDistanceKm > TRIP_RADIUS_KM) continue;
             for (const sid of c.storeIds) {
@@ -598,10 +597,22 @@ export default function StoreResultsSurface({ basketId, embedded = false, bottom
                     comboByStore.set(sid, c);
                 }
             }
-            if (!best || c.splitTotal < best.price) {
-                const stores = c.storeIds.map(id => richById.get(id)).filter((s): s is StoreResult => !!s);
-                if (stores.length === c.storeIds.length) best = { price: c.splitTotal, ids: c.storeIds, stores };
-            }
+        }
+
+        // Global best = the single-store baseline, unless an in-radius split beats
+        // it. The split comes from `bestSplitOption`, i.e. through the SAME
+        // buildSplitOptions collapse the tap-sheet uses — so the ringed stores are
+        // by construction the ones a tap opens. Picking a winner here with its own
+        // rule is what put the ring on the WRONG branch: raw `combos` order with a
+        // strict `<` never replaced an equal-priced incumbent, so on a price tie
+        // between two physical Maximas the ring kept whichever combo sorted first,
+        // while the sheet kept the CLOSEST one (splitOptions.ts: bestByOffer).
+        let best: { price: number; ids: number[]; stores: StoreResult[] } | null =
+            results[0] ? { price: results[0].total, ids: [results[0].storeId], stores: [results[0]] } : null;
+
+        const split = bestSplitOption(combos, results, lazyResults);
+        if (split && (!best || split.total < best.price)) {
+            best = { price: split.total, ids: split.storeIds, stores: split.stores };
         }
         return {
             pinPriceByStore: priceByStore,

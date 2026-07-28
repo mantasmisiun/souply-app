@@ -71,7 +71,7 @@ export function MapCanvas(props: MapCanvasProps) {
             {props.mountMap !== false && (
                 <MapView
                     ref={props.mapRef}
-                    style={StyleSheet.absoluteFillObject}
+                    style={StyleSheet.absoluteFill}
                     initialRegion={props.initialRegion}
                     onMapReady={props.onMapReady}
                     onRegionChange={props.onRegionChange}
@@ -95,6 +95,13 @@ export function MapCanvas(props: MapCanvasProps) {
                     //    explicit animateToRegion instead.
                     moveOnMarkerPress={false}
                     toolbarEnabled={false}
+                    // The map follows the APP's theme, not the OS. Without this
+                    // the Google Maps SDK defaults to MapColorScheme.FOLLOW_SYSTEM,
+                    // so a dark-mode phone rendered a dark map even with the app
+                    // explicitly set to Light — "Light" has to mean the whole app.
+                    // Read at map CREATION (native reads it off initialProps), so a
+                    // theme switch applies to maps mounted after it.
+                    userInterfaceStyle={isDark ? 'dark' : 'light'}
                     customMapStyle={isDark ? DARK_MAP_STYLE : undefined}
                 >
                     {props.children}
@@ -104,7 +111,7 @@ export function MapCanvas(props: MapCanvasProps) {
             {props.overlay}
 
             {props.mapReady === false && (
-                <View style={[StyleSheet.absoluteFillObject, styles.mapCover]}>
+                <View style={[StyleSheet.absoluteFill, styles.mapCover]}>
                     <MaterialProgress size="large" color={colors.primary} />
                 </View>
             )}
