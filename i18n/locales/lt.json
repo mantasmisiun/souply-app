@@ -923,7 +923,7 @@
       "resumeBody": "Iš šio recepto jau pradėjote krepšelį. Tęsti jį ar pradėti naują?",
       "resumeNew": "Sukurti naują",
       "resumeContinue": "Tęsti ankstesnį",
-      "createTitle": "Naujas receptas",
+      "createTitle": "Receptas",
       "createNameLabel": "Recepto pavadinimas",
       "createNamePlaceholder": "pvz. Sveiki pusryčiai savaitei",
       "createCancel": "Atšaukti",
@@ -963,9 +963,9 @@
       "announceBody": "Pagal jūsų kvitus sukūrėme receptą, kad galėtumėte greitai pakartoti pirkimą.",
       "announceCta": "Peržiūrėti",
       "announceDismiss": "Vėliau",
-      "createTitle": "Receptas",
       "createSub": "Naujas · Iš nuorodos",
       "createPaneTitle": "Naujas receptas",
+      "editPaneTitle": "Redaguoti receptą",
       "urlPlaceholder": "https://www.lamaistas.lt/receptas/...",
       "urlPasteA11y": "Įklijuoti iš iškarpinės",
       "urlErrorBadUrl": "Panašu, kad tai ne nuoroda. Įklijuokite visą recepto adresą.",
@@ -1782,7 +1782,14 @@
     "createLists": "Sukurti sąrašą",
     "searchErrorTitle": "Paieška nepavyko",
     "searchErrorBody": "Patikrink ryšį ir bandyk dar kartą.",
-    "newBadge": "Naujas"
+    "newBadge": "Naujas",
+    "sections": {
+      "today": "Šiandien",
+      "yesterday": "Vakar",
+      "thisWeek": "Šią savaitę",
+      "lastWeek": "Praėjusią savaitę",
+      "earlier": "Anksčiau"
+    }
   },
   "notifications": {
     "title": "Pranešimai",
@@ -1821,7 +1828,12 @@
     "newBadge": "Nauja",
     "add": "Į krepšelį",
     "alreadyInBasket": "Prekė jau yra šiame krepšelyje",
-    "addFailed": "Nepavyko pridėti prekės. Bandykite dar kartą."
+    "addFailed": "Nepavyko pridėti prekės. Bandykite dar kartą.",
+    "deleteTitle": "Ištrinti",
+    "viewTitle": "Peržiūrėti",
+    "deleteBasketError": "Nepavyko ištrinti krepšelio",
+    "subjectBasket": "Krepšelį",
+    "subjectRecipe": "Receptą"
   },
   "invite": {
     "shareLink": "Dalintis nuoroda",

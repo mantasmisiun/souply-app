@@ -947,7 +947,7 @@
       "resumeBody": "You already started a basket from this recipe. Continue it or start fresh?",
       "resumeNew": "Start fresh",
       "resumeContinue": "Continue",
-      "createTitle": "New recipe",
+      "createTitle": "Recipe",
       "createNameLabel": "Recipe name",
       "createNamePlaceholder": "e.g. Weekly healthy breakfast",
       "createCancel": "Cancel",
@@ -987,9 +987,9 @@
       "announceBody": "Based on your receipts we built a recipe so you can quickly repeat your shop.",
       "announceCta": "View",
       "announceDismiss": "Later",
-      "createTitle": "Recipe",
       "createSub": "New · From a link",
       "createPaneTitle": "New recipe",
+      "editPaneTitle": "Edit recipe",
       "urlPlaceholder": "https://www.allrecipes.com/recipe/...",
       "urlPasteA11y": "Paste from clipboard",
       "urlErrorBadUrl": "That doesn't look like a link. Paste the full recipe address.",
@@ -1801,7 +1801,14 @@
     "createLists": "Create the list",
     "searchErrorTitle": "Search failed",
     "searchErrorBody": "Check your connection and try again.",
-    "newBadge": "New"
+    "newBadge": "New",
+    "sections": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "thisWeek": "This week",
+      "lastWeek": "Last week",
+      "earlier": "Earlier"
+    }
   },
   "notifications": {
     "title": "Notifications",
@@ -1840,7 +1847,12 @@
     "newBadge": "New",
     "add": "Add",
     "alreadyInBasket": "Already in this basket",
-    "addFailed": "Could not add the item. Please try again."
+    "addFailed": "Could not add the item. Please try again.",
+    "deleteTitle": "Delete",
+    "viewTitle": "View",
+    "deleteBasketError": "Couldn't delete the basket",
+    "subjectBasket": "Basket",
+    "subjectRecipe": "Recipe"
   },
   "invite": {
     "shareLink": "Share link",

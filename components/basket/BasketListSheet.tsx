@@ -1,4 +1,4 @@
-import { View, Text, TouchableOpacity, StyleSheet, Image } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Image, Alert } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming, withDelay, interpolateColor, FadeInDown } from 'react-native-reanimated';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { usePathname, useRouter } from 'expo-router';
@@ -8,6 +8,9 @@ import { MaterialProgress } from '@/components/MaterialProgress';
 import { AddOrStepper } from '@/components/AddOrStepper';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
 import { SheetCloseButton } from '../SheetCloseButton';
+import { DockActionRow } from '../dock/DockActionRow';
+import { ConfirmModal } from '../ConfirmModal';
+import { BasketGlyph, ChefToqueGlyph } from '../icons/tabGlyphs';
 import { useTheme, useResolvedScheme, radius, spacing, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { API_BASE_URL } from '../../config/api';
@@ -15,6 +18,7 @@ import { useBasketSession, targetKey } from '../../state/basketSession';
 import { useTemplateAddState } from '../../state/templateAddState';
 import { useTemplateShop } from '../../hooks/useTemplateShop';
 import { getTemplate, patchTemplateItem, deleteTemplateItem } from '../../utils/basketTemplatesApi';
+import { viewSessionTarget, deleteSessionTarget } from '../../utils/sessionTargetActions';
 
 /**
  * BasketListSheet — the ACTIVE-session view ("collecting items"), rendered
@@ -284,6 +288,84 @@ export function BasketListSheet() {
     // button just opens the results map.
     const canShop = target?.kind !== 'template' || itemCount > 0;
 
+    // ── Target-level actions (the two cards above the item list) ─────────
+    // `pending-new` has NO server row yet (lazy cart) — nothing to open or
+    // delete, so both cards render disabled rather than vanish (a stable row
+    // beats a layout jump the moment the first add mints the basket).
+    const isTemplate = target?.kind === 'template';
+    const isPendingNew = target?.kind === 'pending-new';
+    // The target kind, as the cards' subtitle — reuses the existing words.
+    // ACCUSATIVE, not nominative: the card reads as one phrase, "Ištrinti
+    // krepšelĮ" / "Peržiūrėti receptĄ". The nominative keys reused elsewhere
+    // (optionTemplate / createBasketTitle) are wrong as a verb's object in LT.
+    const kindLabel = t(isTemplate ? 'basketSession.subjectRecipe' : 'basketSession.subjectBasket');
+
+    const [deleteOpen, setDeleteOpen] = useState(false);
+    const [deleting, setDeleting] = useState(false);
+    // Confirm accepted → delete the TARGET itself (utils/sessionTargetActions
+    // owns the teardown: end session + clear overlays + collapse). On failure
+    // the session stays intact and the error surfaces like the sibling delete
+    // flows (template/[id].tsx handleDelete).
+    const doDeleteTarget = useCallback(async () => {
+        const tgt = useBasketSession.getState().target;
+        if (!tgt || tgt.kind === 'pending-new') return;
+        setDeleting(true);
+        try {
+            await deleteSessionTarget(tgt, () => controls.current?.collapse());
+            setDeleteOpen(false);
+        } catch {
+            setDeleteOpen(false);
+            Alert.alert(
+                t('basketTab.errorGeneric'),
+                t(tgt.kind === 'template' ? 'basketTab.templates.errorDelete' : 'basketSession.deleteBasketError'),
+            );
+        } finally {
+            setDeleting(false);
+        }
+    }, [t]);
+
+    // "View" opens the target's own screen with an explicit back-stack (its
+    // home tab under the detail — the finishToShopping shape). The session
+    // stays alive: leaving the catalog hides this sheet, returning resumes it.
+    const openTarget = useCallback(() => {
+        const tgt = useBasketSession.getState().target;
+        if (!tgt || tgt.kind === 'pending-new') return;
+        controls.current?.collapse();
+        // Adapter: the helper speaks plain path strings; expo-router's typed
+        // Href needs the same `as any` every literal route in this file uses.
+        viewSessionTarget(tgt, {
+            navigate: (p) => router.navigate(p as any),
+            push: (p) => router.push(p as any),
+        });
+    }, [router]);
+
+    const targetActions = (
+        <DockActionRow
+            colors={colors}
+            style={styles.targetActions}
+            actions={[
+                {
+                    icon: 'trash-outline',
+                    title: t('basketSession.deleteTitle'),
+                    subtitle: kindLabel,
+                    disabled: isPendingNew || deleting,
+                    onPress: () => setDeleteOpen(true),
+                },
+                {
+                    // The tab bar's own glyph for the kind — the card points at
+                    // the tab the target lives on.
+                    iconNode: isTemplate
+                        ? <ChefToqueGlyph size={24} color={colors.primary} />
+                        : <BasketGlyph size={24} color={colors.primary} />,
+                    title: t('basketSession.viewTitle'),
+                    subtitle: kindLabel,
+                    disabled: isPendingNew,
+                    onPress: openTarget,
+                },
+            ]}
+        />
+    );
+
     const sessionHeader = (
         <View style={styles.header} onLayout={onHeaderLayout}>
             {/* THE sheet ✕ (SheetCloseButton) — outside a GlassSheet it renders
@@ -418,9 +500,17 @@ export function BasketListSheet() {
             barAtTop
             blockScrollRef={onTabRoot ? browseListRef : null}
             sheet={{
-                content: listContent,
+                // Target-level cards first, then the bare item list.
+                content: <>{targetActions}{listContent}</>,
                 maxStage: 2,
-                contentContainerStyle: { paddingTop: spacing.xs, paddingBottom: insets.bottom + spacing.lg },
+                // Horizontal inset + shadow room come from the sheet's own
+                // SheetContent wrapper — it matches the bar row's inset, so
+                // cards and item rows line up with the title row. This style is
+                // EXTRAS only (additive): the safe-area clearance at the
+                // docked-full bottom edge.
+                contentContainerStyle: {
+                    paddingBottom: insets.bottom + spacing.lg,
+                },
                 // Title grows when a drag SETTLES open (stage 1+) and shrinks
                 // back when it settles collapsed — animated, but only on release.
                 onStageChange: (s) => { stageRef.current = s; titleP.value = withTiming(s > 0 ? 1 : 0, { duration: 200 }); },
@@ -430,6 +520,24 @@ export function BasketListSheet() {
             bar's Parduotuvės pill, so unmounting with the bar (visible=false)
             can never strand an open sheet. */}
         {shop.modals}
+        {/* Delete-target confirm — the same souply-styled ConfirmModal (and
+            the same wording keys) as the basket-detail / recipe-detail delete
+            flows, branched on the target kind. */}
+        <ConfirmModal
+            visible={deleteOpen}
+            title={t(isTemplate ? 'basketTab.templates.deleteTitle' : 'basketDetail.removeTitle')}
+            body={isTemplate
+                ? (target?.kind === 'template' && target.name
+                    ? t('basketTab.templates.deleteBody', { name: target.name })
+                    : undefined)
+                : t('basketDetail.removeBody')}
+            confirmLabel={t(isTemplate ? 'basketTab.templates.deleteConfirm' : 'basketDetail.removeConfirm')}
+            cancelLabel={t(isTemplate ? 'basketTab.templates.deleteCancel' : 'common.cancel')}
+            destructive
+            busy={deleting}
+            onConfirm={doDeleteTarget}
+            onClose={() => setDeleteOpen(false)}
+        />
         </>
     );
 }
@@ -460,6 +568,11 @@ const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     // The separator starts where the name/stepper column starts (past the
     // image + gap) and runs to the trash can's right edge — never under the
     // product picture.
+    // The two target cards sit above the bare list; the gap separates them
+    // from the first item row (which carries no separator above it).
+    // Only the extra breathing room above the cards; the shadow halo and the
+    // side inset are the sheet's job now (the sheet's SheetContent wrapper).
+    targetActions: { marginTop: spacing.md, marginBottom: spacing.md },
     sep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem, marginLeft: IMG_W + spacing.md },
     emptyText: { fontSize: 13, color: c.textMuted, textAlign: 'center', paddingVertical: 20 },
 

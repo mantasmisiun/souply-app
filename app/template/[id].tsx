@@ -10,7 +10,6 @@ import {
     Linking,
     BackHandler,
 } from "react-native";
-import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated from 'react-native-reanimated';
 import { useCollapsingHeader, CollapsingHeader } from '../../components/CollapsingHeader';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -20,8 +19,11 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, radius, elevation, spacing, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { AddOrStepper } from '../../components/AddOrStepper';
-import { TemplateCoverEditor } from '../../components/TemplateCoverEditor';
+import { type CoverDraft } from '../../components/TemplateCoverEditor';
+import { RecipeCreatePane } from '../../components/recipe/RecipeCreatePane';
+import { usePaneSubmitControls } from '../../hooks/usePaneSubmitControls';
 import { coverEmoji } from '../../utils/templateCover';
+import { saveTemplateIdentity } from '../../utils/templateIdentitySave';
 import { inkOn } from '../../utils/contrastColor';
 import { isWeighableDisplay } from '../../utils/weighable';
 import { formatItemAmount } from '../../utils/amountDisplay';
@@ -31,11 +33,12 @@ import { GlassSheet } from '../../components/GlassSheet';
 import { SheetCloseButton } from '../../components/SheetCloseButton';
 import { ProductImage } from '../../components/ProductImage';
 import { SkeletonBox } from '../../components/SkeletonBox';
-import { ScalePressable } from '../../components/ScalePressable';
 import { DockedGlassSheet, type DockedSheetControls } from '../../components/DockedGlassSheet';
 import { DockActionRow } from '../../components/dock/DockActionRow';
 import { DockSection } from '../../components/dock/DockSection';
-import { SHEET_CARD_SHADOW_RADIUS } from '../../components/SheetCard';
+import { ActionPill } from '../../components/dock/ActionPill';
+import { ScreenHeading } from '../../components/ScreenHeading';
+import { SheetTitle } from '../../components/dock/SheetTitle';
 import { TemplateSharePane } from '../../components/TemplateSharePane';
 import { PublishWallModal } from '../../components/PublishWallModal';
 import { ConfirmModal } from '../../components/ConfirmModal';
@@ -82,16 +85,24 @@ export default function TemplateDetailScreen() {
     const [barRowH, setBarRowH] = useState(44);
     const [dockClearance, setDockClearance] = useState(120);
 
-    // Share = an IN-SHEET pane (dock content swap), not a modal — the map
-    // dock's Pakviesti already navigates this way, and the recipe dock must
-    // not be the one sheet that throws a modal on top of itself instead.
-    const [sharePane, setSharePane] = useState(false);
+    // Share AND Edit = IN-SHEET panes (dock content swap), not modals — the
+    // map dock's Pakviesti already navigates this way, and the recipe dock
+    // must not be the one sheet that throws a modal on top of itself instead.
+    // ONE state slot for both: only one pane can exist at a time, and a single
+    // variable makes "share and edit open together" unrepresentable — opening
+    // one is what closes the other.
+    const [pane, setPane] = useState<'share' | 'edit' | null>(null);
+    // The edit pane's submit pill (Išsaugoti in the pane's bar row): the PANE
+    // owns the enable/busy logic and reports it up (PaneSubmitControls); this
+    // host just renders the shared ActionPill from the latest report. Cleared
+    // with the pane so a re-open can't flash the previous session's state.
+    const editCtl = usePaneSubmitControls();
+    const closePane = useCallback(() => { setPane(null); editCtl.clear(); }, [editCtl]);
     // Mirror of the dock's stage, so hardware back can peel ONE layer at a
-    // time (share pane → expanded sheet → default navigation) — the map
+    // time (open pane → expanded sheet → default navigation) — the map
     // surface's invite-pane back model.
     const [dockExpanded, setDockExpanded] = useState(false);
     const [publishWallOpen, setPublishWallOpen] = useState(false);
-    const [coverEditorOpen, setCoverEditorOpen] = useState(false);
     // Creator stats (Statistika) — used to be a second tab that swapped the
     // whole body out; now a glass sheet raised from the nav-bar stats icon, so
     // the items list never leaves the screen. Same tiles, same data.
@@ -144,33 +155,37 @@ export default function TemplateDetailScreen() {
         setPublishWallOpen(false);
         if (template && template.visibility !== 'public') {
             const r = await setVisibility('public');
-            if (r === 'ok') { setSharePane(true); sheetRef.current?.snapTo(2); }
+            if (r === 'ok') { setPane('share'); sheetRef.current?.snapTo(2); }
         }
     }, [template, setVisibility]);
 
     /**
-     * Dalintis → swap the dock's CONTENT to the share pane and raise the
-     * sheet to full, exactly like the map dock's Pakviesti. The dock must NOT
-     * collapse: the tap is a navigation WITHIN the sheet, and collapsing first
-     * (the old modal flow) read as the sheet dismissing itself.
+     * Dalintis / Redaguoti → swap the dock's CONTENT to that pane and raise
+     * the sheet to full, exactly like the map dock's Pakviesti. The dock must
+     * NOT collapse: the tap is a navigation WITHIN the sheet, and collapsing
+     * first (the old modal flow) read as the sheet dismissing itself.
      */
     const openSharePane = useCallback(() => {
-        setSharePane(true);
+        setPane('share');
+        sheetRef.current?.snapTo(2);
+    }, []);
+    const openEditPane = useCallback(() => {
+        setPane('edit');
         sheetRef.current?.snapTo(2);
     }, []);
 
-    // Hardware back peels ONE layer: share pane → expanded sheet → (default
+    // Hardware back peels ONE layer: open pane → expanded sheet → (default
     // navigation). Registered only while a layer is open so normal back is
     // untouched otherwise — same shape as the map surface's invite pane.
     useEffect(() => {
-        if (!sharePane && !dockExpanded) return;
+        if (!pane && !dockExpanded) return;
         const sub = BackHandler.addEventListener('hardwareBackPress', () => {
-            if (sharePane) { setSharePane(false); return true; }
+            if (pane) { closePane(); return true; }
             if (dockExpanded) { sheetRef.current?.collapse(); return true; }
             return false;
         });
         return () => sub.remove();
-    }, [sharePane, dockExpanded]);
+    }, [pane, dockExpanded, closePane]);
 
     // ── Data load ─────────────────────────────────────────────────────────
     const fetchTemplate = useCallback(async (silent: boolean) => {
@@ -367,6 +382,24 @@ export default function TemplateDetailScreen() {
             setTemplate(prev => prev ? { ...prev, autoUpdate: value ? 0 : 1 } : prev);
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
         }
+    }, [template, t]);
+
+    // ── Edit (name / emoji / colour) — the dock's edit pane submits here ──
+    // Optimistic: the screen repaints with the new identity immediately and
+    // the PATCH follows; a failure puts the old identity back and says so
+    // (the toggleLearning revert + alert shape — the old TemplateCoverEditor
+    // call here swallowed the error and kept a phantom name on screen).
+    const saveEdit = useCallback((draft: CoverDraft) => {
+        if (!template) return;
+        const prev = { name: template.name, coverColor: template.coverColor, coverImage: template.coverImage };
+        void saveTemplateIdentity(
+            template.id,
+            prev,
+            { name: draft.name, coverColor: draft.coverColor, coverImage: draft.coverImage },
+            (identity) => setTemplate(p => p ? { ...p, ...identity } : p),
+        ).then(ok => {
+            if (!ok) Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
+        });
     }, [template, t]);
 
     // ── Skeleton ──────────────────────────────────────────────────────────
@@ -582,26 +615,35 @@ export default function TemplateDetailScreen() {
                             instead of the surface it actually sits on). Same for
                             the emoji chip: the translucent-white fill was designed
                             for a coloured band it no longer sits on. */}
+                        {/* Tapping the title opens the SAME edit pane as the
+                            dock's Redaguoti row — one edit surface, however
+                            you reach it (this replaced the old
+                            TemplateCoverEditor modal). */}
                         {<TouchableOpacity
-                        onPress={isDefault ? undefined : () => setCoverEditorOpen(true)}
+                        onPress={isDefault ? undefined : openEditPane}
                         activeOpacity={isDefault ? 1 : 0.7}
                         disabled={isDefault}
-                        style={styles.titleRow}
-                        // Feeds the bar-title fade threshold — a two-line title
-                        // fades the bar copy in later (CollapsingHeader measures
-                        // this row via the controller).
-                        onLayout={header.onTitleLayout}
                     >
-                        <View style={[styles.titleEmoji, {
-                            backgroundColor: colors.surfaceMuted ?? colors.cardBackground,
-                        }]}>
-                            {isDefault
-                                ? <Ionicons name="sparkles" size={20} color={colors.primary} />
-                                : <Text style={{ fontSize: 20 }}>{headerEmoji}</Text>}
-                        </View>
-                        <Text style={[styles.titleText, { color: colors.textPrimary }]} numberOfLines={2}>
-                            {titleText}
-                        </Text>
+                        {/* THE shared screen heading (ScreenHeading) — this screen
+                            used to hand-roll its own smaller title row, so it did
+                            not follow the app's screen-title scale. The cover
+                            emoji rides in the new `leading` slot. */}
+                        <ScreenHeading
+                            title={titleText}
+                            leading={(
+                                <View style={[styles.titleEmoji, {
+                                    backgroundColor: colors.surfaceMuted ?? colors.cardBackground,
+                                }]}>
+                                    {isDefault
+                                        ? <Ionicons name="sparkles" size={30} color={colors.primary} />
+                                        : <Text style={{ fontSize: 30, lineHeight: 36 }}>{headerEmoji}</Text>}
+                                </View>
+                            )}
+                            // Feeds the bar-title fade threshold — a two-line title
+                            // fades the bar copy in later (CollapsingHeader measures
+                            // this via the controller).
+                            onLayout={header.onTitleLayout}
+                        />
                     </TouchableOpacity>}
                         {/* No top-of-screen add button: the dock's "Pridėti prekes"
                             is THE entry point for adding — two affordances for the
@@ -680,21 +722,15 @@ export default function TemplateDetailScreen() {
                                     <Text style={styles.addMoreText}>{t('basketTab.templates.addItemsCta')}</Text>
                                 </TouchableOpacity>
                             )}
-                            <ScalePressable
-                                style={[styles.shopPill, isDefault && { flex: 1 }, (!canShop || shop.busy) && styles.shopPillDisabled]}
+                            <ActionPill
+                                colors={colors}
+                                label={t('basketTab.templates.storesCta')}
                                 onPress={shop.start}
-                                disabled={!canShop || shop.busy}
-                                scaleTo={!canShop || shop.busy ? 1 : 0.95}
-                            >
-                                {shop.busy
-                                    ? <MaterialProgress size="small" color={colors.onPrimary} />
-                                    : (
-                                        <>
-                                            <Text style={styles.shopPillText}>{t('basketTab.templates.storesCta')}</Text>
-                                            <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
-                                        </>
-                                    )}
-                            </ScalePressable>
+                                disabled={!canShop}
+                                busy={shop.busy}
+                                chevron
+                                style={isDefault ? { flex: 1 } : undefined}
+                            />
                         </View>
                     }
                     sheet={{
@@ -703,17 +739,21 @@ export default function TemplateDetailScreen() {
                         // screen bottom once docked at full) instead of above a
                         // bottom bar, so the last row needs the safe-area pad —
                         // same contract as the catalog list sheet's content.
-                        contentContainerStyle: { paddingTop: spacing.xs, paddingBottom: insets.bottom + spacing.lg },
+                        // EXTRAS only — the base inset (peek + card-halo pad)
+                        // comes from the sheet's own SheetContent wrapper.
+                        contentContainerStyle: { paddingBottom: insets.bottom + spacing.lg },
                         onStageChange: (st) => setDockExpanded(st > 0),
-                        // The share pane, in the sheet's own pane contract: it
-                        // swaps the TOP ROW to "‹ Dalintis" (replacing the
-                        // add/shop action row), page-slides the body, and — via
-                        // onDismiss — is cleared by the sheet on every collapse,
-                        // so re-expanding the dock always lands on the action
-                        // cards, never a stale share view (the collapsed bar
-                        // gives no hint one is open). None of that is this
-                        // screen's job any more.
-                        pane: sharePane ? {
+                        // The share/edit panes, in the sheet's own pane
+                        // contract: the open one swaps the TOP ROW to
+                        // "‹ <title>" (replacing the add/shop action row),
+                        // page-slides the body, and — via onDismiss — is
+                        // cleared by the sheet on every collapse, so
+                        // re-expanding the dock always lands on the action
+                        // cards, never a stale pane (the collapsed bar gives
+                        // no hint one is open). One `pane` state slot means
+                        // the two can never be open together. None of the
+                        // slide/dismiss mechanics are this screen's job.
+                        pane: pane === 'share' ? {
                             key: 'share',
                             // ‹ back · share icon · title — the map invite
                             // pane's header row, so the way back out of the
@@ -721,16 +761,16 @@ export default function TemplateDetailScreen() {
                             barRow: (
                                 <View style={styles.paneHeaderRow}>
                                     <TouchableOpacity
-                                        onPress={() => setSharePane(false)}
+                                        onPress={closePane}
                                         hitSlop={10}
                                         accessibilityLabel={t('common.back')}
                                     >
                                         <Ionicons name="chevron-back" size={26} color={colors.primary} />
                                     </TouchableOpacity>
                                     <Ionicons name="share-social-outline" size={18} color={colors.primary} />
-                                    <Text style={styles.sheetTitle} numberOfLines={1}>
+                                    <SheetTitle colors={colors} numberOfLines={1}>
                                         {t('basketTab.templates.shareNative')}
-                                    </Text>
+                                    </SheetTitle>
                                 </View>
                             ),
                             content: (
@@ -745,11 +785,65 @@ export default function TemplateDetailScreen() {
                                     />
                                 </View>
                             ),
-                            onDismiss: () => setSharePane(false),
+                            onDismiss: closePane,
+                        } : pane === 'edit' ? {
+                            key: 'edit',
+                            // Same header row shape as the share pane.
+                            barRow: (
+                                <View style={styles.paneHeaderRow}>
+                                    <TouchableOpacity
+                                        onPress={closePane}
+                                        hitSlop={10}
+                                        accessibilityLabel={t('common.back')}
+                                    >
+                                        <Ionicons name="chevron-back" size={26} color={colors.primary} />
+                                    </TouchableOpacity>
+                                    {/* flex: 1 so a long title truncates against
+                                        the pill instead of pushing it off-screen. */}
+                                    <SheetTitle colors={colors} style={{ flex: 1 }} numberOfLines={1}>
+                                        {t('basketTab.templates.editPaneTitle')}
+                                    </SheetTitle>
+                                    {/* Išsaugoti — the pane's submit, as the bar
+                                        row's trailing pill (shared ActionPill);
+                                        the pane reports the enable/busy state. */}
+                                    <ActionPill
+                                        colors={colors}
+                                        label={t('common.save')}
+                                        onPress={editCtl.submit}
+                                        disabled={editCtl.disabled}
+                                        busy={editCtl.busy}
+                                    />
+                                </View>
+                            ),
+                            // The CREATE pane's exact surface, in edit mode:
+                            // prefilled identity, the source URL frozen (or no
+                            // URL row for a hand-made recipe), Išsaugoti →
+                            // saveEdit. Fresh-mounted per open, so it always
+                            // prefills from the CURRENT template.
+                            content: (
+                                <View style={styles.sheetPanelContent}>
+                                    <RecipeCreatePane
+                                        collapse={() => sheetRef.current?.collapse()}
+                                        onSubmitControls={editCtl.onSubmitControls}
+                                        edit={{
+                                            name: template.name,
+                                            coverColor: template.coverColor,
+                                            coverImage: template.coverImage,
+                                            sourceUrl,
+                                            onSubmit: saveEdit,
+                                        }}
+                                    />
+                                </View>
+                            ),
+                            onDismiss: closePane,
                         } : null,
                         content: (
                             <View style={styles.sheetPanelContent}>
-                                <Text style={styles.sheetTitle}>{t('basketDetail.actionsTitle')}</Text>
+                                {/* No "Veiksmai" heading — the sheet opens straight
+                                    on the action cards; the gap-14 column keeps the
+                                    same rhythm against Nustatymai below. (Basket
+                                    detail still titles its sheet, so the i18n key
+                                    stays.) */}
                                 {/* Svetainė + Dalintis — the map dock's card pair,
                                     verbatim (DockActionRow). Svetainė opens the RECIPE
                                     page, not the site's front page: it is the only way
@@ -798,6 +892,25 @@ export default function TemplateDetailScreen() {
                                     icon="settings-outline"
                                     title={t('basketTab.templates.settingsSection')}
                                 >
+                                    {/* Redaguoti — in-sheet navigation to the
+                                        edit pane (name/emoji/colour, frozen
+                                        source URL), so no collapse: the tap
+                                        navigates WITHIN the sheet, like
+                                        Dalintis. The auto template has no
+                                        identity to edit. */}
+                                    {!isDefault && (
+                                        <>
+                                            <TouchableOpacity
+                                                style={styles.sheetRow}
+                                                onPress={openEditPane}
+                                            >
+                                                <Text style={[styles.sheetRowText, { color: colors.textPrimary }]}>
+                                                    {t('common.edit')}
+                                                </Text>
+                                            </TouchableOpacity>
+                                            <View style={styles.sectionSep} />
+                                        </>
+                                    )}
                                     <TouchableOpacity
                                         style={styles.sheetRow}
                                         onPress={() => { sheetRef.current?.collapse(); handleDuplicate(); }}
@@ -853,10 +966,10 @@ export default function TemplateDetailScreen() {
                 non-Modal sheet (the two-Modal Android flicker doesn't apply). */}
             {statsOpen && (
                 <GlassSheet autoHeight onClose={() => setStatsOpen(false)}>
-                    {/* GlassSheet's scroll is edge-to-edge — content owns its padding. */}
+                    {/* Inset comes from GlassSheet's own SheetContent wrapper. */}
                     <View style={styles.statsSheetBody}>
                         <View style={styles.statsSheetTitleRow}>
-                            <Text style={[styles.sheetTitle, { flex: 1 }]}>{t('basketTab.templates.tabStats')}</Text>
+                            <SheetTitle colors={colors} style={{ flex: 1 }}>{t('basketTab.templates.tabStats')}</SheetTitle>
                             <TouchableOpacity
                                 onPress={() => setStatsHelpOpen(true)}
                                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -908,18 +1021,6 @@ export default function TemplateDetailScreen() {
                 modals (hooks/useTemplateShop owns their state and confirm
                 wiring; this screen only picks the landings above). */}
             {shop.modals}
-
-            <TemplateCoverEditor
-                visible={coverEditorOpen}
-                onClose={() => setCoverEditorOpen(false)}
-                name={template.name}
-                coverColor={template.coverColor}
-                coverImage={template.coverImage}
-                onSubmit={(next) => {
-                    setTemplate(prev => prev ? { ...prev, name: next.name, coverColor: next.coverColor, coverImage: next.coverImage } : prev);
-                    patchTemplate(template.id, next).catch(() => {});
-                }}
-            />
         </>
     );
 }
@@ -944,14 +1045,16 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         flexDirection: 'row', alignItems: 'center', gap: 10,
         paddingHorizontal: 16, paddingTop: 4, paddingBottom: 12,
     },
+    // Sized to the shared screen title (ScreenHeading, 33/38) — the chip used to
+    // be built for this screen's own 18px title and looked undersized beside it.
     titleEmoji: {
-        width: 34, height: 34, borderRadius: 10,
+        width: 50, height: 50, borderRadius: 14,
         alignItems: 'center', justifyContent: 'center',
     },
-    titleText: { flex: 1, fontSize: 18, fontWeight: '700' },
 
     // ── Statistika sheet — creator metrics ────────────────────────────────
-    statsSheetBody: { paddingHorizontal: 16, paddingTop: 4, gap: 14 },
+    // Inset comes from GlassSheet's SheetContent wrapper — gap only here.
+    statsSheetBody: { gap: 14 },
     statsSheetTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
     metricsGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12 },
     metricTile: {
@@ -1031,22 +1134,13 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     addMoreBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 8, paddingHorizontal: 6 },
     addMoreText: { fontSize: 15, fontWeight: '700', color: c.primary },
-    shopPill: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
-        backgroundColor: c.primary, borderRadius: radius.pill,
-        paddingHorizontal: 20, paddingVertical: 10,
-    },
-    shopPillDisabled: { opacity: 0.45 },
-    shopPillText: { fontSize: 15, fontWeight: '700', color: c.onPrimary },
     sheetPanelContent: {
-        paddingHorizontal: 16,
-        // Reserves the cards' shadow halo — the sheet's scroll viewport clips
-        // overflow, so a smaller pad cuts the bottom card's shadow off.
-        paddingBottom: SHEET_CARD_SHADOW_RADIUS,
+        // Inset + shadow halo come from the sheet's SheetContent wrapper —
+        // re-declaring them here stacked on top and made this sheet's content sit
+        // further in than every other dock sheet's.
         // ONE gap: between the source cards, and between every section below.
         gap: 14,
     },
-    sheetTitle: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
     // Share-pane BAR row (‹ back · icon · title) — the map invite pane's row.
     // Lives in the dock's bar slot now (SheetPaneSpec.barRow), replacing the
     // add/shop action row while the pane is open; same side inset as barRow.
