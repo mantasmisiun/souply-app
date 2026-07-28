@@ -1,7 +1,6 @@
 import {
     View,
     Text,
-    FlatList,
     TouchableOpacity,
     StyleSheet,
     Alert,
@@ -34,6 +33,7 @@ import { useTabBarOverride } from '../../state/tabBarOverride';
 import { isAwaitingReceipt, groupReceiptProgress } from '../../utils/awaitingReceipts';
 import * as DocumentPicker from 'expo-document-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { scheduleStorageSweep } from '../../utils/storageSweep';
 
 interface StoreChain {
     id: number;
@@ -88,6 +88,15 @@ interface SplitGroup {
     entries: SplitGroupEntry[];
     lists: ShoppingList[];
 }
+
+/** Flattened, virtualisable list rows (section titles + cards). */
+type ListRow =
+    | { kind: 'title'; key: string; label: string }
+    | { kind: 'doneHeader'; key: string }
+    | { kind: 'group'; key: string; group: SplitGroup; allowUpload: boolean }
+    | { kind: 'single'; key: string; item: ShoppingList; allowUpload: boolean }
+    | { kind: 'empty'; key: string };
+const listRowKey = (r: ListRow) => r.key;
 
 // Build a chainId→listId map for the awaiting store rows of a list/group.
 // The receipt's detected chain auto-selects which row to link (no prompt).
@@ -356,10 +365,17 @@ export default function ShoppingListScreen() {
 
     const loadSplitGroups = useCallback(async (currentLists: ShoppingList[]) => {
         try {
-            const allKeys = await AsyncStorage.getAllKeys();
-            const splitKeys = allKeys.filter(k => k.startsWith('split_lists_'));
-            if (splitKeys.length === 0) { setSplitGroups([]); return; }
-            const pairs = await AsyncStorage.multiGet(splitKeys);
+            // Derive the candidate keys from the lists' own basketIds instead of a
+            // full AsyncStorage.getAllKeys() scan on every fetch — a group can only
+            // render when one of its lists is in `currentLists` anyway, and split
+            // lists are always created with their basketId set.
+            const basketIds = [...new Set(
+                currentLists
+                    .map(l => l.basketId)
+                    .filter((b): b is number => b != null),
+            )];
+            if (basketIds.length === 0) { setSplitGroups([]); return; }
+            const pairs = await AsyncStorage.multiGet(basketIds.map(b => `split_lists_${b}`));
             const groups: SplitGroup[] = [];
             for (const [key, value] of pairs) {
                 if (!value) continue;
@@ -406,6 +422,11 @@ export default function ShoppingListScreen() {
         fetchLists();
         fetchReceipts();
     }, [fetchLists, fetchReceipts]));
+
+    // Once per session, well off the interaction path: TTL/size sweep for the
+    // per-id key families (comparison_v2_*, basket_results_*, split_lists_*)
+    // that used to grow forever with no GC.
+    useEffect(() => { scheduleStorageSweep(); }, []);
 
     // Unlinked receipts whose chain matches one of the target's awaiting
     // stores — the candidates for "select from already uploaded". Chain-
@@ -663,32 +684,135 @@ export default function ShoppingListScreen() {
         }));
     }, [singleLists, liveGroups]);
 
-    const filteredSingle = singleLists.filter(l => {
-        if (chainFilter && l.chainName !== chainFilter) return false;
-        return true;
-    });
-    const filteredGroups = liveGroups.filter(g => {
-        if (chainFilter && !g.entries.some(e => e.chainName === chainFilter)) return false;
-        return true;
-    });
+    // Flattened row model for the virtualised list: section titles + cards in
+    // display order. Replaces four unbounded `.map()`s inside a ScrollView —
+    // heavy cards now mount lazily and scroll through a recycling window.
+    const listRows = useMemo<ListRow[]>(() => {
+        const filteredSingle = singleLists.filter(l => !(chainFilter && l.chainName !== chainFilter));
+        const filteredGroups = liveGroups.filter(g => !(chainFilter && !g.entries.some(e => e.chainName === chainFilter)));
 
-    const activeSingle = filteredSingle.filter(l => l.status === 'active');
-    const completedSingle = filteredSingle.filter(l => l.status === 'completed');
-    const activeGroups = filteredGroups.filter(g => g.lists.some(l => l.status === 'active') || g.lists.length === 0);
-    const completedGroups = filteredGroups.filter(g => g.lists.length > 0 && g.lists.every(l => l.status === 'completed'));
+        const activeSingle = filteredSingle.filter(l => l.status === 'active');
+        const completedSingle = filteredSingle.filter(l => l.status === 'completed');
+        const activeGroups = filteredGroups.filter(g => g.lists.some(l => l.status === 'active') || g.lists.length === 0);
+        const completedGroups = filteredGroups.filter(g => g.lists.length > 0 && g.lists.every(l => l.status === 'completed'));
 
-    // Within completed, split by receipt state: lists still missing a receipt
-    // stay visible (their own "Missing receipt" section); fully-receipted lists
-    // drop into the collapsed "Completed" archive below.
-    const missingSingle = completedSingle.filter(isAwaitingReceipt);
-    const doneSingle = completedSingle.filter(l => !isAwaitingReceipt(l));
-    const missingGroups = completedGroups.filter(g => g.lists.some(isAwaitingReceipt));
-    const doneGroups = completedGroups.filter(g => !g.lists.some(isAwaitingReceipt));
+        // Within completed, split by receipt state: lists still missing a receipt
+        // stay visible (their own "Missing receipt" section); fully-receipted lists
+        // drop into the collapsed "Completed" archive below.
+        const missingSingle = completedSingle.filter(isAwaitingReceipt);
+        const doneSingle = completedSingle.filter(l => !isAwaitingReceipt(l));
+        const missingGroups = completedGroups.filter(g => g.lists.some(isAwaitingReceipt));
+        const doneGroups = completedGroups.filter(g => !g.lists.some(isAwaitingReceipt));
 
-    const hasAny = lists.length > 0 || liveGroups.length > 0;
-    const hasActive = activeSingle.length > 0 || activeGroups.length > 0;
-    const hasMissing = missingSingle.length > 0 || missingGroups.length > 0;
-    const hasDone = doneSingle.length > 0 || doneGroups.length > 0;
+        const hasAny = lists.length > 0 || liveGroups.length > 0;
+
+        const rows: ListRow[] = [];
+        if (activeGroups.length > 0 || activeSingle.length > 0) {
+            rows.push({ kind: 'title', key: 't:active', label: t('shoppingListTab.sectionActive') });
+            for (const g of activeGroups) rows.push({ kind: 'group', key: `g:${g.basketId}`, group: g, allowUpload: true });
+            for (const l of activeSingle) rows.push({ kind: 'single', key: `s:${l.id}`, item: l, allowUpload: true });
+        }
+        if (missingGroups.length > 0 || missingSingle.length > 0) {
+            rows.push({ kind: 'title', key: 't:missing', label: t('shoppingListTab.sectionMissingReceipt') });
+            for (const g of missingGroups) rows.push({ kind: 'group', key: `g:${g.basketId}`, group: g, allowUpload: true });
+            for (const l of missingSingle) rows.push({ kind: 'single', key: `s:${l.id}`, item: l, allowUpload: true });
+        }
+        if (doneGroups.length > 0 || doneSingle.length > 0) {
+            rows.push({ kind: 'doneHeader', key: 't:done' });
+            if (!completedCollapsed) {
+                for (const g of doneGroups) rows.push({ kind: 'group', key: `g:${g.basketId}`, group: g, allowUpload: false });
+                for (const l of doneSingle) rows.push({ kind: 'single', key: `s:${l.id}`, item: l, allowUpload: false });
+            }
+        }
+        if (!hasAny) rows.push({ kind: 'empty', key: 'empty' });
+        return rows;
+    }, [singleLists, liveGroups, lists.length, chainFilter, completedCollapsed, t]);
+
+    // Card taps: shared by the active/missing/done sections (the three copies
+    // of this logic used to live inline in each section's map).
+    const onGroupPress = (group: SplitGroup, allowUpload: boolean) => {
+        const groupIds = group.lists.map(l => l.id);
+        if (selectionMode) { toggleSelectGroup(groupIds); return; }
+        const firstId = group.entries[0]?.listId;
+        if (allowUpload) {
+            const awaiting = group.lists.filter(isAwaitingReceipt);
+            if (awaiting.length > 0) {
+                setUploadViewRoute(firstId ? `/shopping-list/${firstId}?basketId=${group.basketId}` : null);
+                setUploadTarget(buildChainListMap(awaiting));
+                return;
+            }
+        }
+        if (firstId) router.push(`/shopping-list/${firstId}?basketId=${group.basketId}` as any);
+    };
+    const onSinglePress = (item: ShoppingList, allowUpload: boolean) => {
+        if (selectionMode) { toggleSelectList(item.id); return; }
+        if (allowUpload && isAwaitingReceipt(item)) {
+            setUploadViewRoute(`/shopping-list/${item.id}`);
+            setUploadTarget(buildChainListMap([item]));
+            return;
+        }
+        router.push(`/shopping-list/${item.id}` as any);
+    };
+
+    const renderListRow = ({ item: row }: { item: ListRow }) => {
+        switch (row.kind) {
+            case 'title':
+                return <Text style={styles.sectionTitle}>{row.label}</Text>;
+            case 'doneHeader':
+                return (
+                    <TouchableOpacity
+                        style={styles.collapsibleHeader}
+                        activeOpacity={0.6}
+                        onPress={() => setCompletedCollapsed(c => !c)}
+                    >
+                        <Text style={styles.sectionTitle}>{t('shoppingListTab.sectionCompleted')}</Text>
+                        <Ionicons
+                            name={completedCollapsed ? 'chevron-down' : 'chevron-up'}
+                            size={18}
+                            color={colors.textSecondary}
+                        />
+                    </TouchableOpacity>
+                );
+            case 'group': {
+                const groupIds = row.group.lists.map(l => l.id);
+                const groupSelected = groupIds.length > 0 && groupIds.every(id => selectedListIds.has(id));
+                return (
+                    <SplitGroupCard
+                        group={row.group}
+                        onPress={() => onGroupPress(row.group, row.allowUpload)}
+                        onLongPress={() => { setSelectionMode(true); toggleSelectGroup(groupIds); }}
+                        selectionMode={selectionMode}
+                        selected={groupSelected}
+                        styles={styles}
+                        colors={colors}
+                    />
+                );
+            }
+            case 'single':
+                return (
+                    <ShoppingListCard
+                        item={row.item}
+                        onPress={() => onSinglePress(row.item, row.allowUpload)}
+                        onLongPress={() => { setSelectionMode(true); toggleSelectList(row.item.id); }}
+                        selectionMode={selectionMode}
+                        selected={selectedListIds.has(row.item.id)}
+                        styles={styles}
+                        colors={colors}
+                    />
+                );
+            case 'empty':
+                return (
+                    <View style={styles.centered}>
+                        <Ionicons name="list-outline" size={56} color={colors.textMuted} />
+                        <Text style={styles.emptyText}>{t('shoppingListTab.empty')}</Text>
+                        <Text style={styles.emptySubText}>{t('shoppingListTab.emptyBody')}</Text>
+                        <TouchableOpacity style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/basket' as any)}>
+                            <Text style={styles.emptyButtonText}>{t('shoppingListTab.emptyCta')}</Text>
+                        </TouchableOpacity>
+                    </View>
+                );
+        }
+    };
 
     if (loading) return (
         <View style={styles.container}>
@@ -716,10 +840,25 @@ export default function ShoppingListScreen() {
         <View style={styles.container}>
             <CollapsingHeader controller={header} back smallTitle={t('tabs.shoppingList')} />
 
-            <Animated.ScrollView
+            {/* Always-pinned chain filter row (the repo's CollapsingHeader
+                pattern — Fabric mis-hit-tests transformed sticky headers). */}
+            {allChains.length >= 2 && (
+                <View onLayout={header.onPinnedLayout} style={{ backgroundColor: colors.pageBackground }}>
+                    <StoreChipBar
+                        chips={allChains}
+                        selectedId={chainFilter}
+                        onSelect={id => setChainFilter(id as string | null)}
+                        allLabel={t('shoppingListTab.filterAll')}
+                    />
+                </View>
+            )}
+            <Animated.FlatList
                 {...header.scroll}
                 style={styles.container}
-                stickyHeaderIndices={allChains.length >= 2 ? [1] : undefined}
+                data={listRows}
+                keyExtractor={listRowKey}
+                renderItem={renderListRow}
+                initialNumToRender={12}
                 contentInsetAdjustmentBehavior="never"
                 contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: tabBarHeight + 24 }]}
                 refreshControl={
@@ -730,184 +869,8 @@ export default function ShoppingListScreen() {
                         tintColor={colors.primary}
                     />
                 }
-            >
-                <ScreenHeading title={t('tabs.shoppingList')} onLayout={header.onTitleLayout} />
-                {allChains.length >= 2 && (
-                    <View style={{ backgroundColor: colors.pageBackground, marginHorizontal: -spacing.lg }}>
-                        <StoreChipBar
-                            chips={allChains}
-                            selectedId={chainFilter}
-                            onSelect={id => setChainFilter(id as string | null)}
-                            allLabel={t('shoppingListTab.filterAll')}
-                        />
-                    </View>
-                )}
-                <View>
-                        {hasActive && (
-                            <>
-                                <Text style={styles.sectionTitle}>{t('shoppingListTab.sectionActive')}</Text>
-                                {activeGroups.map(group => {
-                                    const groupIds = group.lists.map(l => l.id);
-                                    const groupSelected = groupIds.length > 0 && groupIds.every(id => selectedListIds.has(id));
-                                    return (
-                                        <SplitGroupCard
-                                            key={group.basketId}
-                                            group={group}
-                                            onPress={() => {
-                                                if (selectionMode) { toggleSelectGroup(groupIds); return; }
-                                                const awaiting = group.lists.filter(isAwaitingReceipt);
-                                                const firstId = group.entries[0]?.listId;
-                                                if (awaiting.length > 0) {
-                                                    setUploadViewRoute(firstId ? `/shopping-list/${firstId}?basketId=${group.basketId}` : null);
-                                                    setUploadTarget(buildChainListMap(awaiting));
-                                                    return;
-                                                }
-                                                if (firstId) router.push(`/shopping-list/${firstId}?basketId=${group.basketId}` as any);
-                                            }}
-                                            onLongPress={() => { setSelectionMode(true); toggleSelectGroup(groupIds); }}
-                                            selectionMode={selectionMode}
-                                            selected={groupSelected}
-                                            styles={styles}
-                                            colors={colors}
-                                        />
-                                    );
-                                })}
-                                {activeSingle.map(item => (
-                                    <ShoppingListCard
-                                        key={item.id}
-                                        item={item}
-                                        onPress={id => {
-                                            if (selectionMode) { toggleSelectList(item.id); return; }
-                                            if (isAwaitingReceipt(item)) {
-                                                setUploadViewRoute(`/shopping-list/${item.id}`);
-                                                setUploadTarget(buildChainListMap([item]));
-                                                return;
-                                            }
-                                            router.push(`/shopping-list/${id}` as any);
-                                        }}
-                                        onLongPress={() => { setSelectionMode(true); toggleSelectList(item.id); }}
-                                        selectionMode={selectionMode}
-                                        selected={selectedListIds.has(item.id)}
-                                        styles={styles}
-                                        colors={colors}
-                                    />
-                                ))}
-                            </>
-                        )}
-                        {hasMissing && (
-                            <>
-                                <Text style={styles.sectionTitle}>{t('shoppingListTab.sectionMissingReceipt')}</Text>
-                                {missingGroups.map(group => {
-                                    const groupIds = group.lists.map(l => l.id);
-                                    const groupSelected = groupIds.length > 0 && groupIds.every(id => selectedListIds.has(id));
-                                    return (
-                                        <SplitGroupCard
-                                            key={group.basketId}
-                                            group={group}
-                                            onPress={() => {
-                                                if (selectionMode) { toggleSelectGroup(groupIds); return; }
-                                                const awaiting = group.lists.filter(isAwaitingReceipt);
-                                                const firstId = group.entries[0]?.listId;
-                                                if (awaiting.length > 0) {
-                                                    setUploadViewRoute(firstId ? `/shopping-list/${firstId}?basketId=${group.basketId}` : null);
-                                                    setUploadTarget(buildChainListMap(awaiting));
-                                                    return;
-                                                }
-                                                if (firstId) router.push(`/shopping-list/${firstId}?basketId=${group.basketId}` as any);
-                                            }}
-                                            onLongPress={() => { setSelectionMode(true); toggleSelectGroup(groupIds); }}
-                                            selectionMode={selectionMode}
-                                            selected={groupSelected}
-                                            styles={styles}
-                                            colors={colors}
-                                        />
-                                    );
-                                })}
-                                {missingSingle.map(item => (
-                                    <ShoppingListCard
-                                        key={item.id}
-                                        item={item}
-                                        onPress={id => {
-                                            if (selectionMode) { toggleSelectList(item.id); return; }
-                                            if (isAwaitingReceipt(item)) {
-                                                setUploadViewRoute(`/shopping-list/${item.id}`);
-                                                setUploadTarget(buildChainListMap([item]));
-                                                return;
-                                            }
-                                            router.push(`/shopping-list/${id}` as any);
-                                        }}
-                                        onLongPress={() => { setSelectionMode(true); toggleSelectList(item.id); }}
-                                        selectionMode={selectionMode}
-                                        selected={selectedListIds.has(item.id)}
-                                        styles={styles}
-                                        colors={colors}
-                                    />
-                                ))}
-                            </>
-                        )}
-                        {hasDone && (
-                            <>
-                                <TouchableOpacity
-                                    style={styles.collapsibleHeader}
-                                    activeOpacity={0.6}
-                                    onPress={() => setCompletedCollapsed(c => !c)}
-                                >
-                                    <Text style={styles.sectionTitle}>{t('shoppingListTab.sectionCompleted')}</Text>
-                                    <Ionicons
-                                        name={completedCollapsed ? 'chevron-down' : 'chevron-up'}
-                                        size={18}
-                                        color={colors.textSecondary}
-                                    />
-                                </TouchableOpacity>
-                                {!completedCollapsed && doneGroups.map(group => {
-                                    const groupIds = group.lists.map(l => l.id);
-                                    const groupSelected = groupIds.length > 0 && groupIds.every(id => selectedListIds.has(id));
-                                    return (
-                                        <SplitGroupCard
-                                            key={group.basketId}
-                                            group={group}
-                                            onPress={() => {
-                                                if (selectionMode) { toggleSelectGroup(groupIds); return; }
-                                                const firstId = group.entries[0]?.listId;
-                                                if (firstId) router.push(`/shopping-list/${firstId}?basketId=${group.basketId}` as any);
-                                            }}
-                                            onLongPress={() => { setSelectionMode(true); toggleSelectGroup(groupIds); }}
-                                            selectionMode={selectionMode}
-                                            selected={groupSelected}
-                                            styles={styles}
-                                            colors={colors}
-                                        />
-                                    );
-                                })}
-                                {!completedCollapsed && doneSingle.map(item => (
-                                    <ShoppingListCard
-                                        key={item.id}
-                                        item={item}
-                                        onPress={id => {
-                                            if (selectionMode) { toggleSelectList(item.id); return; }
-                                            router.push(`/shopping-list/${id}` as any);
-                                        }}
-                                        onLongPress={() => { setSelectionMode(true); toggleSelectList(item.id); }}
-                                        selectionMode={selectionMode}
-                                        selected={selectedListIds.has(item.id)}
-                                        styles={styles}
-                                        colors={colors}
-                                    />
-                                ))}
-                            </>
-                        )}
-                        {!hasAny && (
-                            <View style={styles.centered}>
-                                <Ionicons name="list-outline" size={56} color={colors.textMuted} />
-                                <Text style={styles.emptyText}>{t('shoppingListTab.empty')}</Text>
-                                <Text style={styles.emptySubText}>{t('shoppingListTab.emptyBody')}</Text>
-                                <TouchableOpacity style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/basket' as any)}>
-                                    <Text style={styles.emptyButtonText}>{t('shoppingListTab.emptyCta')}</Text>
-                                </TouchableOpacity>
-                            </View>
-                        )}
-                </View>
-            </Animated.ScrollView>
+                ListHeaderComponent={<ScreenHeading title={t('tabs.shoppingList')} onLayout={header.onTitleLayout} />}
+            />
 
             {!selectionMode && (
                 <TouchableOpacity

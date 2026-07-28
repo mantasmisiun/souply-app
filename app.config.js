@@ -179,6 +179,14 @@ export default {
             // cleartext by default. Production stays HTTPS-only (false) —
             // Play Store requires it and prod talks to https://api.souply.lt.
             usesCleartextTraffic: IS_DEV,
+            // R8 code shrinking + resource shrinking for release builds
+            // (perf audit finding 18): smaller APK, dead code stripped.
+            // Release-only flags — debug/dev-client builds are unaffected.
+            // NOTE: R8 can break libraries lacking consumer keep rules —
+            // verify ML Kit text recognition, react-native-maps and Sentry
+            // on a local staging build before promoting.
+            enableProguardInReleaseBuilds: true,
+            enableShrinkResourcesInReleaseBuilds: true,
           },
         },
       ],

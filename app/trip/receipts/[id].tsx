@@ -12,7 +12,7 @@ import {
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
@@ -41,7 +41,7 @@ import { formatMonthKey } from '../../../utils/monthNames';
 import { formatItemAmount } from '../../../utils/amountDisplay';
 import { formatWeekday } from '../../../utils/formatDayDate';
 import { ltPluralSuffix } from '../../../utils/ltPlural';
-import { mergeReceiptItems, mergedQtyLabel } from '../../../utils/mergeReceiptItems';
+import { mergeReceiptItems, mergedQtyLabel, type MergedReceiptItem } from '../../../utils/mergeReceiptItems';
 import Animated, { LinearTransition, FadeInDown } from 'react-native-reanimated';
 import { ScanRevealRow, type ScanMode } from '../../../components/ScanRevealRow';
 import { useTheme, spacing, radius, typography, type AppTheme } from '../../../constants/theme';
@@ -52,6 +52,8 @@ import {
     type TripReceipt, type TripStats, type TripScore, type TripSpendEntry, type TripSummary,
 } from '../../../utils/tripsApi';
 import { ReceiptUploadSheet } from '../../../components/ReceiptUploadSheet';
+import { linkReceiptToList } from '../../../services/receiptProcessingService';
+import { detachReceiptFromTrip } from '../../../utils/tripsApi';
 import { getUserId } from '../../../config/user';
 import { API_BASE_URL } from '../../../config/api';
 
@@ -69,6 +71,58 @@ const receiptTotal = (r: TripReceipt): number =>
     r.printedTotal != null
         ? Number(r.printedTotal)
         : r.items.reduce((s, it) => s + (it.lineTotal != null ? Number(it.lineTotal) : (it.price != null ? Number(it.price) : 0)), 0);
+
+/**
+ * One identified-item row of the Kvitai pane. Memoised: `merged` is the union
+ * of ALL line items across every trip receipt, and the screen re-renders on
+ * queue progress ticks, tab flips and sheet toggles — without the memo every
+ * one of those re-rendered every row. Props are primitives / stable objects,
+ * so an unchanged row skips entirely (animMode/animDelay only flip during a
+ * heal's staggered reveal).
+ */
+const MergedItemRow = memo(function MergedItemRow({ m, multi, animMode, animDelay, styles }: {
+    m: MergedReceiptItem;
+    multi: boolean;
+    animMode: ScanMode | undefined;
+    animDelay: number;
+    styles: ReturnType<typeof makeStyles>;
+}) {
+    const qtyLabel = mergedQtyLabel(m);
+    return (
+        <Animated.View
+            layout={LinearTransition.duration(360)}
+            entering={animMode === 'inserted' ? FadeInDown.duration(340) : undefined}
+        >
+            <ScanRevealRow mode={animMode} delay={animDelay}>
+                <View style={styles.itemRow}>
+                    <View style={styles.thumbWrap}>
+                        {m.imageUrl
+                            ? <Image source={{ uri: m.imageUrl }} style={styles.itemImage} />
+                            : <View style={[styles.itemImage, styles.itemImageEmpty]}><Text style={styles.itemBeet}>🫜</Text></View>}
+                        {multi && (
+                            <View style={styles.itemBadge}>
+                                <ChainLogoChip chainId={m.chainId ?? chainIdByName(m.chainName ?? '') ?? 0} name={m.chainName ?? undefined} size={18} />
+                            </View>
+                        )}
+                    </View>
+                    <View style={{ flex: 1, minWidth: 0 }}>
+                        <Text style={styles.itemName} numberOfLines={1}>{m.name}</Text>
+                        {qtyLabel && <Text style={styles.itemMeta}>{qtyLabel}</Text>}
+                    </View>
+                    {m.regularTotal > m.lineTotal + 0.005 ? (
+                        // Discounted (line promo or combo/set-deal): struck regular over the paid net.
+                        <View style={styles.itemPriceCol}>
+                            <Text style={styles.itemRegularStrike}>{formatEuro(m.regularTotal)}</Text>
+                            <Text style={[styles.itemPrice, styles.itemPricePromo]}>{formatEuro(m.lineTotal)}</Text>
+                        </View>
+                    ) : (
+                        <Text style={styles.itemPrice}>{formatEuro(m.lineTotal)}</Text>
+                    )}
+                </View>
+            </ScanRevealRow>
+        </Animated.View>
+    );
+});
 
 export default function TripFinalScreen() {
     const colors = useTheme();
@@ -148,6 +202,8 @@ export default function TripFinalScreen() {
     const queueItems = useReceiptQueueStore(s => s.items);
     const addQueueItems = useReceiptQueueStore(s => s.addItems);
     const removeQueueItem = useReceiptQueueStore(s => s.removeItem);
+    const resolveStoreLink = useReceiptQueueStore(s => s.resolveStoreLink);
+    const resolveStoreTrip = useReceiptQueueStore(s => s.resolveStoreTrip);
 
     // DEV-ONLY: re-run the whole OCR→parse→heal pipeline on the receipt's CACHED
     // photo (no camera). Downloads the stored image, then enqueues it exactly
@@ -195,10 +251,46 @@ export default function TripFinalScreen() {
         q.healReceiptId == null
         && (q.status === 'processing' || q.status === 'pending'
             || q.status === 'awaiting_network' || q.status === 'error'
-            || q.status === 'needs_date')
+            || q.status === 'needs_date' || q.status === 'needs_store' || q.status === 'needs_link')
         && ((q.fallbackLinkId != null && tripListIds.has(q.fallbackLinkId))
             || (q.linkMap != null && Object.values(q.linkMap).some(lid => tripListIds.has(lid))))
     ), [queueItems, tripListIds]);
+
+    // BACKSTOP: an upload aimed at THIS trip that finished attached somewhere
+    // else (or nowhere). Before this, its progress card simply disappeared on
+    // completion and the receipt turned up as a stray ad-hoc trip — the exact
+    // shape of "it silently failed". Never let that be invisible again.
+    const lastCompleted = useReceiptQueueStore(s => s.lastCompleted);
+    const [detachedDismissed, setDetachedDismissed] = useState<number | null>(null);
+    const detachedUpload = useMemo(() => {
+        if (!lastCompleted) return null;
+        if (detachedDismissed === lastCompleted.receiptId) return null;
+        const aimedHere = lastCompleted.intendedListIds.some(lid => tripListIds.has(lid));
+        if (!aimedHere) return null;
+        const landedHere = lastCompleted.linkedListId != null && tripListIds.has(lastCompleted.linkedListId);
+        return landedHere ? null : lastCompleted;
+    }, [lastCompleted, tripListIds, detachedDismissed]);
+
+    // Detach = "this receipt isn't part of this shopping". Confirmed, because it
+    // moves the receipt out of every stat this trip shows.
+    const confirmDetach = useCallback((r: TripReceipt) => {
+        Alert.alert(
+            t('tripReceipts.detachTitle'),
+            t('tripReceipts.detachBody', { store: r.chainName ?? r.storeName ?? `#${r.id}` }),
+            [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('tripReceipts.detachConfirm'),
+                    style: 'destructive',
+                    onPress: async () => {
+                        const ok = await detachReceiptFromTrip(tripId, r.id);
+                        if (ok) void load();
+                        else Alert.alert(t('tripReceipts.detachTitle'), t('tripReceipts.detachFailed'));
+                    },
+                },
+            ],
+        );
+    }, [tripId, t, load]);
 
     // Merged Kvitai item list + a per-key reveal assignment: when a heal changes
     // the data, diff vs the previous list — a changed line = 'refreshed', a new
@@ -432,6 +524,26 @@ export default function TripFinalScreen() {
                         <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 92 }}>
                             {/* Receipt cards — tap opens the receipt sheet. */}
                             <Text style={styles.sectionTitle}>{t('tripFinal.receiptsCount', { count: receipts.length + pendingUploads.length })}</Text>
+                            {/* BACKSTOP: the upload finished but not on THIS trip. Say so —
+                                the old behaviour was the progress card simply vanishing. */}
+                            {detachedUpload && (
+                                <View style={[styles.rcard, { borderColor: colors.primary }]}>
+                                    <View style={styles.pendingIcon}>
+                                        <Ionicons name="information-circle-outline" size={20} color={colors.primary} />
+                                    </View>
+                                    <View style={{ flex: 1, minWidth: 0 }}>
+                                        <Text style={styles.rstore} numberOfLines={1}>{t('tripReceipts.detachedTitle')}</Text>
+                                        <Text style={styles.rsub} numberOfLines={2}>{t('tripReceipts.detachedBody')}</Text>
+                                    </View>
+                                    <TouchableOpacity
+                                        onPress={() => setDetachedDismissed(detachedUpload.receiptId)}
+                                        hitSlop={8}
+                                        accessibilityLabel={t('common.close')}
+                                    >
+                                        <Ionicons name="close" size={18} color={colors.textSecondary} />
+                                    </TouchableOpacity>
+                                </View>
+                            )}
                             {/* Placeholder cards for a fresh upload still processing — same shape
                                 as a real receipt card, with a spinner + bottom progress glow. */}
                             {pendingUploads.map(q => {
@@ -473,6 +585,60 @@ export default function TripFinalScreen() {
                                         </View>
                                     );
                                 }
+                                // PARKED, not failed. needs_store: the receipt is from a
+                                // store this trip didn't plan — the obvious answer HERE is
+                                // "yes, it belongs to this trip", so offer that directly
+                                // (the Shopping card offers the per-store choice).
+                                // needs_link: the receipt saved but never attached — retry
+                                // just the link, no re-scan.
+                                if (q.status === 'needs_store' || q.status === 'needs_link') {
+                                    return (
+                                        <View key={`pending-${q.id}`} style={styles.rcard}>
+                                            <View style={styles.pendingIcon}>
+                                                <Ionicons name="help-circle-outline" size={20} color={colors.primary} />
+                                            </View>
+                                            <View style={{ flex: 1, minWidth: 0 }}>
+                                                <Text style={styles.rstore} numberOfLines={1}>
+                                                    {q.status === 'needs_store'
+                                                        ? t('receiptQueue.needsStoreTitle')
+                                                        : t('receiptQueue.linkFailedTitle')}
+                                                </Text>
+                                                <Text style={styles.rsub} numberOfLines={2}>
+                                                    {q.status === 'needs_store'
+                                                        ? t('receiptQueue.needsStore')
+                                                        : t('receiptQueue.linkFailed')}
+                                                </Text>
+                                            </View>
+                                            <TouchableOpacity
+                                                style={styles.retryBtn}
+                                                onPress={() => {
+                                                    if (q.status === 'needs_store') {
+                                                        // The receipt's chain matches a planned store → that
+                                                        // slot. Otherwise it joins the TRIP with no slot: it
+                                                        // is part of this shopping, but it fulfils nobody's
+                                                        // plan, and saying otherwise marks the wrong store done.
+                                                        const chainSlot = (q.linkOptions ?? []).find(
+                                                            o => o.chainId === q.linkDetectedChainId && tripListIds.has(o.listId));
+                                                        if (chainSlot) resolveStoreLink(q.id, chainSlot.listId);
+                                                        else resolveStoreTrip(q.id, tripId);
+                                                        return;
+                                                    }
+                                                    if (q.linkReceiptId != null && q.linkListId != null) {
+                                                        void linkReceiptToList(q.linkListId, q.linkReceiptId)
+                                                            .then(ok => { if (ok) { removeQueueItem(q.id); void load(); } });
+                                                    }
+                                                }}
+                                                hitSlop={8}
+                                            >
+                                                <Ionicons name="link-outline" size={14} color={colors.onPrimary} />
+                                                <Text style={styles.retryBtnText}>{t('tripReceipts.attachHere')}</Text>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity onPress={() => removeQueueItem(q.id)} hitSlop={8}>
+                                                <Ionicons name="close" size={18} color={colors.textSecondary} />
+                                            </TouchableOpacity>
+                                        </View>
+                                    );
+                                }
                                 return (
                                     <View key={`pending-${q.id}`} style={styles.rcard}>
                                         <View style={styles.pendingIcon}>
@@ -499,6 +665,11 @@ export default function TripFinalScreen() {
                                     style={styles.rcard}
                                     activeOpacity={0.8}
                                     onPress={() => setSheetReceipt(r)}
+                                    // A wrong attach had no undo — the only way out was
+                                    // linking it somewhere else. Long-press detaches
+                                    // (server enforces owner / 7-day uploader window).
+                                    onLongPress={() => confirmDetach(r)}
+                                    delayLongPress={450}
                                 >
                                     <View>
                                         <ChainLogoChip chainId={r.chainId ?? chainIdByName(r.chainName ?? '') ?? 0} name={r.chainName ?? undefined} size={38} />
@@ -557,42 +728,16 @@ export default function TripFinalScreen() {
                                 the price shown is the ACTUAL paid (promo-adjusted). */}
                             <Text style={styles.sectionTitle}>{`${t('tripFinal.itemsSection')} · ${merged.length}`}</Text>
                             {merged.map(m => {
-                                const qtyLabel = mergedQtyLabel(m);
                                 const a = mergedAnim.get(m.key);
                                 return (
-                                    <Animated.View
+                                    <MergedItemRow
                                         key={m.key}
-                                        layout={LinearTransition.duration(360)}
-                                        entering={a?.mode === 'inserted' ? FadeInDown.duration(340) : undefined}
-                                    >
-                                        <ScanRevealRow mode={a?.mode} delay={(a?.order ?? 0) * 140}>
-                                            <View style={styles.itemRow}>
-                                                <View style={styles.thumbWrap}>
-                                                    {m.imageUrl
-                                                        ? <Image source={{ uri: m.imageUrl }} style={styles.itemImage} />
-                                                        : <View style={[styles.itemImage, styles.itemImageEmpty]}><Text style={styles.itemBeet}>🫜</Text></View>}
-                                                    {multi && (
-                                                        <View style={styles.itemBadge}>
-                                                            <ChainLogoChip chainId={m.chainId ?? chainIdByName(m.chainName ?? '') ?? 0} name={m.chainName ?? undefined} size={18} />
-                                                        </View>
-                                                    )}
-                                                </View>
-                                                <View style={{ flex: 1, minWidth: 0 }}>
-                                                    <Text style={styles.itemName} numberOfLines={1}>{m.name}</Text>
-                                                    {qtyLabel && <Text style={styles.itemMeta}>{qtyLabel}</Text>}
-                                                </View>
-                                                {m.regularTotal > m.lineTotal + 0.005 ? (
-                                                    // Discounted (line promo or combo/set-deal): struck regular over the paid net.
-                                                    <View style={styles.itemPriceCol}>
-                                                        <Text style={styles.itemRegularStrike}>{formatEuro(m.regularTotal)}</Text>
-                                                        <Text style={[styles.itemPrice, styles.itemPricePromo]}>{formatEuro(m.lineTotal)}</Text>
-                                                    </View>
-                                                ) : (
-                                                    <Text style={styles.itemPrice}>{formatEuro(m.lineTotal)}</Text>
-                                                )}
-                                            </View>
-                                        </ScanRevealRow>
-                                    </Animated.View>
+                                        m={m}
+                                        multi={multi}
+                                        animMode={a?.mode}
+                                        animDelay={(a?.order ?? 0) * 140}
+                                        styles={styles}
+                                    />
                                 );
                             })}
                         </ScrollView>
@@ -624,9 +769,13 @@ export default function TripFinalScreen() {
                                 <Text style={styles.heroLbl}>{t('trips.statSpent')}</Text>
                             </View>
 
-                            {/* Reconciliation warning: a receipt didn't scan cleanly, so
-                                these numbers may be off — nudge a retake. */}
-                            {anyLowQuality && (
+                            {/* Reconciliation warning — DEV ONLY. It fires on heuristics
+                                (unmatched-line fraction, a gap vs the printed total)
+                                that have legitimate causes we now model one by one:
+                                set deals, and loyalty money paid off an earned
+                                balance. Until it stops crying wolf it's a developer
+                                signal, not something to put in front of a shopper. */}
+                            {__DEV__ && anyLowQuality && (
                                 <View style={styles.qualityWarn}>
                                     <Ionicons name="warning-outline" size={16} color={colors.onWarning ?? colors.onPrimary} />
                                     <Text style={styles.qualityWarnText} numberOfLines={3}>{t('tripReceipts.statsLowQuality')}</Text>

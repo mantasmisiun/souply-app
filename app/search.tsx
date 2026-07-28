@@ -31,7 +31,8 @@ import { API_BASE_URL } from "../config/api";
 import { useReceiptPickerState , useBasketState } from "../state/basketState";
 import { useBasketSession } from "../state/basketSession";
 import { addProductToBasket } from '@/utils/basketUtils';
-import BasketProductCard, { type UnitPriceBadge } from '@/components/browse/BasketProductCard';
+import { type UnitPriceBadge } from '@/components/browse/BasketProductCard';
+import { ConnectedProductCard } from '@/components/browse/ConnectedProductCard';
 import { useTemplateAddState } from '@/state/templateAddState';
 import { ProductImage } from "../components/ProductImage";
 import CreateStoreProductModal, {
@@ -144,7 +145,9 @@ export default function SearchScreen() {
     const { setPendingPick } = useReceiptPickerState();
     const { draftBasketId, setDraftBasketId } = useBasketState();
     // ONE target-aware source (session basket → draft fallback, basketRev-reactive).
-    const { basketId: targetBasketId, quantities: basketQuantities, setQuantities: setBasketQuantities, refresh: refreshBasketQuantities } = useBasketQuantities();
+    // Actions only — no quantities-map subscription (cards self-subscribe per
+    // product; a map subscription here re-rendered the screen on every ± tap).
+    const { commit: commitBasketQty, refresh: refreshBasketQuantities } = useBasketQuantities();
     const chainId =
         typeof params.chainId === "string" ? Number(params.chainId) : NaN;
     const productIndex =
@@ -176,57 +179,15 @@ export default function SearchScreen() {
     }, [refreshBasketQuantities]);
     useFocusEffect(useCallback(() => { void hydrateBasket(); }, [hydrateBasket]));
 
-    // Absolute quantity set for an already-added product — used by the amount
-    // picker's edit-reopen (tap the quantity on a card). Same server sync as
-    // the per-card syncQty stepper.
-    const setBasketQtyAbsolute = useCallback(async (productId: number, newQty: number) => {
-        setBasketQuantities(prev => ({ ...prev, [productId]: Math.max(0, newQty) }));
-        try {
-            const currentDraftId = targetBasketId ?? useBasketState.getState().draftBasketId;
-            if (!currentDraftId) return;
-            const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
-            const items = await res.json();
-            const basketItem = items.find((i: any) => i.productId === productId);
-            if (!basketItem) return;
-            if (newQty <= 0) {
-                await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
-                return;
-            }
-            await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ quantity: newQty }),
-            });
-        } catch {}
-    }, [targetBasketId, setBasketQuantities]);
-
-    // Fresh add (non-picker path; the weighable/range picker is owned by
-    // AddOrStepper and also lands here via onCommit). Adopts server truth on
-    // 409 rather than rolling back to "Add".
-    const addToBasket = useCallback((item: ProductRow, qty: number) => {
-        setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
-        addProductToBasket(item.id, draftBasketId, setDraftBasketId, qty).then(result => {
-            if (!result.success) {
-                void hydrateBasket();
-                toastRef.current?.show(result.message);
-            } else {
-            }
-        });
-    }, [draftBasketId, setDraftBasketId, hydrateBasket, t]);
-
-    // Single commit for AddOrStepper: add / set-absolute / remove (or the
-    // template store). `currentQty` is the card's current qty (0 ⇒ fresh add).
-    const commitCardQty = useCallback((item: ProductRow, currentQty: number, qty: number) => {
+    const commitCardQty = useCallback((productId: number, currentQty: number, qty: number) => {
         if (isTemplateMode) {
-            const tq = templateMap[item.id]?.quantity ?? 0;
-            if (qty <= 0) { templateSetQty(item.id, 0).catch(() => {}); return; }
-            if (tq === 0) { templateAdd(item.id, qty).catch(() => {}); return; }
-            templateSetQty(item.id, qty).catch(() => {});
+            if (qty <= 0) { templateSetQty(productId, 0).catch(() => {}); return; }
+            if (currentQty === 0) { templateAdd(productId, qty).catch(() => {}); return; }
+            templateSetQty(productId, qty).catch(() => {});
             return;
         }
-        if (currentQty === 0 && qty > 0) { addToBasket(item, qty); return; }
-        void setBasketQtyAbsolute(item.id, qty);
-    }, [isTemplateMode, templateMap, templateSetQty, templateAdd, addToBasket, setBasketQtyAbsolute]);
+        commitBasketQty(productId, currentQty, qty);
+    }, [isTemplateMode, templateSetQty, templateAdd, commitBasketQty]);
     const [query, setQuery] = useState("");
     const [searching, setSearching] = useState(false);
     const [inputKey, setInputKey] = useState(0);
@@ -373,9 +334,15 @@ export default function SearchScreen() {
                 badge: p.badge ?? null,
             }));
 
+        // Dedup by id: list keys are now pure product ids (no index
+        // suffix), so a server row repeated across search branches must
+        // not produce duplicate keys.
+        const seen = new Set<number>();
+        const deduped = cleaned.filter(p => (seen.has(p.id) ? false : (seen.add(p.id), true)));
+
         if (!cancelled) {
                 setSelectedCategoryId(null);
-                setProductResults(cleaned);
+                setProductResults(deduped);
                 setLocalResults([]);
                 setOtherResults([]);
                 }
@@ -587,6 +554,33 @@ export default function SearchScreen() {
       ) : null}
     </>
   );
+    const renderProductCard = useCallback(({ item }: { item: ProductRow }) => {
+                if (!Number.isFinite(item.id) || item.id <= 0 || !Number.isFinite(item.categoryId) || !item.name?.trim()) return null;
+                const isVolume = item.unit === 'ml' || item.canonicalUnit === 'l';
+                const bigUnit = isVolume ? 'l' : 'kg';
+                const smallUnit = isVolume ? 'ml' : 'g';
+                const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
+                const amountText = item.minAmount != null && item.maxAmount != null
+                    ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
+                    : '';
+                const templateQty = isTemplateMode ? (templateMap[item.id]?.quantity ?? 0) : 0;
+                return (
+                    <ConnectedProductCard
+                    name={item.name}
+                    imageUrls={item.imageUrls}
+                    chainLogos={item.chainLogos}
+                    badge={item.badge}
+                    amountText={amountText}
+                    product={item}
+                    isTemplateMode={isTemplateMode}
+                    templateQuantity={templateQty}
+                    addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
+                    onOpen={() => router.push(`/catalog/product/${item.id}` as any)}
+                    onCommit={commitCardQty}
+                    />
+                );
+    }, [isTemplateMode, templateMap, commitCardQty, router, t]);
+
   const searchHeader = (
     <View
       style={styles.headerOverlay}
@@ -677,10 +671,10 @@ export default function SearchScreen() {
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
             onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
-            keyExtractor={(item, idx) => {
-                if (item.kind === "create") return `create-${idx}`;
-                if (item.kind === "local") return `local-${item.data.id}-${idx}`;
-                return `other-${item.data.productId}-${idx}`;
+            keyExtractor={(item) => {
+                if (item.kind === "create") return "create";
+                if (item.kind === "local") return `local-${item.data.id}`;
+                return `other-${item.data.productId}`;
             }}
             contentContainerStyle={[styles.list, { paddingTop: headerTop + 12 }]}
             numColumns={2}
@@ -690,6 +684,13 @@ export default function SearchScreen() {
                 {query.trim() ? t('search.notFound') : t('search.enterQuery')}
               </Text>
             }
+            // Same windowing as the products grid below — identical 2-up
+            // image-card cost, so identical mount/batch limits.
+            initialNumToRender={8}
+            maxToRenderPerBatch={6}
+            updateCellsBatchingPeriod={50}
+            windowSize={7}
+            removeClippedSubviews={Platform.OS === 'android'}
             renderItem={({ item }) => {
                 if (item.kind === "create") return renderCreateCard();
                 if (item.kind === "other") return renderOtherCard(item.data);
@@ -703,7 +704,7 @@ export default function SearchScreen() {
             keyboardDismissMode="on-drag"
             keyboardShouldPersistTaps="handled"
             onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
-            keyExtractor={(item, idx) => `p-${item.id}-${idx}`}
+            keyExtractor={(item) => `p-${item.id}`}
             contentContainerStyle={[
               styles.list,
               // Under the floating search header; clear the floating bottom bar
@@ -717,34 +718,15 @@ export default function SearchScreen() {
                 {query.trim() ? t('search.notFound') : t('search.enterQuery')}
               </Text>
             }
-            renderItem={({ item }) => {
-                if (!Number.isFinite(item.id) || item.id <= 0 || !Number.isFinite(item.categoryId) || !item.name?.trim()) return null;
-const quantity = basketQuantities[item.id] ?? 0;
-
-                const isVolume = item.unit === 'ml' || item.canonicalUnit === 'l';
-                const bigUnit = isVolume ? 'l' : 'kg';
-                const smallUnit = isVolume ? 'ml' : 'g';
-                const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
-                const amountText = item.minAmount != null && item.maxAmount != null
-                    ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
-                    : '';
-                const templateQty = isTemplateMode ? (templateMap[item.id]?.quantity ?? 0) : 0;
-                const cardQty = isTemplateMode ? templateQty : quantity;
-                return (
-                    <BasketProductCard
-                    name={item.name}
-                    imageUrls={item.imageUrls}
-                    chainLogos={item.chainLogos}
-                    badge={item.badge}
-                    amountText={amountText}
-                    product={item}
-                    quantity={cardQty}
-                    addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
-                    onOpen={() => router.push(`/catalog/product/${item.id}` as any)}
-                    onCommit={(qty) => commitCardQty(item, cardQty, qty)}
-                    />
-                );
-                }}
+            // Windowing: render a screen or two, not the whole result set. With
+            // 2-up cards the defaults (10 initial / 21 window) mount ~40 image
+            // cards up front and re-batch aggressively mid-fling.
+            initialNumToRender={8}
+            maxToRenderPerBatch={6}
+            updateCellsBatchingPeriod={50}
+            windowSize={7}
+            removeClippedSubviews={Platform.OS === 'android'}
+            renderItem={renderProductCard}
           />
         )}
       </View>

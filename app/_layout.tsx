@@ -21,9 +21,11 @@ import { UsernameGate } from '../components/UsernameGate';
 import UpdateGateModal from '../components/UpdateGateModal';
 import { useAppUpdates } from '../hooks/useAppUpdates';
 import { looksLikePdf, normalizeToLocalUri } from '../utils/pdfToImages';
+import { installReanimatedWarnTrace } from '@/utils/reanimatedWarnTrace';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
+import { useTemplateAddState } from '../state/templateAddState';
 import { useReceiptQueueRunner } from '../hooks/useReceiptQueueRunner';
 import { usePushNotifications } from '../hooks/usePushNotifications';
 import '../i18n';
@@ -46,6 +48,10 @@ installFetchInterceptor();
 // Catch any uncaught JS error and ship it to /api/dev-log so we can
 // diagnose iOS crashes without Xcode. Idempotent.
 installCrashReporter();
+
+// DEV: name the component behind Reanimated's "reading .value during render"
+// warning (the warning itself doesn't say). No-op in production builds.
+installReanimatedWarnTrace();
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -160,6 +166,12 @@ function RootLayout() {
   useReceiptQueueRunner();
   usePushNotifications();
 
+  // One-shot "leave the recipe without a pop transition" flag — flips the
+  // template/[id] declaration below to animation:'none' for the "Pridėti
+  // prekes" leave only. See the comment on that <Stack.Screen> for why the
+  // option must travel through the STATIC options rather than setOptions.
+  const recipeInstantLeave = useTemplateAddState((s) => s.leaveInstant);
+
   // Hydrate the user-settings store once at app boot — pulls the
   // persisted language choice (or detects device locale on first launch)
   // and syncs it into i18next. Subsequent renders see the right
@@ -257,6 +269,15 @@ function RootLayout() {
       <UpdateGateModal />
       <Stack
         screenOptions={{
+          // Freeze (react-freeze) each screen's React tree while it is fully
+          // covered by a pushed screen — without this the results-map screen
+          // kept its MapView + full-screen Skia canvas + overlay worklets live
+          // under everything pushed above it. The (tabs) layout already sets
+          // this on the tab navigator; this extends it to root-stack pushes.
+          // NOTE the template/[id] leave keeps its static animation:'none'
+          // workaround below — that pop stays immune to the interrupted-close
+          // alpha-wash the freeze/unfreeze load once caused.
+          freezeOnBlur: true,
           headerStyle: { backgroundColor: colors.pageBackground },
           // Pink tint colours the native back chevron consistently across the
           // app. Title colour is pinned to textPrimary via headerTitleStyle so
@@ -308,7 +329,42 @@ function RootLayout() {
         <Stack.Screen name="shopping-list/index" options={{ title: '', headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="receipt/index" options={{ title: '', headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess'), headerLeft: () => <ScreenBackButton /> }} />
-        <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
+        {/* Vote history draws its OWN chrome (CollapsingHeader: back · small
+            title on scroll · help), so the native bar must stay off — with both
+            on, the screen wore two stacked top bars. */}
+        <Stack.Screen name="profile/vote-history" options={{ headerShown: false }} />
+        {/* Recipe-import review — its own CollapsingHeader (back · small title on
+            scroll), so the native bar must stay off from the first frame. */}
+        <Stack.Screen name="recipe-import" options={{ headerShown: false }} />
+        {/* Recipe detail — its own CollapsingHeader (cover-coloured custom bar),
+            native bar off from the first frame like the other dock hosts, so
+            the bottom dock's full detent can cover the chrome to the top.
+            ANIMATION: platform default for the ordinary push/pop — EXCEPT the
+            "Pridėti prekes" leave (startAddingItems, app/template/[id].tsx).
+            That leave is a root-stack POP of this screen running concurrently
+            with a tab switch (Receptai → Katalogas), the catalog's
+            freezeOnBlur unfreeze and the session dock mounting. Under that
+            load the pop's native close transition is interrupted mid-flight
+            and the REVEALED (tabs) screen — the container of the WHOLE tab
+            navigator — is stranded at partial alpha (Android's default close
+            tween fades the revealed screen 0→1; cancelled part-way it leaves
+            the fragment's view semi-transparent). Because every tab scene and
+            every screen pushed inside a tab's nested stack renders INSIDE
+            that container, the root backdrop bleeds through them all — the
+            persistent wash over everything opened from the catalog
+            (device-probe confirmed: the wash sampled as the root backdrop
+            colour). On Android the close animation is chosen from the
+            DISMISSED screen's stackAnimation (rnscreens ScreenStack close
+            branch), and a RUNTIME setOptions({animation:'none'}) demonstrably
+            never survived into that native pop transaction — so the 'none'
+            is declared HERE, in the static options, gated by the one-shot
+            leaveInstant flag that startAddingItems commits one frame before
+            the navigate. Native 'none' maps to a 1→1 alpha tween
+            (rns_no_animation_20), so even an interrupted commit cannot
+            strand a wash. The flag resets in the recipe screen's unmount
+            cleanup, so the next push into a recipe keeps the platform
+            animation. */}
+        <Stack.Screen name="template/[id]" options={{ headerShown: false, animation: recipeInstantLeave ? 'none' : undefined }} />
         <Stack.Screen
           name="settings"
           options={{

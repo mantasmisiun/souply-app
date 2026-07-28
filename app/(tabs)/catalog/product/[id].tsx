@@ -9,7 +9,7 @@ import {
  Animated as RNAnimated } from "react-native";
 import Animated from 'react-native-reanimated';
 import { useCollapsingHeader, CollapsingHeader } from '@/components/CollapsingHeader';
-import { useBasketQuantities } from '@/hooks/useBasketQuantities';
+import { useBasketQuantities, useBasketProductQuantity } from '@/hooks/useBasketQuantities';
 import { SkeletonBox } from '@/components/SkeletonBox';
 import { ProductImage } from '@/components/ProductImage';
 import React, { useEffect, useLayoutEffect, useState, useMemo, useRef, useCallback } from 'react';
@@ -31,6 +31,8 @@ import { useBasketState } from '@/state/basketState';
 import { useBasketSession } from '@/state/basketSession';
 import { AddOrStepper } from '@/components/AddOrStepper';
 import { ScreenHeading } from '@/components/ScreenHeading';
+import { useQuery } from '@tanstack/react-query';
+import { fetchPriceHistories } from '@/utils/priceHistory';
 
 interface StoreProduct {
     id: number;
@@ -473,20 +475,17 @@ export default function ProductDetailScreen() {
     const [product, setProduct] = useState<Product | null>(null);
     const [categoryParts, setCategoryParts] = useState<string[]>([]);
     const [storeProducts, setStoreProducts] = useState<StoreProduct[]>([]);
-    const [allChains, setAllChains] = useState<Chain[]>([]);
     const [loading, setLoading] = useState(true);
     const [selectedChainId, setSelectedChainId] = useState<number | null>(null);
     const [priceCache, setPriceCache] = useState<{ [key: string]: PricePoint[] }>({});
     const [chartModalSp, setChartModalSp] = useState<StoreProduct | null>(null);
-    const [isAdding, setIsAdding] = useState(false);
-    // Target-aware quantity (session basket → draft fallback); local override
-    // keeps the header stepper optimistic between commits.
-    const { basketId: targetBasketId, quantities: targetQuantities, refresh: refreshBasketQuantities } = useBasketQuantities();
-    const [qtyOverride, setQtyOverride] = useState<number | null>(null);
-    const basketQuantity = qtyOverride ?? targetQuantities[Number(id)] ?? 0;
-    const setBasketQuantity = setQtyOverride;
-    // Switching the target basket invalidates any optimistic override.
-    useEffect(() => { setQtyOverride(null); }, [targetBasketId]);
+    // Target-aware quantity. No local override any more: the shared quantities
+    // store IS the optimistic layer (writes paint instantly and survive an
+    // in-flight refresh), so a second copy here could only drift from it.
+    // Scalar subscription: only THIS product's quantity re-renders the screen —
+    // subscribing to the whole map re-rendered the ScrollView on every tap.
+    const { refresh: refreshBasketQuantities, commit: commitBasketQty } = useBasketQuantities();
+    const basketQuantity = useBasketProductQuantity(Number(id));
     const { mode, ready: prefReady } = useDisplayMode();
     const { draftBasketId, setDraftBasketId } = useBasketState();
     const templateItems = useTemplateAddState(s => s.items);
@@ -502,12 +501,17 @@ export default function ProductDetailScreen() {
     const draftBasketIdRef = useRef(draftBasketId);
     useEffect(() => { draftBasketIdRef.current = draftBasketId; }, [draftBasketId]);
 
-    useEffect(() => {
-        fetch(`${API_BASE_URL}/api/chains`)
-            .then(r => r.json())
-            .then(data => setAllChains(Array.isArray(data) ? data : []))
-            .catch(() => {});
-    }, []);
+    // Chain list is near-static reference data — cache it for the whole app
+    // session instead of refetching on every product-detail mount.
+    const { data: allChains = [] } = useQuery<Chain[]>({
+        queryKey: ['chains'],
+        queryFn: async () => {
+            const res = await fetch(`${API_BASE_URL}/api/chains`);
+            const data = await res.json();
+            return Array.isArray(data) ? data : [];
+        },
+        staleTime: Infinity,
+    });
 
     // Get chains for tabs: use DB-sourced logos from /api/chains as the base,
     // filled in by storeProducts for any chain the API hasn't returned yet.
@@ -567,22 +571,25 @@ export default function ProductDetailScreen() {
         fetchData();
     }, [id, mode, prefReady]);
 
-    // Fetch price history for visible store products
+    // Fetch price history for visible store products — ONE chunked bulk
+    // request (single-id fallback inside) and ONE state commit, instead of a
+    // serial round trip + full ScrollView re-render per store product.
     useEffect(() => {
-        const fetchPrices = async () => {
-            for (const sp of filteredStoreProducts) {
-                const cacheKey = `${sp.id}-all`;
-                if (priceCache[cacheKey]) continue;
-                try {
-                    const res = await fetch(`${API_BASE_URL}/api/prices/store-product/${sp.id}/history`);
-                    const data = await res.json();
-                    setPriceCache(prev => ({ ...prev, [cacheKey]: Array.isArray(data) ? data : [] }));
-                } catch {
-                    setPriceCache(prev => ({ ...prev, [cacheKey]: [] }));
-                }
-            }
-        };
-        if (filteredStoreProducts.length > 0) fetchPrices();
+        const missing = filteredStoreProducts
+            .map(sp => sp.id)
+            .filter(spId => !priceCache[`${spId}-all`]);
+        if (missing.length === 0) return;
+        let cancelled = false;
+        (async () => {
+            const histories = await fetchPriceHistories(missing);
+            if (cancelled) return;
+            setPriceCache(prev => {
+                const next = { ...prev };
+                for (const spId of missing) next[`${spId}-all`] = histories[spId] ?? [];
+                return next;
+            });
+        })();
+        return () => { cancelled = true; };
     }, [filteredStoreProducts]);
 
     const getPricesForSp = (spId: number): PricePoint[] => priceCache[`${spId}-all`] || [];
@@ -592,45 +599,19 @@ export default function ProductDetailScreen() {
     // final SP card isn't hidden under the stack.
     const BAR_HEIGHT = isTemplateMode ? 132 : 84; // basket mode: session-bar clearance
 
-    // Focus refresh drops the optimistic override back onto server truth.
+    // Re-read on focus (the basket may have changed elsewhere). Merges under any
+    // still-pending local write rather than replacing it.
     useFocusEffect(useCallback(() => {
-        setQtyOverride(null);
         void refreshBasketQuantities();
     }, [refreshBasketQuantities]));
 
-    // One commit for the header AddOrStepper (basket mode): add (session-aware),
-    // update or remove the draft-basket line. qty 0 = remove (and drop the
-    // basket if it was the last line).
-    const commitQty = useCallback(async (qty: number) => {
+    // One commit for the header AddOrStepper (basket mode). A fresh add still
+    // goes through the session flow (target / chooser / queue); a step is a
+    // single by-product upsert. Both paint before the network answers.
+    const commitQty = useCallback((qty: number) => {
         if (!product) return;
-        if (basketQuantity === 0 && qty > 0) {
-            setIsAdding(true);
-            try {
-                const r = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, qty, mode);
-                if (r.success) setBasketQuantity(qty);
-            } finally { setIsAdding(false); }
-            return;
-        }
-        setBasketQuantity(qty);
-        const bid = targetBasketId ?? draftBasketIdRef.current;
-        if (!bid) return;
-        const all = await fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).catch(() => []);
-        const found = Array.isArray(all) ? all.find((i: any) => i.productId === product.id) : null;
-        if (qty <= 0) {
-            if (found) await fetch(`${API_BASE_URL}/api/basket-items/${found.id}`, { method: 'DELETE' });
-            const remaining = Array.isArray(all) ? all.filter((i: any) => i.id !== found?.id) : [];
-            if (remaining.length === 0) {
-                await fetch(`${API_BASE_URL}/api/baskets/${bid}`, { method: 'DELETE' });
-                setDraftBasketId(null);
-            }
-        } else if (found) {
-            await fetch(`${API_BASE_URL}/api/basket-items/${found.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ quantity: qty }),
-            });
-        }
-    }, [product, basketQuantity, draftBasketId, setDraftBasketId, mode, targetBasketId]);
+        commitBasketQty(product.id, basketQuantity, qty);
+    }, [product, basketQuantity, commitBasketQty]);
 
     // Template-mode commit (the sticky bottom AddOrStepper): the picker/stepper
     // set the absolute quantity (0 = remove).
@@ -691,7 +672,6 @@ export default function ProductDetailScreen() {
                         product={product}
                         quantity={basketQuantity}
                         onCommit={commitQty}
-                        busy={isAdding}
                         addLabel={t('basketSession.add')}
                         style={styles.headerStepper}
                     />

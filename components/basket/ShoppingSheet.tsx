@@ -4,7 +4,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming, Easing, interpo
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { SheetCard, SHEET_CARD_SHADOW_RADIUS } from '../SheetCard';
-import { DockActionCard } from '../dock/DockActionCard';
+import { DockActionRow } from '../dock/DockActionRow';
 import { FamilyShoppingPane } from './FamilyShoppingPane';
 import { ReceiptUploadPane } from './ReceiptUploadPane';
 import { useTheme, useResolvedScheme, spacing, radius, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
@@ -162,13 +162,24 @@ export function ShoppingSheet({ collapse }: { collapse: () => void }) {
             });
             if (!bRes.ok) throw new Error(`HTTP ${bRes.status}`);
             const basket = await bRes.json();
-            for (const item of preview.items) {
-                await fetch(`${API_BASE_URL}/api/basket-items`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json', 'X-User-Id': uid },
-                    body: JSON.stringify({ basketId: basket.id, productId: item.productId, quantity: item.quantity }),
-                }).catch(() => {});
-            }
+            // Bounded-concurrency add: the serial loop cost one round trip PER
+            // item (20 items = 20 sequential waits behind one spinner). There
+            // is no bulk basket-items endpoint (checked), so run 4 POSTs at a
+            // time — workers pull from a shared cursor, preserving approximate
+            // insertion order. Per-item failures stay non-fatal, as before.
+            const toAdd = preview.items;
+            let cursor = 0;
+            const worker = async () => {
+                while (cursor < toAdd.length) {
+                    const item = toAdd[cursor++];
+                    await fetch(`${API_BASE_URL}/api/basket-items`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-User-Id': uid },
+                        body: JSON.stringify({ basketId: basket.id, productId: item.productId, quantity: item.quantity }),
+                    }).catch(() => {});
+                }
+            };
+            await Promise.all(Array.from({ length: Math.min(4, toAdd.length) }, worker));
             refreshTrips?.();
             setPhase('menu');
             setPreview(null);
@@ -254,31 +265,32 @@ export function ShoppingSheet({ collapse }: { collapse: () => void }) {
             <Text style={styles.sheetHeading}>{t('smartBasket.sheetTitle')}</Text>
 
             {/* ── Top actions: Family shopping + Receipt upload ─────────── */}
-            <View style={styles.actionRow}>
-                <DockActionCard
-                    colors={colors}
-                    icon="home"
-                    title={t('smartBasket.familyTitle')}
-                    subtitle={household
-                        ? t('trips.householdMembers', { count: household.members.length })
-                        : t('family.disabled')}
-                    onPress={() => navigate('family')}
-                />
-                <DockActionCard
-                    colors={colors}
-                    iconNode={
-                        <View style={styles.uploadIcon}>
-                            <Ionicons name="receipt-outline" size={24} color={colors.primary} />
-                            <View style={styles.uploadPlus}>
-                                <Ionicons name="add" size={11} color="#FFFFFF" />
+            <DockActionRow
+                colors={colors}
+                actions={[
+                    {
+                        icon: 'home',
+                        title: t('smartBasket.familyTitle'),
+                        subtitle: household
+                            ? t('trips.householdMembers', { count: household.members.length })
+                            : t('family.disabled'),
+                        onPress: () => navigate('family'),
+                    },
+                    {
+                        iconNode: (
+                            <View style={styles.uploadIcon}>
+                                <Ionicons name="receipt-outline" size={24} color={colors.primary} />
+                                <View style={styles.uploadPlus}>
+                                    <Ionicons name="add" size={11} color="#FFFFFF" />
+                                </View>
                             </View>
-                        </View>
-                    }
-                    title={t('family.uploadTitle')}
-                    subtitle={t('family.uploadSub')}
-                    onPress={() => navigate('upload')}
-                />
-            </View>
+                        ),
+                        title: t('family.uploadTitle'),
+                        subtitle: t('family.uploadSub'),
+                        onPress: () => navigate('upload'),
+                    },
+                ]}
+            />
 
             {/* ── AI Basket ───────────────────────────────────────────── */}
             <SheetCard>
@@ -371,7 +383,6 @@ const makeStyles = (c: AppTheme, _isDark: boolean) => StyleSheet.create({
     sheetHeading: { fontSize: 22, fontWeight: '700', color: c.textPrimary, paddingTop: spacing.xs, paddingBottom: spacing.xs },
     cardTitle: { fontSize: 20, fontWeight: '800', color: c.textPrimary, paddingVertical: spacing.md },
     filterRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
-    actionRow: { flexDirection: 'row', gap: spacing.md },
     // Upload button glyph: receipt icon + a white "+" in a pink dot.
     uploadIcon: { width: 26, height: 26, alignItems: 'center', justifyContent: 'center' },
     uploadPlus: {

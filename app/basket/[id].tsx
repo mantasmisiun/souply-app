@@ -35,15 +35,17 @@ import { AddOrStepper } from '../../components/AddOrStepper';
 import { BrandedQR } from '../../components/BrandedQR';
 import { ChefToqueGlyph } from '../../components/icons/tabGlyphs';
 import { SheetCard } from '../../components/SheetCard';
+import { DockActionRow } from '../../components/dock/DockActionRow';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { useBasketSession } from '../../state/basketSession';
+import { useBasketQuantitiesStore } from '../../state/basketQuantities';
 import { useShoppingSheet } from '../../state/shoppingSheet';
 import { fetchTrips, createTripInviteUrl } from '../../utils/tripsApi';
 import * as Haptics from 'expo-haptics';
 import { ScalePressable } from '../../components/ScalePressable';
 import { formatDate } from '../../utils/formatCurrency';
-import { loadCachedCoords, persistCoords, tryGpsCoords, type UserCoords, VILNIUS_FALLBACK } from '../../utils/location';
-import { buildCandidatePool } from '../../utils/candidatePool';
+import { loadCachedCoords, tryGpsCoords, type UserCoords } from '../../utils/location';
+import { compareBasket } from '../../utils/basketCalc';
 import { getLocationSettings, type LocationSettings } from '../../utils/locationStorage';
 import { useTranslation } from 'react-i18next';
 import { GlassIconButton } from '../../components/GlassIconButton';
@@ -185,11 +187,16 @@ export default function BasketDetailScreen() {
 
     // 3-dots actions for template-derived baskets.
     const [actionsOpen, setActionsOpen] = useState(false);
+    // Copy/instantiate both await the server before navigating — without a
+    // busy overlay the tap felt dead (and a second tap fired a second copy).
+    const [actionBusy, setActionBusy] = useState(false);
 
     // Copy the basket as it is now. If it was edited, the server returns a
     // "plain" copy (no template identity) — navigate into it.
     const handleCopyBasket = useCallback(async () => {
+        if (actionBusy) return;
         setActionsOpen(false);
+        setActionBusy(true);
         try {
             const userId = await getUserId();
             const res = await fetch(`${API_BASE_URL}/api/baskets/${Number(id)}/copy`, {
@@ -200,23 +207,29 @@ export default function BasketDetailScreen() {
             if (data?.id) router.push(`/basket/${data.id}` as any);
         } catch {
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
+        } finally {
+            setActionBusy(false);
         }
-    }, [id, router, t]);
+    }, [actionBusy, id, router, t]);
 
     // Copy the creator's original (re-instantiate the source template) —
     // keeps the inherited emoji/colour/@attribution + the original items.
     const handleCopyOriginal = useCallback(async () => {
+        if (actionBusy) return;
         setActionsOpen(false);
         const tplId = basket?.sourceTemplateId;
         if (!tplId) return;
+        setActionBusy(true);
         try {
             const userId = await getUserId();
             const res = await instantiateTemplate(tplId, userId, { force: true });
             if (res?.basketId) router.push(`/basket/${res.basketId}` as any);
         } catch {
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorInstantiate'));
+        } finally {
+            setActionBusy(false);
         }
-    }, [basket?.sourceTemplateId, router, t]);
+    }, [actionBusy, basket?.sourceTemplateId, router, t]);
     const [activeSettings, setActiveSettings] = useState<LocationSettings | null>(null);
     // Snapshot of the settings used at the time of the most recent calculation.
     // Loaded from AsyncStorage `basket_calc_meta_${id}` whenever the basket
@@ -439,6 +452,21 @@ export default function BasketDetailScreen() {
 
         try {
             await revertToDraftIfCompared();
+            // COALESCED PATH: when the shared quantities store is bound to
+            // THIS basket (it follows the session target), route the write
+            // through it — a burst of ± taps becomes ONE debounced by-product
+            // PUT with supersede/abort semantics, exactly like the catalog
+            // stepper, instead of a PUT per tap. The store also owns the
+            // rollback (server-truth fallback + add-failed notice) and bumps
+            // basketRev on success, so every surface stays in step.
+            const qStore = useBasketQuantitiesStore.getState();
+            if (qStore.basketId === Number(id)) {
+                qStore.commit(existing.productId, rounded);
+                markEditedLocally();
+                return;
+            }
+            // Not the session target (opened from the baskets list with no
+            // active session) — keep the direct per-item write.
             const res = await fetch(`${API_BASE_URL}/api/basket-items/${itemId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -487,53 +515,19 @@ export default function BasketDetailScreen() {
         setCalcError(null);
         setCalcing(true);
         try {
-            // Build candidate pool from location settings (non-blocking on failure)
-            const [pool, settings] = await Promise.all([
-                buildCandidatePool({ lat: coords.lat, lng: coords.lng }, String(id)),
-                getLocationSettings(String(id)),
-            ]);
-
-            // The calculate origin must be the SETTINGS-RESOLVED centre (the
-            // chosen place/bus centre), not the device position: the server
-            // derives every store's `distance` from these coords, and the
-            // combo scorer optimises travel from them. Posting raw GPS in
-            // place mode skewed recommendations toward the user's CURRENT
-            // location (candidates around the place, distances from the GPS).
-            // Route mode has no single centre (searchCenter null) → resolved
-            // coords remain the fallback origin.
-            const origin = pool.searchCenter ?? coords;
-            const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
-            if (pool.storeIds.length > 0) body.storeIds = pool.storeIds;
-
-            const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const newResults = await res.json();
-
-            // Persist results + location context so the results screen can score combos.
-            // The full `settings` snapshot is also written so the basket-detail
-            // screen can detect "user changed settings since the last calc" and
-            // swap the button text from "view results" to "re-find stores".
-            await Promise.all([
-                AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults)),
-                AsyncStorage.setItem(`basket_calc_meta_${id}`, JSON.stringify({
-                    storeCount: settings.storeCount,
-                    searchCenter: pool.searchCenter,
-                    settings,
-                })),
-            ]);
+            // THE shared comparison path (utils/basketCalc) — candidate pool,
+            // settings-resolved origin, POST /calculate, both cache keys, and
+            // persisting the coords that produced these results. This screen
+            // used to carry its own inline copy of all of that; the recipe
+            // screen's one-tap "Parduotuvės" now runs the same compareBasket,
+            // so the two entrances cannot drift apart.
+            await compareBasket(String(id), coords);
 
             setBasket(prev => prev ? { ...prev, status: 'compared' } : prev);
             // This basket is no longer a draft: subsequent "add to basket"
             // taps from product screens should create a new draft instead
             // of attaching here.
             setDraftBasketId(null);
-            // Persist the coords that actually produced these results so
-            // re-calcs use the same viewpoint by default.
-            await persistCoords(coords);
             router.replace(`/basket/results/${id}`);
         } catch {
             setCalcError(t('basketDetail.errorCalculate'));
@@ -841,24 +835,24 @@ export default function BasketDetailScreen() {
                                     <Text style={styles.sheetTitle}>{t('basketDetail.actionsTitle')}</Text>
                                     {/* iOS-style big actions, two per row — SheetCards,
                                         the same surface as the Settings section. */}
-                                    <View style={styles.bigBtnRow}>
-                                        {!fromTemplate && (
-                                            <TouchableOpacity style={{ flex: 1 }} onPress={() => setSaveTplVisible(true)} activeOpacity={0.7}>
-                                                <SheetCard style={styles.bigActionCard}>
-                                                    <ChefToqueGlyph size={24} color={colors.primary} />
-                                                    <Text style={styles.bigActionTitle}>{t('basketDetail.saveTitle')}</Text>
-                                                    <Text style={styles.bigActionSub}>{t('basketDetail.saveSub')}</Text>
-                                                </SheetCard>
-                                            </TouchableOpacity>
-                                        )}
-                                        <TouchableOpacity style={{ flex: 1 }} onPress={() => void openInvite()} activeOpacity={0.7}>
-                                            <SheetCard style={styles.bigActionCard}>
-                                                <Ionicons name="person-add" size={24} color={colors.primary} />
-                                                <Text style={styles.bigActionTitle}>{t('basketDetail.inviteTitle')}</Text>
-                                                <Text style={styles.bigActionSub}>{t('basketDetail.inviteSub')}</Text>
-                                            </SheetCard>
-                                        </TouchableOpacity>
-                                    </View>
+                                    <DockActionRow
+                                        colors={colors}
+                                        gap={14}
+                                        actions={[
+                                            !fromTemplate && {
+                                                iconNode: <ChefToqueGlyph size={24} color={colors.primary} />,
+                                                title: t('basketDetail.saveTitle'),
+                                                subtitle: t('basketDetail.saveSub'),
+                                                onPress: () => setSaveTplVisible(true),
+                                            },
+                                            {
+                                                icon: 'person-add',
+                                                title: t('basketDetail.inviteTitle'),
+                                                subtitle: t('basketDetail.inviteSub'),
+                                                onPress: () => void openInvite(),
+                                            },
+                                        ]}
+                                    />
                                     {/* Settings section — same SheetCard system as the
                                         catalog chooser's sections; the row with the gear
                                         is the section TITLE, not an action. */}
@@ -940,6 +934,14 @@ export default function BasketDetailScreen() {
                     ...(edited ? [{ icon: 'duplicate-outline' as const, label: t('basketTab.copyOriginal'), onPress: handleCopyOriginal }] : []),
                 ]}
             />
+
+            {/* Copy / copy-original in flight: block the screen with a spinner
+                so the tap visibly "took" and can't be double-fired. */}
+            <Modal visible={actionBusy} transparent animationType="fade">
+                <View style={styles.busyOverlay}>
+                    <MaterialProgress size="large" color={colors.primary} />
+                </View>
+            </Modal>
 
             <LocationPromptModal
                 visible={locationPromptVisible}
@@ -1028,10 +1030,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // Separator: from the title start (past the image) to the trash end.
     rowSep: { height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginLeft: 56 + 12 },
     sheetRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
-    bigBtnRow: { flexDirection: 'row', gap: 14 },
-    bigActionCard: { alignItems: 'flex-start', gap: 2, paddingVertical: 14 },
-    bigActionTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, marginTop: 6 },
-    bigActionSub: { fontSize: 12, fontWeight: '500', color: c.textSecondary },
     sheetRowText: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
     sheetRowTextRegular: { fontSize: 15, fontWeight: '400' },
     sheetTitle: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
@@ -1039,6 +1037,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 14 },
     sectionTitleText: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
     qrBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
+    busyOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' },
     qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: 24, alignItems: 'center', gap: 16 },
     sheetPanelContent: {
         paddingHorizontal: 16,

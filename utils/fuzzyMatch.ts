@@ -80,12 +80,31 @@ function tokenHits(nameTokens: string[], qTok: string): boolean {
     return false;
 }
 
-export function fuzzyMatches(name: string, query: string): boolean {
-    const q = searchFold(query.trim());
-    if (!q) return true;
-    const qTokens = q.split(/\s+/).filter(Boolean);
+/** Pre-folded, pre-tokenised text — the cacheable half of a fuzzy match. */
+export type FoldedTokens = string[];
+
+/**
+ * Fold + tokenise once. Callers filtering a LIST against a query should
+ * precompute this per candidate (memo keyed on the dataset) and once for the
+ * query per filter run — re-folding every name on every keystroke was the
+ * dominant cost of the discounts search, not the edit-distance itself.
+ */
+export function foldTokens(text: string): FoldedTokens {
+    return searchFold(text).split(/\s+/).filter(Boolean);
+}
+
+/**
+ * Core matcher over pre-folded tokens. Semantics identical to
+ * `fuzzyMatches` (which is now a thin wrapper): empty query matches
+ * everything, an empty candidate matches nothing (for a non-empty query),
+ * token-AND with per-token typo tolerance otherwise.
+ */
+export function fuzzyMatchesPrepared(nameTokens: FoldedTokens, qTokens: FoldedTokens): boolean {
     if (qTokens.length === 0) return true;
-    const nameTokens = searchFold(name).split(/\s+/).filter(Boolean);
     if (nameTokens.length === 0) return false;
     return qTokens.every((tok) => tokenHits(nameTokens, tok));
+}
+
+export function fuzzyMatches(name: string, query: string): boolean {
+    return fuzzyMatchesPrepared(foldTokens(name), foldTokens(query.trim()));
 }

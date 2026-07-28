@@ -21,7 +21,7 @@ import { useRouter, useFocusEffect } from 'expo-router';
 import { useCollapsingHeader, CollapsingHeader } from './CollapsingHeader';
 import { ScreenHeading } from './ScreenHeading';
 import { GlassIconButton } from './GlassIconButton';
-import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { memo, useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { ContextMenu, type ContextMenuAction } from './ContextMenu';
@@ -39,6 +39,7 @@ import { formatEuro } from '../utils/formatCurrency';
 import { formatStoreStreet } from '../utils/formatAddress';
 import { formatItemAmount, fmtSize, unitLabel } from '../utils/amountDisplay';
 import { chainBrandName } from '../utils/chainBrandName';
+import { sortItems, mergeServerItems, createDebouncedSearch, type DebouncedSearch } from '../utils/shoppingListSync';
 import { useTranslation } from 'react-i18next';
 
 interface ShoppingList {
@@ -79,22 +80,17 @@ interface ShoppingListItem {
     checkedByColor?: string | null;
 }
 
-// Category groups follow the Naršyti sequence — by L1 id, then L2 id (NOT
-// alphabetical). Uncategorised items (no L2) sink to the bottom under "Kita".
+// Category grouping order (sortItems) + the 3s-poll merge with its diff-bail
+// live in utils/shoppingListSync.ts so they're unit-testable.
 const CAT_LAST = Number.MAX_SAFE_INTEGER;
-const sortItems = (arr: ShoppingListItem[]): ShoppingListItem[] =>
-    arr.sort((a, b) => {
-        if (a.isChecked !== b.isChecked) return Number(a.isChecked) - Number(b.isChecked);
-        if (!a.isChecked) {
-            const l1a = a.l2CategoryId == null ? CAT_LAST : (a.l1CategoryId ?? CAT_LAST);
-            const l1b = b.l2CategoryId == null ? CAT_LAST : (b.l1CategoryId ?? CAT_LAST);
-            if (l1a !== l1b) return l1a - l1b;
-            const l2a = a.l2CategoryId ?? CAT_LAST;
-            const l2b = b.l2CategoryId ?? CAT_LAST;
-            if (l2a !== l2b) return l2a - l2b;
-        }
-        return a.productName.localeCompare(b.productName, 'lt');
-    });
+
+// One flattened list row: a category header or an item card. Flat so the
+// virtualised list can animate a ticked item flying down to the "Atlikta"
+// tray (cross-parent moves don't animate).
+type Row =
+    | { kind: 'header'; key: string; label: string }
+    | { kind: 'item'; key: string; item: ShoppingListItem };
+const rowKey = (r: Row) => r.key;
 
 /** V2 checkbox: a spring-fill circle that pops when ticked. */
 function SpringCheckbox({ checked, styles, colors }: {
@@ -121,7 +117,9 @@ function SpringCheckbox({ checked, styles, colors }: {
     );
 }
 
-function ShoppingListItemCard({ item, isMine, onToggle, onRemove, storeBadge, styles, colors }: {
+// memo + stable callbacks from the screen: the 3s poll (when it does commit)
+// and unrelated state flips no longer re-render every row card.
+const ShoppingListItemCard = memo(function ShoppingListItemCard({ item, isMine, onToggle, onRemove, storeBadge, styles, colors }: {
     item: ShoppingListItem;
     isMine: (uid?: string | null) => boolean;
     onToggle: (item: ShoppingListItem) => void;
@@ -187,7 +185,7 @@ function ShoppingListItemCard({ item, isMine, onToggle, onRemove, storeBadge, st
             </TouchableOpacity>
         </SwipeableRow>
     );
-}
+});
 
 export interface ShoppingListMeta {
     title: string;
@@ -362,7 +360,10 @@ export function ShoppingListDetail({
     // Only show the skeleton on a genuine cold load — a cached switch is instant.
     const [loading, setLoading] = useState(() => !hasCachedListItems(sourceIds));
     const [quickAddText, setQuickAddText] = useState('');
-    const [searchQuery, setSearchQuery] = useState('');
+    // Latest items snapshot for stable callbacks (toggle/remove read it instead
+    // of closing over `items`, so the row card's memo isn't defeated).
+    const itemsRef = useRef<ShoppingListItem[]>([]);
+    itemsRef.current = items;
 
     const pendingDeleteRef = useRef<{ item: ShoppingListItem; timer: ReturnType<typeof setTimeout> } | null>(null);
     const [pendingDeleteTick, setPendingDeleteTick] = useState(0);
@@ -409,13 +410,41 @@ export function ShoppingListDetail({
         setCouponQueue(q => q.slice(1));
     };
 
+    // Debounced (300ms) + abortable + seq-guarded product search — the shape
+    // app/search.tsx uses, factored into utils/shoppingListSync. The chain the
+    // search is scoped to can change (list loads async), so the runner reads it
+    // from a ref at fire time.
+    const searchChainIdRef = useRef<number | null>(null);
+    searchChainIdRef.current = unified ? (primarySource?.chainId ?? null) : (list?.chainId ?? null);
+    const searchRunnerRef = useRef<DebouncedSearch | null>(null);
+    if (!searchRunnerRef.current) {
+        searchRunnerRef.current = createDebouncedSearch(
+            async (query, signal) => {
+                const chainId = searchChainIdRef.current;
+                if (!chainId) return [] as any[];
+                const res = await fetch(
+                    `${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(query)}&chainId=${chainId}`,
+                    { signal },
+                );
+                const data = await res.json();
+                return Array.isArray(data) ? data.slice(0, 12) : [];
+            },
+            results => setSearchResults(results),
+        );
+    }
+    useEffect(() => () => searchRunnerRef.current?.cancel(), []);
+
+    const clearSearch = useCallback(() => {
+        searchRunnerRef.current?.cancel();
+        setQuickAddText('');
+        setSearchResults([]);
+    }, []);
+
     const closeSearch = useCallback(() => {
         setSearchRevealed(false);
-        setQuickAddText('');
-        setSearchQuery('');
-        setSearchResults([]);
+        clearSearch();
         onSearchActiveChange?.(false);
-    }, [onSearchActiveChange]);
+    }, [onSearchActiveChange, clearSearch]);
 
     // Fetch + merge items from every source list (one list in single mode).
     // Each list's result is written through the shared cache so the next switch
@@ -484,17 +513,13 @@ export function ShoppingListDetail({
                     if (now - ts > FLIGHT_HOLD_MS) inFlightItemsRef.current.delete(k);
                 }
 
-                setItems(prev => {
-                    const byId = new Map<number, ShoppingListItem>(prev.map(p => [p.id, p]));
-                    const merged: ShoppingListItem[] = server.map((s: any) => {
-                        if (inFlightItemsRef.current.has(s.id)) return byId.get(s.id) ?? s;
-                        return s;
-                    });
-                    const pendDel = pendingDeleteRef.current?.item.id;
-                    const filtered = pendDel != null ? merged.filter(m => m.id !== pendDel) : merged;
-                    sortItems(filtered);
-                    return filtered;
-                });
+                // mergeServerItems DIFF-BAILS: when nothing changed it returns
+                // `prev` itself, so this 3s tick commits no state and the
+                // layout-animated rows don't re-render.
+                setItems(prev => mergeServerItems(prev, server, {
+                    inFlightIds: new Set(inFlightItemsRef.current.keys()),
+                    pendingDeleteId: pendingDeleteRef.current?.item.id ?? null,
+                }));
                 setVisibleCount(c => Math.max(c, server.length));
             } catch {}
         };
@@ -531,12 +556,9 @@ export function ShoppingListDetail({
             });
 
         // Flatten to a single sequence of header/item rows so each item is one
-        // Animated.View sibling in ONE parent — a ticked item can then FLY down
-        // to the "Atlikta" tray via LinearTransition (cross-parent moves don't
-        // animate). Stable keys: `h:<name>` / `i:<id>`.
-        type Row =
-            | { kind: 'header'; key: string; label: string }
-            | { kind: 'item'; key: string; item: ShoppingListItem };
+        // sibling in ONE list — a ticked item can then FLY down to the
+        // "Atlikta" tray via the list's itemLayoutAnimation (cross-parent moves
+        // don't animate). Stable keys: `h:<name>` / `i:<id>`.
         const rows: Row[] = [];
         for (const g of groups) {
             rows.push({ kind: 'header', key: `h:${g.name ?? '__nocat__'}`, label: g.name ?? t('shoppingListDetail.uncategorised', { defaultValue: 'Kita' }) });
@@ -550,32 +572,15 @@ export function ShoppingListDetail({
         return { uncheckedGroups: groups, checkedItems: checked, rows };
     }, [items, visibleCount, t]);
 
-    // Tap handler: guard un-ticking an item that ANOTHER member ticked (so a
-    // stray tap doesn't silently undo their work); everything else toggles.
-    const requestToggle = (item: ShoppingListItem) => {
-        const othersItem = item.isChecked && item.checkedByUserId && !isMine(item.checkedByUserId);
-        if (othersItem) {
-            Alert.alert(
-                t('shoppingListDetail.uncheckOtherTitle'),
-                t('shoppingListDetail.uncheckOtherBody', { name: item.checkedByName ?? t('shoppingListDetail.someone') }),
-                [
-                    { text: t('common.cancel'), style: 'cancel' },
-                    { text: t('shoppingListDetail.uncheckConfirm'), style: 'destructive', onPress: () => void toggleItem(item) },
-                ],
-            );
-            return;
-        }
-        void toggleItem(item);
-    };
-
-    const toggleItem = async (item: ShoppingListItem) => {
+    const toggleItem = useCallback(async (item: ShoppingListItem) => {
         const newChecked = !item.isChecked;
         Haptics.impactAsync(newChecked ? Haptics.ImpactFeedbackStyle.Medium : Haptics.ImpactFeedbackStyle.Light);
 
         // Optimistically record self as the checker (so my own ticks show no
         // avatar); the 3s sync brings the authoritative checker for others.
+        const before = itemsRef.current;
         const updatedItems = sortItems(
-            items.map(i => i.id === item.id
+            before.map(i => i.id === item.id
                 ? { ...i, isChecked: newChecked, checkedByUserId: newChecked ? (myIds[0] ?? null) : null, checkedByName: null, checkedByColor: null }
                 : i)
         );
@@ -587,7 +592,7 @@ export function ShoppingListDetail({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ isChecked: newChecked }),
         })
-            .catch(() => { setItems(items); })
+            .catch(() => { setItems(before); })
             .finally(() => { inFlightItemsRef.current.delete(item.id); });
 
         if (newChecked && item.requiresCoupon && item.couponLabel) {
@@ -612,7 +617,25 @@ export function ShoppingListDetail({
             await AsyncStorage.setItem(key, '1');
             setCompletionModal(true);
         }
-    };
+    }, [myIds, isPartOfBasket, id]);
+
+    // Tap handler: guard un-ticking an item that ANOTHER member ticked (so a
+    // stray tap doesn't silently undo their work); everything else toggles.
+    const requestToggle = useCallback((item: ShoppingListItem) => {
+        const othersItem = item.isChecked && item.checkedByUserId && !isMine(item.checkedByUserId);
+        if (othersItem) {
+            Alert.alert(
+                t('shoppingListDetail.uncheckOtherTitle'),
+                t('shoppingListDetail.uncheckOtherBody', { name: item.checkedByName ?? t('shoppingListDetail.someone') }),
+                [
+                    { text: t('common.cancel'), style: 'cancel' },
+                    { text: t('shoppingListDetail.uncheckConfirm'), style: 'destructive', onPress: () => void toggleItem(item) },
+                ],
+            );
+            return;
+        }
+        void toggleItem(item);
+    }, [isMine, toggleItem, t]);
 
     const promptQuantity = (
         productId: number | null,
@@ -676,8 +699,8 @@ export function ShoppingListDetail({
         promptQuantity(product.productId, name, false, product.id, product.imageUrl, packOptions.length > 0 ? packOptions : undefined);
     };
 
-    const removeItem = (itemId: number) => {
-        const target = items.find(i => i.id === itemId);
+    const removeItem = useCallback((itemId: number) => {
+        const target = itemsRef.current.find(i => i.id === itemId);
         if (!target) return;
         setItems(prev => prev.filter(i => i.id !== itemId));
         if (pendingDeleteRef.current) {
@@ -693,7 +716,7 @@ export function ShoppingListDetail({
         }, 3000);
         pendingDeleteRef.current = { item: target, timer };
         setPendingDeleteTick(t => t + 1);
-    };
+    }, []);
 
     const undoItemDelete = () => {
         if (!pendingDeleteRef.current) return;
@@ -704,16 +727,30 @@ export function ShoppingListDetail({
         setPendingDeleteTick(t => t + 1);
     };
 
-    const handleSearch = async (query: string) => {
-        setSearchQuery(query);
-        if (query.length < 2) { setSearchResults([]); return; }
-        const chainId = unified ? (primarySource?.chainId ?? null) : (list?.chainId ?? null);
-        if (!chainId) { setSearchResults([]); return; }
-        try {
-            const res = await fetch(`${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(query)}&chainId=${chainId}`);
-            const data = await res.json();
-            setSearchResults(Array.isArray(data) ? data.slice(0, 12) : []);
-        } catch {}
+    // Virtualised row renderer — header rows are plain labels, item rows are
+    // the memoised card with STABLE callbacks (so a commit only re-renders the
+    // rows whose item object actually changed).
+    const renderRow = useCallback(({ item: row }: { item: Row }) => (
+        row.kind === 'header'
+            ? <Text style={styles.sectionHeader}>{row.label}</Text>
+            : <ShoppingListItemCard
+                item={row.item}
+                isMine={isMine}
+                onToggle={requestToggle}
+                onRemove={removeItem}
+                storeBadge={unified ? chainBySource.get(row.item.listId) : null}
+                styles={styles}
+                colors={colors}
+            />
+    ), [styles, colors, isMine, requestToggle, removeItem, unified, chainBySource]);
+
+    const handleSearch = (query: string) => {
+        if (query.length < 2) {
+            searchRunnerRef.current?.cancel();
+            setSearchResults([]);
+            return;
+        }
+        searchRunnerRef.current?.search(query);
     };
 
     const addProduct = async (
@@ -754,9 +791,7 @@ export function ShoppingListDetail({
             setItems(prev => [...prev, newItem]);
             markInFlight(data.id);
             setVisibleCount(prev => prev + 1);
-            setQuickAddText('');
-            setSearchQuery('');
-            setSearchResults([]);
+            clearSearch();
         } catch {
             Alert.alert(t('shoppingListDetail.errorGeneric'), t('shoppingListDetail.errorAdd'));
         }
@@ -864,35 +899,44 @@ export function ShoppingListDetail({
                         </TouchableOpacity>
                     </View>
 
-                    <Animated.ScrollView
-                        {...header.scroll}
-                        style={{ flex: 1 }}
-                        stickyHeaderIndices={[1]}
-                        contentContainerStyle={[styles.scrollContent, { paddingTop: 0 }]}
-                    >
-                        <ScreenHeading
-                            title={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
-                            subtitle={headerSubtitle ?? (formatStoreStreet(list?.address) || list?.storeName || undefined)}
-                            onLayout={header.onTitleLayout}
-                        />
-                        <View style={{ backgroundColor: colors.pageBackground }}>
+                    {/* Multi-store chip selector — ALWAYS-PINNED above the list
+                        (the repo's CollapsingHeader pattern: receipt/index,
+                        receipt-picker, discounts all pin their chip row here;
+                        Fabric mis-hit-tests transformed sticky headers). */}
+                    {pinnedHeader != null && (
+                        <View onLayout={header.onPinnedLayout} style={{ backgroundColor: colors.pageBackground }}>
                             {pinnedHeader}
                         </View>
-                        <View style={styles.listInner}>
-                        {rows.map(row => (
-                            <Animated.View key={row.key} layout={LinearTransition.duration(240)}>
-                                {row.kind === 'header'
-                                    ? <Text style={styles.sectionHeader}>{row.label}</Text>
-                                    : <ShoppingListItemCard item={row.item} isMine={isMine} onToggle={requestToggle} onRemove={removeItem} storeBadge={unified ? chainBySource.get(row.item.listId) : null} styles={styles} colors={colors} />}
-                            </Animated.View>
-                        ))}
-                        {items.length === 0 && (
+                    )}
+
+                    <Animated.FlatList
+                        {...header.scroll}
+                        style={{ flex: 1 }}
+                        data={rows}
+                        keyExtractor={rowKey}
+                        renderItem={renderRow}
+                        // Drives the done-tray fly-down that the per-row
+                        // LinearTransition wrappers used to provide.
+                        itemLayoutAnimation={LinearTransition.duration(240)}
+                        initialNumToRender={14}
+                        ListHeaderComponent={
+                            <>
+                                <ScreenHeading
+                                    title={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
+                                    subtitle={headerSubtitle ?? (formatStoreStreet(list?.address) || list?.storeName || undefined)}
+                                    onLayout={header.onTitleLayout}
+                                    bleedX={spacing.md}
+                                />
+                                <View style={{ height: spacing.sm }} />
+                            </>
+                        }
+                        ListEmptyComponent={
                             <View style={styles.centered}>
                                 <Text style={styles.emptyText}>{t('shoppingListDetail.empty')}</Text>
                             </View>
-                        )}
-                        </View>
-                    </Animated.ScrollView>
+                        }
+                        contentContainerStyle={[styles.scrollContent, { paddingTop: 0, paddingHorizontal: spacing.md }]}
+                    />
 
                     {/* Search results — a FULL-SCREEN overlay under the top search
                         bar. ALWAYS MOUNTED, toggled ONLY via opacity/pointerEvents:
@@ -918,9 +962,7 @@ export function ShoppingListDetail({
                                                 return;
                                             }
                                             void pickSearchResult(product);
-                                            setQuickAddText('');
-                                            setSearchQuery('');
-                                            setSearchResults([]);
+                                            clearSearch();
                                         }}
                                     >
                                         {alreadyInList && <Ionicons name="checkmark-circle" size={iconSize.md} color={colors.primary} style={{ marginRight: spacing.sm }} />}
@@ -966,9 +1008,7 @@ export function ShoppingListDetail({
                                     onSubmitEditing={() => {
                                         const name = quickAddText.trim();
                                         if (!name) return;
-                                        setQuickAddText('');
-                                        setSearchQuery('');
-                                        setSearchResults([]);
+                                        clearSearch();
                                         addProduct(null, name, 1, false, null, null);
                                     }}
                                     returnKeyType="done"
@@ -977,7 +1017,7 @@ export function ShoppingListDetail({
                                     mounting a sibling next to the focused input drops
                                     the Android keyboard on the first keystroke. */}
                                 <TouchableOpacity
-                                    onPress={() => { setQuickAddText(''); setSearchQuery(''); setSearchResults([]); }}
+                                    onPress={clearSearch}
                                     hitSlop={8}
                                     disabled={quickAddText.length === 0}
                                     style={{ opacity: quickAddText.length > 0 ? 1 : 0 }}
@@ -1178,7 +1218,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
 
     scrollContent: { paddingBottom: spacing.xxxl },
-    listInner: { paddingTop: spacing.sm, paddingHorizontal: spacing.md },
 
     sectionHeader: {
         ...typography.labelSmall, fontWeight: '700', color: c.textMuted,

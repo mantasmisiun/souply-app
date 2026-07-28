@@ -11,7 +11,8 @@ import {
     useLocalSearchParams,
     useRouter } from "expo-router";
 import Animated from "react-native-reanimated";
-import { useCallback,
+import { memo,
+    useCallback,
     useEffect,
     useMemo,
     useRef,
@@ -110,6 +111,271 @@ import { useProfileStore } from '../state/profileStore';
 type AsyncStatus = "idle" | "pending" | "done" | "error";
 
 const CARD_WIDTH = Dimensions.get("window").width - 32 - 32;
+
+// "Messed up" = the parser missed a HARD field: the NAME (a stray "?" phantom — no
+// letters at all) or the PRICE (anything that would render "0,00 EUR" — price <= 0).
+// Only these two genuinely-broken cases are hidden from the Items list on PRODUCTION
+// — NOT a merely-uncertain match. A clean line whose match is only moderate (low
+// confidence band) is still a real, useful product row and stays visible. Weighable
+// (kg) items are NOT exempt: an unrecoverable €/kg shows "0,00" and is dropped on prod
+// like any other priceless line (the "never write price" server guard is separate and
+// unaffected). On dev/staging the dropped lines still render with a "would be hidden on
+// production" marker. Module-scope (pure) so memoised derivations can use it.
+const isMessedUpLine = (p: ProductLine) => {
+  const noName = !/[a-ząčęėįšųūž]/i.test(p.name ?? "");
+  const noPrice = !(p.price != null && p.price > 0);
+  return noName || noPrice;
+};
+
+const isCompletelyUnrecognizedLine = (p: ProductLine) =>
+  !p.matchConfirmed && !p.storeProductId && p.altMatches.length === 0;
+
+// In production, product rows are flat — there's nothing useful to show
+// in the expanded drawer. The three-dots menu handles issue reporting and
+// photo upload; the swipe flow handles OCR-name correction. Expand is
+// only live under DEV_MODE so we can still inspect region previews.
+const canExpandProductLine = (_p: ProductLine) => DEV_MODE;
+
+/**
+ * One parsed receipt line on the Prekės tab (~230 lines of JSX). Previously
+ * re-created inline for EVERY line on EVERY screen render — a 60-line receipt
+ * paid 60 of these per keystroke / progress tick / state flip. Memoised with
+ * primitive + stable props, so a row re-renders only when ITS product object,
+ * expansion state or rematch spinner changes.
+ *
+ * Deliberately NOT virtualised: the tab is a ScrollView with heterogeneous
+ * siblings and the screen has a documented StrictMode double-mount defence —
+ * memoisation gets the render win without restructuring the scan flow.
+ */
+const ProductRowCard = memo(function ProductRowCard({
+  product,
+  index,
+  isFirst,
+  isLast,
+  expanded,
+  rematchLoading,
+  pageMetas,
+  styles,
+  colors,
+  onToggleExpand,
+  onOpenMenu,
+  onChangeName,
+}: {
+  product: ProductLine;
+  index: number;
+  isFirst: boolean;
+  isLast: boolean;
+  expanded: boolean;
+  rematchLoading: boolean;
+  pageMetas: PageMeta[];
+  styles: ReturnType<typeof makeStyles>;
+  colors: AppTheme;
+  onToggleExpand: (index: number) => void;
+  onOpenMenu: (index: number) => void;
+  onChangeName: (index: number, text: string) => void;
+}) {
+  const { t } = useTranslation();
+  // B3: three visual states drive border / background.
+  //   S1 confirmed  — matchConfirmed=true. Clean white, soft-accent border.
+  //   S3 partial    — line parsed but no SP match. warning border + tint.
+  //   S4 unrecognised — no name structure or no data. error border + tint, muted thumb, "—" price.
+  const isUnrecognised = isCompletelyUnrecognizedLine(product);
+  const state: "S1" | "S3" | "S4" = product.matchConfirmed
+    ? "S1"
+    : isUnrecognised
+    ? "S4"
+    : "S3";
+  // Per-line confidence band (DISPLAY-ONLY). When CONFIDENCE_BAND_DISPLAY
+  // is on AND the server scored this line, the band — not the legacy
+  // matchConfirmed flag — decides whether we trust the SP name/image
+  // (S1) or fall back to the OCR text with a review nudge (S2) / alone
+  // (S3). Off by default until thresholds are calibrated, so showSpInfo
+  // stays bit-identical to the old `state === "S1"`. The `state`-driven
+  // borders/placeholders/price below are unchanged (parse quality, not
+  // identity confidence).
+  const ic = product.itemConfidence ?? null;
+  const useBand = CONFIDENCE_BAND_DISPLAY && ic != null;
+  const showSpInfo = useBand ? ic!.band === "S1" : state === "S1";
+  const showReviewBadge = useBand && ic!.band === "S2";
+  const totalPrice =
+    product.promoPrice != null && product.promoPrice < product.price
+      ? product.promoPrice * product.quantity
+      : product.price * product.quantity;
+  const grossTotal = product.price * product.quantity;
+  return (
+    <TouchableOpacity
+      style={[
+        styles.productRowCard,
+        isFirst && styles.productRowCardFirst,
+        isLast && styles.productRowCardLast,
+        state === "S3" && styles.productRowCardS3,
+        state === "S4" && styles.productRowCardS4,
+      ]}
+      activeOpacity={canExpandProductLine(product) ? 0.7 : 1}
+      onPress={canExpandProductLine(product) ? () => onToggleExpand(index) : undefined}
+    >
+      {/* Dev-only band crop: shows the OCR region this row's
+          data was extracted from, sliced from the receipt
+          image. Gated by __DEV__ so release bundles strip
+          the entire branch at Metro bundle time. Uses the
+          sharper pre-crop component — RegionPreview's
+          overflow-trick produced unreadable mush on Android
+          for narrow product bands. */}
+      {__DEV__ &&
+        pageMetas.length > 0 &&
+        product.region &&
+        product.region.yBottom > product.region.yTop && (
+          <View style={styles.productBandCropWrap}>
+            <BandCropImage
+              pages={pageMetas}
+              region={product.region}
+              cardWidth={CARD_WIDTH}
+            />
+          </View>
+        )}
+      <View style={styles.productRow}>
+        {showSpInfo && product.storeProductImageUrl ? (
+          <Image
+            source={{ uri: product.storeProductImageUrl }}
+            style={styles.productThumb}
+            resizeMode="contain"
+          />
+        ) : (
+          <View
+            style={[
+              styles.productThumbPlaceholder,
+              state === "S4" && styles.productThumbPlaceholderMuted,
+            ]}
+          >
+            <Text style={styles.productThumbEmoji}>🫜</Text>
+          </View>
+        )}
+        <View style={styles.productInfo}>
+          {/* Name typography: matched products use the primary
+              colour ("matched"), partial / unrecognised stay
+              textPrimary. Inline state icons removed — the
+              row's border + background communicate state now. */}
+          {showSpInfo && product.matchedName ? (
+            <Text style={styles.matchedName} numberOfLines={2}>
+              {product.matchedName}
+            </Text>
+          ) : (
+            <Text style={styles.productName} numberOfLines={2}>
+              {product.name}
+            </Text>
+          )}
+          <Text style={styles.productQuantity}>
+            {formatAmountLabel(product)}
+          </Text>
+          {/* S2 review nudge (user-facing, behind the flag): OCR name is
+              shown but the matched SP wants a human glance. */}
+          {showReviewBadge && ic && (
+            <ConfidenceBadge ic={ic} colors={colors} variant="review" />
+          )}
+          {/* Dev-only band readout — always on in dev builds so we can
+              watch the score on-device while calibrating. Stripped from
+              release bundles by __DEV__. */}
+          {__DEV__ && ic && (
+            <ConfidenceBadge ic={ic} colors={colors} variant="dev" />
+          )}
+          {/* dev/staging marker: this low-confidence line WOULD be hidden on production. */}
+          {!IS_PROD && isMessedUpLine(product) && (
+            <View style={styles.prodSkipBadge}>
+              <Ionicons name="eye-off-outline" size={11} color={colors.warning} />
+              <Text style={styles.prodSkipBadgeText}>{t('receiptProcess.prodSkipBadge')}</Text>
+            </View>
+          )}
+          {/* Re-verification pending: this match contradicts one of the user's old
+              'different' votes; the rejection is SUSPENDED and the pair is queued
+              as a priority swipe card. The chip keeps the open question visible. */}
+          {product.pendingReverification && (
+            <View style={styles.prodSkipBadge}>
+              <Ionicons name="help-circle-outline" size={11} color={colors.warning} />
+              <Text style={styles.prodSkipBadgeText}>{t('receiptProcess.reverifyBadge')}</Text>
+            </View>
+          )}
+        </View>
+        <View style={styles.productPriceCol}>
+          {/* Show the OCR-captured price whenever we HAVE one — even for an
+              unrecognised (S4) line: the price is a real receipt fact, only the
+              product IDENTITY is unknown. "—" only when there is genuinely no
+              price (footer junk / an unrecoverable weighed €/kg → price 0). */}
+          {totalPrice > 0 ? (
+            product.promoPrice != null && product.promoPrice < product.price ? (
+              <>
+                <Text style={styles.productPrice}>{formatEuro(totalPrice)}</Text>
+                <Text style={styles.productPriceStrike}>{formatEuro(grossTotal)}</Text>
+              </>
+            ) : (
+              <Text style={styles.productPrice}>{formatEuro(totalPrice)}</Text>
+            )
+          ) : (
+            <Text style={styles.productPrice}>—</Text>
+          )}
+        </View>
+        <TouchableOpacity
+          style={styles.productRowMenuBtn}
+          onPress={(e) => {
+            e.stopPropagation?.();
+            onOpenMenu(index);
+          }}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+        >
+          <Ionicons
+            name="ellipsis-vertical"
+            size={18}
+            color={colors.textSecondary}
+          />
+        </TouchableOpacity>
+      </View>
+      {expanded && canExpandProductLine(product) && (
+        <View style={styles.editSection}>
+          {isCompletelyUnrecognizedLine(product) && (
+            <View style={styles.unrecognizedBlock}>
+              <Text style={styles.editLabel}>OCR pavadinimas</Text>
+              <View style={styles.editInputLoaderWrap}>
+                <TextInput
+                  style={[
+                    styles.editInput,
+                    styles.editInputWithLoaderPadding,
+                  ]}
+                  value={product.name}
+                  onChangeText={(text) => onChangeName(index, text)}
+                  placeholder={t('receiptProcess.namePlaceholder')}
+                  placeholderTextColor={colors.textMuted}
+                />
+                {rematchLoading && (
+                  <MaterialProgress
+                    size="small"
+                    color={colors.primary}
+                    style={styles.editInputLoader}
+                  />
+                )}
+              </View>
+            </View>
+          )}
+
+          {/* Raw OCR region preview — dev-only surface, gated by
+              DEV_MODE so end users don't see it. Useful for
+              debugging parser/geometry issues against the source
+              image. */}
+          {DEV_MODE && pageMetas.length > 0 && (
+            <View style={styles.regionPreviewWrap}>
+              <Text style={styles.rawTextLabel}>
+                Nuskaitytas regionas (dev):
+              </Text>
+              <RegionPreview
+                pages={pageMetas}
+                region={product.region}
+                cardWidth={CARD_WIDTH - 40}
+              />
+            </View>
+          )}
+        </View>
+      )}
+    </TouchableOpacity>
+  );
+});
 
 /** Spec C2 — receipt-process screen tabs. */
 type ReceiptTab = "suvestine" | "prekes" | "kvitas";
@@ -519,6 +785,37 @@ export default function ProcessReceiptScreen() {
     ];
     return clampMaskBandsToProtected(maskBands, protectedRegions as any);
   }, [maskBands, header, footer, products]);
+  // Region-array props for <ReceiptPhotoView> — memoised so the (memo'd)
+  // photo card actually skips re-renders: the inline ternaries used to mint
+  // fresh arrays every render, defeating its React.memo.
+  const photoHeaderRegions = useMemo(() => {
+    // ARRAY-PRESENCE semantics: an array that EXISTS but is empty means the
+    // parse (or the manual-pick strip) decided there is nothing to band —
+    // show nothing. Only a MISSING array (legacy receipts) falls back to the
+    // block-union region; that fallback used to kick in after the manual-pick
+    // strip emptied lineRegions and drew ONE band across the whole header
+    // (address + company code — receipt-302).
+    return Array.isArray(header?.lineRegions)
+      ? header.lineRegions
+      : header?.region
+      ? [header.region]
+      : [];
+  }, [header]);
+  const photoFooterRegions = useMemo(() => (
+    footer?.lineRegions && footer.lineRegions.length > 0
+      ? footer.lineRegions
+      : footer?.region
+      ? [footer.region]
+      : []
+  ), [footer]);
+  const photoProductRegions = useMemo(() => (
+    // Prod-hide parity: a line hidden from the Items list (isMessedUp) must not
+    // leave its green band on the photo either — dev/staging still draw it.
+    products
+      .filter((p) => !(IS_PROD && isMessedUpLine(p)))
+      .map((p) => p.region)
+      .filter(Boolean)
+  ), [products]);
   const { pendingPick, clearPendingPick } = useReceiptPickerState();
   const setCreateContext = useReceiptCreateContext((s) => s.setContext);
   // productsExpanded removed — Prekės is now its own tab (C2 absorbed
@@ -582,11 +879,8 @@ export default function ProcessReceiptScreen() {
   const comparisonKeyRef = useRef("");
   const shouldRefreshComparisonRef = useRef(false);
   const isFullyRecognized = (p: ProductLine) => p.matchConfirmed;
-  // In production, product rows are flat — there's nothing useful to show
-  // in the expanded drawer. The three-dots menu handles issue reporting and
-  // photo upload; the swipe flow handles OCR-name correction. Expand is
-  // only live under DEV_MODE so we can still inspect region previews.
-  const canExpandProduct = (_p: ProductLine) => DEV_MODE;
+  // Expand gate — see canExpandProductLine (module scope).
+  const canExpandProduct = canExpandProductLine;
 
   const buildComparisonKey = (h: HeaderData | null, items: ProductLine[]) =>
     JSON.stringify({
@@ -599,23 +893,10 @@ export default function ProcessReceiptScreen() {
         quantity: Number(p.quantity ?? 1),
       })),
     });
-  const isCompletelyUnrecognized = (p: ProductLine) =>
-    !p.matchConfirmed && !p.storeProductId && p.altMatches.length === 0;
 
-  // "Messed up" = the parser missed a HARD field: the NAME (a stray "?" phantom — no
-  // letters at all) or the PRICE (anything that would render "0,00 EUR" — price <= 0).
-  // Only these two genuinely-broken cases are hidden from the Items list on PRODUCTION
-  // — NOT a merely-uncertain match. A clean line whose match is only moderate (low
-  // confidence band) is still a real, useful product row and stays visible. Weighable
-  // (kg) items are NOT exempt: an unrecoverable €/kg shows "0,00" and is dropped on prod
-  // like any other priceless line (the "never write price" server guard is separate and
-  // unaffected). On dev/staging the dropped lines still render with a "would be hidden on
-  // production" marker.
-  const isMessedUp = (p: ProductLine) => {
-    const noName = !/[a-ząčęėįšųūž]/i.test(p.name ?? "");
-    const noPrice = !(p.price != null && p.price > 0);
-    return noName || noPrice;
-  };
+  // "Messed up" — see isMessedUpLine (module scope; hoisted so the memoised
+  // photo-region derivation above can use it during render).
+  const isMessedUp = isMessedUpLine;
 
   const clearRematchTimers = (index: number) => {
     const spinnerTimer = rematchSpinnerTimersRef.current[index];
@@ -709,6 +990,28 @@ export default function ProcessReceiptScreen() {
       rematchProductByName(index, value, seq);
     }, 3000);
   };
+
+  // Stable row callbacks for the memoised <ProductRowCard>. scheduleManualRematch
+  // is recreated per render (it closes over header state via rematchProductByName),
+  // so the name-change callback reaches it through a latest-ref.
+  const scheduleManualRematchRef = useRef(scheduleManualRematch);
+  scheduleManualRematchRef.current = scheduleManualRematch;
+  const onRowToggleExpand = useCallback((index: number) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
+    setEditingSection((prev) => (prev === index ? null : index));
+  }, []);
+  const onRowOpenMenu = useCallback((index: number) => {
+    Haptics.selectionAsync().catch(() => {});
+    setMenuOpenForIndex(index);
+  }, []);
+  const onRowChangeName = useCallback((index: number, text: string) => {
+    setProducts((prev) => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], name: text };
+      return updated;
+    });
+    scheduleManualRematchRef.current(index, text);
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -2315,228 +2618,24 @@ export default function ProcessReceiptScreen() {
               // PRODUCTION: hide a "messed up" (band-S3) line entirely. Keep the map over the full
               // `products` array (returning null) so every other row's `index` — used by the edit /
               // menu / rematch handlers — stays correct. dev/staging fall through and render it
-              // with a marker (below).
+              // with a marker (inside the row card).
               if (IS_PROD && isMessedUp(product)) return null;
-              // B3: three visual states drive border / background.
-              //   S1 confirmed  — matchConfirmed=true. Clean white, soft-accent border.
-              //   S3 partial    — line parsed but no SP match. warning border + tint.
-              //   S4 unrecognised — no name structure or no data. error border + tint, muted thumb, "—" price.
-              const isUnrecognised = isCompletelyUnrecognized(product);
-              const state: "S1" | "S3" | "S4" = product.matchConfirmed
-                ? "S1"
-                : isUnrecognised
-                ? "S4"
-                : "S3";
-              // Per-line confidence band (DISPLAY-ONLY). When CONFIDENCE_BAND_DISPLAY
-              // is on AND the server scored this line, the band — not the legacy
-              // matchConfirmed flag — decides whether we trust the SP name/image
-              // (S1) or fall back to the OCR text with a review nudge (S2) / alone
-              // (S3). Off by default until thresholds are calibrated, so showSpInfo
-              // stays bit-identical to the old `state === "S1"`. The `state`-driven
-              // borders/placeholders/price below are unchanged (parse quality, not
-              // identity confidence).
-              const ic = product.itemConfidence ?? null;
-              const useBand = CONFIDENCE_BAND_DISPLAY && ic != null;
-              const showSpInfo = useBand ? ic!.band === "S1" : state === "S1";
-              const showReviewBadge = useBand && ic!.band === "S2";
-              const totalPrice =
-                product.promoPrice != null && product.promoPrice < product.price
-                  ? product.promoPrice * product.quantity
-                  : product.price * product.quantity;
-              const grossTotal = product.price * product.quantity;
               return (
-              <TouchableOpacity
-                key={index}
-                style={[
-                  styles.productRowCard,
-                  index === 0 && styles.productRowCardFirst,
-                  index === products.length - 1 && !(footer?.comboDiscount) && styles.productRowCardLast,
-                  state === "S3" && styles.productRowCardS3,
-                  state === "S4" && styles.productRowCardS4,
-                ]}
-                activeOpacity={canExpandProduct(product) ? 0.7 : 1}
-                onPress={
-                  canExpandProduct(product)
-                    ? () => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light).catch(() => {});
-                        setEditingSection(
-                          editingSection === index ? null : index,
-                        );
-                      }
-                    : undefined
-                }
-              >
-                {/* Dev-only band crop: shows the OCR region this row's
-                    data was extracted from, sliced from the receipt
-                    image. Gated by __DEV__ so release bundles strip
-                    the entire branch at Metro bundle time. Uses the
-                    sharper pre-crop component — RegionPreview's
-                    overflow-trick produced unreadable mush on Android
-                    for narrow product bands. */}
-                {__DEV__ &&
-                  pageMetas.length > 0 &&
-                  product.region &&
-                  product.region.yBottom > product.region.yTop && (
-                    <View style={styles.productBandCropWrap}>
-                      <BandCropImage
-                        pages={pageMetas}
-                        region={product.region}
-                        cardWidth={CARD_WIDTH}
-                      />
-                    </View>
-                  )}
-                <View style={styles.productRow}>
-                  {showSpInfo && product.storeProductImageUrl ? (
-                    <Image
-                      source={{ uri: product.storeProductImageUrl }}
-                      style={styles.productThumb}
-                      resizeMode="contain"
-                    />
-                  ) : (
-                    <View
-                      style={[
-                        styles.productThumbPlaceholder,
-                        state === "S4" && styles.productThumbPlaceholderMuted,
-                      ]}
-                    >
-                      <Text style={styles.productThumbEmoji}>🫜</Text>
-                    </View>
-                  )}
-                  <View style={styles.productInfo}>
-                    {/* Name typography: matched products use the primary
-                        colour ("matched"), partial / unrecognised stay
-                        textPrimary. Inline state icons removed — the
-                        row's border + background communicate state now. */}
-                    {showSpInfo && product.matchedName ? (
-                      <Text style={styles.matchedName} numberOfLines={2}>
-                        {product.matchedName}
-                      </Text>
-                    ) : (
-                      <Text style={styles.productName} numberOfLines={2}>
-                        {product.name}
-                      </Text>
-                    )}
-                    <Text style={styles.productQuantity}>
-                      {formatAmountLabel(product)}
-                    </Text>
-                    {/* S2 review nudge (user-facing, behind the flag): OCR name is
-                        shown but the matched SP wants a human glance. */}
-                    {showReviewBadge && ic && (
-                      <ConfidenceBadge ic={ic} colors={colors} variant="review" />
-                    )}
-                    {/* Dev-only band readout — always on in dev builds so we can
-                        watch the score on-device while calibrating. Stripped from
-                        release bundles by __DEV__. */}
-                    {__DEV__ && ic && (
-                      <ConfidenceBadge ic={ic} colors={colors} variant="dev" />
-                    )}
-                    {/* dev/staging marker: this low-confidence line WOULD be hidden on production. */}
-                    {!IS_PROD && isMessedUp(product) && (
-                      <View style={styles.prodSkipBadge}>
-                        <Ionicons name="eye-off-outline" size={11} color={colors.warning} />
-                        <Text style={styles.prodSkipBadgeText}>{t('receiptProcess.prodSkipBadge')}</Text>
-                      </View>
-                    )}
-                    {/* Re-verification pending: this match contradicts one of the user's old
-                        'different' votes; the rejection is SUSPENDED and the pair is queued
-                        as a priority swipe card. The chip keeps the open question visible. */}
-                    {product.pendingReverification && (
-                      <View style={styles.prodSkipBadge}>
-                        <Ionicons name="help-circle-outline" size={11} color={colors.warning} />
-                        <Text style={styles.prodSkipBadgeText}>{t('receiptProcess.reverifyBadge')}</Text>
-                      </View>
-                    )}
-                  </View>
-                  <View style={styles.productPriceCol}>
-                    {/* Show the OCR-captured price whenever we HAVE one — even for an
-                        unrecognised (S4) line: the price is a real receipt fact, only the
-                        product IDENTITY is unknown. "—" only when there is genuinely no
-                        price (footer junk / an unrecoverable weighed €/kg → price 0). */}
-                    {totalPrice > 0 ? (
-                      product.promoPrice != null && product.promoPrice < product.price ? (
-                        <>
-                          <Text style={styles.productPrice}>{formatEuro(totalPrice)}</Text>
-                          <Text style={styles.productPriceStrike}>{formatEuro(grossTotal)}</Text>
-                        </>
-                      ) : (
-                        <Text style={styles.productPrice}>{formatEuro(totalPrice)}</Text>
-                      )
-                    ) : (
-                      <Text style={styles.productPrice}>—</Text>
-                    )}
-                  </View>
-                  <TouchableOpacity
-                    style={styles.productRowMenuBtn}
-                    onPress={(e) => {
-                      e.stopPropagation?.();
-                      Haptics.selectionAsync().catch(() => {});
-                      setMenuOpenForIndex(index);
-                    }}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  >
-                    <Ionicons
-                      name="ellipsis-vertical"
-                      size={18}
-                      color={colors.textSecondary}
-                    />
-                  </TouchableOpacity>
-                </View>
-                {editingSection === index && canExpandProduct(product) && (
-                  <View style={styles.editSection}>
-                    {isCompletelyUnrecognized(product) && (
-                      <View style={styles.unrecognizedBlock}>
-                        <Text style={styles.editLabel}>OCR pavadinimas</Text>
-                        <View style={styles.editInputLoaderWrap}>
-                          <TextInput
-                            style={[
-                              styles.editInput,
-                              styles.editInputWithLoaderPadding,
-                            ]}
-                            value={product.name}
-                            onChangeText={(text) => {
-                              setProducts((prev) => {
-                                const updated = [...prev];
-                                updated[index] = {
-                                  ...updated[index],
-                                  name: text,
-                                };
-                                return updated;
-                              });
-                              scheduleManualRematch(index, text);
-                            }}
-                            placeholder={t('receiptProcess.namePlaceholder')}
-                            placeholderTextColor={colors.textMuted}
-                          />
-                          {rematchLoadingByIndex[index] && (
-                            <MaterialProgress
-                              size="small"
-                              color={colors.primary}
-                              style={styles.editInputLoader}
-                            />
-                          )}
-                        </View>
-                      </View>
-                    )}
-
-                    {/* Raw OCR region preview — dev-only surface, gated by
-                        DEV_MODE so end users don't see it. Useful for
-                        debugging parser/geometry issues against the source
-                        image. */}
-                    {DEV_MODE && pageMetas.length > 0 && (
-                      <View style={styles.regionPreviewWrap}>
-                        <Text style={styles.rawTextLabel}>
-                          Nuskaitytas regionas (dev):
-                        </Text>
-                        <RegionPreview
-                          pages={pageMetas}
-                          region={product.region}
-                          cardWidth={CARD_WIDTH - 40}
-                        />
-                      </View>
-                    )}
-                  </View>
-                )}
-              </TouchableOpacity>
+                <ProductRowCard
+                  key={index}
+                  product={product}
+                  index={index}
+                  isFirst={index === 0}
+                  isLast={index === products.length - 1 && !(footer?.comboDiscount)}
+                  expanded={editingSection === index}
+                  rematchLoading={!!rematchLoadingByIndex[index]}
+                  pageMetas={pageMetas}
+                  styles={styles}
+                  colors={colors}
+                  onToggleExpand={onRowToggleExpand}
+                  onOpenMenu={onRowOpenMenu}
+                  onChangeName={onRowChangeName}
+                />
               );
               })
             )}
@@ -2605,33 +2704,12 @@ export default function ProcessReceiptScreen() {
               imageUri={imageUri}
               imageDims={imageDims}
               loading={imageLoading}
-              headerRegions={
-                // ARRAY-PRESENCE semantics: an array that EXISTS but is empty means the
-                // parse (or the manual-pick strip) decided there is nothing to band —
-                // show nothing. Only a MISSING array (legacy receipts) falls back to the
-                // block-union region; that fallback used to kick in after the manual-pick
-                // strip emptied lineRegions and drew ONE band across the whole header
-                // (address + company code — receipt-302).
-                Array.isArray(header?.lineRegions)
-                  ? header.lineRegions
-                  : header?.region
-                  ? [header.region]
-                  : []
-              }
-              // Prod-hide parity: a line hidden from the Items list (isMessedUp) must not
-              // leave its green band on the photo either — dev/staging still draw it.
-              productRegions={products
-                .filter((p) => !(IS_PROD && isMessedUp(p)))
-                .map((p) => p.region)
-                .filter(Boolean)}
+              // Region arrays memoised above (photo*Regions) so the memo'd
+              // photo card skips re-renders when regions didn't change.
+              headerRegions={photoHeaderRegions}
+              productRegions={photoProductRegions}
               skippedRegions={skippedRegions}
-              footerRegions={
-                footer?.lineRegions && footer.lineRegions.length > 0
-                  ? footer.lineRegions
-                  : footer?.region
-                  ? [footer.region]
-                  : []
-              }
+              footerRegions={photoFooterRegions}
               maskRegions={maskBandsClamped}
               // Fresh scan: draw the overlay over the un-redacted camera image. Saved
               // receipt: the displayed image is already burned-in, so skip the overlay

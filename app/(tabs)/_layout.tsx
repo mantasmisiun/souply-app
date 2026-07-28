@@ -1,13 +1,13 @@
-import { Tabs, Redirect } from 'expo-router';
+import { Tabs, Redirect, useFocusEffect } from 'expo-router';
 import { NativeTabs, Icon, Label, Badge } from 'expo-router/unstable-native-tabs';
 import { BlurView } from 'expo-blur';
 import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Platform, View, Text, StyleSheet } from 'react-native';
+import { AppState, Platform, View, Text, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { useTheme, type AppTheme } from '../../constants/theme';
-import { useProfileStore } from '../../state/profileStore';
+import { fetchProfileIfStale } from '../../state/profileStore';
 import { useAdminModeStore } from '../../state/adminModeStore';
 import { HapticTab } from '../../components/haptic-tab';
 import { FloatingPillTabBar } from '../../components/FloatingPillTabBar';
@@ -63,7 +63,7 @@ function TabLayout() {
     // ONE badge endpoint (2.0): trips ≈ non-archived trips in stages 1-4
     // (server-side grouping of baskets + lists until Phase 4 goes Trip-native);
     // pendingSwipes moved to the Profilis tab badge.
-    const fetchCounts = async () => {
+    const fetchCounts = useCallback(async () => {
         try {
             const userId = await getUserId();
             const res = await fetch(`${API_BASE_URL}/api/users/${userId}/tab-badges`);
@@ -73,19 +73,41 @@ function TabLayout() {
         } catch (error) {
             console.error('Failed to fetch counts:', error);
         }
-    };
-
-    useEffect(() => {
-        fetchCounts();
-        const interval = setInterval(fetchCounts, 10000);
-        return () => clearInterval(interval);
     }, []);
 
+    // Refetch when the tab group (re)gains navigation focus — covers mount and
+    // every return from a root-stack push (receipt flows, settings, ...).
+    useFocusEffect(useCallback(() => { fetchCounts(); }, [fetchCounts]));
+
+    // Poll gated on the app actually being in the FOREGROUND, at 60s. The old
+    // 10s always-on interval kept firing while backgrounded (~360 req/h);
+    // AppState pauses it entirely, and a foreground return refetches at once.
     useEffect(() => {
-        useProfileStore.getState().fetchProfile();
+        let interval: ReturnType<typeof setInterval> | null = null;
+        const start = () => { if (interval == null) interval = setInterval(fetchCounts, 60_000); };
+        const stop = () => { if (interval != null) { clearInterval(interval); interval = null; } };
+        if (AppState.currentState === 'active') start();
+        const sub = AppState.addEventListener('change', (state) => {
+            if (state === 'active') { fetchCounts(); start(); }
+            else stop();
+        });
+        return () => { stop(); sub.remove(); };
+    }, [fetchCounts]);
+
+    // Stale-guarded (state/profileStore.ts) — the store already knows when its
+    // data is fresh; the previous unconditional fetchProfile() bypassed that
+    // and refetched profile+stats on every tab-layout mount.
+    useEffect(() => {
+        fetchProfileIfStale();
     }, []);
 
     const renderTabBar = useCallback((props: BottomTabBarProps) => <FloatingPillTabBar {...props} />, []);
+
+    // Mount diagnostic, ONCE — this used to sit in the render body of the iOS
+    // branch, POSTing to /api/dev-log on every re-render of the tab layout.
+    useEffect(() => {
+        if (Platform.OS === 'ios') devLog('tabs.iosLayoutMount', {});
+    }, []);
 
     const jsTabs = (
         <Tabs
@@ -161,7 +183,6 @@ function TabLayout() {
     );
 
     if (Platform.OS === 'ios') {
-        devLog('tabs.iosLayoutMount', { tripCount, pendingSwipeCount });
         const fmt = (n: number) => (n > 0 ? (n > 9 ? '9+' : String(n)) : undefined);
         const tripBadge = fmt(tripCount);
         const swipeBadge = fmt(pendingSwipeCount);

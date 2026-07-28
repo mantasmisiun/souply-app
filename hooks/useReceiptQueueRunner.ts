@@ -7,6 +7,7 @@ import {
 } from "../services/receiptProcessingService";
 import { useNetworkStatus } from "../state/networkStatus";
 import { useReceiptQueueStore } from "../state/receiptQueueStore";
+import { devLog } from "../utils/devLog";
 
 /**
  * Decides how a processing failure should be reflected in the queue.
@@ -77,6 +78,14 @@ export function useReceiptQueueRunner(): void {
     runningRef.current = true;
     abortRef.current = new AbortController();
     store.markProcessing(next.id, "Nuskaitoma...");
+    // The queue is headless and its items can be parked, resumed and re-parked
+    // across app restarts — without a trace, "my receipt never arrived" is
+    // unanswerable after the fact.
+    devLog('queue.start', {
+        id: next.id, pages: next.uris.length, heal: next.healReceiptId ?? null,
+        linkChoiceListId: next.linkChoiceListId ?? null, linkAdHoc: !!next.linkAdHoc, linkTripId: next.linkTripId ?? null,
+        linkMap: next.linkMap ?? null, retryOfDate: !!next.overrideDate,
+    });
 
     processOneReceipt(
       next.uris,
@@ -85,17 +94,37 @@ export function useReceiptQueueRunner(): void {
         useReceiptQueueStore
           .getState()
           .updateProgress(next.id, step, done, total),
-      { isPdf: next.isPdf === true, linkMap: next.linkMap, fallbackLinkId: next.fallbackLinkId, healReceiptId: next.healReceiptId, devReplace: next.devReplace, overrideDate: next.overrideDate, resolvedStore: next.resolvedStore },
+      { isPdf: next.isPdf === true, linkMap: next.linkMap, fallbackLinkId: next.fallbackLinkId, healReceiptId: next.healReceiptId, devReplace: next.devReplace, overrideDate: next.overrideDate, resolvedStore: next.resolvedStore, linkChoiceListId: next.linkChoiceListId, linkAdHoc: next.linkAdHoc, linkTripId: next.linkTripId },
     )
       .then((result) => {
-        useReceiptQueueStore.getState().markDone(next.id, result.receiptId);
+        devLog('queue.done', { id: next.id, receiptId: result.receiptId, linkedListId: result.linkedListId ?? null });
+        useReceiptQueueStore.getState().markDone(next.id, result.receiptId, result.linkedListId);
       })
       .catch((e) => {
         const s = useReceiptQueueStore.getState();
+        devLog('queue.fail', {
+            id: next.id,
+            reason: e instanceof ProcessingError ? e.reason : (e?.name ?? 'unknown'),
+            message: String(e?.message ?? e).slice(0, 200),
+            online: onlineRef.current,
+        });
         // PARKED, not failed: the parse succeeded but the purchase date didn't
         // read. The card asks for it and resolveDate() re-queues the item.
         if (e instanceof ProcessingError && e.reason === "needs_date") {
           s.markNeedsDate(next.id, e.message);
+          return;
+        }
+        // PARKED: uploaded for a trip, but from a store that trip didn't plan.
+        // The card asks which slot it covers; resolveStoreLink() re-queues it.
+        if (e instanceof ProcessingError && e.reason === "needs_store" && e.linkChoice) {
+          s.markNeedsStore(next.id, e.message, e.linkChoice);
+          return;
+        }
+        // PARKED: the receipt SAVED but never attached to its list. Retrying the
+        // whole pipeline would only trip duplicate detection — the card retries
+        // just the link, so the receipt can still reach the trip it was meant for.
+        if (e instanceof ProcessingError && e.reason === "link_failed" && e.linkFailure) {
+          s.markNeedsLink(next.id, e.message, e.linkFailure);
           return;
         }
         const routing = routeQueueError(e, onlineRef.current);
@@ -126,15 +155,24 @@ export function useReceiptQueueRunner(): void {
   }
 
   // Watch queue: start processing when a new pending item arrives and nothing is running.
-  const items = useReceiptQueueStore((s) => s.items);
+  //
+  // Subscribe to the two DERIVED BOOLEANS, not the items array: this hook runs
+  // inside RootLayout (above the Stack and every provider), so an array-identity
+  // subscription re-rendered the whole app on every updateProgress tick during
+  // product matching. Zustand compares selector results with Object.is, so a
+  // boolean selector only re-renders on an actual pending/processing flip.
+  const hasPending = useReceiptQueueStore((s) =>
+    s.items.some((i) => i.status === "pending"),
+  );
+  const hasProcessing = useReceiptQueueStore((s) =>
+    s.items.some((i) => i.status === "processing"),
+  );
   useEffect(() => {
-    const hasPending = items.some((i) => i.status === "pending");
-    const hasProcessing = items.some((i) => i.status === "processing");
     if (hasPending && !hasProcessing) {
       processNext();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [items, initialized]);
+  }, [hasPending, hasProcessing, initialized]);
 
   // Offline → online edge: revive every `awaiting_network` item. The
   // items-effect above then picks the first one up. We don't call

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { memo, useMemo, useState } from 'react';
 import {
     Image,
     LayoutChangeEvent,
@@ -128,6 +128,120 @@ const footerBandStyle = (kind: string | undefined, colors: AppTheme, t: TFunctio
     }
 };
 
+/** Precomputed display-space band geometry (one entry per drawable region). */
+interface QuadEntry {
+    points: string;
+    left: number;
+    midY: number;
+    /** Per-kind band colour (header/footer bands only). */
+    colour?: string;
+}
+
+interface OverlayData {
+    products: QuadEntry[];
+    skipped: QuadEntry[];
+    masks: QuadEntry[];
+    footer: QuadEntry[];
+    header: QuadEntry[];
+}
+
+/**
+ * The band overlay — hundreds of SVG polygons + #N badges. Memoised as one
+ * unit over the PRECOMPUTED geometry so parent re-renders (image-loading
+ * spinner flips, the explainer modal, pan/zoom-driven parent state) don't
+ * rebuild every node; only a geometry change (new regions, container resize)
+ * does.
+ */
+const BandOverlays = memo(function BandOverlays({ data, containerW, stageH, successColour, badgeTextStyle, badgeStyle }: {
+    data: OverlayData;
+    containerW: number;
+    stageH: number;
+    successColour: string;
+    badgeTextStyle: object;
+    badgeStyle: object;
+}) {
+    return (
+        <>
+            <Svg
+                style={StyleSheet.absoluteFill}
+                width={containerW}
+                height={stageH}
+                pointerEvents="none"
+            >
+                {data.products.map((q, i) => (
+                    <Polygon
+                        key={`pp-${i}`}
+                        points={q.points}
+                        stroke={successColour}
+                        strokeWidth={2}
+                        fill={`${successColour}1A`}
+                    />
+                ))}
+                {data.skipped.map((q, i) => (
+                    <Polygon
+                        key={`sp-${i}`}
+                        points={q.points}
+                        stroke={PALETTE_SKIPPED}
+                        strokeWidth={2}
+                        strokeDasharray="4 3"
+                        fill={`${PALETTE_SKIPPED}26`}
+                    />
+                ))}
+                {/* Privacy masks — solid black, tilt-following (same quad as the
+                    burned-in box) so the overlay matches the uploaded image. */}
+                {data.masks.map((q, i) => (
+                    <Polygon
+                        key={`mk-${i}`}
+                        points={q.points}
+                        fill="#000"
+                        stroke="#000"
+                        strokeWidth={1}
+                    />
+                ))}
+                {/* Footer bands (total / date / receipt №), coloured per kind. */}
+                {data.footer.map((q, i) => (
+                    <Polygon
+                        key={`f-${i}`}
+                        points={q.points}
+                        stroke={q.colour}
+                        strokeWidth={2}
+                        fill={`${q.colour}1A`}
+                    />
+                ))}
+                {/* Header bands (address / company-code). */}
+                {data.header.map((q, i) => (
+                    <Polygon
+                        key={`h-${i}`}
+                        points={q.points}
+                        stroke={q.colour}
+                        strokeWidth={2}
+                        fill={`${q.colour}1A`}
+                    />
+                ))}
+            </Svg>
+            {/* Per-product #N badge to the left of each band. */}
+            {data.products.map((q, i) => {
+                const BADGE_W = 26;
+                const BADGE_GAP = 4;
+                const badgeLeft =
+                    q.left >= BADGE_W + BADGE_GAP ? q.left - BADGE_W - BADGE_GAP : 2;
+                return (
+                    <View
+                        key={`pb-${i}`}
+                        pointerEvents="none"
+                        style={[
+                            badgeStyle,
+                            { top: q.midY - 9, left: badgeLeft, backgroundColor: successColour },
+                        ]}
+                    >
+                        <Text style={badgeTextStyle}>#{i + 1}</Text>
+                    </View>
+                );
+            })}
+        </>
+    );
+});
+
 interface Props {
     imageUri: string | null;
     /** Page-1 pixel dims as the parser saw them. */
@@ -159,7 +273,7 @@ interface Props {
     loading?: boolean;
 }
 
-export default function ReceiptPhotoView({
+function ReceiptPhotoView({
     imageUri,
     imageDims,
     headerRegions,
@@ -301,6 +415,38 @@ export default function ReceiptPhotoView({
         return Array.from(groups.values()).sort((a, b) => a.order - b.order);
     }, [headerRegions, productRegions.length, footerRegions, skippedRegions.length, colors, t]);
 
+    // Precompute EVERY band's display-space quad once per geometry change —
+    // before this, each parent re-render (image spinner flips, modal opens)
+    // recomputed hundreds of polygon strings and rebuilt their nodes.
+    const overlayData = useMemo<OverlayData | null>(() => {
+        if (!imageDims || containerW <= 0) return null;
+        const quad = (r: ReceiptRegion): QuadEntry | null => {
+            const q = toQuadPoints(r);
+            return q ? { points: q.points, left: q.left, midY: q.midY } : null;
+        };
+        const withStyle = (r: ReceiptRegion, style: BandStyle): QuadEntry | null => {
+            const q = quad(r);
+            return q ? { ...q, colour: style.colour } : null;
+        };
+        return {
+            products: productRegions.map(quad).filter((q): q is QuadEntry => q != null),
+            skipped: skippedRegions.map(quad).filter((q): q is QuadEntry => q != null),
+            masks: drawMasks
+                ? maskRegions.map(quad).filter((q): q is QuadEntry => q != null)
+                : [],
+            footer: footerRegions
+                .map(r => withStyle(r, footerBandStyle(r.kind, colors, t)))
+                .filter((q): q is QuadEntry => q != null),
+            header: headerRegions
+                .map(r => withStyle(r, headerBandStyle(r.kind, colors, t)))
+                .filter((q): q is QuadEntry => q != null),
+        };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [
+        productRegions, skippedRegions, maskRegions, footerRegions, headerRegions,
+        imageDims, containerW, scale, cropOffsetX, cropOffsetY, stageH, drawMasks, colors, t,
+    ]);
+
     if (!imageUri || !imageDims) {
         // Still fetching the saved photo from MinIO → skeleton (title + legend hints +
         // a tall image placeholder) so the layout is set and nothing flashes. Only once
@@ -395,116 +541,19 @@ export default function ReceiptPhotoView({
                         {/* Tilt-following band walls: product (green) + skipped
                             (grey dashed) bands as SVG polygons built from each
                             region's per-corner Y, so the overlay follows a
-                            skewed receipt instead of boxing it as rectangles. */}
-                        <Svg
-                            style={StyleSheet.absoluteFill}
-                            width={containerW}
-                            height={stageH}
-                            pointerEvents="none"
-                        >
-                            {productRegions.map((r, i) => {
-                                const q = toQuadPoints(r);
-                                if (!q) return null;
-                                return (
-                                    <Polygon
-                                        key={`pp-${i}`}
-                                        points={q.points}
-                                        stroke={colors.success}
-                                        strokeWidth={2}
-                                        fill={`${colors.success}1A`}
-                                    />
-                                );
-                            })}
-                            {skippedRegions.map((r, i) => {
-                                const q = toQuadPoints(r);
-                                if (!q) return null;
-                                return (
-                                    <Polygon
-                                        key={`sp-${i}`}
-                                        points={q.points}
-                                        stroke={PALETTE_SKIPPED}
-                                        strokeWidth={2}
-                                        strokeDasharray="4 3"
-                                        fill={`${PALETTE_SKIPPED}26`}
-                                    />
-                                );
-                            })}
-                            {/* Privacy masks — solid black, tilt-following (same
-                                quad as the burned-in box) so the overlay matches
-                                the uploaded image. */}
-                            {drawMasks && maskRegions.map((r, i) => {
-                                const q = toQuadPoints(r);
-                                if (!q) return null;
-                                return (
-                                    <Polygon
-                                        key={`mk-${i}`}
-                                        points={q.points}
-                                        fill="#000"
-                                        stroke="#000"
-                                        strokeWidth={1}
-                                    />
-                                );
-                            })}
-                            {/* Footer bands (total / date / receipt №) as tilt-
-                                following polygons, coloured per kind — they sit
-                                well below the product section so no neighbour
-                                clamp is needed. */}
-                            {footerRegions.map((r, i) => {
-                                const q = toQuadPoints(r);
-                                if (!q) return null;
-                                const s = footerBandStyle(r.kind, colors, t);
-                                return (
-                                    <Polygon
-                                        key={`f-${i}`}
-                                        points={q.points}
-                                        stroke={s.colour}
-                                        strokeWidth={2}
-                                        fill={`${s.colour}1A`}
-                                    />
-                                );
-                            })}
-                            {/* Header bands (address / company-code) as tilt-
-                                following polygons too. The parser already tiled
-                                them (bent seams, no overlap with each other or the
-                                product section), so they render straight from the
-                                quad like every other band. */}
-                            {headerRegions.map((r, i) => {
-                                const q = toQuadPoints(r);
-                                if (!q) return null;
-                                const s = headerBandStyle(r.kind, colors, t);
-                                return (
-                                    <Polygon
-                                        key={`h-${i}`}
-                                        points={q.points}
-                                        stroke={s.colour}
-                                        strokeWidth={2}
-                                        fill={`${s.colour}1A`}
-                                    />
-                                );
-                            })}
-                        </Svg>
-                        {/* Per-product #N badge to the left of each band; the
-                            band itself is the green SVG polygon above. */}
-                        {productRegions.map((r, i) => {
-                            const q = toQuadPoints(r);
-                            if (!q) return null;
-                            const BADGE_W = 26;
-                            const BADGE_GAP = 4;
-                            const badgeLeft =
-                                q.left >= BADGE_W + BADGE_GAP ? q.left - BADGE_W - BADGE_GAP : 2;
-                            return (
-                                <View
-                                    key={`pb-${i}`}
-                                    pointerEvents="none"
-                                    style={[
-                                        styles.bandBadge,
-                                        { top: q.midY - 9, left: badgeLeft, backgroundColor: colors.success },
-                                    ]}
-                                >
-                                    <Text style={styles.bandBadgeText}>#{i + 1}</Text>
-                                </View>
-                            );
-                        })}
+                            skewed receipt instead of boxing it as rectangles.
+                            Geometry precomputed + memoised (BandOverlays), so a
+                            re-render that changes nothing rebuilds nothing. */}
+                        {overlayData && (
+                            <BandOverlays
+                                data={overlayData}
+                                containerW={containerW}
+                                stageH={stageH}
+                                successColour={colors.success}
+                                badgeStyle={styles.bandBadge}
+                                badgeTextStyle={styles.bandBadgeText}
+                            />
+                        )}
                         {/* (Footer bands are the per-kind SVG polygons in the
                             layer above; skipped coupon/bag/points bands are the
                             grey dashed polygons there too.) */}
@@ -595,6 +644,10 @@ export default function ReceiptPhotoView({
         </View>
     );
 }
+
+// memo'd: parents (receipt-process Kvitas tab, ReceiptDetailSheet) re-render
+// on scroll/sheet state; with stable region-array props the whole card skips.
+export default memo(ReceiptPhotoView);
 
 function LegendChip({
     colour,

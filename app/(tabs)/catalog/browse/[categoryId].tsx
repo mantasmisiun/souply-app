@@ -1,4 +1,5 @@
-import { View, SectionList, Text, StyleSheet } from 'react-native';
+import { View, SectionList, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { SkeletonBox } from '@/components/SkeletonBox';
 import { useBasketQuantities } from '@/hooks/useBasketQuantities';
 import { useEffect, useMemo, useState, useCallback, useRef, memo, Fragment } from 'react';
@@ -11,7 +12,7 @@ import { useBasketState } from '@/state/basketState';
 import { useBasketSession } from '@/state/basketSession';
 import { addProductToBasket } from '@/utils/basketUtils';
 import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '@/components/ComparedBasketChoiceModal';
-import BasketProductCard from '@/components/browse/BasketProductCard';
+import { ConnectedProductCard } from '@/components/browse/ConnectedProductCard';
 import type { UnitPriceBadge } from '@/components/browse/BasketProductCard';
 import CategoryBubbles from '@/components/browse/CategoryBubbles';
 import { useTemplateAddState } from '@/state/templateAddState';
@@ -80,8 +81,10 @@ export default function CategoryScreen() {
     const [loadingProducts, setLoadingProducts] = useState(false);
     const { draftBasketId, setDraftBasketId } = useBasketState();
     // ONE target-aware source: session basket (X → chooser switch included),
-    // draft fallback; re-fetches on basketRev.
-    const { basketId: targetBasketId, quantities: basketQuantities, setQuantities: setBasketQuantities, refresh: refreshBasketQuantities } = useBasketQuantities();
+    // draft fallback; re-fetches on basketRev. Actions only — the screen must
+    // NOT subscribe to the quantities map (every ± tap replaces its identity
+    // and would re-render the whole grid over the per-card subscriptions).
+    const { commit: commitBasketQty, refresh: refreshBasketQuantities } = useBasketQuantities();
     // Products whose "Į krepšelį" POST is currently in flight. Prevents
     // rapid double-taps from firing a second add before the first lands
     // and paints the quantity control over the button.
@@ -102,12 +105,15 @@ export default function CategoryScreen() {
         resolve: (choice: ComparedChoice) => void;
     }>({ visible: false, resolve: () => {} });
 
+    const [loadFailed, setLoadFailed] = useState(false);
+    const [reloadKey, setReloadKey] = useState(0);
     useEffect(() => {
         // Wait for the display-mode preference to load before firing fetches;
         // otherwise the screen flashes default-mode results before switching.
         if (!prefReady) return;
         const fetchData = async () => {
             setLoading(true);
+            setLoadFailed(false);
             try {
                 const userId = await getUserId();
                 const [subRes, prodRes] = await Promise.all([
@@ -130,6 +136,10 @@ export default function CategoryScreen() {
                 } else {
                     setUserMergeMap({});
                 }
+            } catch {
+                // A failed load must not read as "this category is empty" — the
+                // list would show "no products" and never try again.
+                setLoadFailed(true);
             } finally {
                 setLoading(false);
             }
@@ -138,7 +148,7 @@ export default function CategoryScreen() {
         // i18n.language dep: subcategories carry localised names; re-fetch
         // when the language changes (or on first hydration) so the chips
         // don't lag behind the rest of the UI.
-    }, [categoryId, mode, prefReady, i18n.language]);
+    }, [categoryId, mode, prefReady, i18n.language, reloadKey]);
     // Draft init still happens once so the no-session fallback has a basket.
     useEffect(() => {
         if (!draftBasketId) void useBasketState.getState().initDraftBasket();
@@ -285,13 +295,9 @@ export default function CategoryScreen() {
         return addProductToBasket(productId, existing, setDraftBasketId, quantity, mode);
     };
 
-    const draftBasketIdRef = useRef(draftBasketId);
-    useEffect(() => { draftBasketIdRef.current = draftBasketId; }, [draftBasketId]);
     // Set/remove must hit the basket the cards DISPLAY (session target first) —
     // writing to the draft while a session targets another basket silently
     // edited the wrong basket.
-    const targetBasketIdRef = useRef(targetBasketId);
-    useEffect(() => { targetBasketIdRef.current = targetBasketId; }, [targetBasketId]);
     const commitAddRef = useRef(commitAdd);
     useEffect(() => { commitAddRef.current = commitAdd; }, [commitAdd]);
 
@@ -436,62 +442,22 @@ export default function CategoryScreen() {
 
     // Fresh add (non-picker path; the picker — when the item is weighable/range
     // — is owned by AddOrStepper and also lands here via onCommit). Optimistic.
-    const addToBasket = useCallback((item: Product, qty: number) => {
-        setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
-        commitAddRef.current(item.id, qty).then(result => {
-            if (result.success) {
-                setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
-            }
-        }).finally(() => {
-            setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
-        });
-    }, [t]);
-
-    // Remove the whole line (stepping below one step, or an explicit 0). When it
-    // was the basket's last item the draft basket itself is torn down.
-    const removeFromBasket = useCallback((item: Product) => {
-        const bid = targetBasketIdRef.current ?? draftBasketIdRef.current;
-        setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
-        if (!bid) return;
-        fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (allItems: any) => {
-            const basketItem = Array.isArray(allItems) ? allItems.find((i: any) => i.productId === item.id) : null;
-            if (basketItem) await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
-            const remaining = Array.isArray(allItems) ? allItems.filter((i: any) => i.id !== basketItem?.id) : [];
-            if (remaining.length === 0) { await fetch(`${API_BASE_URL}/api/baskets/${bid}`, { method: 'DELETE' }); setDraftBasketId(null); }
-        }).catch(() => {});
-    }, [setDraftBasketId]);
-
-    // Absolute set — the +/- stepper and the picker's edit-reopen both land here.
-    const onSetQuantity = useCallback((item: Product, newQty: number) => {
-        const bid = targetBasketIdRef.current ?? draftBasketIdRef.current;
-        setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
-        if (!bid) return;
-        fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async (items2: any) => {
-            const basketItem = items2.find((i: any) => i.productId === item.id);
-            if (basketItem) await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
-        }).catch(() => {});
-    }, []);
-
-    // Single commit for AddOrStepper: routes the new qty to add / set / remove
-    // (or the template store in template mode). `currentQty` is what the card
-    // shows now (0 ⇒ a fresh add; the summed basket qty otherwise).
-    const commitCardQty = useCallback((item: Product, currentQty: number, qty: number) => {
+    // Single commit for AddOrStepper: add / set / remove (or the template store).
+    // The basket side is ONE call into the shared quantities store — optimistic,
+    // coalesced, and immune to a slow refresh landing on top of it.
+    const commitCardQty = useCallback((productId: number, currentQty: number, qty: number) => {
         if (isTemplateMode) {
-            const tq = templateMap[item.id]?.quantity ?? 0;
-            if (qty <= 0) { templateSetQty(item.id, 0).catch(() => {}); return; }
-            if (tq === 0) { commitTemplateAdd(item.id, qty); return; }
-            templateSetQty(item.id, qty).catch(() => {});
+            if (qty <= 0) { templateSetQty(productId, 0).catch(() => {}); return; }
+            if (currentQty === 0) { commitTemplateAdd(productId, qty); return; }
+            templateSetQty(productId, qty).catch(() => {});
             return;
         }
-        if (qty <= 0) { removeFromBasket(item); return; }
-        if (currentQty === 0) { addToBasket(item, qty); return; }
-        onSetQuantity(item, qty);
-    }, [isTemplateMode, templateMap, templateSetQty, commitTemplateAdd, removeFromBasket, addToBasket, onSetQuantity]);
+        // The screen's own add resolves a COMPARED basket first (use it / start
+        // new); steps skip it and go straight to the by-product write.
+        commitBasketQty(productId, currentQty, qty, commitAddRef.current);
+    }, [isTemplateMode, templateSetQty, commitTemplateAdd, commitBasketQty]);
 
     const renderCard = useCallback(({ item }: { item: Product }) => {
-        const mergedQty = (mergedIntoMe[item.id] ?? [])
-            .reduce((sum, hid) => sum + (basketQuantities[hid] ?? 0), 0);
-        const quantity = (basketQuantities[item.id] ?? 0) + mergedQty;
         // Size-line dimension comes from the listing's `unit` ('ml' when the
         // product's SPs are volume) — canonicalUnit alone misses single-pack
         // liquids reclassified to 'vnt' (they'd print "1 kg" for a 1 l pack).
@@ -506,23 +472,26 @@ export default function CategoryScreen() {
         // amount (so already-added products render the stepper instead of
         // the "Į šabloną" CTA). +/− operate on the template, not a basket.
         const templateQty = isTemplateMode ? (templateMap[item.id]?.quantity ?? 0) : 0;
-        const cardQuantity = isTemplateMode ? templateQty : quantity;
         return (
-            <BasketProductCard
+            <ConnectedProductCard
                 name={item.name}
                 imageUrls={item.imageUrls}
                 chainLogos={mergedChainLogos(item)}
                 badge={item.badge}
                 amountText={amountText}
                 product={item}
-                quantity={cardQuantity}
-                isAdding={addingIds.has(item.id)}
+                isTemplateMode={isTemplateMode}
+                templateQuantity={templateQty}
+                mergedProductIds={mergedIntoMe[item.id]}
+                // Basket adds are optimistic (the card flips on tap); only a
+                // template add still waits on the server, so only it spins.
+                isAdding={isTemplateMode && addingIds.has(item.id)}
                 addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
                 onOpen={() => onNavigate(item.id)}
-                onCommit={(qty) => commitCardQty(item, cardQuantity, qty)}
+                onCommit={commitCardQty}
             />
         );
-    }, [basketQuantities, mergedIntoMe, addingIds, onNavigate, commitCardQty, mergedChainLogos, isTemplateMode, templateMap, t]);
+    }, [mergedIntoMe, addingIds, onNavigate, commitCardQty, mergedChainLogos, isTemplateMode, templateMap, t]);
 
     if (loading) return (
         <>
@@ -598,13 +567,30 @@ export default function CategoryScreen() {
                             keyboardShouldPersistTaps="handled"
                             keyboardDismissMode="on-drag"
                             sections={[{ data: productRows }]}
-                            keyExtractor={(_row, i) => `r-${i}`}
+                            // Key rows by their PRODUCT IDS: with index keys every
+                            // L3-filter change reshuffled content under stable keys
+                            // and force-rebound every mounted image cell.
+                            keyExtractor={(row) => 'r-' + row.map(p => p.id).join('-')}
                             contentContainerStyle={{ paddingTop: 0, paddingBottom: barClearance }}
                             ListHeaderComponent={
                                 <ScreenHeading title={decodeURIComponent(name || '')} onLayout={header.onTitleLayout} />
                             }
                             ListEmptyComponent={
-                                <Text style={styles.emptyText}>{t('catalog.noProducts')}</Text>
+                                loadFailed ? (
+                                    <View style={styles.loadFailWrap}>
+                                        <Ionicons name="cloud-offline-outline" size={40} color={colors.textMuted} />
+                                        <Text style={styles.emptyText}>{t('catalog.loadFailed')}</Text>
+                                        <TouchableOpacity
+                                            style={styles.loadFailBtn}
+                                            onPress={() => setReloadKey(k => k + 1)}
+                                            activeOpacity={0.85}
+                                        >
+                                            <Text style={styles.loadFailBtnText}>{t('discounts.retry')}</Text>
+                                        </TouchableOpacity>
+                                    </View>
+                                ) : (
+                                    <Text style={styles.emptyText}>{t('catalog.noProducts')}</Text>
+                                )
                             }
                             renderItem={({ item: pair }) => (
                                 <View style={styles.row}>
@@ -678,6 +664,12 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         marginBottom: 12,
         paddingHorizontal: 12,
     },
+    loadFailWrap: { alignItems: 'center', justifyContent: 'center', gap: 12, paddingVertical: 40 },
+    loadFailBtn: {
+        backgroundColor: c.primary, borderRadius: radius.pill,
+        paddingHorizontal: 22, paddingVertical: 11, minWidth: 140, alignItems: 'center',
+    },
+    loadFailBtnText: { color: c.onPrimary, fontSize: 15, fontWeight: '700' },
     emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: c.textSecondary },
     productRow: {
         flexDirection: 'row',

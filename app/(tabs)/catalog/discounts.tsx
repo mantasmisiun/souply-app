@@ -2,7 +2,7 @@ import {
     View, SectionList, ScrollView, TouchableOpacity, Text, TextInput,
     StyleSheet, ActivityIndicator, RefreshControl, Keyboard, Modal, Pressable
 } from 'react-native';
-import { useEffect, useMemo, useState, useCallback, useRef, memo, Fragment } from 'react';
+import { useDeferredValue, useEffect, useMemo, useState, useCallback, useRef, memo, Fragment } from 'react';
 import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
 import { ScreenHeading } from '@/components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '@/components/CollapsingHeader';
@@ -14,7 +14,8 @@ import { API_BASE_URL } from '@/config/api';
 import { useBasketState } from '@/state/basketState';
 import { useBasketSession } from '@/state/basketSession';
 import { addProductToBasket } from '@/utils/basketUtils';
-import BasketProductCard, { type CardBadge } from '@/components/browse/BasketProductCard';
+import { type CardBadge } from '@/components/browse/BasketProductCard';
+import { ConnectedProductCard } from '@/components/browse/ConnectedProductCard';
 import { useTheme, radius, elevation, type AppTheme } from '@/constants/theme';
 import { getUserId } from '@/config/user';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -28,9 +29,9 @@ import { FilterDropdownModal, type FilterOption } from '@/components/FilterDropd
 import { StoreFilterButton } from '@/components/StoreFilterButton';
 import { categoryIcon } from '@/constants/categoryIcons';
 import { useTranslation } from 'react-i18next';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '@/utils/fetchWithTimeout';
-import { fuzzyMatches } from '@/utils/fuzzyMatch';
+import { foldTokens, fuzzyMatchesPrepared, type FoldedTokens } from '@/utils/fuzzyMatch';
 import { useTemplateAddState } from '@/state/templateAddState';
 
 interface L2Category {
@@ -66,6 +67,17 @@ interface DiscountedProduct {
 }
 
 const CHAIN_NAME_BY_ID: Record<number, string> = { 1: 'Maxima', 2: 'Rimi', 3: 'Iki', 4: 'Norfa', 5: 'Lidl' };
+
+/**
+ * Last ETag the discounts endpoint gave us, kept per app session (module
+ * scope survives screen remounts). Sent back as If-None-Match so an
+ * unchanged catalog revalidates as a bodiless 304 instead of re-downloading
+ * the full payload on every pull-to-refresh / stale refetch. Cold start
+ * pays one full 200 (the persisted react-query cache still paints
+ * instantly) — the etag is locale- and filter-keyed server-side, so a
+ * language switch simply misses and refetches in full.
+ */
+let discountsEtag: string | null = null;
 
 /** chainLogos can arrive as an array, or a single/double-encoded JSON string
  *  from MariaDB — always normalise to an array before reading chainId. */
@@ -160,8 +172,13 @@ export default function DiscountsScreen() {
 
     // Discounts — React Query handles stale-while-revalidate, persistence
     // (via PersistQueryClientProvider in _layout.tsx), retry/backoff, and
-    // request dedup. ETag/304 wiring is server-side only for now; client
-    // doesn't read or echo back If-None-Match yet.
+    // request dedup. The queryFn echoes the server's weak ETag back as
+    // If-None-Match: a 304 keeps the cached body (no multi-hundred-KB
+    // re-download when nothing changed). The server's l2CategoryId/search/
+    // limit/offset params stay deliberately unused: this screen filters the
+    // ONE cached full list locally (instant, offline-capable) — server-side
+    // filtering would fragment the cache per filter combination.
+    const queryClient = useQueryClient();
     const {
         data: allProducts = [],
         isLoading,
@@ -171,10 +188,17 @@ export default function DiscountsScreen() {
     } = useQuery<DiscountedProduct[]>({
         queryKey: ['discounts'],
         queryFn: async () => {
+            const cached = queryClient.getQueryData<DiscountedProduct[]>(['discounts']);
+            const headers: Record<string, string> = {};
+            // Only revalidate when we still HAVE a body to keep — a 304
+            // with an evicted cache would leave the screen empty.
+            if (discountsEtag && cached && cached.length > 0) headers['If-None-Match'] = discountsEtag;
             const res = await fetchWithTimeout(
                 `${API_BASE_URL}/api/products/discounted`,
-                { timeoutMs: TIMEOUT_HEAVY_MS },
+                { timeoutMs: TIMEOUT_HEAVY_MS, headers },
             );
+            if (res.status === 304 && cached) return cached;
+            discountsEtag = res.headers.get('etag');
             const data = await res.json();
             return Array.isArray(data) ? data : [];
         },
@@ -266,6 +290,20 @@ export default function DiscountsScreen() {
         if (selectedL1 != null && !activeL1Ids.has(selectedL1)) { setSelectedL1(null); setSelectedL2(null); }
     }, [activeL1Ids, selectedL1]);
 
+    // Deferred query: typing updates the TextInput at input priority while the
+    // full-catalog filter below lags a beat behind — keystrokes never block on
+    // the match pass.
+    const deferredSearch = useDeferredValue(search);
+
+    // Folded/tokenised names, computed ONCE per dataset. The matcher used to
+    // re-fold + re-tokenise every product name on every keystroke — that, not
+    // the edit distance, was the per-keystroke cost.
+    const foldedNameById = useMemo(() => {
+        const m = new Map<number, FoldedTokens>();
+        for (const p of allProducts) m.set(p.id, foldTokens(p.name));
+        return m;
+    }, [allProducts]);
+
     const products = useMemo(() => {
         let list = allProducts;
         // STORE: keep items offered by at least one checked chain. Skipped when
@@ -280,17 +318,19 @@ export default function DiscountsScreen() {
         }
         // L2 subcategory.
         if (selectedL2 != null) list = list.filter(p => p.l2CategoryId === selectedL2);
-        const trimmed = search.trim();
+        const trimmed = deferredSearch.trim();
         if (trimmed) {
             // Diacritic-fold + token-AND + per-token Levenshtein so
             // "zvake" hits "žvakė", "kapu zvake" finds "Kapų raudona
             // žvakė" (missed middle word), and small typos like "zkae"
-            // still resolve. Cost stays sub-ms per row for typical
-            // product names.
-            list = list.filter((p) => fuzzyMatches(p.name, trimmed));
+            // still resolve. The query folds ONCE per filter run and the
+            // names come pre-folded from the memo above.
+            const qTokens = foldTokens(trimmed);
+            list = list.filter((p) =>
+                fuzzyMatchesPrepared(foldedNameById.get(p.id) ?? foldTokens(p.name), qTokens));
         }
         return list;
-    }, [allProducts, selectedChainIds, availableChainIds, selectedL1, selectedL2, l2ToL1, search]);
+    }, [allProducts, selectedChainIds, availableChainIds, selectedL1, selectedL2, l2ToL1, deferredSearch, foldedNameById]);
 
     // 2-up rows for the SectionList (no numColumns) — pair up the filtered
     // products; a lone last item renders half-width (the card is flex:1/50%).
@@ -337,9 +377,11 @@ export default function DiscountsScreen() {
         : t('discounts.filterSubcategories');
     const hasFilters = storeOptions.length > 1 || l1Options.length > 0;
 
-    const { draftBasketId, setDraftBasketId, sessionBasketId, clearSessionBasket } = useBasketState();
+    const { draftBasketId, setDraftBasketId } = useBasketState();
     // ONE target-aware source (session basket → draft fallback, basketRev-reactive).
-    const { basketId: targetBasketId, quantities: basketQuantities, setQuantities: setBasketQuantities, refresh: refreshBasketQuantities } = useBasketQuantities();
+    // Actions only — no quantities-map subscription (cards self-subscribe per
+    // product; a map subscription here re-rendered the screen on every ± tap).
+    const { commit: commitBasketQty, refresh: refreshBasketQuantities } = useBasketQuantities();
     const [latestCompared, setLatestCompared] = useState<ComparedBasketChoice | null>(null);
     type ComparedChoice = 'use-existing' | 'new' | 'cancel';
     const [comparedModal, setComparedModal] = useState<{
@@ -418,12 +460,6 @@ export default function DiscountsScreen() {
         return addProductToBasket(productId, existing, setDraftBasketId, quantity, 'sku');
     };
 
-    const hasBasketItems = Object.values(basketQuantities).some(q => q > 0);
-
-    const draftBasketIdRef = useRef(draftBasketId);
-    useEffect(() => { draftBasketIdRef.current = draftBasketId; }, [draftBasketId]);
-    const targetBasketIdRef = useRef(targetBasketId);
-    useEffect(() => { targetBasketIdRef.current = targetBasketId; }, [targetBasketId]);
     const commitAddRef = useRef(commitAdd);
     useEffect(() => { commitAddRef.current = commitAdd; }, [commitAdd]);
 
@@ -434,70 +470,34 @@ export default function DiscountsScreen() {
     // Fresh add (non-picker path; the weighable/range picker is owned by
     // AddOrStepper and also lands here via onCommit). One canonical step as the
     // quantity so server pack-math lands on exactly one pack.
-    const addToBasket = useCallback((item: DiscountedProduct, qty: number) => {
-        setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
-        commitAddRef.current(item.id, qty).then(result => {
-            if (result.success) {
-                setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
-            }
-        }).finally(() => {
-            setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
-        });
-    }, [t]);
-
-    const commitTemplateAdd = useCallback((item: DiscountedProduct, qty: number) => {
-        setAddingIds(prev => { const n = new Set(prev); n.add(item.id); return n; });
-        templateAddFn(item.id, qty)
+    const commitTemplateAdd = useCallback((productId: number, qty: number) => {
+        setAddingIds(prev => { const n = new Set(prev); n.add(productId); return n; });
+        templateAddFn(productId, qty)
             .then(() => toastRef.current?.show(t('basketTab.templates.addedToTemplateToast')))
             .catch(() => {})
             .finally(() => {
-                setAddingIds(prev => { const n = new Set(prev); n.delete(item.id); return n; });
+                setAddingIds(prev => { const n = new Set(prev); n.delete(productId); return n; });
             });
     }, [templateAddFn, t]);
 
-    // Remove the whole line (below one step, or explicit 0); tear the draft
-    // basket down when it was the last item.
-    const removeFromBasket = useCallback((item: DiscountedProduct) => {
-        const bid = targetBasketIdRef.current ?? draftBasketIdRef.current;
-        setBasketQuantities(prev => ({ ...prev, [item.id]: 0 }));
-        if (!bid) return;
-        fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async allItems => {
-            const bi = Array.isArray(allItems) ? allItems.find((i: any) => i.productId === item.id) : null;
-            if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'DELETE' });
-            const remaining = Array.isArray(allItems) ? allItems.filter((i: any) => i.id !== bi?.id) : [];
-            if (remaining.length === 0) { await fetch(`${API_BASE_URL}/api/baskets/${bid}`, { method: 'DELETE' }); clearSessionBasket(); }
-        }).catch(() => {});
-    }, [clearSessionBasket]);
-
-    const onSetQuantity = useCallback((item: DiscountedProduct, newQty: number) => {
-        const bid = targetBasketIdRef.current ?? draftBasketIdRef.current;
-        setBasketQuantities(prev => ({ ...prev, [item.id]: newQty }));
-        if (!bid) return;
-        fetch(`${API_BASE_URL}/api/baskets/${bid}/items`).then(r => r.json()).then(async items2 => {
-            const bi = items2.find((i: any) => i.productId === item.id);
-            if (bi) await fetch(`${API_BASE_URL}/api/basket-items/${bi.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ quantity: newQty }) });
-        }).catch(() => {});
-    }, []);
-
-    // Single commit for AddOrStepper: add / set / remove (or the template
-    // store). `currentQty` is the card's current qty (0 ⇒ a fresh add).
-    const commitCardQty = useCallback((item: DiscountedProduct, currentQty: number, qty: number) => {
+    // Single commit for AddOrStepper: add / set / remove — or the template store.
+    // The basket side is now ONE call into the shared quantities store: it paints
+    // immediately, coalesces a burst of taps and writes once, so no card waits on
+    // (or gets reverted by) a round trip. `currentQty` is the card's qty now.
+    const commitCardQty = useCallback((productId: number, currentQty: number, qty: number) => {
         if (isTemplateMode) {
-            const tq = templateMap[item.id]?.quantity ?? 0;
-            if (qty <= 0) { templateSetQty(item.id, 0).catch(() => {}); return; }
-            if (tq === 0) { commitTemplateAdd(item, qty); return; }
-            templateSetQty(item.id, qty).catch(() => {});
+            if (qty <= 0) { templateSetQty(productId, 0).catch(() => {}); return; }
+            if (currentQty === 0) { commitTemplateAdd(productId, qty); return; }
+            templateSetQty(productId, qty).catch(() => {});
             return;
         }
-        if (qty <= 0) { removeFromBasket(item); return; }
-        if (currentQty === 0) { addToBasket(item, qty); return; }
-        onSetQuantity(item, qty);
-    }, [isTemplateMode, templateMap, templateSetQty, commitTemplateAdd, removeFromBasket, addToBasket, onSetQuantity]);
+        // The screen's own add resolves a COMPARED basket first (use it / start
+        // new); steps skip it and go straight to the by-product write.
+        commitBasketQty(productId, currentQty, qty, commitAddRef.current);
+    }, [isTemplateMode, templateSetQty, commitTemplateAdd, commitBasketQty]);
 
     const renderCard = useCallback(({ item }: { item: DiscountedProduct }) => {
-        const quantity = isTemplateMode
-            ? (templateMap[item.id]?.quantity ?? 0)
-            : (basketQuantities[item.id] ?? 0);
+        const templateQuantity = isTemplateMode ? (templateMap[item.id]?.quantity ?? 0) : 0;
         // Amount range caption (250 g – 500 g), same shape as browse/search.
         const isVolume = item.unit === 'ml' || item.canonicalUnit === 'l';
         const big = isVolume ? 'l' : 'kg';
@@ -517,21 +517,24 @@ export default function DiscountsScreen() {
             }
             : { showLogo: false, text: `🔥 -${item.bestDiscountPct}%` };
         return (
-            <BasketProductCard
+            <ConnectedProductCard
                 name={item.name}
                 imageUrls={item.imageUrls}
                 chainLogos={item.chainLogos}
                 amountText={amountText}
-                quantity={quantity}
                 product={item}
-                onCommit={(qty) => commitCardQty(item, quantity, qty)}
-                isAdding={addingIds.has(item.id)}
+                isTemplateMode={isTemplateMode}
+                templateQuantity={templateQuantity}
+                onCommit={commitCardQty}
+                // Basket adds are optimistic (the card flips on tap); only a
+                // template add still waits on the server, so only it spins.
+                isAdding={isTemplateMode && addingIds.has(item.id)}
                 addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
                 onOpen={() => onNavigate(item.id)}
                 discountBadge={discountBadge}
             />
         );
-    }, [basketQuantities, addingIds, onNavigate, commitCardQty, isTemplateMode, templateMap, t]);
+    }, [addingIds, onNavigate, commitCardQty, isTemplateMode, templateMap, t]);
 
     const clearSearch = useCallback(() => {
         setSearch('');
@@ -639,11 +642,15 @@ export default function DiscountsScreen() {
                             <>
                             {/* Always-pinned chips: Fabric mis-hit-tests transformed
                                 sticky headers (touches fall through to the list). */}
-                            {filterChips}
+                            <View onLayout={header.onPinnedLayout}>{filterChips}</View>
                             <AnimatedSectionList
                                 {...header.scroll}
                                 sections={[{ data: rows }]}
-                                keyExtractor={(_row, i) => `r-${i}`}
+                                // Key rows by their PRODUCT IDS: with index keys
+                                // every filter/search change reshuffled content
+                                // under stable keys and force-rebound every
+                                // mounted image cell.
+                                keyExtractor={(row) => 'r-' + row.map(p => p.id).join('-')}
                                 contentContainerStyle={{ paddingTop: 0, paddingBottom: barClearance }}
                                 keyboardDismissMode="on-drag"
                                 keyboardShouldPersistTaps="handled"

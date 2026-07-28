@@ -118,7 +118,7 @@ export default function ReceiptPickerScreen() {
             <CollapsingHeader controller={header} back smallTitle={t('shoppingListTab.selectExistingTitle')} />
             {/* Always-pinned filter row: Fabric mis-hit-tests transformed
                 sticky headers (touches fall through to the list). */}
-                    <View style={{ backgroundColor: colors.pageBackground, marginHorizontal: -spacing.lg }}>
+                    <View onLayout={header.onPinnedLayout} style={{ backgroundColor: colors.pageBackground, marginHorizontal: -spacing.lg }}>
                         <ScrollView
                             horizontal
                             showsHorizontalScrollIndicator={false}

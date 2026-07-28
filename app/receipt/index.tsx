@@ -42,6 +42,7 @@ import { chainBrandName, chainIdByName } from "../../utils/chainBrandName";
 import { launchDocumentScanner } from "../../utils/launchDocumentScanner";
 import { looksLikePdf } from "../../utils/pdfToImages";
 import { buildReceiptDotMap, parseLooseDate, sameDay } from "../../utils/receiptDots";
+import { receiptFooterDateStr } from "../../utils/receiptFooterDate";
 import { ChainLogoChip } from "../../components/ChainLogoChip";
 import { SkeletonBox } from "../../components/SkeletonBox";
 import { PendingSwipesBanner } from "../../components/PendingSwipesBanner";
@@ -80,6 +81,9 @@ interface Receipt {
   storeAddress: string | null;
   mandatorySwipesRequired: number;
   mandatorySwipesCompleted: number;
+  /** Explicit footer date from the slimmed endpoint (JSON_EXTRACT server-side). */
+  receiptFooterDate?: string | null;
+  /** Legacy blob — only present on an un-updated server; used as fallback. */
   parsedData?: unknown;
 }
 
@@ -89,25 +93,10 @@ type ListItem =
   | { kind: "section"; title: string; id: string }
   | { kind: "receipt"; data: Receipt };
 
-const safeJsonParse = (raw: string): any => {
-  try {
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-};
-
 // ── Receipt DATE (the date printed on the receipt, not the upload time) ──
-// The receipt's own footer date (parsed blob) takes priority over the stored
-// receiptDate column — same source the card shows.
-const receiptFooterDateStr = (r: Receipt): string | null => {
-  const pd = r.parsedData;
-  if (!pd) return null;
-  const obj = typeof pd === "string" ? safeJsonParse(pd) : pd;
-  const raw = (obj as any)?.footer?.date ?? (obj as any)?.date ?? null;
-  return typeof raw === "string" && raw.trim() ? raw : null;
-};
-
+// The receipt's own footer date — the explicit `receiptFooterDate` field from
+// the slimmed endpoint, falling back to the legacy parsedData blob — takes
+// priority over the stored receiptDate column. Same source the card shows.
 const receiptDateObj = (r: Receipt): Date | null =>
   parseLooseDate(receiptFooterDateStr(r) ?? r.receiptDate);
 
@@ -257,6 +246,11 @@ export default function ReceiptsScreen() {
     addItems(entries);
   };
 
+  // Change fingerprint over the fields the list actually renders — a focus
+  // refetch (or a 3s pending-processing tick) whose payload is unchanged
+  // commits NO state, so it can't re-render the whole list (the silent
+  // refetch treatment; cf. app/(tabs)/basket/index.tsx's focus fetch).
+  const receiptsFingerprintRef = useRef<string | null>(null);
   const fetchReceipts = async () => {
     try {
       const userId = await getUserId();
@@ -265,8 +259,17 @@ export default function ReceiptsScreen() {
         { timeoutMs: TIMEOUT_STANDARD_MS },
       );
       const data = await response.json();
-      const rows = Array.isArray(data) ? data : [];
-      setReceipts(rows);
+      const rows: Receipt[] = Array.isArray(data) ? data : [];
+      const fp = rows
+        .map((r) =>
+          `${r.id}|${r.processingStatus}|${r.receiptDate ?? ""}|${r.receiptFooterDate ?? ""}|` +
+          `${r.receiptNo ?? ""}|${r.chainName ?? ""}|${r.storeName ?? ""}|${r.storeAddress ?? ""}|` +
+          `${r.mandatorySwipesRequired ?? 0}|${r.mandatorySwipesCompleted ?? 0}`)
+        .join("§");
+      if (fp !== receiptsFingerprintRef.current) {
+        receiptsFingerprintRef.current = fp;
+        setReceipts(rows);
+      }
     } catch (error) {
       console.error("Failed to fetch receipts:", error);
     } finally {
@@ -779,14 +782,7 @@ export default function ReceiptsScreen() {
     const shopHeadline =
       item.storeName || item.chainName || t('receipts.status.unknownStore');
     const shopAddress = item.storeAddress || null;
-    const parsedFooterDate = (() => {
-      const pd = item.parsedData;
-      if (!pd) return null;
-      const obj = typeof pd === "string" ? safeJsonParse(pd) : pd;
-      const raw = obj?.footer?.date ?? obj?.date ?? null;
-      return typeof raw === "string" && raw.trim() ? raw : null;
-    })();
-    const dateSource = parsedFooterDate ?? item.receiptDate;
+    const dateSource = receiptFooterDateStr(item) ?? item.receiptDate;
     const dateLabel = dateSource ? formatDate(dateSource) : "—";
     return (
       <TouchableOpacity
@@ -856,7 +852,7 @@ export default function ReceiptsScreen() {
           headers (touches fall through to the list). */}
       {(storeOptions.length > 1 || receipts.length > 0) ? (
 
-          <View style={{ backgroundColor: colors.pageBackground, marginHorizontal: -spacing.lg }}>
+          <View onLayout={header.onPinnedLayout} style={{ backgroundColor: colors.pageBackground, marginHorizontal: -spacing.lg }}>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}

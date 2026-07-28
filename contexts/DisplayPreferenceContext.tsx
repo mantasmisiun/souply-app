@@ -14,7 +14,7 @@
  */
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { createContext, useContext, useEffect, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 
 export type DisplayMode = 'base' | 'sku';
 
@@ -46,16 +46,21 @@ export function DisplayPreferenceProvider({ children }: { children: React.ReactN
     })();
   }, []);
 
-  const setMode = (m: DisplayMode) => {
+  const setMode = useCallback((m: DisplayMode) => {
     setModeState(m);
     // Fire-and-forget write — UI reacts to state instantly, persistence
     // catches up async. A failed write means the preference resets on
     // next cold start; acceptable.
     AsyncStorage.setItem(STORAGE_KEY, m).catch(() => {});
-  };
+  }, []);
+
+  // Memoised — this provider sits inside RootLayout, so a fresh value object
+  // per render would re-render every consumer (the big list screens) on any
+  // root re-render even when mode/ready are unchanged.
+  const value = useMemo(() => ({ mode, setMode, ready }), [mode, setMode, ready]);
 
   return (
-    <DisplayPreferenceContext.Provider value={{ mode, setMode, ready }}>
+    <DisplayPreferenceContext.Provider value={value}>
       {children}
     </DisplayPreferenceContext.Provider>
   );
