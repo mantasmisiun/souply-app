@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import * as DocumentPicker from 'expo-document-picker';
 import { SheetCard } from '../SheetCard';
+import { SheetTitle } from '../dock/SheetTitle';
 import { scanDocumentOnly } from '../../utils/launchDocumentScanner';
 import { looksLikePdf } from '../../utils/pdfToImages';
 import { useReceiptQueueStore } from '../../state/receiptQueueStore';
@@ -62,7 +63,7 @@ export function ReceiptUploadPane({ onBack }: { onBack: () => void }) {
                 <TouchableOpacity onPress={onBack} hitSlop={10} accessibilityLabel={t('common.back')}>
                     <Ionicons name="chevron-back" size={26} color={colors.primary} />
                 </TouchableOpacity>
-                <Text style={styles.title}>{t('shoppingListDetail.uploadReceipt')}</Text>
+                <SheetTitle colors={colors}>{t('shoppingListDetail.uploadReceipt')}</SheetTitle>
             </View>
 
             <SheetCard>
@@ -81,8 +82,9 @@ export function ReceiptUploadPane({ onBack }: { onBack: () => void }) {
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    headerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingTop: spacing.xs, paddingBottom: spacing.xs },
-    title: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
+    // NO vertical padding — the sheet's own inset owns the top gap and the
+    // body column's gap owns the space below (see dock/SheetTitle).
+    headerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
     row: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, paddingVertical: spacing.lg, paddingHorizontal: spacing.xs },
     rowText: { fontSize: 15, fontWeight: '700', color: c.textPrimary },
     divider: { height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginLeft: 40 },

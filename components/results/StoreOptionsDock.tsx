@@ -12,7 +12,7 @@ import { formatEuro } from '../../utils/formatCurrency';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
 import { SheetCard } from '../SheetCard';
 import { DockActionRow } from '../dock/DockActionRow';
-import { dockBarBase, dockContentBase } from '../dock/dockLayout';
+import { dockBarBase } from '../dock/dockLayout';
 
 const SCREEN_H = Dimensions.get('window').height;
 
@@ -419,7 +419,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // ── Content ──
     // Bottom pad so the last option row is never flush against the sheet's
     // bottom edge (where a tap could land on the map below instead).
-    content: { ...dockContentBase, paddingBottom: spacing.lg },
+    // Inset + halo clearance come from the sheet's SheetContent wrapper.
+    content: { gap: 14 },
 
     // ── Store options — a "Stores" section of separate cards ──
     // Single-store facts card — same shadowed SheetCard family as the

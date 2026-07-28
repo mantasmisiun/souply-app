@@ -1416,7 +1416,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     loadingText: { ...typography.body, color: c.textSecondary },
 
     // ── Glass dock ─────────────────────────────────────────────────────────
-    dockBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 40, paddingHorizontal: 16 },
+    // NO horizontal padding — the sheet lays the bar row out at the shared
+    // PEEK inset; content (SheetContent) uses the same, so they align.
+    dockBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, minHeight: 40 },
     summaryText: { flex: 1, fontSize: 15, fontWeight: '700', color: c.textPrimary },
     // V1 "price hero" collapsed bar: big price + quiet two-line caption.
     summaryHero: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -1431,7 +1433,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         width: 32, height: 32, borderRadius: 16, alignItems: 'center', justifyContent: 'center',
         backgroundColor: c.primaryMuted,
     },
-    dockContent: { paddingHorizontal: 16, paddingTop: 22, gap: 14 },
+    // Inset + halo clearance come from the sheet's SheetContent wrapper.
+    dockContent: { gap: 14 },
     // Item-count pip overlaid on the Basket action card's cart icon.
     cartCount: {
         position: 'absolute', top: -6, right: -10, minWidth: 18, height: 18, borderRadius: 9,

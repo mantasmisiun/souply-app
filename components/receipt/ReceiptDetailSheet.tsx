@@ -126,9 +126,9 @@ export function ReceiptDetailSheet({
 
     return (
         <View style={styles.body}>
-            {/* Title + actions share one horizontal inset (spacing.lg); the photo
-                below fills to the SAME inset via ReceiptPhotoView's own 16 margin,
-                so every element lines up left and right. */}
+            {/* ONE horizontal inset for everything: the sheet's SheetContent
+                wrapper. Title/actions add none of their own, and the photo card
+                renders `flush` so it lines up with them. */}
             <View style={styles.padded}>
                 {/* Old-receipt warning — the purchase date is >30 days old. Shown to
                     every trip member (anti-fraud transparency). */}
@@ -185,6 +185,7 @@ export function ReceiptDetailSheet({
 
             {/* Full receipt photo + parser legend (scrolls into view at full). */}
             <ReceiptPhotoView
+                flush
                 imageUri={photo.imageUri}
                 imageDims={photo.imageDims}
                 headerRegions={photo.headerRegions}
@@ -200,8 +201,9 @@ export function ReceiptDetailSheet({
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     body: { gap: spacing.sm },
-    padded: { paddingHorizontal: spacing.lg, gap: spacing.md },
-    titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingTop: spacing.xs },
+    // Horizontal inset comes from the sheet's SheetContent wrapper — none here.
+    padded: { gap: spacing.md },
+    titleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     titleCol: { flex: 1, minWidth: 0 },
     titleName: { ...typography.bodyStrong, color: c.textPrimary },
     titleSub: { ...typography.labelSmall, color: c.textSecondary, marginTop: 2 },

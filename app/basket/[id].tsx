@@ -36,6 +36,7 @@ import { BrandedQR } from '../../components/BrandedQR';
 import { ChefToqueGlyph } from '../../components/icons/tabGlyphs';
 import { SheetCard } from '../../components/SheetCard';
 import { DockActionRow } from '../../components/dock/DockActionRow';
+import { SheetTitle } from '../../components/dock/SheetTitle';
 import { ConfirmModal } from '../../components/ConfirmModal';
 import { useBasketSession } from '../../state/basketSession';
 import { useBasketQuantitiesStore } from '../../state/basketQuantities';
@@ -832,7 +833,7 @@ export default function BasketDetailScreen() {
                             maxStage: 2,
                             content: (
                                 <View style={styles.sheetPanelContent}>
-                                    <Text style={styles.sheetTitle}>{t('basketDetail.actionsTitle')}</Text>
+                                    <SheetTitle colors={colors}>{t('basketDetail.actionsTitle')}</SheetTitle>
                                     {/* iOS-style big actions, two per row — SheetCards,
                                         the same surface as the Settings section. */}
                                     <DockActionRow
@@ -1032,7 +1033,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     sheetRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
     sheetRowText: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
     sheetRowTextRegular: { fontSize: 15, fontWeight: '400' },
-    sheetTitle: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
     sectionSep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem },
     sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 14 },
     sectionTitleText: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
@@ -1040,8 +1040,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     busyOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' },
     qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: 24, alignItems: 'center', gap: 16 },
     sheetPanelContent: {
-        paddingHorizontal: 16,
-        paddingBottom: 8,
+        // Inset + shadow halo come from DockedGlassSheet's SheetContent wrapper —
+        // re-declaring them here stacked on top and made this sheet's content sit
+        // further in than every other dock sheet's.
         // ONE gap: between the Save|Invite cards, and between that row and
         // the Settings section below.
         gap: 14,

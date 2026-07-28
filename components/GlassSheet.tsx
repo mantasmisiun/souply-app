@@ -10,7 +10,8 @@ import {
     GlassFill, makeGlassLayerStyles, GLASS_SHADOW_OPACITY, SheetSolidContext,
 } from './DockedGlassSheet';
 import { useTheme, useResolvedScheme, spacing, radius, type AppTheme } from '../constants/theme';
-import { concentricRadius } from '../utils/displayCorners';
+import { sheetCornerRadius } from './dock/sheetTokens';
+import { SheetContent } from './dock/SheetContent';
 
 /**
  * GlassSheet — a NON-DOCKED modal bottom sheet that shares the app's ONE glass
@@ -199,7 +200,7 @@ export function GlassSheet({
     const solidP = useDerivedValue(() =>
         fullH > mediumH ? clamp((h.value - mediumH) / (fullH - mediumH), 0, 1) : 0);
 
-    const cornerR = concentricRadius(insets.bottom, spacing.sm);
+    const cornerR = sheetCornerRadius(insets.bottom);
 
     const panelStyle = useAnimatedStyle(() => ({ height: h.value }));
     const backdropStyle = useAnimatedStyle(() => ({ opacity: backdrop.value }));
@@ -261,8 +262,12 @@ export function GlassSheet({
                         <SheetSolidContext.Provider value={solidP}>
                             <SheetOpenedContext.Provider value={opened}>
                               <SheetDismissContext.Provider value={dismiss}>
+                                {/* The measured box wraps SheetContent so an
+                                    autoHeight sheet sizes to content PLUS the
+                                    shared inset. Content owns no padding of its
+                                    own — see components/dock/SheetContent.tsx. */}
                                 <View onLayout={autoHeight ? (e => setContentH(e.nativeEvent.layout.height)) : undefined}>
-                                    {children}
+                                    <SheetContent>{children}</SheetContent>
                                 </View>
                               </SheetDismissContext.Provider>
                             </SheetOpenedContext.Provider>
@@ -291,6 +296,7 @@ const makeStyles = (c: AppTheme, isDark: boolean) => {
         },
         glassFill: glass.glassFill,
         tint: glass.tint,
+        tintOverBlur: glass.tintOverBlur,
         solid: glass.solid,
         rim: glass.rim,
         scroll: { flex: 1, marginTop: spacing.md },

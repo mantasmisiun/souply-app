@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming, Easing, interpolate, runOnJS } from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
-import { SheetCard, SHEET_CARD_SHADOW_RADIUS } from '../SheetCard';
+import { SheetCard } from '../SheetCard';
+import { SheetTitle } from '../dock/SheetTitle';
 import { DockActionRow } from '../dock/DockActionRow';
 import { FamilyShoppingPane } from './FamilyShoppingPane';
 import { ReceiptUploadPane } from './ReceiptUploadPane';
@@ -262,7 +263,7 @@ export function ShoppingSheet({ collapse }: { collapse: () => void }) {
     function renderMain() {
         return (
         <>
-            <Text style={styles.sheetHeading}>{t('smartBasket.sheetTitle')}</Text>
+            <SheetTitle colors={colors}>{t('smartBasket.sheetTitle')}</SheetTitle>
 
             {/* ── Top actions: Family shopping + Receipt upload ─────────── */}
             <DockActionRow
@@ -379,8 +380,8 @@ const makeStyles = (c: AppTheme, _isDark: boolean) => StyleSheet.create({
     pagerBelow: { position: 'absolute', top: 0, left: 0, right: 0 },
     // paddingBottom reserves the SheetCard shadow halo so the pager's
     // overflow:'hidden' (needed for the horizontal pane slide) can't clip it.
-    body: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: SHEET_CARD_SHADOW_RADIUS, gap: spacing.md },
-    sheetHeading: { fontSize: 22, fontWeight: '700', color: c.textPrimary, paddingTop: spacing.xs, paddingBottom: spacing.xs },
+    // Horizontal inset + shadow room come from the sheet's SheetContent wrapper.
+    body: { gap: spacing.md },
     cardTitle: { fontSize: 20, fontWeight: '800', color: c.textPrimary, paddingVertical: spacing.md },
     filterRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, flexWrap: 'wrap' },
     // Upload button glyph: receipt icon + a white "+" in a pink dot.

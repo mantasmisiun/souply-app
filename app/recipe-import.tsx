@@ -415,7 +415,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     ctaDisabled: { backgroundColor: c.border },
     ctaText: { fontSize: 15, fontWeight: '700', color: c.onPrimary },
 
-    sheetBody: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs, gap: spacing.sm },
+    // Inset comes from GlassSheet's SheetContent wrapper — gap only here.
+    sheetBody: { gap: spacing.sm },
     sheetTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     sheetTitle: { flex: 1, ...typography.subheading, color: c.textPrimary },
     sheetRawLabel: {

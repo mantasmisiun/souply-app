@@ -1,6 +1,9 @@
 import { Stack } from 'expo-router';
+import { Platform, StyleSheet } from 'react-native';
+import { BlurTargetView } from 'expo-blur';
 import { useTheme } from '@/constants/theme';
 import { tabStackOptions } from '@/constants/navHeader';
+import { tabBlurTargets } from '@/state/tabBlurTargets';
 
 /**
  * Catalog tab navigator. The whole catalog TREE lives inside this nested Stack
@@ -19,7 +22,7 @@ import { tabStackOptions } from '@/constants/navHeader';
  */
 export default function CatalogLayout() {
     const colors = useTheme();
-    return (
+    const stack = (
         // Explicit slide animation: the default Android fade-through push kept
         // STICKING mid-transition on re-pushes of these barless screens (screen
         // stuck at partial/zero alpha — "washed" or "empty" pages, with the row
@@ -34,4 +37,16 @@ export default function CatalogLayout() {
             <Stack.Screen name="search" options={{ headerShown: false }} />
         </Stack>
     );
+    if (Platform.OS !== 'android') return stack;
+    // ANDROID: the whole tab tree is a BlurTargetView, so the floating tab dock
+    // (rendered OUTSIDE it, as the Tabs navigator's tabBar overlay) can blur
+    // this tab's content via the cheap RenderNode path — see state/tabBlurTargets.
+    // iOS returns the bare stack: zero hierarchy change there.
+    return (
+        <BlurTargetView ref={tabBlurTargets.catalog} style={styles.blurTarget}>
+            {stack}
+        </BlurTargetView>
+    );
 }
+
+const styles = StyleSheet.create({ blurTarget: { flex: 1 } });

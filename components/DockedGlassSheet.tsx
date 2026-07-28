@@ -1,6 +1,6 @@
 import React, {
     createContext, forwardRef, useCallback, useEffect, useImperativeHandle, useLayoutEffect, useMemo, useRef, useState,
-    type ReactNode,
+    type ReactNode, type RefObject,
 } from 'react';
 import type { SharedValue } from 'react-native-reanimated';
 import {
@@ -21,7 +21,9 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
     useTheme, useResolvedScheme, spacing, radius, withAlpha, type AppTheme,
 } from '../constants/theme';
-import { concentricRadius, displayCornerRadius } from '../utils/displayCorners';
+import { SHEET_PEEK, sheetCornerRadius } from './dock/sheetTokens';
+import { SheetContent } from './dock/SheetContent';
+import { displayCornerRadius } from '../utils/displayCorners';
 import { floatCollapseProgress } from './dock/dockGeometry';
 
 /** The sheet's 0→1 solid/dock progress (0 floating glass → 1 edge-to-edge
@@ -62,13 +64,22 @@ export const SheetSolidContext = createContext<SharedValue<number> | null>(null)
 const SCREEN_H = Dimensions.get('window').height;
 const SCREEN_W = Dimensions.get('window').width;
 const MEDIUM_FRACTION = 0.5;   // stage-1 detent — the standard medium height.
-const PEEK = 14;               // slim pill strip above the bar row.
+// Slim pill strip above the bar row — and the dock's ONE horizontal inset:
+// the bar row is laid out at `left/right: peek`, and SheetContent pads sheet
+// content by the same token, so content edges line up with the title row.
+const PEEK = SHEET_PEEK;
 const FLOAT_MARGIN = spacing.lg;
 const COLLAPSED_INSET = 18;
 // The floating dock's gap from every screen edge (left/right/bottom), shrinking
 // to 0 at full. Trimmed 25% for a tighter float.
 const COLLAPSED_MARGIN = Math.round((FLOAT_MARGIN + COLLAPSED_INSET) * 0.75);
 const BAR_CONTENT_W = SCREEN_W - 2 * COLLAPSED_MARGIN;
+// How much EXTRA tint the glass gains as the sheet rises. Stacked over the
+// 0.62 base, `1 - 0.38*(1-0.6) ≈ 0.85` effective at full — the collapsed bar is
+// untouched (progress 0), a raised sheet reads solid enough to carry content.
+// Only applied where the 0.62 over-blur recipe is in use; the blur-less Android
+// fallback is already at 0.90/0.93 and would go fully opaque.
+const TINT_BOOST_MAX = 0.6;
 const PILL_W = 40;
 const PILL_H = 5;
 const SNAP_SPRING = { damping: 30, stiffness: 280, mass: 0.9, overshootClamping: true } as const;
@@ -90,24 +101,57 @@ function clamp(v: number, lo: number, hi: number) {
  *  rim/solid decoration layers stay with each caller (the panel animates them;
  *  compact keeps them static).
  *
- *  ANDROID: NO live blur (perf audit finding 3). This fill IS the tab bar —
- *  mounted on every tab route — and `dimezisBlurView` re-renders the sibling
- *  hierarchy in software on every window invalidation (continuously, over a
- *  live MapView or any animation). Without the prop, expo-blur falls back to
- *  its cheap translucent approximation, and the 0.62 tint layer on top keeps
- *  the frosted look — the same degrade LiquidGlass/GlassButton already use.
- *  iOS keeps the real native blur (the prop is Android-only there anyway). */
-export function GlassFill({ isDark, style }: { isDark: boolean; style: any }) {
+ *  ANDROID: real blur is OPT-IN via `blurTarget` (expo-blur 57 / Dimezis
+ *  BlurView 3.x). The old `dimezisBlurView` (2.0.6) re-rasterised the sibling
+ *  hierarchy into a software bitmap every frame — a measured cost (perf audit
+ *  finding 3) that got Android blur disabled. 3.x records the target to a
+ *  RenderNode and replays it blurred on the render thread — no bitmap, no
+ *  extra draw calls — but it needs an explicit BlurTargetView wrapping the
+ *  content to blur (which must NOT contain this fill). Callers that pass a
+ *  target get `dimezisBlurViewSdk31Plus`: real blur on Android 12+, and below
+ *  that it self-degrades to the flat translucent fallback. Callers without a
+ *  target (and any Android < 12) keep the tint-only recipe unchanged — the
+ *  opaque 0.90/0.93 wash carries the frost; with a live blur the tint drops
+ *  back to the 0.62 calibrated-over-blur recipe (tintOverBlur).
+ *  iOS keeps its real native blur; `blurTarget`/`blurMethod` are Android-only
+ *  and never passed there. */
+export function GlassFill({ isDark, style, blurTarget, progress }: {
+    isDark: boolean;
+    style: any;
+    /** Android only: ref to a BlurTargetView wrapping the content BEHIND this
+     *  glass (never containing it). Omit to keep the tint-only fallback. */
+    blurTarget?: RefObject<View | null>;
+    /** Open progress (0 collapsed → 1 full). When given, the glass gains tint as
+     *  the sheet rises: a bar peeking over content wants to stay see-through, a
+     *  raised sheet is a reading surface and shouldn't. Omit for a constant tint. */
+    progress?: SharedValue<number>;
+}) {
+    const androidTarget = Platform.OS === 'android' ? blurTarget : undefined;
+    // Android 12+ with a wired target — the only case a real blur renders, so
+    // the only case the lighter over-blur tint is correct. Below 12 the native
+    // side falls back to a flat translucent view and the opaque tint must stay.
+    const blurLive = androidTarget != null && Number(Platform.Version) >= 31;
+    // Whether the 0.62 over-blur recipe is the one painting (vs the opaque
+    // Android fallback) — the only case the boost below is correct.
+    const lightRecipe = Platform.OS !== 'android' || blurLive;
+    const boostStyle = useAnimatedStyle(() => ({
+        opacity: progress ? clamp(progress.value, 0, 1) * TINT_BOOST_MAX : 0,
+    }));
     return (
         <>
             <BlurView
                 pointerEvents="none"
                 intensity={30}
                 tint={isDark ? 'dark' : 'light'}
-                experimentalBlurMethod={Platform.OS === 'android' ? undefined : 'dimezisBlurView'}
+                blurMethod={androidTarget != null ? 'dimezisBlurViewSdk31Plus' : undefined}
+                blurTarget={androidTarget}
                 style={style.glassFill}
             />
-            <View pointerEvents="none" style={[style.glassFill, style.tint]} />
+            <View pointerEvents="none" style={[style.glassFill, blurLive ? style.tintOverBlur : style.tint]} />
+            {/* Progressive tint — only over the LIGHT (0.62) recipe: real blur on
+                Android 12+, or iOS's native blur. The blur-less Android fallback
+                already sits at 0.90/0.93 and must not be pushed to opaque. */}
+            {lightRecipe && <Animated.View pointerEvents="none" style={[style.glassFill, style.tintOverBlur, boostStyle]} />}
         </>
     );
 }
@@ -134,16 +178,22 @@ export function makeGlassLayerStyles(c: AppTheme, isDark: boolean) {
             ...StyleSheet.absoluteFill,
             backgroundColor: Platform.OS === 'android' ? undefined : 'transparent',
         },
-        // 0.62 was calibrated to sit ON TOP OF a real blur. Android no longer
-        // has one (perf audit finding 3), so the tint is now the ONLY thing
-        // frosting the surface — at 0.62 the content behind reads straight
-        // through, sharp. Android therefore carries the opacity the blur used
-        // to contribute; iOS keeps the original recipe over its native blur.
+        // 0.62 was calibrated to sit ON TOP OF a real blur. Android WITHOUT one
+        // (no blurTarget wired, or Android < 12) has only the tint frosting the
+        // surface — at 0.62 the content behind reads straight through, sharp —
+        // so it carries the opacity the blur used to contribute. iOS keeps the
+        // original recipe over its native blur.
         tint: {
             backgroundColor: withAlpha(
                 isDark ? c.surfaceContainer : '#FFFFFF',
                 Platform.OS === 'android' ? (isDark ? 0.90 : 0.93) : 0.62,
             ),
+        },
+        // The original over-blur recipe, used by GlassFill INSTEAD of `tint`
+        // when a REAL Android blur is live under it (blurTarget wired, Android
+        // 12+ — the RenderNode path). Matches what iOS's `tint` computes to.
+        tintOverBlur: {
+            backgroundColor: withAlpha(isDark ? c.surfaceContainer : '#FFFFFF', 0.62),
         },
         solid: { backgroundColor: c.sheetSurface },
         rim: {
@@ -311,12 +361,16 @@ interface Props {
      *  + corners) via GlassFill; only the geometry differs. Sheetless (no detents,
      *  no pan, no animation) — `sheet`/`barRowHeight`/dock callbacks are ignored. */
     compact?: boolean;
+    /** ANDROID real blur (opt-in): ref to a BlurTargetView wrapping the content
+     *  BEHIND this dock — never a view that contains the dock (the Dimezis
+     *  structural rule). See GlassFill. Omitted → today's tint fallback. */
+    blurTarget?: RefObject<View | null>;
 }
 
 export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function DockedGlassSheet({
     barRow, barRowHeight, sheet, colors: colorsProp, onBarHeight, onCollapsedClearance, onOcclusion,
     blockScrollRef, progressiveShadow, barAtTop, externalPanOnly, progressSV, dragActiveSV, onTouchStart, mapMode,
-    compact,
+    compact, blurTarget,
 }, ref) {
     const themed = useTheme();
     const colors = colorsProp ?? themed;
@@ -690,7 +744,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     });
     useAnimatedReaction(() => p.value, (v) => { 'worklet'; if (progressSV) progressSV.value = v; }, [progressSV]);
 
-    const cornerR = concentricRadius(insets.bottom, spacing.sm);
+    const cornerR = sheetCornerRadius(insets.bottom);
     const displayR = displayCornerRadius(insets.bottom);
 
     // ── Animated styles ───────────────────────────────────────────────────────
@@ -741,12 +795,16 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     // Content revealed BELOW the top bar: top rides just under the title (also a
     // constant gap) and the bottom clips EXACTLY at the sheet's bottom edge
     // (bottom: 0 of the clip — which is the screen bottom once docked at full).
-    // Left/right hug the clip's edges like the title row, so the item rows
-    // spread outward WITH the sheet as it widens through the stages. The opacity
-    // ramp hides the content sliver that would otherwise peek out below the
-    // title in the collapsed bar (the clip leaves `peek` of slack there).
+    // Left/right span the FULL glass; the `peek` inset that lines content up
+    // with the title row is applied as PADDING (the SheetContent wrapper).
+    // Insetting the clip itself put its boundary exactly on the content edge, so
+    // a SheetCard's boxShadow halo was sliced off on both sides — and it also
+    // double-counted against the inset (content at 2*peek, title row at peek).
+    // Clip at the glass edge + pad inside = aligned edges AND room for the halo.
+    // The opacity ramp still hides the content sliver that would otherwise peek
+    // out below the title in the collapsed bar.
     const contentBelowStyle = useAnimatedStyle(() => ({
-        left: peek, right: peek,
+        left: 0, right: 0,
         top: peek + barRowHeight, bottom: 0,
         opacity: clamp(p.value * 6, 0, 1),
     }));
@@ -768,7 +826,8 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
     // solid and actually scrolled (scroll is enabled at full only). Same edge
     // anchoring as the content it covers.
     const topFadeStyle = useAnimatedStyle(() => ({
-        left: peek, right: peek,
+        // Spans the full glass like the content it covers (see contentBelowStyle).
+        left: 0, right: 0,
         top: peek + barRowHeight,
         opacity: solidP.value * clamp(scrollY.value / 32, 0, 1),
     }));
@@ -830,7 +889,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                     ]}
                     pointerEvents="box-none"
                 >
-                    <GlassFill isDark={isDark} style={styles} />
+                    <GlassFill isDark={isDark} style={styles} blurTarget={blurTarget} progress={p} />
                     <View pointerEvents="none" style={styles.rim} />
                     <View style={styles.barRowCompact}>{barRow}</View>
                 </View>
@@ -852,7 +911,7 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
         >
             {/* CONSTANT GLASS (blur + tint) + a SOLID backdrop that fades in at
                 the full detent. */}
-            <GlassFill isDark={isDark} style={styles} />
+            <GlassFill isDark={isDark} style={styles} blurTarget={blurTarget} progress={p} />
             {dockAtLast && (
                 <Animated.View pointerEvents="none" style={[styles.glassFill, styles.solid, solidStyle]} />
             )}
@@ -880,6 +939,14 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                         // viewport must still own the whole open sheet, not
                         // end mid-air at its content's height. Hosts without
                         // panes keep their exact previous layout.
+                        /* CONTENT INSET IS THE COMPONENT'S JOB — applied by the
+                           SheetContent wrapper below (the shared primitive all
+                           three sheet components render), NOT by callers and NOT
+                           overridable here: hand-rolled copies of the inset are
+                           exactly the drift that put one sheet's content at 30px
+                           while another sat at 14. `contentContainerStyle` is for
+                           EXTRAS only (e.g. bottom safe-area clearance) — it is
+                           additive on top of SheetContent's inset. */
                         contentContainerStyle={paneEnabled
                             ? [styles.paneGrow, sheet!.contentContainerStyle]
                             : sheet!.contentContainerStyle}
@@ -891,27 +958,29 @@ export const DockedGlassSheet = forwardRef<DockedSheetControls, Props>(function 
                         overScrollMode="never"
                     >
                         <SheetSolidContext.Provider value={solidP}>
-                            {paneEnabled ? (
-                                /* Pane pager (see SheetSpec.pane): the showing
-                                   page slides to rest; during a swap the
-                                   previous page is a frozen snapshot stacked
-                                   absolutely on top, sliding out the other
-                                   way. The sheet's own clip bounds the slide,
-                                   so no extra overflow wrapper is needed. */
-                                <View style={styles.paneGrow}>
-                                    <Animated.View style={[styles.paneGrow, paneInStyle]}>
-                                        {shownContent}
-                                    </Animated.View>
-                                    {paneTransition && (
-                                        <Animated.View
-                                            style={[styles.paneOutgoing, paneOutStyle]}
-                                            pointerEvents="none"
-                                        >
-                                            {paneTransition.content}
+                            <SheetContent grow={paneEnabled}>
+                                {paneEnabled ? (
+                                    /* Pane pager (see SheetSpec.pane): the showing
+                                       page slides to rest; during a swap the
+                                       previous page is a frozen snapshot stacked
+                                       absolutely on top, sliding out the other
+                                       way. The sheet's own clip bounds the slide,
+                                       so no extra overflow wrapper is needed. */
+                                    <View style={styles.paneGrow}>
+                                        <Animated.View style={[styles.paneGrow, paneInStyle]}>
+                                            {shownContent}
                                         </Animated.View>
-                                    )}
-                                </View>
-                            ) : sheet!.content}
+                                        {paneTransition && (
+                                            <Animated.View
+                                                style={[styles.paneOutgoing, paneOutStyle]}
+                                                pointerEvents="none"
+                                            >
+                                                {paneTransition.content}
+                                            </Animated.View>
+                                        )}
+                                    </View>
+                                ) : sheet!.content}
+                            </SheetContent>
                         </SheetSolidContext.Provider>
                     </AnimatedScroll>
                 </Animated.View>
@@ -1061,9 +1130,13 @@ const makeStyles = (c: AppTheme, isDark: boolean) => {
     // Glass fill / tint / solid / rim — the shared frosted-glass layers.
     glassFill: glass.glassFill,
     tint: glass.tint,
+    tintOverBlur: glass.tintOverBlur,
     solid: glass.solid,
     rim: glass.rim,
     contentClip: { position: 'absolute', left: 0, right: 0, overflow: 'hidden' },
+    // The content inset itself lives in the shared SheetContent wrapper (see
+    // components/dock/SheetContent.tsx) — this component renders it around the
+    // scroll's children, so no sheet host can forget or re-declare it.
     // Pane pager (SheetSpec.pane): the stack and the showing page stretch to
     // the scroll viewport (paired with the flexGrow contentContainerStyle) so
     // the visible page always spans the full detent; the outgoing snapshot is

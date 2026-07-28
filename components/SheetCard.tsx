@@ -3,19 +3,10 @@ import { StyleSheet, type StyleProp, type ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle } from 'react-native-reanimated';
 import { SheetSolidContext } from './DockedGlassSheet';
 import { useResolvedScheme, radius, spacing } from '../constants/theme';
-
-/**
- * The radius of SheetCard's soft shadow halo — how far the shadow bleeds past
- * the card box on every side. It renders OUTSIDE the card's bounds, so any
- * ancestor with `overflow: 'hidden'` (an animated pager, a scroll viewport)
- * clips the halo unless it reserves at least this much room past the card.
- *
- * CONTRACT: a sheet content container that stacks SheetCards must give its
- * bottom edge `paddingBottom: SHEET_CARD_SHADOW_RADIUS` (and, if a card can sit
- * flush against a clipped top/side, that side too). Reference this constant
- * instead of a magic number so the reserve and the halo can never drift apart.
- */
-export const SHEET_CARD_SHADOW_RADIUS = 20;
+// The halo radius lives in the sheet tokens (ONE home): SheetContent — which
+// every sheet component renders around its content — reserves exactly this
+// much top and bottom, so the reserve and the halo can never drift apart.
+import { SHEET_CARD_SHADOW_RADIUS } from './dock/sheetTokens';
 
 /**
  * A section card inside a DockedGlassSheet. It reads the sheet's solid/dock

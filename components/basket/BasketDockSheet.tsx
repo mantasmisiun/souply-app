@@ -1,10 +1,10 @@
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
-import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { usePathname } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { DockedGlassSheet, type DockedSheetControls } from '../DockedGlassSheet';
-import { SheetCard, SHEET_CARD_SHADOW_RADIUS } from '../SheetCard';
+import { SheetCard } from '../SheetCard';
 import { useTheme, useResolvedScheme, spacing, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { useBasketSession, templateChooserOption, type ChooserOption } from '../../state/basketSession';
 import { useBasketState } from '../../state/basketState';
@@ -12,10 +12,14 @@ import { applyChooserPick } from '../../utils/basketUtils';
 import { formatWeekdayDate } from '../../utils/formatDayDate';
 import { type CoverDraft } from '../TemplateCoverEditor';
 import { DockActionRow } from '../dock/DockActionRow';
+import { ActionPill } from '../dock/ActionPill';
 import { ShoppingSheet } from './ShoppingSheet';
 import { useShoppingSheet } from '../../state/shoppingSheet';
 import { RecipeDockPane } from '../recipe/RecipeDockPane';
 import { RecipeCreatePane } from '../recipe/RecipeCreatePane';
+import { ChefToqueGlyph } from '../icons/tabGlyphs';
+import { SheetTitle } from '../dock/SheetTitle';
+import { usePaneSubmitControls } from '../../hooks/usePaneSubmitControls';
 import { useRecipeDock } from '../../state/recipeDock';
 import { createTemplate } from '../../utils/basketTemplatesApi';
 import { getUserId } from '../../config/user';
@@ -32,7 +36,13 @@ import { getUserId } from '../../config/user';
  */
 
 
-export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode; tabsRowHeight: number }) {
+export function BasketDockSheet({ tabsRow, tabsRowHeight, blurTarget }: {
+    tabsRow: ReactNode;
+    tabsRowHeight: number;
+    /** Android: the focused tab's BlurTargetView ref (see state/tabBlurTargets)
+     *  — forwarded to the dock's GlassFill for the real RenderNode blur. */
+    blurTarget?: RefObject<View | null>;
+}) {
     const colors = useTheme();
     const isDark = useResolvedScheme() === 'dark';
     const styles = useMemo(() => makeStyles(colors, isDark), [colors, isDark]);
@@ -117,8 +127,14 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     // it too so a return can't resurrect a stale pane.
     const paneSurface = onTemplatesRoot ? 'templates' : onCatalogChooser ? 'catalog' : null;
     const [recipePane, setRecipePane] = useState(false);
+    // The pane's submit pill state (Sukurti in the pane's bar row): the PANE
+    // owns the logic and reports it up (PaneSubmitControls); this host only
+    // renders the pill from the latest report. Cleared with the pane so a
+    // re-open starts from the true initial state (disabled — no name yet).
+    const createCtl = usePaneSubmitControls();
     const openRecipeCreate = () => { setRecipePane(true); controls.current?.snapTo(2); };
-    useEffect(() => { setRecipePane(false); }, [paneSurface]);
+    const closeRecipePane = () => { setRecipePane(false); createCtl.clear(); };
+    useEffect(() => { setRecipePane(false); createCtl.clear(); }, [paneSurface]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // External collapse (browse scroll / L1 toggle) — only while the chooser
     // owns the dock; the active-session List sheet registers its own.
@@ -184,7 +200,11 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
     const itemRow = (o: ChooserOption, keyId: string) => (
         <TouchableOpacity key={keyId} style={styles.row} onPress={() => { applyChooserPick(o, setDraftBasketId).catch(() => {}); }}>
             <View style={styles.rowIcon}>
-                <Ionicons name={o.key === 'template' ? 'bookmark' : 'cart'} size={20} color={colors.primary} />
+                {/* The tab bar's chef toque for recipes — one glyph per concept
+                    across tab bar, session cards and this chooser. */}
+                {o.key === 'template'
+                    ? <ChefToqueGlyph size={20} color={colors.primary} />
+                    : <Ionicons name="cart" size={20} color={colors.primary} />}
                 {o.itemCount > 0 && (
                     <View style={styles.countBadge}>
                         <Text style={styles.countBadgeText}>{o.itemCount > 99 ? '99+' : o.itemCount}</Text>
@@ -214,7 +234,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
         <View style={styles.body}>
             {/* Sheet title (screen-title font) — frames the whole sheet as a
                 destination choice: pick a basket/template or start a new one. */}
-            <Text style={styles.sheetHeading}>{t('basketSession.chooserPrompt')}</Text>
+            <SheetTitle colors={colors}>{t('basketSession.chooserPrompt')}</SheetTitle>
             {/* CREATE pair — the standard dock cards. Krepšelis runs the
                 chooser's old "add new basket" pick verbatim; Receptas opens
                 the SAME in-sheet create pane the Receptai dock uses (the
@@ -232,7 +252,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                         onPress: () => { applyChooserPick({ key: 'new', basketId: null, itemCount: 0 }, setDraftBasketId).catch(() => {}); },
                     },
                     {
-                        icon: 'add-circle-outline',
+                        iconNode: <ChefToqueGlyph size={24} color={colors.primary} />,
                         title: t('basketTab.templates.createTitle'),
                         subtitle: t('basketTab.templates.createSub'),
                         onPress: openRecipeCreate,
@@ -256,7 +276,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
 
     if (!hasSheet) {
         return (
-            <DockedGlassSheet barRow={tabsRow} barRowHeight={tabsRowHeight} colors={colors} onCollapsedClearance={setTabBarClearance} />
+            <DockedGlassSheet barRow={tabsRow} barRowHeight={tabsRowHeight} colors={colors} onCollapsedClearance={setTabBarClearance} blurTarget={blurTarget} />
         );
     }
 
@@ -268,6 +288,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
             barRowHeight={tabsRowHeight}
             onCollapsedClearance={setTabBarClearance}
             blockScrollRef={onTabRoot ? browseListRef : null}
+            blurTarget={blurTarget}
             sheet={{
                 // Shopping tab root → the shopping sheet (date filter / family /
                 // generate with AI). Catalog surfaces → the basket chooser.
@@ -291,7 +312,7 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                         barRow: (
                             <View style={styles.paneHeaderRow}>
                                 <TouchableOpacity
-                                    onPress={() => setRecipePane(false)}
+                                    onPress={closeRecipePane}
                                     hitSlop={10}
                                     accessibilityLabel={t('common.back')}
                                 >
@@ -300,18 +321,32 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
                                 <Text style={styles.paneTitle} numberOfLines={1}>
                                     {t('basketTab.templates.createPaneTitle')}
                                 </Text>
+                                {/* Sukurti — the pane's submit, as the bar row's
+                                    trailing pill (shared ActionPill). The flex:1
+                                    title truncates, so it can never push the
+                                    pill off-screen. Disabled until the pane
+                                    reports otherwise (a name exists, no import
+                                    in flight); busy = create POST running. */}
+                                <ActionPill
+                                    colors={colors}
+                                    label={t('basketTab.templates.createConfirm')}
+                                    onPress={createCtl.submit}
+                                    disabled={createCtl.disabled}
+                                    busy={createCtl.busy}
+                                />
                             </View>
                         ),
                         content: (
                             <RecipeCreatePane
                                 collapse={() => controls.current?.collapse()}
+                                onSubmitControls={createCtl.onSubmitControls}
                                 // Catalog entry point: blank create lands in the
                                 // catalog session bar, not on /template/{id}.
                                 // Imports keep the review-screen path either way.
                                 onCreateBlank={paneSurface === 'catalog' ? createRecipeIntoSession : undefined}
                             />
                         ),
-                        onDismiss: () => setRecipePane(false),
+                        onDismiss: closeRecipePane,
                     } : null)
                     : undefined,
                 // Full detent so the sections have room; the shared geometry
@@ -339,9 +374,9 @@ export function BasketDockSheet({ tabsRow, tabsRowHeight }: { tabsRow: ReactNode
 const makeStyles = (c: AppTheme, isDark: boolean) => StyleSheet.create({
     // paddingBottom reserves the SheetCard shadow halo so the sheet's scroll
     // viewport (overflow:'hidden') can't clip the last section's shadow.
-    body: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: SHEET_CARD_SHADOW_RADIUS, gap: spacing.md },
+    // Horizontal inset + shadow room come from the sheet's SheetContent wrapper.
+    body: { gap: spacing.md },
     // Same size as a screen's ScreenHeading title (22/700) — the sheet's own title.
-    sheetHeading: { fontSize: 22, fontWeight: '700', color: c.textPrimary, paddingTop: spacing.xs, paddingBottom: spacing.xs },
     cardTitle: { fontSize: 20, fontWeight: '800', color: c.textPrimary, paddingVertical: spacing.md },
     row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 10 },
     rowIcon: {

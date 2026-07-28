@@ -339,7 +339,7 @@ export default function VoteHistoryScreen() {
                 close button. */}
             {showHelp && (
                 <GlassSheet autoHeight onClose={() => setShowHelp(false)}>
-                    {/* GlassSheet's scroll is edge-to-edge — content owns its padding. */}
+                    {/* Inset comes from GlassSheet's own SheetContent wrapper. */}
                     <View style={styles.sheetBody}>
                     <View style={styles.sheetTitleRow}>
                         <View style={styles.helpIconBadge}>
@@ -471,7 +471,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
 
     // Sheet chrome (backdrop, panel, corners) belongs to GlassSheet now — what
     // remains here is only the CONTENT of those sheets.
-    sheetBody: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
+    // Inset comes from GlassSheet's SheetContent wrapper — none here.
+    sheetBody: {},
     sheetTitleRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginBottom: spacing.md },
     sheetTitle: { flex: 1, fontSize: 17, fontWeight: '700', color: c.textPrimary },
     pairCard: { alignSelf: 'center', marginBottom: spacing.lg },

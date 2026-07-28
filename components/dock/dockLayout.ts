@@ -2,26 +2,20 @@ import { spacing } from '../../constants/theme';
 
 /**
  * Shared geometry for every map DockedGlassSheet (the main dock and the
- * store-options dock). Keeping these in ONE place is what stops the two docks
- * from drifting apart: the bar row and the sheet content use the SAME horizontal
- * pad, so the title, the action cards and the section cards all keep an equal
- * gap to the sheet edge at every stage.
+ * store-options dock).
+ *
+ * NO horizontal padding here, on purpose: DockedGlassSheet lays the bar row
+ * out at the shared PEEK inset and wraps sheet content in SheetContent (the
+ * same inset), so bar and content already align — a pad here would stack on
+ * top and push these two docks out of line with every other sheet (they sat
+ * at 30px while the rest sat at 14).
  */
-export const DOCK_SIDE_PAD = 16;
 
-/** Bar row base — horizontal pad matches the content so bar and cards align. */
+/** Bar row base — layout only; the inset is the sheet's job. */
 export const dockBarBase = {
     flexDirection: 'row' as const,
     alignItems: 'center' as const,
     gap: spacing.md,
-    paddingHorizontal: DOCK_SIDE_PAD,
-};
-
-/** Sheet content base — one column of action rows / section cards. */
-export const dockContentBase = {
-    paddingHorizontal: DOCK_SIDE_PAD,
-    paddingTop: 22,
-    gap: 14,
 };
 
 /**

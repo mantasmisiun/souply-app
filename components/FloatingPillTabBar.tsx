@@ -14,6 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 // expo-router/js-tabs (same identity as the `Tabs` component in the tab layout).
 import type { BottomTabBarProps } from 'expo-router/js-tabs';
 import { useTabBarOverride } from '../state/tabBarOverride';
+import { tabBlurTargetFor } from '../state/tabBlurTargets';
 import { BasketDockSheet } from './basket/BasketDockSheet';
 import {
     useTheme,
@@ -158,7 +159,16 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
         </View>
     );
 
-    return <BasketDockSheet tabsRow={tabsRow} tabsRowHeight={rowH} />;
+    // ANDROID real blur: the dock blurs the FOCUSED tab's BlurTargetView (each
+    // tab layout wraps its nested Stack in one — state/tabBlurTargets). This
+    // bar re-renders on every focus change, so handing the dock a DIFFERENT
+    // ref object per tab retargets expo-blur's native BlurView in the same
+    // commit as the switch. On iOS the refs stay null and GlassFill ignores
+    // the prop entirely — the native NativeTabs path doesn't render this bar
+    // anyway (only the error-boundary fallback does).
+    const blurTarget = tabBlurTargetFor(state.routes[state.index]?.name ?? '');
+
+    return <BasketDockSheet tabsRow={tabsRow} tabsRowHeight={rowH} blurTarget={blurTarget} />;
 }
 
 /** A generic dock tab item (for docks other than the root tab bar). */

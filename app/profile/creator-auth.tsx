@@ -211,7 +211,7 @@ export default function CreatorAuthScreen() {
                 hardware back — no full-width button eating the bottom. */}
             {showIntro && (
                 <GlassSheet autoHeight onClose={dismissIntro}>
-                    {/* GlassSheet's scroll is edge-to-edge — content owns its padding. */}
+                    {/* Inset comes from GlassSheet's own SheetContent wrapper. */}
                     <View style={styles.sheetBody}>
                     <View style={styles.sheetTitleRow}>
                         <View style={styles.sheetTitleCol}>
@@ -286,7 +286,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     whoLink: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, paddingVertical: 8 },
     whoLinkText: { fontSize: 13, color: c.textSecondary, fontWeight: '600' },
 
-    sheetBody: { paddingHorizontal: 20, paddingBottom: 20 },
+    // Inset comes from GlassSheet's SheetContent wrapper — none here.
+    sheetBody: {},
     sheetTitleRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, marginBottom: 16 },
     sheetTitleCol: { flex: 1, minWidth: 0 },
     modalTitle: { fontSize: 20, fontWeight: '800', color: c.textPrimary },

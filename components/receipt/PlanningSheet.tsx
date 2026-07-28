@@ -79,7 +79,8 @@ type Styles = ReturnType<typeof makeStyles>;
 const BAR_H = 12;
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    body: { paddingHorizontal: spacing.lg, gap: spacing.lg, paddingTop: spacing.xs },
+    // Inset comes from the sheet's SheetContent wrapper — gap only here.
+    body: { gap: spacing.lg },
     banner: {
         backgroundColor: withAlpha(c.success, 0.14), borderRadius: radius.md,
         paddingVertical: spacing.sm, paddingHorizontal: spacing.md, alignItems: 'center',

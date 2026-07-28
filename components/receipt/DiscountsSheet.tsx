@@ -148,7 +148,8 @@ export function DiscountsSheet({ receipts }: { receipts: TripReceipt[] }) {
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     body: { gap: spacing.xs },
-    padded: { paddingHorizontal: spacing.lg, gap: spacing.md, paddingTop: spacing.xs, marginBottom: spacing.xs },
+    // Horizontal inset comes from the sheet's SheetContent wrapper — none here.
+    padded: { gap: spacing.md, marginBottom: spacing.xs },
     note: {
         flexDirection: 'row', alignItems: 'flex-start', gap: spacing.sm,
         backgroundColor: withAlpha(c.textSecondary, 0.08), borderRadius: radius.md,
@@ -156,7 +157,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     noteText: { flex: 1, ...typography.labelSmall, color: c.textSecondary, lineHeight: 17 },
 
-    itemRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
+    itemRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.sm },
     thumbWrap: { width: 40, height: 40 },
     itemImage: { width: 40, height: 40, borderRadius: 10 },
     itemImageEmpty: { backgroundColor: c.surfaceMuted },

@@ -151,7 +151,8 @@ export function PredictionSheet({ score, lowQuality }: { score: TripScore; lowQu
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     body: { gap: spacing.xs },
-    padded: { paddingHorizontal: spacing.lg, gap: spacing.md, paddingTop: spacing.xs, marginBottom: spacing.xs },
+    // Horizontal inset comes from the sheet's SheetContent wrapper — none here.
+    padded: { gap: spacing.md, marginBottom: spacing.xs },
 
     hero: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
     heroSide: { gap: 1 },
@@ -171,9 +172,9 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     },
     qualityWarnText: { flex: 1, ...typography.labelSmall, color: c.onWarning ?? c.onPrimary, lineHeight: 17 },
 
-    row: { flexDirection: 'row', gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.md, alignItems: 'flex-start' },
+    row: { flexDirection: 'row', gap: spacing.md, paddingVertical: spacing.md, alignItems: 'flex-start' },
     // Canonical item divider (theme dividerItem), inset past the thumbnail.
-    sep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem, marginLeft: spacing.lg + 38 + spacing.md, marginRight: spacing.lg },
+    sep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem, marginLeft: 38 + spacing.md },
     thumb: { width: 38, height: 38, borderRadius: 9 },
     thumbPh: { width: 38, height: 38, borderRadius: 9, backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center' },
     thumbEmoji: { fontSize: 20, opacity: 0.5 },

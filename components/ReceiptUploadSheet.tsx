@@ -107,7 +107,8 @@ export function ReceiptUploadSheet({
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    content: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs },
+    // Inset comes from GlassSheet's SheetContent wrapper — none here.
+    content: {},
     title: { ...typography.subheading, color: c.textPrimary, marginBottom: spacing.sm },
     row: { flexDirection: 'row', alignItems: 'center', gap: spacing.lg, paddingVertical: spacing.lg, paddingHorizontal: spacing.xs, borderRadius: radius.md },
     rowText: { ...typography.bodyStrong, fontWeight: '700', color: c.textPrimary },

@@ -109,7 +109,8 @@ export function PlanReconcileSheet({
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     body: { gap: spacing.xs },
-    padded: { paddingHorizontal: spacing.lg, gap: spacing.md, paddingTop: spacing.xs, marginBottom: spacing.xs },
+    // Horizontal inset comes from the sheet's SheetContent wrapper — none here.
+    padded: { gap: spacing.md, marginBottom: spacing.xs },
     legend: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.lg },
     legendItem: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
     legendText: { ...typography.labelSmall, color: c.textSecondary },
@@ -121,8 +122,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     noteText: { flex: 1, ...typography.labelSmall, color: c.textSecondary, lineHeight: 17 },
 
     // Canonical item divider (theme dividerItem), inset past the thumbnail.
-    sep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem, marginLeft: spacing.lg + 40 + spacing.md, marginRight: spacing.lg },
-    itemRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
+    sep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem, marginLeft: 40 + spacing.md },
+    itemRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: spacing.sm },
     thumbWrap: { width: 40, height: 40 },
     itemImage: { width: 40, height: 40, borderRadius: 10 },
     itemImagePlaceholder: {

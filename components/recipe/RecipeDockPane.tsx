@@ -1,7 +1,6 @@
 import { useMemo } from 'react';
 import { View, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import { SHEET_CARD_SHADOW_RADIUS } from '../SheetCard';
 import { DockActionRow } from '../dock/DockActionRow';
 import { useTheme, spacing, type AppTheme } from '../../constants/theme';
 
@@ -40,7 +39,7 @@ const makeStyles = (_c: AppTheme) => StyleSheet.create({
     // paddingBottom reserves the action card's shadow halo — the sheet's scroll
     // viewport clips overflow, so without it the shadow is cut off.
     body: {
-        paddingHorizontal: spacing.lg, paddingTop: spacing.sm,
-        paddingBottom: SHEET_CARD_SHADOW_RADIUS, gap: spacing.md,
+        // Inset + halo: the sheet's SheetContent wrapper.
+        gap: spacing.md,
     },
 });

@@ -4,6 +4,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTranslation } from 'react-i18next';
 import { useTheme, spacing, type AppTheme } from '../../constants/theme';
 import { SheetCard } from '../SheetCard';
+import { SheetTitle } from '../dock/SheetTitle';
 import { MaterialProgress } from '../MaterialProgress';
 import { InvitePane } from '../results/InvitePane';
 import { getUserId } from '../../config/user';
@@ -82,7 +83,7 @@ export function FamilyShoppingPane({ onBack }: { onBack: () => void }) {
                 <TouchableOpacity onPress={onBack} hitSlop={10} accessibilityLabel={t('common.back')}>
                     <Ionicons name="chevron-back" size={26} color={colors.primary} />
                 </TouchableOpacity>
-                <Text style={styles.title}>{t('family.sheetTitle')}</Text>
+                <SheetTitle colors={colors}>{t('family.sheetTitle')}</SheetTitle>
             </View>
 
             <SheetCard>
@@ -127,8 +128,9 @@ export function FamilyShoppingPane({ onBack }: { onBack: () => void }) {
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    headerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingTop: spacing.xs, paddingBottom: spacing.xs },
-    title: { fontSize: 22, fontWeight: '700', color: c.textPrimary },
+    // NO vertical padding — the sheet's own inset owns the top gap and the
+    // body column's gap owns the space below (see dock/SheetTitle).
+    headerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
     row: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingVertical: 10 },
     rowIcon: {
         width: 40, height: 40, borderRadius: 20,

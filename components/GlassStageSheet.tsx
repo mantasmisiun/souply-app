@@ -2,13 +2,14 @@ import React, { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, use
 import { View, Pressable, StyleSheet, Dimensions, Platform, BackHandler, type StyleProp, type ViewStyle } from 'react-native';
 import { Gesture, GestureDetector, ScrollView, State } from 'react-native-gesture-handler';
 import Animated, {
-    SlideOutDown, runOnJS, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
+    SlideOutDown, interpolateColor, runOnJS, useAnimatedScrollHandler, useAnimatedStyle, useDerivedValue,
     useSharedValue, withDelay, withRepeat, withSequence, withSpring, withTiming,
 } from 'react-native-reanimated';
-import { BlurView } from 'expo-blur';
-import { spacing, radius, withAlpha, useResolvedScheme, type AppTheme } from '../constants/theme';
-import { LiquidGlass } from './LiquidGlass';
-import { concentricRadius, displayCornerRadius } from '../utils/displayCorners';
+import { spacing, radius, useResolvedScheme, type AppTheme } from '../constants/theme';
+import { GlassFill, makeGlassLayerStyles, GLASS_SHADOW_OPACITY } from './DockedGlassSheet';
+import { SheetContent } from './dock/SheetContent';
+import { sheetCornerRadius } from './dock/sheetTokens';
+import { displayCornerRadius } from '../utils/displayCorners';
 
 /**
  * FLOATING GLASS BAR↔SHEET (Find-My-style) — the reusable stage machinery
@@ -83,8 +84,11 @@ type Props = {
     /** Bottom-pinned bar content (always visible). Measured & reported. */
     bar: React.ReactNode;
     /** Body content, revealed by expansion, inside the sheet's ScrollView.
-     *  Ignored when `pages` is set. */
+     *  Ignored when `pages` is set. Rendered through the shared SheetContent
+     *  wrapper — content must NOT re-declare the sheet inset. */
     children?: React.ReactNode;
+    /** EXTRAS only (e.g. bottom clearance) — additive on top of SheetContent's
+     *  inset, never a replacement for it. */
     contentContainerStyle?: StyleProp<ViewStyle>;
     /** IN-SHEET NAV STACK (2.0 Find-My): the body becomes a horizontal page
      *  stack; the LAST entry is the active page. Push/pop by changing the
@@ -161,8 +165,8 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     fadeGlassNearCollapse = false, handleAlign = 'center', glassBottomInset = 0,
     onActiveChange, pulseHint = false,
 }, ref) {
-    const styles = useMemo(() => makeStyles(colors), [colors]);
     const isDark = useResolvedScheme() === 'dark';
+    const styles = useMemo(() => makeStyles(colors, isDark), [colors, isDark]);
     const [barH, setBarH] = useState(60);
     const [stage, setStage] = useState(initialStage);
     // Bumped on each user snap so the settle effect animates even to the SAME
@@ -218,6 +222,15 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
         let p = draggingSV.value ? hp : stagePSV.value;
         if (p > 0.995) p = 1;
         return p;
+    });
+    // Open progress across the WHOLE snap range (0 collapsed bar → 1 last
+    // detent) — feeds GlassFill's progressive tint, the same rule as the docks:
+    // a collapsed bar peeking over content stays see-through, a raised sheet is
+    // a reading surface and shouldn't.
+    const openP = useDerivedValue(() => {
+        const sn = snapsSV.value;
+        const lo = sn[0], hi = sn[sn.length - 1];
+        return hi > lo ? Math.min(1, Math.max(0, (height.value - lo) / (hi - lo))) : 0;
     });
     // flushBottom sheets sit ON their bar — no float lift (the lift is the
     // gap the merge exists to remove).
@@ -466,7 +479,7 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
 
     const maxSnap = snaps[snaps.length - 1];
     const listH = Math.max(0, maxSnap - handleH - barH);
-    const cornerR = cornerRadius ?? concentricRadius(bottomInset, spacing.sm);
+    const cornerR = cornerRadius ?? sheetCornerRadius(bottomInset);
     const displayR = displayCornerRadius(bottomInset);
     const expandable = snaps.length > 1;
 
@@ -508,9 +521,16 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
         if (!dockAtLast) return { top, opacity };
         const p = dockP.value;
         const r = Math.round(cornerR + (displayR - cornerR) * p);
-        return { top, opacity, borderBottomLeftRadius: r, borderBottomRightRadius: r };
+        return {
+            top, opacity, borderBottomLeftRadius: r, borderBottomRightRadius: r,
+            // Edge outline fades out as it docks — no border once edge-to-edge
+            // (same rule as DockedGlassSheet's clipStyle).
+            borderColor: interpolateColor(p, [0, 1], [colors.outlineVariant, 'transparent']),
+        };
     });
     const solidBgStyle = useAnimatedStyle(() => ({ opacity: dockP.value }));
+    // Top rim highlight is edge decoration — gone once docked edge-to-edge.
+    const rimStyle = useAnimatedStyle(() => ({ opacity: 1 - dockP.value }));
 
     // Float mode gets its side margins from LAYOUT; dock mode is laid out
     // edge-to-edge and scaled (so content there sits in an inset viewport).
@@ -529,44 +549,32 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
             pointerEvents="box-none"
         >
             {/* GLASS FRAME — sized to the VISIBLE sheet rect every frame; the
-                material's rim wraps all real edges. Radii on the glass itself. */}
+                material's rim wraps all real edges. Radii on the glass itself.
+                The fill is THE shared glass recipe (GlassFill +
+                makeGlassLayerStyles, same as DockedGlassSheet / GlassSheet).
+                DELIBERATE exception: no `blurTarget` is ever wired here — this
+                sheet floats over a LIVE native map (a SurfaceView), which an
+                Android blur snapshot cannot see — so Android always keeps
+                GlassFill's tint-only fallback (the opaque 0.90/0.93 wash), and
+                the Android elevation: 0 treatment stands (see styles.glassFrame). */}
             <Animated.View pointerEvents={flushBottom ? 'none' : 'auto'} style={[styles.glassFrame, glassBottomInset > 0 && { bottom: glassBottomInset }, {
                 borderTopLeftRadius: cornerR, borderTopRightRadius: cornerR,
                 borderBottomLeftRadius: cornerR, borderBottomRightRadius: cornerR,
             },
             flushBottom && { borderBottomLeftRadius: flushBottomRadius, borderBottomRightRadius: flushBottomRadius, borderBottomWidth: 0 },
-            flushBottom && Platform.OS === 'android' && { backgroundColor: 'transparent', borderColor: colors.outlineVariant },
             topRimColor != null && { borderTopWidth: 1.2, borderTopColor: topRimColor },
             glassFrameStyle]}>
-                {flushBottom && Platform.OS === 'android' ? (
-                    // Merge mode: replicate the floating tab bar's EXACT glass
-                    // recipe so sheet and bar are indistinguishable where they
-                    // meet — the default near-opaque Android frame reads as a
-                    // different material. The bar dropped its LIVE Android blur
-                    // (perf audit finding 3 — dimezis re-renders the sibling
-                    // hierarchy in software per invalidation), so this matches
-                    // its new recipe: expo-blur's cheap translucent fallback
-                    // (no experimentalBlurMethod) + the 0.8 surface tint.
-                    <>
-                        <BlurView
-                            pointerEvents="none"
-                            intensity={isDark ? 40 : 55}
-                            tint={isDark ? 'dark' : 'light'}
-                            style={StyleSheet.absoluteFill}
-                        />
-                        <View
-                            pointerEvents="none"
-                            style={[StyleSheet.absoluteFill, { backgroundColor: withAlpha(colors.surfaceContainer, 0.8) }]}
-                        />
-                    </>
-                ) : (
-                    <LiquidGlass fallback="blur" style={[StyleSheet.absoluteFill, { borderRadius: cornerR }]} />
-                )}
+                <GlassFill isDark={isDark} style={styles} progress={openP} />
                 {dockAtLast && (
                     <Animated.View
                         pointerEvents="none"
-                        style={[StyleSheet.absoluteFill, { backgroundColor: colors.pageBackground }, solidBgStyle]}
+                        style={[styles.glassFill, styles.solidDock, solidBgStyle]}
                     />
+                )}
+                {/* Shared top rim highlight — unless a merge host supplies its
+                    own topRimColor border on the frame itself. */}
+                {topRimColor == null && (
+                    <Animated.View pointerEvents="none" style={[styles.rim, rimStyle]} />
                 )}
             </Animated.View>
 
@@ -613,7 +621,11 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
                                                 if (i === depth) onContentHeight?.(h);
                                             }}
                                         >
-                                            {page.content}
+                                            {/* THE shared content inset — see
+                                                components/dock/SheetContent.tsx.
+                                                Pages own no padding of their own;
+                                                contentContainerStyle is extras only. */}
+                                            <SheetContent>{page.content}</SheetContent>
                                         </AnimatedGHScrollView>
                                     </View>
                                 );
@@ -656,7 +668,9 @@ export const GlassStageSheet = forwardRef<GlassStageSheetRef, Props>(function Gl
     );
 });
 
-const makeStyles = (c: AppTheme) => StyleSheet.create({
+const makeStyles = (c: AppTheme, isDark: boolean) => {
+  const glass = makeGlassLayerStyles(c, isDark);
+  return StyleSheet.create({
     sheetRoot: {
         position: 'absolute', bottom: 0,
         overflow: 'hidden', // rounds the visible bottom cut of the sliding panel
@@ -667,15 +681,27 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // Float mode: real margins — no scale involved.
     rootFloat: { left: spacing.sm, right: spacing.sm },
     // The glass frame — bottom-pinned; `top` (+ dock radii) animate with the
-    // drag so its bounds = the visible sheet rect. Android rides the same
-    // frame: the blur fallback gets a tinted body + hairline for contrast.
+    // drag so its bounds = the visible sheet rect. Edge + shadow ink come from
+    // the ONE shared recipe (makeGlassLayerStyles.clipEdge).
+    // ANDROID: elevation 0, deliberately — an elevation shadow paints beneath
+    // this translucent overflow-hidden clip and washes grey inward from every
+    // edge (see DockedGlassSheet's shadowStyle); the hairline clipEdge still
+    // defines the shape there.
     glassFrame: {
         position: 'absolute', left: 0, right: 0, bottom: 0, overflow: 'hidden',
-        backgroundColor: Platform.OS === 'android' ? c.cardBackground + 'F2' : 'transparent',
-        ...(Platform.OS === 'android'
-            ? { borderWidth: StyleSheet.hairlineWidth, borderColor: 'rgba(120,120,128,0.24)' as const }
-            : null),
+        ...glass.clipEdge,
+        shadowOpacity: isDark ? GLASS_SHADOW_OPACITY.dark : GLASS_SHADOW_OPACITY.light,
+        elevation: Platform.OS === 'android' ? 0 : 3,
     },
+    // Glass fill / tint / rim — the shared frosted-glass layers (GlassFill).
+    glassFill: glass.glassFill,
+    tint: glass.tint,
+    tintOverBlur: glass.tintOverBlur,
+    rim: glass.rim,
+    // DELIBERATE divergence from the shared `solid` (sheetSurface): the docked
+    // results list reads as the results PAGE over the map, and its translucent
+    // option cards are calibrated against pageBackground, not sheet white.
+    solidDock: { backgroundColor: c.pageBackground },
     panel: { position: 'absolute', top: 0, left: 0, right: 0, overflow: 'hidden' },
     viewport: { position: 'absolute', top: 0, overflow: 'hidden' },
     barOverlay: { position: 'absolute', left: 0, right: 0, bottom: 0 },
@@ -684,4 +710,5 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     handle: { width: 44, height: 5, borderRadius: radius.pill, backgroundColor: c.border },
     list: { flexGrow: 0 },
     pagesRow: { flexDirection: 'row' },
-});
+  });
+};

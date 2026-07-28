@@ -210,7 +210,8 @@ const LOGO = 30;
 const LOGO_OVERLAP = 18;
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    body: { paddingHorizontal: spacing.lg, gap: spacing.md, paddingTop: spacing.xs },
+    // Inset comes from the sheet's SheetContent wrapper — gap only here.
+    body: { gap: spacing.md },
     loadingBody: { padding: spacing.xl, alignItems: 'center', gap: spacing.md },
     loadingText: { ...typography.bodySmall, color: c.textSecondary },
     bars: { gap: spacing.sm },

@@ -11,6 +11,7 @@ import {
 import { MaterialProgress } from '@/components/MaterialProgress';
 import Animated, { SlideInDown, SlideOutDown } from 'react-native-reanimated';
 import { GlassStageSheet, SHEET_HANDLE_H, type GlassStageSheetRef } from '../GlassStageSheet';
+import { SHEET_CARD_SHADOW_RADIUS, SHEET_PEEK } from '../dock/sheetTokens';
 import { Ionicons } from '@expo/vector-icons';
 import { spacing, radius, typography, iconSize, avatarSize, type AppTheme } from '../../constants/theme';
 import { type SheetOption } from '../../utils/splitOptions';
@@ -264,7 +265,11 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
     const snaps = useMemo(() => {
         const bar = SHEET_HANDLE_H + actionsH;
         const full = SCREEN_H * 0.85;
-        const peek = Math.min(bar + firstCardH + PEEK_GAP, full);
+        // The sheet's own SheetContent wrapper sits the first card
+        // SHEET_CARD_SHADOW_RADIUS below the handle — the peek detent must
+        // clear that inset too, or the next-card sliver disappears. (Snap
+        // geometry is the parent's job; content PADDING is never re-declared.)
+        const peek = Math.min(bar + SHEET_CARD_SHADOW_RADIUS + firstCardH + PEEK_GAP, full);
         const mid = clamp(Math.min(bar + contentH, bar + SCREEN_H * 0.42), peek, full);
         const pts = [bar];
         if (peek > bar + 40) pts.push(peek);
@@ -289,7 +294,6 @@ function MultiSheet({ options, selectedKey, onSelect, onNavigate, onCreateList, 
             onHeightChange={onHeightChange}
             onBarHeight={setActionsH}
             onContentHeight={setContentH}
-            contentContainerStyle={styles.listContent}
             bar={
                 <Actions styles={styles} colors={colors} creatingList={creatingList}
                     onNavigate={onNavigate} onCreateList={onCreateList} bottomInset={bottomInset} />
@@ -334,8 +338,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // Top breathing room under the rounded corners (SingleSheet only — the
     // draggable sheet's pill lives in GlassStageSheet).
     handleArea: { height: HANDLE_H, alignItems: 'center', justifyContent: 'center' },
-
-    listContent: { paddingHorizontal: spacing.lg, paddingTop: spacing.xs, paddingBottom: spacing.sm },
 
     // ── Single-store card ──
     singlePad: { paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: spacing.lg },
@@ -397,7 +399,10 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     breakdownDist: { ...typography.caption, color: c.textMuted, marginTop: 2 },
 
     // ── Actions ──
-    actions: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.sm },
+    // Bar inset = the shared sheet-content inset (SHEET_PEEK) so the bar's
+    // buttons line up with the option cards above (a bar is the CALLER's
+    // render in GlassStageSheet, so it reads the token; content never does).
+    actions: { flexDirection: 'row', gap: spacing.sm, paddingHorizontal: SHEET_PEEK, paddingTop: spacing.sm },
     navigateBtn: {
         flex: 1, borderWidth: 1, borderColor: c.primary, borderRadius: radius.pill,
         paddingVertical: spacing.md, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm,

@@ -271,6 +271,11 @@ interface Props {
      *  that fallback is otherwise indistinguishable from "still fetching" (both are
      *  imageUri/imageDims null) and flashes before the photo lands. */
     loading?: boolean;
+    /** Drop the card's own horizontal margin — for hosts whose container already
+     *  insets content (a sheet's SheetContent wrapper), so the photo card lines
+     *  up with the surrounding sheet content instead of sitting further in.
+     *  Screens that render this full-bleed keep the default margin. */
+    flush?: boolean;
 }
 
 function ReceiptPhotoView({
@@ -283,10 +288,12 @@ function ReceiptPhotoView({
     maskRegions = [],
     drawMasks = true,
     loading = false,
+    flush = false,
 }: Props) {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    const cardStyle = flush ? [styles.card, styles.cardFlush] : styles.card;
     const [explainerOpen, setExplainerOpen] = useState(false);
     // A saved receipt's photo is fetched from MinIO over the network — show a spinner over the
     // stage while it loads. Seeded true for a remote (http) URI so the spinner is up before the
@@ -453,7 +460,7 @@ function ReceiptPhotoView({
         // the fetch settles WITHOUT an image do we show the honest "not available".
         if (loading) {
             return (
-                <View style={styles.card}>
+                <View style={cardStyle}>
                     <View style={styles.titleRow}>
                         <Text style={styles.title}>{t('receiptPhoto.title')}</Text>
                     </View>
@@ -467,7 +474,7 @@ function ReceiptPhotoView({
             );
         }
         return (
-            <View style={styles.card}>
+            <View style={cardStyle}>
                 <View style={styles.fallbackWrap}>
                     <Text style={styles.fallbackTitle}>{t('receiptPhoto.fallbackTitle')}</Text>
                     <Text style={styles.fallbackBody}>
@@ -479,7 +486,7 @@ function ReceiptPhotoView({
     }
 
     return (
-        <View style={styles.card}>
+        <View style={cardStyle}>
             {/* Compact title row + (?) for the explainer modal. */}
             <View style={styles.titleRow}>
                 <Text style={styles.title}>{t('receiptPhoto.title')}</Text>
@@ -706,6 +713,9 @@ const makeStyles = (c: AppTheme) =>
             shadowOpacity: 0.05,
             shadowRadius: 2,
         },
+        // `flush` hosts (sheet content, already inset by SheetContent) — the
+        // card must line up with its siblings, not sit a margin further in.
+        cardFlush: { marginHorizontal: 0 },
         titleRow: {
             flexDirection: 'row',
             alignItems: 'center',
