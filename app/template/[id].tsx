@@ -381,15 +381,19 @@ export default function TemplateDetailScreen() {
     const headerEmoji = coverEmoji(template.coverImage) ?? '🫜';
 
     /**
-     * The page a recipe was imported FROM. The import endpoint returns a
-     * `sourceUrl` in its PREVIEW only — `POST /api/basket-templates` takes
-     * name/cover/items and nothing else, so the address is dropped the moment the
-     * shopper confirms and no template row can answer "where did this come from".
-     * Rather than inventing a field the server never fills, the two source cards
-     * below render DISABLED: the layout is honest about what it doesn't know.
+     * The page a recipe was imported FROM.
+     *
+     * `BasketTemplate.sourceUrl`/`sourceSite` are real columns now, written by
+     * the import flow — so this reads the row instead of the hardcoded null that
+     * stood here while the server had nowhere to put the address. A hand-made
+     * recipe still has none, which is what keeps the source cards disabled for
+     * those; the layout stays honest either way.
+     *
+     * `sourceSite` is stored alongside the URL so the byline needs no parsing,
+     * but it is derived here as a fallback for rows written before that column.
      */
-    const sourceUrl: string | null = null;
-    const sourceSite = (() => {
+    const sourceUrl: string | null = template.sourceUrl ?? null;
+    const sourceSite = template.sourceSite ?? (() => {
         if (!sourceUrl) return null;
         try { return new URL(sourceUrl).hostname.replace(/^www\./, ''); } catch { return null; }
     })();
@@ -675,8 +679,13 @@ export default function TemplateDetailScreen() {
                                             icon: 'globe-outline',
                                             title: t('basketTab.templates.websiteTitle'),
                                             subtitle: sourceSite ?? t('basketTab.templates.sourceUnknown'),
-                                            onPress: () => openSource(sourceSite ? `https://${sourceSite}` : null),
-                                            disabled: !sourceSite,
+                                            // Opens the RECIPE, not the site's front page. There
+                                            // used to be a separate "open recipe" card for that;
+                                            // with it gone this is the only way back to the
+                                            // instructions, and a shopper tapping the source
+                                            // wants the page they imported, not lamaistas.lt.
+                                            onPress: () => openSource(sourceUrl),
+                                            disabled: !sourceUrl,
                                         },
                                     ]}
                                 />
