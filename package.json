@@ -12,6 +12,7 @@
     "run:dev:ios": "npm run dev",
     "start:dev": "APP_VARIANT=dev expo start --dev-client",
     "dev": "npm run sync-shared && APP_VARIANT=dev expo start --dev-client --clear",
+    "dev:usb": "adb reverse tcp:8081 tcp:8081 && npm run sync-shared && APP_VARIANT=dev expo start --dev-client --clear --localhost",
     "lint": "expo lint",
     "sync-shared": "rm -rf ./shared && cp -r ../shared ./shared && rm -rf ./shared/.git",
     "build:dev:ios": "node scripts/require-branch.js dev && npm run sync-shared && eas build --profile development -p ios",
