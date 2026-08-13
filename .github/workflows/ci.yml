@@ -29,7 +29,7 @@ jobs:
           # Without this the checkout used souply-shared's DEFAULT branch
           # (main) — months-stale parsers under brand-new app code.
           ref: ${{ github.base_ref || github.ref_name }}
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
