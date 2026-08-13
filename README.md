@@ -1,8 +1,9 @@
 # souply-app
 
 Mobile client for [Souply](https://souply.lt) — a grocery price-comparison platform for the
-Lithuanian market. You photograph a receipt, it becomes structured line items on-device,
-and the app tells you what the same basket would cost at each shop near you.
+Lithuanian market. You build a basket, the app tells you what it costs at each shop near
+you, and after you've shopped it reads your receipt to show what you actually paid against
+what you would have paid elsewhere.
 
 Souply is split across four repositories:
 
@@ -12,6 +13,40 @@ Souply is split across four repositories:
 | `souply-api` | Node/Express/MariaDB backend |
 | `souply-web` | Web client — landing, creator auth, dashboard |
 | `souply-shared` | Receipt parsers and recognition config, shared with the API |
+
+## What it does
+
+Four tabs: **Katalogas** (catalog), **Apsipirkimai** (shopping trips), **Receptai**
+(recipes) and **Mano** (profile).
+
+**A shopping trip is one continuous object**, not a set of disconnected screens. You
+collect items — from the catalogue, from a recipe, or by typing them — and the same trip
+carries you through comparison, shopping, receipt capture and the final numbers. Its stage
+is derived rather than stored, and every entry point redirects to whichever single screen
+that stage calls for:
+
+| Stage | Screen | What you do |
+|---|---|---|
+| forming | `/basket/[id]` | edit items, then *Find stores* |
+| compared | `/basket/results/[id]` | the comparison map — totals per shop, and whether splitting across two or three is worth the extra distance |
+| shopping | `/shopping-list/[id]` | a per-store list, opening at the closest unfinished shop |
+| need receipt | `/trip/receipts/[id]` | photograph what you actually bought |
+| done | `/trip/stats/[id]` | what you paid vs. what it would have cost elsewhere |
+
+The design rule is in the source: *a trip is a journey, not a workspace — one stage, one
+screen, one primary action.* An earlier version gave a trip its own six-tab workspace; it
+was removed.
+
+**Recipes are imported from a URL.** Paste a link and the server reads the page's
+schema.org `Recipe` markup rather than scraping per-site, so ingredients arrive structured
+and land in a basket as real products. There is no parser per recipe site.
+
+**Trips and recipes are both shareable.** A recipe gets a public URL
+(`souply.lt/t/{slug}`) that opens in a browser without the app installed; a trip gets an
+invite link, so a household can shop the same list together and see each other's progress.
+
+**Receipts also work standalone**, without a trip — scan one and it becomes structured line
+items, matched against the catalogue, feeding your price history either way.
 
 ## Stack
 
@@ -88,19 +123,24 @@ phone reaching Metro over Wi-Fi entirely. It maps port 8081 over the USB cable i
 ## Layout
 
 ```
-app/            expo-router routes — 66 screens
-  (tabs)/       main tab navigation
-  receipt/      capture, processing, review, swipe matching
-  basket/       basket building and comparison
-  trip/         shopping trips and store results
-  family/       shared household expenses
-  shopping-list/ · template/ · preset/ · profile/
-components/     shared UI — sheets, dock, map surfaces, cards
-modules/        three native modules (see above)
-shared/         synced copy of souply-shared (gitignored)
+app/                  expo-router routes — 66 screens
+  (tabs)/             catalog · basket (trips) · templates (recipes) · menu
+  basket/             basket editing, and results/[id] — the comparison map
+  shopping-list/      per-store lists, plus split/[basketId]
+  trip/               [id] stage redirector · receipts/[id] · stats/[id]
+  receipt/            capture, processing, review, swipe matching
+  template/           recipe editing            t/[slug]  public shared view
+  family/             shared household expenses
+  preset/ · profile/ · swipe/
+components/           shared UI — sheets, dock, map surfaces, share panels
+modules/              three native modules (see above)
+shared/               synced copy of souply-shared (gitignored)
 state/ · contexts/ · hooks/ · services/ · utils/
-__tests__/      165 test files
+__tests__/            165 test files
 ```
+
+Route names predate some renames: the `templates` tab is **Receptai** (recipes), and the
+`basket` tab is **Apsipirkimai** (shopping trips).
 
 ## Status and licence
 
