@@ -8,7 +8,7 @@
  *    Trips → Stores donut carousel (same as My tab), and extra metric cards.
  */
 import {
-    View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Alert,
+    View, Text, TouchableOpacity, StyleSheet, ScrollView, Image, Alert, BackHandler,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
@@ -49,11 +49,25 @@ import { DockedGlassSheet } from '../../../components/DockedGlassSheet';
 import { DockTabsRow } from '../../../components/FloatingPillTabBar';
 import {
     fetchTrips, fetchTripReceipts, fetchTripStats, fetchTripScore, fetchMonthlyTripSpend,
+    detachReceiptFromTrip, createTripInviteUrl, fetchTripMembers,
+    sendAddressedTripInvite, removeTripMember, type TripMemberInfo,
     type TripReceipt, type TripStats, type TripScore, type TripSpendEntry, type TripSummary,
 } from '../../../utils/tripsApi';
 import { ReceiptUploadSheet } from '../../../components/ReceiptUploadSheet';
+import { ContextMenu, type ContextMenuAction } from '../../../components/ContextMenu';
+import { CardActionBar } from '../../../components/CardActionBar';
+import { InvitePane } from '../../../components/results/InvitePane';
+import { SheetTitle } from '../../../components/dock/SheetTitle';
 import { linkReceiptToList } from '../../../services/receiptProcessingService';
-import { detachReceiptFromTrip } from '../../../utils/tripsApi';
+import {
+    convertTripToFamily, fetchFamilyHousehold, fetchFamilyReceipt, setFamilyReceiptScope,
+    type FamilyHousehold, type FamilyReceiptView, type ScopeLockState, type ScopeChangeResult,
+} from '../../../utils/familyShoppingApi';
+import {
+    derivePersonalKeys, splitRowsByScope, isRowPersonal, applyScope, revertScope, groupLinesByReceipt,
+    summariseScopeOutcome, mergeLockStates, toggleSelection, pruneSelection, linesForSelection,
+    type LineRef,
+} from '../../../utils/familyReceiptScope';
 import { getUserId } from '../../../config/user';
 import { API_BASE_URL } from '../../../config/api';
 
@@ -78,47 +92,106 @@ const receiptTotal = (r: TripReceipt): number =>
  * queue progress ticks, tab flips and sheet toggles — without the memo every
  * one of those re-rendered every row. Props are primitives / stable objects,
  * so an unchanged row skips entirely (animMode/animDelay only flip during a
- * heal's staggered reveal).
+ * heal's staggered reveal; scope/selected only for the rows a toggle touched).
+ *
+ * Family mode (spec §4.1/§4.2) adds three affordances, all prop-driven:
+ *   · scope != null → the small FAMILY/PERSONAL chip under the name (one tap
+ *     flips it — deliberately NOT drag-and-drop);
+ *   · long-press → the host enters checkbox selection mode;
+ *   · selectionMode → a leading checkbox, taps toggle selection.
  */
-const MergedItemRow = memo(function MergedItemRow({ m, multi, animMode, animDelay, styles }: {
+const MergedItemRow = memo(function MergedItemRow({
+    m, multi, animMode, animDelay, styles, colors, scope, selectionMode, selected,
+    scopeLabels, onToggleScope, onRowPress, onRowLongPress,
+}: {
     m: MergedReceiptItem;
     multi: boolean;
     animMode: ScanMode | undefined;
     animDelay: number;
     styles: ReturnType<typeof makeStyles>;
+    colors: AppTheme;
+    /** null = family mode off — the row renders exactly as before. */
+    scope: 'family' | 'personal' | null;
+    selectionMode: boolean;
+    selected: boolean;
+    /** Stable label object (host-memoised) so the memo comparison stays cheap. */
+    scopeLabels: { family: string; personal: string; toFamily: string; toPersonal: string } | null;
+    onToggleScope?: (m: MergedReceiptItem) => void;
+    onRowPress?: (m: MergedReceiptItem) => void;
+    onRowLongPress?: (m: MergedReceiptItem) => void;
 }) {
     const qtyLabel = mergedQtyLabel(m);
+    const familyMode = scope != null;
+    const isFamily = scope === 'family';
+    const row = (
+        <View style={styles.itemRow}>
+            {familyMode && selectionMode && (
+                <View style={[styles.selectCircle, selected && styles.selectCircleChecked]}>
+                    {selected && <Ionicons name="checkmark" size={13} color={colors.onPrimary} />}
+                </View>
+            )}
+            <View style={styles.thumbWrap}>
+                {m.imageUrl
+                    ? <Image source={{ uri: m.imageUrl }} style={styles.itemImage} />
+                    : <View style={[styles.itemImage, styles.itemImageEmpty]}><Text style={styles.itemBeet}>🫜</Text></View>}
+                {multi && (
+                    <View style={styles.itemBadge}>
+                        <ChainLogoChip chainId={m.chainId ?? chainIdByName(m.chainName ?? '') ?? 0} name={m.chainName ?? undefined} size={18} />
+                    </View>
+                )}
+            </View>
+            <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.itemName} numberOfLines={1}>{m.name}</Text>
+                {qtyLabel && <Text style={styles.itemMeta}>{qtyLabel}</Text>}
+                {/* §4.1 — the one-tap FAMILY/PERSONAL toggle. Hidden while
+                    selecting so a bulk tap can't half-flip a row. */}
+                {familyMode && !selectionMode && (
+                    <TouchableOpacity
+                        style={[styles.scopeChip, !isFamily && styles.scopeChipPersonal]}
+                        onPress={() => onToggleScope?.(m)}
+                        hitSlop={6}
+                        accessibilityRole="switch"
+                        accessibilityState={{ checked: isFamily }}
+                        accessibilityLabel={isFamily ? scopeLabels?.toPersonal : scopeLabels?.toFamily}
+                    >
+                        <Ionicons
+                            name={isFamily ? 'people' : 'person-outline'}
+                            size={11}
+                            color={isFamily ? colors.primary : colors.textSecondary}
+                        />
+                        <Text style={[styles.scopeChipText, !isFamily && styles.scopeChipTextPersonal]}>
+                            {isFamily ? scopeLabels?.family : scopeLabels?.personal}
+                        </Text>
+                    </TouchableOpacity>
+                )}
+            </View>
+            {m.regularTotal > m.lineTotal + 0.005 ? (
+                // Discounted (line promo or combo/set-deal): struck regular over the paid net.
+                <View style={styles.itemPriceCol}>
+                    <Text style={styles.itemRegularStrike}>{formatEuro(m.regularTotal)}</Text>
+                    <Text style={[styles.itemPrice, styles.itemPricePromo]}>{formatEuro(m.lineTotal)}</Text>
+                </View>
+            ) : (
+                <Text style={styles.itemPrice}>{formatEuro(m.lineTotal)}</Text>
+            )}
+        </View>
+    );
     return (
         <Animated.View
             layout={LinearTransition.duration(360)}
             entering={animMode === 'inserted' ? FadeInDown.duration(340) : undefined}
         >
             <ScanRevealRow mode={animMode} delay={animDelay}>
-                <View style={styles.itemRow}>
-                    <View style={styles.thumbWrap}>
-                        {m.imageUrl
-                            ? <Image source={{ uri: m.imageUrl }} style={styles.itemImage} />
-                            : <View style={[styles.itemImage, styles.itemImageEmpty]}><Text style={styles.itemBeet}>🫜</Text></View>}
-                        {multi && (
-                            <View style={styles.itemBadge}>
-                                <ChainLogoChip chainId={m.chainId ?? chainIdByName(m.chainName ?? '') ?? 0} name={m.chainName ?? undefined} size={18} />
-                            </View>
-                        )}
-                    </View>
-                    <View style={{ flex: 1, minWidth: 0 }}>
-                        <Text style={styles.itemName} numberOfLines={1}>{m.name}</Text>
-                        {qtyLabel && <Text style={styles.itemMeta}>{qtyLabel}</Text>}
-                    </View>
-                    {m.regularTotal > m.lineTotal + 0.005 ? (
-                        // Discounted (line promo or combo/set-deal): struck regular over the paid net.
-                        <View style={styles.itemPriceCol}>
-                            <Text style={styles.itemRegularStrike}>{formatEuro(m.regularTotal)}</Text>
-                            <Text style={[styles.itemPrice, styles.itemPricePromo]}>{formatEuro(m.lineTotal)}</Text>
-                        </View>
-                    ) : (
-                        <Text style={styles.itemPrice}>{formatEuro(m.lineTotal)}</Text>
-                    )}
-                </View>
+                {familyMode ? (
+                    <TouchableOpacity
+                        activeOpacity={selectionMode ? 0.7 : 1}
+                        onPress={() => { if (selectionMode) onRowPress?.(m); }}
+                        onLongPress={() => onRowLongPress?.(m)}
+                        delayLongPress={350}
+                    >
+                        {row}
+                    </TouchableOpacity>
+                ) : row}
             </ScanRevealRow>
         </Animated.View>
     );
@@ -167,6 +240,132 @@ export default function TripFinalScreen() {
     // Raises this trip's seen-receipts watermark (never lowers it).
     const markTripSeen = useTripSeenStore(s => s.markOpened);
 
+    // ── FAMILY MODE (spec §4.1/§4.2/§7) ──────────────────────────────────
+    const [menuOpen, setMenuOpen] = useState(false);
+    const [household, setHousehold] = useState<FamilyHousehold | null>(null);
+    const [inviteOpen, setInviteOpen] = useState(false);
+    const [inviteUrl, setInviteUrl] = useState<string | null>(null);
+    const [tripMembers, setTripMembers] = useState<TripMemberInfo[]>([]);
+    /** Personal line keys ("receiptId:lineIdx"), hydrated from the server —
+     *  family is the default (§4.1). This is a CACHE of ReceiptItem.isPersonal
+     *  for optimistic rendering, never a second source of truth: it is seeded
+     *  from §4.5's family view and every flip is a PATCH that can revert it. */
+    const [personalKeys, setPersonalKeys] = useState<Set<string>>(new Set());
+    /** §4.4 lock state per receipt, refreshed from every PATCH response. */
+    const [scopeLocks, setScopeLocks] = useState<Map<number, ScopeLockState>>(new Map());
+    const [selectionMode, setSelectionMode] = useState(false);
+    const [selectedRows, setSelectedRows] = useState<Set<string>>(new Set());
+
+    // §7's menu gate: "belongs to a household or owns one and it is enabled"
+    // — the app-wide meaning of enabled is simply that a household exists
+    // (FamilyShoppingPane's `enabled = household != null`).
+    useEffect(() => { fetchFamilyHousehold().then(setHousehold).catch(() => {}); }, []);
+
+    /**
+     * FAMILY MODE IS THE SERVER'S ANSWER, FULL STOP (spec §7).
+     *
+     * `Trip.householdId` decides it — for a trip born from the shared family
+     * basket and for a CONVERTED one alike, which is the point: after
+     * `convertTripToFamily` the two are indistinguishable to this screen.
+     *
+     * There used to be a second, device-local source of truth
+     * (state/familyTripStore, an AsyncStorage map of "trips I converted on this
+     * phone" plus their personal flags) because the API had no convert
+     * endpoint. It made the section and the toggles appear while nothing
+     * reached the ledger and no other member saw anything — a feature that
+     * looked like it worked. It is deleted; do not reintroduce a local flag
+     * here. If the server says the trip is personal, it is personal.
+     */
+    const familyActive = trip?.householdId != null;
+
+    // Hydrate scope from the server: the family view (§4.5) lists FAMILY lines,
+    // personal is the complement. A seq guard drops a stale hydration racing a
+    // reload.
+    const scopeSeqRef = useRef(0);
+    useEffect(() => {
+        if (!familyActive || receipts == null) return;
+        const seq = ++scopeSeqRef.current;
+        void (async () => {
+            const entries = await Promise.all(receipts.map(async r =>
+                [r.id, await fetchFamilyReceipt(r.id).catch(() => null)] as const));
+            if (seq !== scopeSeqRef.current) return;
+            const views = new Map(entries.filter((e): e is [number, FamilyReceiptView] => e[1] != null));
+            setPersonalKeys(derivePersonalKeys(receipts, views));
+            setScopeLocks(new Map(Array.from(views, ([id, v]) => [id, v.lock])));
+        })();
+    }, [familyActive, receipts]);
+
+    /**
+     * §4.1/§4.2 — flip lines, optimistically, then persist. §4.4 handling per
+     * the server contract (receiptFamilyScope): the PATCH still SUCCEEDS after
+     * the lock — it answers ledger:'adjusted' with the visible audit entry —
+     * so "refused" here means a real failure (409 ledger-conflict, 404
+     * membership, network), which reverts exactly the failed lines and says so.
+     * An 'adjusted' outcome is surfaced too: silently succeeding would defeat
+     * the audit trail the event exists for.
+     */
+    const commitScope = useCallback(async (lines: LineRef[], toPersonal: boolean) => {
+        if (lines.length === 0) return;
+        const prev = personalKeys;
+        const next = applyScope(prev, lines, toPersonal);
+        setPersonalKeys(next); // optimistic — reverted below on failure
+        const groups = Array.from(groupLinesByReceipt(lines));
+        const settled = await Promise.all(groups.map(async ([receiptId, lineIdxs]) => {
+            try {
+                const result = await setFamilyReceiptScope(receiptId, toPersonal ? 'personal' : 'family', lineIdxs);
+                return { receiptId, lineIdxs, result };
+            } catch {
+                return { receiptId, lineIdxs, result: null as ScopeChangeResult | null };
+            }
+        }));
+        const ok = settled.filter(s => s.result != null).map(s => s.result as ScopeChangeResult);
+        const failed = settled.filter(s => s.result == null);
+        if (ok.length > 0) setScopeLocks(l => mergeLockStates(l, ok));
+        if (failed.length > 0) {
+            const failedLines = failed.flatMap(f => f.lineIdxs.map(lineIdx => ({ receiptId: f.receiptId, lineIdx })));
+            setPersonalKeys(cur => revertScope(cur, prev, failedLines));
+            Alert.alert(t('tripFamily.scopeFailedTitle'), t('tripFamily.scopeFailedBody'));
+        }
+        if (summariseScopeOutcome(ok) === 'adjusted') {
+            Alert.alert(t('tripFamily.adjustedTitle'), t('tripFamily.adjustedBody'));
+        }
+    }, [personalKeys, t]);
+
+    // ── §4.2 selection mode (long-press → checkboxes → bulk move) ─────────
+    const exitSelection = useCallback(() => { setSelectionMode(false); setSelectedRows(new Set()); }, []);
+    const onRowLongPress = useCallback((m: MergedReceiptItem) => {
+        setSelectionMode(true);
+        setSelectedRows(prevSel => toggleSelection(prevSel, m.key));
+    }, []);
+    // Deselecting the last row exits selection mode (shopping-list precedent)
+    // — decided in the tap itself, not in an effect.
+    const onRowPress = useCallback((m: MergedReceiptItem) => {
+        const next = toggleSelection(selectedRows, m.key);
+        setSelectedRows(next);
+        if (next.size === 0) setSelectionMode(false);
+    }, [selectedRows]);
+    // Android back peels selection mode before navigating away.
+    useEffect(() => {
+        if (!selectionMode) return;
+        const sub = BackHandler.addEventListener('hardwareBackPress', () => { exitSelection(); return true; });
+        return () => sub.remove();
+    }, [selectionMode, exitSelection]);
+
+    // ── §7 "Add a member" — the trip share sheet from the BOTTOM EDGE ─────
+    const openInvite = useCallback(() => {
+        setMenuOpen(false);
+        setInviteOpen(true);
+        if (inviteUrl == null) createTripInviteUrl(tripId).then(setInviteUrl).catch(() => {});
+        fetchTripMembers(tripId).then(setTripMembers).catch(() => {});
+    }, [inviteUrl, tripId]);
+
+    const scopeLabels = useMemo(() => ({
+        family: t('tripFamily.chipFamily'),
+        personal: t('tripFamily.chipPersonal'),
+        toFamily: t('tripFamily.markFamily'),
+        toPersonal: t('tripFamily.markPersonal'),
+    }), [t]);
+
     const load = useCallback(async () => {
         try {
             const rs = await fetchTripReceipts(tripId);
@@ -196,6 +395,66 @@ export default function TripFinalScreen() {
         } catch { setLocked(true); setReceipts([]); }
     }, [tripId, markTripSeen]);
     useFocusEffect(useCallback(() => { void load(); }, [load]));
+
+    /**
+     * §7 "Convert to family shopping" — a SERVER call, and irreversible.
+     *
+     * POST /trips/:id/convert-to-family attaches the trip to the caller's
+     * household and records every receipt already on it into the ledger at its
+     * FAMILY subtotal (§4.3). Two consequences the user has to agree to before
+     * we fire it, hence the confirm:
+     *   · the money becomes shared — balances move for everyone;
+     *   · there is no undo. The ledger is append-only and members may settle
+     *     against it; the way back is to mark items PERSONAL (§4.1), which
+     *     drains the family subtotal visibly rather than erasing history.
+     *
+     * On success we simply RELOAD. Family mode is `trip.householdId != null`
+     * and nothing else — the screen must learn it the same way it would for a
+     * trip born from the shared basket, so a conversion and a household-born
+     * trip cannot drift apart. A failure is surfaced, never swallowed: the
+     * whole bug this replaces was a convert that only pretended to work.
+     */
+    const [converting, setConverting] = useState(false);
+    const confirmConvert = useCallback(() => {
+        setMenuOpen(false);
+        Alert.alert(
+            t('tripFamily.convertConfirmTitle'),
+            t('tripFamily.convertConfirmBody'),
+            [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('tripFamily.convertConfirm'),
+                    onPress: async () => {
+                        setConverting(true);
+                        try {
+                            await convertTripToFamily(tripId);
+                            await load();
+                        } catch {
+                            Alert.alert(t('tripFamily.convertFailedTitle'), t('tripFamily.convertFailedBody'));
+                        } finally {
+                            setConverting(false);
+                        }
+                    },
+                },
+            ],
+        );
+    }, [tripId, load, t]);
+
+    const menuActions = useMemo<ContextMenuAction[]>(() => {
+        const acts: ContextMenuAction[] = [];
+        // §7's gate: only when the user has a household, and only for a trip
+        // that is not family already (the server refuses the second convert
+        // with 409 regardless — this just doesn't offer it).
+        if (household != null && !familyActive && !converting) {
+            acts.push({
+                icon: 'people-outline',
+                label: t('tripFamily.convert'),
+                onPress: confirmConvert,
+            });
+        }
+        acts.push({ icon: 'person-add-outline', label: t('tripFamily.addMember'), onPress: openInvite });
+        return acts;
+    }, [household, familyActive, converting, t, confirmConvert, openInvite]);
 
     // A background heal (retake) of one of this trip's receipts just finished →
     // reload so the merged/renewed lines land (and drive the reveal animation).
@@ -328,6 +587,30 @@ export default function TripFinalScreen() {
         const to = setTimeout(() => setMergedAnim(new Map()), changed.size * 140 + 520 + 300);
         return () => clearTimeout(to);
     }, [merged]);
+
+    // §4.1 — the two sections are DERIVED views of the per-line personal flag,
+    // exactly like isPantry drives "Įprastos prekės". Never drop targets.
+    const scopedSections = useMemo(() => splitRowsByScope(merged, personalKeys), [merged, personalKeys]);
+    const familySubtotal = useMemo(
+        () => Math.round(scopedSections.family.reduce((s, m) => s + m.lineTotal, 0) * 100) / 100,
+        [scopedSections]);
+    const anyScopeLocked = useMemo(() => Array.from(scopeLocks.values()).some(l => l.locked), [scopeLocks]);
+
+    // A heal/reload can change row keys — dead selections are simply ignored
+    // (derived), not cleaned up in an effect.
+    const liveSelectedRows = useMemo(
+        () => pruneSelection(selectedRows, merged.map(m => m.key)),
+        [selectedRows, merged]);
+
+    const onToggleScope = useCallback((m: MergedReceiptItem) => {
+        void commitScope(m.lines, !isRowPersonal(m.lines, personalKeys));
+    }, [personalKeys, commitScope]);
+
+    const bulkMove = useCallback((toPersonal: boolean) => {
+        const lines = linesForSelection(merged, liveSelectedRows);
+        exitSelection();
+        void commitScope(lines, toPersonal);
+    }, [merged, liveSelectedRows, exitSelection, commitScope]);
 
     const title = trip ? (trip.name ?? formatWeekday(trip.anchorDate, i18n.language)) : t('tripReceipts.title');
 
@@ -468,6 +751,29 @@ export default function TripFinalScreen() {
             meta: formatItemAmount({ quantity: li.quantity, isWeighable: li.isWeighable, unit: li.packUnit, packAmount: li.packAmount, canonicalStep: li.canonicalStep }), ok: li.bought,
         })), [score]);
 
+    /** One merged row — shared by the flat list and both family-mode sections. */
+    const renderMergedRow = (m: MergedReceiptItem, scope: 'family' | 'personal' | null) => {
+        const a = mergedAnim.get(m.key);
+        return (
+            <MergedItemRow
+                key={m.key}
+                m={m}
+                multi={multi}
+                animMode={a?.mode}
+                animDelay={(a?.order ?? 0) * 140}
+                styles={styles}
+                colors={colors}
+                scope={scope}
+                selectionMode={selectionMode}
+                selected={liveSelectedRows.has(m.key)}
+                scopeLabels={scope != null ? scopeLabels : null}
+                onToggleScope={onToggleScope}
+                onRowPress={onRowPress}
+                onRowLongPress={onRowLongPress}
+            />
+        );
+    };
+
     // Prediction: hide unless a real (non-ad-hoc) list was priced.
     const prediction = score && !score.isAdHoc && score.predictedMatchedTotal != null && score.actualMatchedTotal != null
         ? { delta: Math.round((score.actualMatchedTotal - score.predictedMatchedTotal) * 100) / 100,
@@ -481,13 +787,16 @@ export default function TripFinalScreen() {
                 <View style={styles.chrome}>
                     <ScreenBackButton />
                     <Text style={styles.title} numberOfLines={1}>{title}</Text>
-                    {tab === 'receipt' && (receipts?.length ?? 0) > 0 && (
+                    {/* §7 — upload lives TOP RIGHT as the pink FAB (the filled
+                        header CTA variant), on the Receipt tab. */}
+                    {tab === 'receipt' && (
                         <GlassIconButton
+                            filled
                             iconNode={
                                 <View style={styles.uploadIcon}>
-                                    <Ionicons name="receipt-outline" size={24} color={colors.primary} />
+                                    <Ionicons name="receipt-outline" size={24} color={colors.onPrimary} />
                                     <View style={styles.uploadPlus}>
-                                        <Ionicons name="add" size={11} color="#FFFFFF" />
+                                        <Ionicons name="add" size={11} color={colors.primary} />
                                     </View>
                                 </View>
                             }
@@ -506,6 +815,13 @@ export default function TripFinalScreen() {
                             accessibilityLabel={t('tripFinal.helpIdentify')}
                         />
                     )}
+                    {/* §7 — the 3-dot menu (convert to family / add a member). */}
+                    <GlassIconButton
+                        icon="ellipsis-vertical"
+                        color={colors.textMuted}
+                        onPress={() => setMenuOpen(true)}
+                        accessibilityLabel={t('tripFamily.menu')}
+                    />
                 </View>
 
                 {/* ── RECEIPT PANE ── */}
@@ -727,19 +1043,39 @@ export default function TripFinalScreen() {
                             {/* Identified items — duplicate/same-product lines merged;
                                 the price shown is the ACTUAL paid (promo-adjusted). */}
                             <Text style={styles.sectionTitle}>{`${t('tripFinal.itemsSection')} · ${merged.length}`}</Text>
-                            {merged.map(m => {
-                                const a = mergedAnim.get(m.key);
-                                return (
-                                    <MergedItemRow
-                                        key={m.key}
-                                        m={m}
-                                        multi={multi}
-                                        animMode={a?.mode}
-                                        animDelay={(a?.order ?? 0) * 140}
-                                        styles={styles}
-                                    />
-                                );
-                            })}
+                            {familyActive ? (
+                                <>
+                                    {/* §4.1/§6 — the pink-bordered "Family items" group
+                                        (the Įprastos prekės treatment); personal items
+                                        below it, unbordered. Both are DERIVED from the
+                                        per-line flag — never drop targets. */}
+                                    <View style={styles.familySection}>
+                                        <View style={styles.familySectionHeader}>
+                                            <Ionicons name="people" size={15} color={colors.primary} />
+                                            <Text style={styles.familySectionTitle}>{t('tripFamily.familySection')}</Text>
+                                            {familySubtotal > 0 && (
+                                                <Text style={styles.familySubtotal}>{formatEuro(familySubtotal)}</Text>
+                                            )}
+                                        </View>
+                                        {/* §4.4 — the window has closed: toggles still
+                                            work but are recorded visibly for the family. */}
+                                        {anyScopeLocked && (
+                                            <Text style={styles.familyLockNote}>{t('tripFamily.lockedNote')}</Text>
+                                        )}
+                                        {scopedSections.family.length === 0
+                                            ? <Text style={styles.familyEmpty}>{t('tripFamily.familyEmpty')}</Text>
+                                            : scopedSections.family.map(m => renderMergedRow(m, 'family'))}
+                                    </View>
+                                    {scopedSections.personal.length > 0 && (
+                                        <>
+                                            <Text style={styles.sectionTitle}>{t('tripFamily.personalSection')}</Text>
+                                            {scopedSections.personal.map(m => renderMergedRow(m, 'personal'))}
+                                        </>
+                                    )}
+                                </>
+                            ) : (
+                                merged.map(m => renderMergedRow(m, null))
+                            )}
                         </ScrollView>
                     )
                 )}
@@ -942,8 +1278,9 @@ export default function TripFinalScreen() {
                     form (same blur/tint/rim/shadow/corners as the main nav + map
                     bars, via DockedGlassSheet). Stats is gated until unlock. Hidden
                     while the voluntary swipe overlay covers the screen — switching
-                    panes under it would be invisible and confusing. */}
-                {!voluntaryOpen && !(tab === 'stats' && pendingSwipeIds.length > 0) && <DockedGlassSheet
+                    panes under it would be invisible and confusing — and while the
+                    §4.2 selection bar owns the bottom edge. */}
+                {!voluntaryOpen && !selectionMode && !(tab === 'stats' && pendingSwipeIds.length > 0) && <DockedGlassSheet
                     compact
                     barRowHeight={0}
                     barRow={
@@ -966,7 +1303,46 @@ export default function TripFinalScreen() {
                         />
                     }
                 />}
+
+                {/* §4.2 — bulk move bar while rows are selected (same inline
+                    pattern as the other multi-select flows; X exits). */}
+                {selectionMode && liveSelectedRows.size > 0 && (
+                    <CardActionBar
+                        mode="inline"
+                        onDismiss={exitSelection}
+                        actions={[
+                            { icon: 'people-outline', label: t('tripFamily.moveToFamily'), onPress: () => bulkMove(false) },
+                            { icon: 'person-outline', label: t('tripFamily.moveToPersonal'), onPress: () => bulkMove(true) },
+                        ]}
+                    />
+                )}
             </View>
+
+            {/* §7 — the header 3-dot menu. */}
+            <ContextMenu
+                visible={menuOpen}
+                onDismiss={() => setMenuOpen(false)}
+                actions={menuActions}
+                top={insets.top + 52}
+            />
+
+            {/* §7 — "Add a member": the app-wide share/invite surface, raised
+                from the BOTTOM EDGE (GlassSheet), not the bottom bar. */}
+            {inviteOpen && (
+                <GlassSheet mediumFraction={0.62} onClose={() => setInviteOpen(false)}>
+                    <SheetTitle colors={colors} style={{ marginBottom: spacing.md }}>
+                        {t('tripFamily.addMember')}
+                    </SheetTitle>
+                    <InvitePane
+                        inviteUrl={inviteUrl}
+                        members={tripMembers}
+                        colors={colors}
+                        onSendInvite={async (target) => { await sendAddressedTripInvite(tripId, target); }}
+                        onRemoveMember={async (userId) => { await removeTripMember(tripId, userId); }}
+                        onInvitesSent={() => { fetchTripMembers(tripId).then(setTripMembers).catch(() => {}); }}
+                    />
+                </GlassSheet>
+            )}
 
             {/* Receipt sheet — the shared non-docked glass sheet. Mounted only
                 while a receipt is selected so its photo fetch doesn't run idle. */}
@@ -1058,12 +1434,13 @@ export default function TripFinalScreen() {
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     chrome: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingBottom: spacing.md },
-    // Upload button glyph: the tab's receipt icon + a white "+" in a pink dot.
+    // Upload FAB glyph (§7): white receipt icon on the pink filled disc, with
+    // the "+" dot inverted (white dot, pink plus) so it reads on the pink.
     uploadIcon: { width: 26, height: 26, alignItems: 'center', justifyContent: 'center' },
     uploadPlus: {
         position: 'absolute', top: -3, right: -4, width: 14, height: 14, borderRadius: 7,
-        backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center',
-        borderWidth: 1.5, borderColor: c.cardBackground,
+        backgroundColor: c.onPrimary, alignItems: 'center', justifyContent: 'center',
+        borderWidth: 1.5, borderColor: c.primary,
     },
     title: { flex: 1, fontSize: 22, fontWeight: '800', color: c.textPrimary },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: spacing.lg, padding: spacing.xl },
@@ -1121,6 +1498,48 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     retakeSub: { fontSize: 12, color: c.textSecondary, marginTop: 2 },
     retakeBtn: { backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: spacing.md, paddingVertical: 7 },
     retakeBtnText: { fontSize: 13, fontWeight: '800', color: c.onPrimary },
+
+    // ── Family mode (§4.1/§4.2/§6) ────────────────────────────────────────
+    // The pink-bordered "Family items" group — the Įprastos prekės treatment
+    // (template screen's pantrySection): a plain bordered View on the app
+    // pink, outer radius concentric with the rows. The rows keep their own
+    // spacing.lg horizontal padding, so the box is inset by spacing.md only —
+    // row content then sits ~28px from the screen edge, border at 12.
+    familySection: {
+        marginHorizontal: spacing.md, marginBottom: spacing.xs,
+        borderWidth: 1.5, borderColor: c.primary, borderRadius: radius.xl,
+        paddingVertical: spacing.xs,
+    },
+    familySectionHeader: {
+        flexDirection: 'row', alignItems: 'center', gap: 6,
+        paddingHorizontal: spacing.lg, paddingTop: spacing.sm, paddingBottom: 2,
+    },
+    familySectionTitle: {
+        fontSize: 13, fontWeight: '800', color: c.primary,
+        textTransform: 'uppercase', letterSpacing: 0.5,
+    },
+    familySubtotal: {
+        marginLeft: 'auto', fontSize: 12, fontWeight: '800', color: c.primary,
+        fontVariant: ['tabular-nums'],
+    },
+    familyLockNote: { ...typography.labelSmall, color: c.textSecondary, paddingHorizontal: spacing.lg, paddingBottom: 2 },
+    familyEmpty: { ...typography.labelSmall, color: c.textSecondary, paddingHorizontal: spacing.lg, paddingVertical: spacing.md },
+    // §4.1 — the one-tap FAMILY/PERSONAL chip on every row.
+    scopeChip: {
+        flexDirection: 'row', alignItems: 'center', gap: 4, alignSelf: 'flex-start',
+        marginTop: 4, paddingHorizontal: 8, paddingVertical: 2.5,
+        borderRadius: radius.pill, borderWidth: 1, borderColor: c.primary,
+        backgroundColor: c.primaryMuted ?? 'transparent',
+    },
+    scopeChipPersonal: { borderColor: c.border, backgroundColor: c.surfaceMuted },
+    scopeChipText: { fontSize: 10.5, fontWeight: '700', color: c.primary },
+    scopeChipTextPersonal: { color: c.textSecondary },
+    // §4.2 — selection checkbox (the shopping-list selectCircle pattern).
+    selectCircle: {
+        width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: c.border,
+        alignItems: 'center', justifyContent: 'center',
+    },
+    selectCircleChecked: { backgroundColor: c.primary, borderColor: c.primary },
 
     itemRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm },
     thumbWrap: { width: 40, height: 40 },

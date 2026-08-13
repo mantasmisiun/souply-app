@@ -26,6 +26,9 @@ export interface MergedReceiptItem {
     /** The ReceiptItem ids that merged here — all share the same plan/impulse
      *  status (same product/name), so the Impulse sheet can flag the row. */
     receiptItemIds: number[];
+    /** The (receiptId, lineIdx) refs behind this row — what the family/personal
+     *  scope PATCH addresses (a row may span several receipts). */
+    lines: { receiptId: number; lineIdx: number }[];
     chainId: number | null;
     chainName: string | null;
 }
@@ -69,6 +72,7 @@ export function mergeReceiptItems(receipts: TripReceipt[]): MergedReceiptItem[] 
                 ex.regularTotal += regular;
                 ex.count += 1;
                 ex.receiptItemIds.push(it.id);
+                ex.lines.push({ receiptId: r.id, lineIdx: it.lineIdx });
                 if (!ex.imageUrl && it.storeProductImageUrl) ex.imageUrl = it.storeProductImageUrl;
             } else {
                 map.set(key, {
@@ -76,6 +80,7 @@ export function mergeReceiptItems(receipts: TripReceipt[]): MergedReceiptItem[] 
                     imageUrl: it.storeProductImageUrl, unit: it.unit, sizeUnit: it.sizeUnit,
                     quantity: qty, lineTotal: paid, regularTotal: regular, count: 1,
                     receiptItemIds: [it.id],
+                    lines: [{ receiptId: r.id, lineIdx: it.lineIdx }],
                     chainId: r.chainId, chainName: r.chainName,
                 });
                 order.push(key);

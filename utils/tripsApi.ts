@@ -36,6 +36,10 @@ export interface TripSummary {
     /** Trip owner/creator — the client uses this to decide who may moderate
      *  (remove another member's receipt from the trip). */
     ownerUserId: string;
+    /** Household this trip belongs to (trips born from the shared family
+     *  basket) — null/absent for a personal trip. Drives the family sections
+     *  and per-item scope toggles on the trip receipts screen. */
+    householdId?: number | null;
     /** Member avatar previews (owner first) for the stacked circles on shared cards. */
     members?: { initial: string; color: string | null }[];
     anchorDate: string;

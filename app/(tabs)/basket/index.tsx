@@ -19,7 +19,7 @@ import {
     Platform,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
-import Animated, { LinearTransition, withTiming, Easing } from 'react-native-reanimated';
+import Animated, { LinearTransition, Easing } from 'react-native-reanimated';
 import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { ScreenHeading } from '../../../components/ScreenHeading';
@@ -27,7 +27,7 @@ import { useCollapsingHeader, CollapsingHeader } from '../../../components/Colla
 import { useBackToExit } from '../../../hooks/useBackToExit';
 import { useReceiptQueueStore, type QueueItem } from '../../../state/receiptQueueStore';
 import { useTripSeenStore, isTripNew } from '../../../state/tripSeenStore';
-import { ChainLogoChip } from '../../../components/ChainLogoChip';
+import { TripCard } from '../../../components/TripCard';
 import { ProgressGlow } from '../../../components/ProgressGlow';
 import { requestStoreResolution } from '../../../utils/storeResolution';
 import { chainNameById, chainBrandColorById } from '../../../utils/chainBrandName';
@@ -42,11 +42,9 @@ import { getUserId } from '../../../config/user';
 import { useBasketState } from '../../../state/basketState';
 import { useTheme, radius, spacing, type AppTheme } from '../../../constants/theme';
 import { ScalePressable } from '../../../components/ScalePressable';
-import { UserAvatar } from '../../../components/UserAvatar';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatDate } from '../../../utils/formatCurrency';
 import { formatWeekday } from '../../../utils/formatDayDate';
-import CalendarBadge from '../../../components/CalendarBadge';
 import { useShoppingSheet } from '../../../state/shoppingSheet';
 import { buildReceiptDotMap, parseLooseDate, sameDay } from '../../../utils/receiptDots';
 import { groupBySection, type TripSection } from '../../../utils/tripSections';
@@ -57,20 +55,6 @@ import {
 import { tripStageHref } from '../../../utils/tripStageRoute';
 import { ShoppingFilterChips } from '../../../components/basket/ShoppingFilterChips';
 import { shouldRefetchOnFocus } from '../../../utils/focusStaleness';
-
-const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
-
-/** Card removal: a clean, quick fade + slight shrink — no overshoot. */
-function cardExit() {
-    'worklet';
-    return {
-        initialValues: { opacity: 1, transform: [{ scale: 1 }] },
-        animations: {
-            opacity: withTiming(0, { duration: 200, easing: Easing.in(Easing.quad) }),
-            transform: [{ scale: withTiming(0.94, { duration: 200, easing: Easing.in(Easing.quad) }) }],
-        },
-    };
-}
 
 const STAGE_ICONS: Record<number, keyof typeof Ionicons.glyphMap> = {
     1: 'cart-outline', 2: 'storefront-outline', 3: 'list-outline', 4: 'receipt-outline', 5: 'stats-chart-outline',
@@ -92,30 +76,6 @@ const tripRowKey = (r: TripRow) => r.key;
  *  per-card `layout` prop — identical 240ms cubic-out motion, but Reanimated
  *  no longer snapshots every card on mount. */
 const rowLayout = LinearTransition.duration(240).easing(Easing.out(Easing.cubic));
-
-/** Overlapping member-avatar circles for a shared card (up to 3 + "+N"). */
-function MemberStack({ members, total, styles }: {
-    members: { initial: string; color: string | null }[];
-    total: number;
-    styles: ReturnType<typeof makeStyles>;
-}) {
-    const shown = members.slice(0, 3);
-    const extra = total - shown.length;
-    return (
-        <View style={styles.memberStack}>
-            {shown.map((m, i) => (
-                <View key={i} style={i > 0 ? styles.memberOverlap : undefined}>
-                    <UserAvatar name={m.initial} color={m.color} size={22} style={styles.memberRing} />
-                </View>
-            ))}
-            {extra > 0 && (
-                <View style={[styles.memberOverlap, styles.memberMore]}>
-                    <Text style={styles.memberMoreText}>+{extra}</Text>
-                </View>
-            )}
-        </View>
-    );
-}
 
 /** In-flight receipt-queue item as a card shaped like a trip card, with a
  *  bottom-edge progress glow + status line. Only shown on the Shopping screen;
@@ -524,22 +484,10 @@ export default function TripsScreen() {
     const customName = (trip: TripSummary): string | null =>
         trip.name ?? trip.basket?.name ?? (trip.isAdHoc ? t('trips.adHocName') : null);
 
-    // Title text: the custom name when renamed, else the full weekday. The card
-    // renders the date separately as a full-height CalendarBadge column.
+    // Title text (ARCHIVE rows only — live cards title themselves in TripCard):
+    // the custom name when renamed, else the full weekday.
     const tripTitle = (trip: TripSummary) =>
         customName(trip) ?? formatWeekday(trip.anchorDate, i18n.language);
-
-    const slotLine = (trip: TripSummary) => {
-        if (trip.slots.length === 0) {
-            return trip.basket ? t('trips.itemCount', { count: trip.basket.itemCount }) : null;
-        }
-        return trip.slots.map(s => {
-            const name = s.chainName ?? s.storeName ?? '?';
-            if (trip.stage === 3) return `${name} ${s.checkedCount}/${s.itemCount}`;
-            if (trip.stage >= 4) return s.hasReceipt ? `${name} ✓` : s.receiptSkipped ? `${name} —` : name;
-            return name;
-        }).join(' · ');
-    };
 
     const renderRow = ({ item: row }: { item: TripRow }) => {
         switch (row.kind) {
@@ -601,23 +549,12 @@ export default function TripsScreen() {
             }
             case 'trip': {
                 const trip = row.trip;
-                const hasReceipt = trip.receiptCount > 0;
-                // Once the trip has LISTS, they are the source of truth for the
-                // card's count + preview: the basket is consumed into the lists,
-                // so its own itemCount/itemPreview go stale (an emptied basket
-                // rendered "0" and a blank preview row on a stage-3/4 card).
-                const listItems = trip.slots.reduce((n, s) => n + (s.itemCount ?? 0), 0);
-                const listPreview = trip.slots.flatMap(s => s.itemPreview ?? []);
-                const preview = trip.slots.length > 0 ? listPreview : (trip.basket?.itemPreview ?? []);
-                const plannedCount = trip.slots.length > 0 ? listItems : (trip.basket?.itemCount ?? 0);
                 const isNew = seenInit && isTripNew(seenTrips, trip.id, trip.receiptCount);
-                const chains = trip.chains ?? [];
-                const shownChains = chains.slice(0, 4);
-                const chainOverflow = chains.length - shownChains.length;
                 return (
                     // Section-outline slice: this wrapper draws the box's side
                     // edges (+ bottom edge/corners on the last row) so the card
-                    // itself stays a plain virtualised row inside it.
+                    // itself stays a plain virtualised row inside it. The card
+                    // body is the shared TripCard (also the family History tab).
                     <View
                         style={[
                             styles.sectionBody,
@@ -625,70 +562,13 @@ export default function TripsScreen() {
                             row.section === 'today' ? styles.sectionPink : styles.sectionGrey,
                         ]}
                     >
-                    <AnimatedTouchable
-                        style={[styles.card, styles.cardInSection, isNew && styles.cardNew]}
-                        onPress={() => openTrip(trip)}
-                        activeOpacity={0.8}
-                        exiting={cardExit}
-                    >
-                        <View style={styles.cardMain}>
-                            {/* Date column: every row (count/logos, title, preview) sits to
-                                its RIGHT, so the calendar reads as the card's anchor rather
-                                than a chip glued to the title. The badge keeps its natural
-                                near-square tear-off proportions and centres in the column —
-                                stretching it to the full row height read as a tall ribbon. */}
-                            <View style={styles.calCol}>
-                                <CalendarBadge date={trip.anchorDate} size={60} />
-                            </View>
-                            <View style={styles.cardBody}>
-                                <View style={styles.cardTop}>
-                                    <View style={styles.cardTopLeft}>
-                                        {/* Uploaded receipt → receipt icon + recognised line count;
-                                            otherwise the planned shopping-list count. */}
-                                        <View style={styles.cartChip}>
-                                            <Ionicons name={hasReceipt ? 'receipt-outline' : 'cart-outline'} size={14} color={colors.primary} />
-                                            <Text style={styles.cartChipText}>{hasReceipt ? trip.recognisedItemCount : plannedCount}</Text>
-                                        </View>
-                                        {/* Chain logos: receipt chains full colour, planned-only dimmed. */}
-                                        {shownChains.length > 0 && (
-                                            <View style={styles.logoStrip}>
-                                                {shownChains.map(c => (
-                                                    <ChainLogoChip key={c.chainId} chainId={c.chainId} name={c.chainName ?? undefined} size={22} dimmed={!c.hasReceipt} style={styles.logoChip} />
-                                                ))}
-                                                {chainOverflow > 0 && <Text style={styles.logoMore}>+{chainOverflow}</Text>}
-                                            </View>
-                                        )}
-                                    </View>
-                                    <View style={styles.cardTopRight}>
-                                        {isNew && (
-                                            <View style={styles.newBadge}><Text style={styles.newBadgeText}>{t('trips.newBadge')}</Text></View>
-                                        )}
-                                        {trip.memberCount > 1 && (
-                                            <MemberStack members={trip.members ?? []} total={trip.memberCount} styles={styles} />
-                                        )}
-                                    </View>
-                                </View>
-                                <Text style={styles.cardTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
-                                {preview.length > 0 ? (
-                                    // Newest items first — each name caps and ellipsises so 3+ fit.
-                                    <View style={styles.previewRow}>
-                                        {preview.slice(0, 3).map((name, i) => (
-                                            <React.Fragment key={i}>
-                                                {i > 0 && <Text style={styles.previewDot}>·</Text>}
-                                                <Text style={styles.previewName} numberOfLines={1}>{name}</Text>
-                                            </React.Fragment>
-                                        ))}
-                                    </View>
-                                ) : slotLine(trip) ? (
-                                    <Text style={styles.cardMeta} numberOfLines={1}>{slotLine(trip)}</Text>
-                                ) : null}
-                            </View>
-                            <View style={styles.ctaBtn}>
-                                <Text style={styles.ctaText}>{stageCta(trip.stage)}</Text>
-                                <Ionicons name="chevron-forward" size={16} color={colors.primary} />
-                            </View>
-                        </View>
-                    </AnimatedTouchable>
+                        <TripCard
+                            trip={trip}
+                            ctaLabel={stageCta(trip.stage)}
+                            onPress={() => openTrip(trip)}
+                            isNew={isNew}
+                            style={styles.cardInSection}
+                        />
                     </View>
                 );
             }
@@ -824,41 +704,15 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     linkChoiceGhost: { backgroundColor: 'transparent' },
     linkChoiceDot: { width: 8, height: 8, borderRadius: 4 },
     linkChoiceText: { fontSize: 13, fontWeight: '700', color: c.textPrimary },
-    // `stretch` gives the date column the full content height to centre within.
+    // ProcessingCard's slice of the (now extracted) trip-card anatomy — the
+    // full card styles live in components/TripCard.tsx.
     cardMain: { flexDirection: 'row', alignItems: 'stretch', gap: 10 },
-    calCol: { justifyContent: 'center' },
-    cardBody: { flex: 1, minWidth: 0, gap: 4 },
     cartChip: {
         flexDirection: 'row', alignItems: 'center', gap: 4,
         backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderRadius: radius.pill,
         paddingHorizontal: 10, paddingVertical: 4,
     },
-    cartChipText: { fontSize: 13, fontWeight: '800', color: c.primary },
-    // New (unopened receipt) card: pink-tinted fill + full pink border, set apart
-    // from the pinned family card (also pink) by the "New" badge + receipt content.
-    cardNew: { backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderColor: c.primary },
-    cardTopLeft: { flexDirection: 'row', alignItems: 'center', gap: 8, flexShrink: 1, minWidth: 0 },
-    cardTopRight: { flexDirection: 'row', alignItems: 'center', gap: 6 },
-    logoStrip: { flexDirection: 'row', alignItems: 'center', gap: 3 },
-    logoChip: {},
-    logoMore: { fontSize: 11, fontWeight: '800', color: c.textMuted, marginLeft: 2 },
-    newBadge: { backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: 8, paddingVertical: 2 },
-    newBadgeText: { fontSize: 10, fontWeight: '900', color: c.onPrimary, letterSpacing: 0.3 },
-    previewRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-    previewName: { flexShrink: 1, fontSize: 12, color: c.textSecondary, maxWidth: '38%' },
-    previewDot: { fontSize: 12, color: c.textMuted },
-    // alignSelf keeps the CTA vertically centred now that the row stretches.
-    ctaBtn: { flexDirection: 'row', alignItems: 'center', alignSelf: 'center', gap: 2, paddingLeft: 4 },
     cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 },
-    // Overlapping member avatars — top-right of a shared card.
-    memberStack: { flexDirection: 'row', alignItems: 'center' },
-    memberOverlap: { marginLeft: -8 },
-    memberRing: { borderWidth: 1.5, borderColor: c.cardBackground },
-    memberMore: {
-        width: 22, height: 22, borderRadius: 11, backgroundColor: c.surfaceMuted,
-        borderWidth: 1.5, borderColor: c.cardBackground, alignItems: 'center', justifyContent: 'center',
-    },
-    memberMoreText: { fontSize: 10, fontWeight: '800', color: c.textSecondary },
     stageChip: {
         flexDirection: 'row', alignItems: 'center', gap: 4,
         backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderRadius: radius.pill,
@@ -871,10 +725,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         paddingHorizontal: 7, paddingVertical: 3,
     },
     membersChipText: { fontSize: 11, fontWeight: '700', color: c.textSecondary },
-    cardTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary, flexShrink: 1 },
     cardMeta: { fontSize: 13, color: c.textSecondary, marginTop: 3 },
-    ctaRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'flex-end', gap: 2, marginTop: 8 },
-    ctaText: { fontSize: 13, fontWeight: '700', color: c.primary },
 
     // Recency sections (Šiandien/Vakar/…): same row-sliced outline as the
     // archive box below, but with the pantrySection geometry from the recipe
