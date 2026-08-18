@@ -12,10 +12,18 @@ import { APP_ENV } from './env';
  *   4. Production → api.souply.lt (souply_production).
  */
 
-// Hardcoded laptop LAN IP for the EAS dev variant (no Metro = no
-// auto-discovery). Update when you switch networks. Format: bare host,
-// no scheme, no port — the URL composer adds those.
-const DEV_VARIANT_LAN_HOST = '192.168.1.127';
+// Where the dev API lives when Metro can't tell us (EAS dev variant, or Metro
+// served over USB — see getDevHost below). Bare host: no scheme, no port.
+//
+// Default is the device's own loopback, which is correct when the API port is
+// forwarded over the cable:  adb reverse tcp:3000 tcp:3000
+//
+// On a network that allows client-to-client traffic, point it at the laptop's
+// LAN IP instead so API calls survive unplugging the cable:
+//     EXPO_PUBLIC_DEV_API_HOST=192.168.1.127
+// in souply-app/.env. Kept out of the source so it doesn't go stale on a move —
+// it was hardcoded to a previous flat's IP until 2026-08-18.
+const DEV_VARIANT_LAN_HOST = process.env.EXPO_PUBLIC_DEV_API_HOST ?? '127.0.0.1';
 
 /**
  * Pulls Metro's host (e.g. "192.168.1.127:8081") from expo-constants and
@@ -37,10 +45,15 @@ const getDevHost = (): string => {
         cfg?.manifest?.debuggerHost ??
         '';
     const host = String(hostUri).split(':')[0].trim();
-    // When Metro is served over USB (adb reverse) the host is localhost/127.0.0.1 — but the API is
-    // NOT on the device's own loopback. Fall back to the laptop's LAN IP so the JS bundle can stream
-    // over USB (fast) while API calls still go over Wi-Fi — including AFTER you unplug to photograph a
-    // receipt. (On Wi-Fi Metro this returns the LAN IP directly, unchanged.)
+    // Metro over USB (adb reverse) reports localhost, which tells us nothing about
+    // where the API is — so defer to DEV_VARIANT_LAN_HOST, which the developer sets
+    // for their situation:
+    //   • cable only (default 127.0.0.1) — needs `adb reverse tcp:3000 tcp:3000`,
+    //     and API calls die when you unplug
+    //   • laptop LAN IP via EXPO_PUBLIC_DEV_API_HOST — bundle streams over USB while
+    //     API calls go over Wi-Fi, so they survive unplugging to photograph a receipt.
+    //     Only works on a network that permits client-to-client traffic.
+    // (On Wi-Fi Metro this branch isn't hit — the real LAN IP is returned below.)
     if (!host || host === 'localhost' || host === '127.0.0.1') return DEV_VARIANT_LAN_HOST;
     return host;
 };
