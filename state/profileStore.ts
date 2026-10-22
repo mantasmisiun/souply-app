@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { API_BASE_URL } from '../config/api';
-import { getUserId, reclaimAnonSessionToken } from '../config/user';
+import { getUserId } from '../config/user';
 
 export interface ProfileData {
     points: number;
@@ -79,13 +79,11 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
                 fetch(`${API_BASE_URL}/api/users/${userId}/profile`),
                 fetch(`${API_BASE_URL}/api/users/${userId}/stats`),
             ]);
-            let [profileRes, statsRes] = await load();
-            // Stale/pre-hardening session token → the self-only routes 401.
-            // Re-claim the anon token once and retry (empty charts + missing
-            // savings card came from storing the 401 error body as "stats").
-            if (profileRes.status === 401 || statsRes.status === 401) {
-                if (await reclaimAnonSessionToken()) [profileRes, statsRes] = await load();
-            }
+            // A stale/pre-hardening token used to 401 these self-only routes and
+            // blank the profile. The reclaim-and-replay that used to live here now
+            // sits in installFetchInterceptor, so every per-user route gets it and
+            // concurrent 401s share ONE reclaim instead of racing.
+            const [profileRes, statsRes] = await load();
             // NEVER store a non-OK body — `{error}` parsed as stats blanked the
             // whole profile screen. Keep previous data instead.
             if (!profileRes.ok || !statsRes.ok) return;
