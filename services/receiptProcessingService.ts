@@ -1,5 +1,6 @@
 import { parseProductName } from "@shared/parsers/productNameParser";
 import { detectCardMaskBands, redactReceiptText, type MaskBand } from "@shared/parsers/cardMaskDetection";
+import { buildWordsDump, type WordsDumpLine } from "../utils/receiptWordsDump";
 import { buildRedactedUploadUri } from "../components/MaskRedactionHost";
 import i18n from "../i18n";
 import { ocrReceiptPages } from "../utils/receiptOcrPipeline";
@@ -15,7 +16,9 @@ import {
   isIkiReceipt,
   parseIkiReceipt,
   type IkiProduct,
+  type IkiLine,
 } from "@shared/parsers/ikiParser";
+import { runIkiReocrPasses } from "../utils/productReocrDevice";
 import {
   isMaximaReceipt,
   parseMaximaReceipt,
@@ -38,6 +41,7 @@ import {
   type Region,
 } from "@shared/parsers/rimiParser";
 import { detectChainByVatCode } from "@shared/parsers/chainVatFallback";
+import { detectLoyaltyMoney } from "@shared/parsers/loyaltyMoney";
 import { REGIONS_VERSION } from "./regionsRehydrationService";
 import { pdfToImageUris } from "../utils/pdfToImages";
 import { mapLimit } from "../utils/concurrency";
@@ -52,6 +56,9 @@ const PARSER_OPTS = { iosOcr: Platform.OS === "ios" };
 export interface ProcessingResult {
   receiptId: number;
   mandatorySwipesRequired: number;
+  /** Shopping list this receipt was attached to (null = ad-hoc trip). Lets the
+   *  trip screen tell "landed here" from "landed somewhere else". */
+  linkedListId?: number | null;
 }
 
 export type ProcessingFailReason =
@@ -60,12 +67,53 @@ export type ProcessingFailReason =
   | "chain_unrecognized"
   | "store_unrecognized"
   | "post_failed"
-  | "mask_failed";
+  | "mask_failed"
+  | "needs_date"
+  /** Parked: the upload came from a trip, but the receipt's chain matches none
+   *  of that trip's planned stores. The card asks which store slot it fulfils. */
+  | "needs_store"
+  /** The receipt saved, but attaching it to its shopping list failed. Parked so
+   *  the link can be retried on its own — never silently dropped. */
+  | "link_failed";
+
+/** Store context attached to a `store_unrecognized` error so the trip card's
+ *  "Rasti parduotuvę" CTA can open the chain-scoped map pre-seeded. */
+export interface StoreErrorContext {
+  chainId: number;
+  chainName: string;
+  storeAddress: string | null;
+}
+
+/** A user-picked store (from the map) to inject on a re-process, skipping the
+ *  automatic `matchStore`. */
+export interface ResolvedStoreInput {
+  storeId: number;
+  storeName: string | null;
+  storeAddress: string | null;
+}
+
+/** Context for a `needs_store` park: what we detected vs what the trip planned,
+ *  so the card can offer one button per planned store slot. */
+export interface LinkChoiceContext {
+  detectedChainId: number | null;
+  /** chainId → listId of the trip's planned stores (the enqueued linkMap). */
+  options: { chainId: number; listId: number }[];
+}
+
+/** Context for a `link_failed` park: everything the retry needs, and nothing
+ *  that would make it re-run OCR (the receipt already exists server-side). */
+export interface LinkFailureContext {
+  receiptId: number;
+  listId: number;
+}
 
 export class ProcessingError extends Error {
   constructor(
     public readonly reason: ProcessingFailReason,
     message: string,
+    public readonly storeContext?: StoreErrorContext,
+    public readonly linkChoice?: LinkChoiceContext,
+    public readonly linkFailure?: LinkFailureContext,
   ) {
     super(message);
     this.name = "ProcessingError";
@@ -218,6 +266,30 @@ async function matchStore(
   return null;
 }
 
+type MatchedStore = { storeId: number; storeName: string | null; storeAddressMatched: string | null; matchConfidence: number | null };
+
+/** Resolve the receipt's store: a user-picked `resolvedStore` (from the map,
+ *  on a re-process) wins outright; otherwise auto-match by address. When neither
+ *  yields a store, throw `store_unrecognized` carrying the chain context so the
+ *  trip card can offer "Rasti parduotuvę". */
+async function resolveStore(
+  chainId: number,
+  chainName: string,
+  ocrAddress: string | null,
+  signal: AbortSignal,
+  resolvedStore?: ResolvedStoreInput,
+): Promise<MatchedStore> {
+  if (resolvedStore) {
+    return { storeId: resolvedStore.storeId, storeName: resolvedStore.storeName, storeAddressMatched: resolvedStore.storeAddress, matchConfidence: 1 };
+  }
+  const store = await matchStore(chainId, ocrAddress, signal);
+  if (!store) {
+    await logFail("store_unrecognized", { detectedChainName: chainName, extractedStoreAddress: ocrAddress || null });
+    throw new ProcessingError("store_unrecognized", `${chainName} parduotuvė neatpažinta`, { chainId, chainName, storeAddress: ocrAddress });
+  }
+  return store;
+}
+
 async function matchProducts(
   chainId: number,
   rawProducts: {
@@ -342,6 +414,55 @@ async function logFail(
   }
 }
 
+/** RETAKE: POST the re-scan's parse to the heal endpoint, which merges it into
+ *  the SAME receipt (kept lines untouched, garbled lines healed, missed lines
+ *  recovered). 409 = the retake was a DIFFERENT receipt → surfaced so the UI can
+ *  offer a full replace instead. Returns the existing receipt id (image + markDone
+ *  reuse the normal downstream). */
+async function healExistingReceipt(
+  receiptId: number,
+  parsedData: object,
+  signal: AbortSignal,
+): Promise<{ receiptId: number; mandatorySwipesRequired: number }> {
+  const userId = await getUserId();
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${receiptId}/heal`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-User-Id": userId },
+    // swapImage: the retake photo is uploaded to this receipt right after, so the
+    // server adopts the retake's band/crop geometry to match the new image.
+    body: JSON.stringify({ parsedData, swapImage: true }),
+    timeoutMs: TIMEOUT_HEAVY_MS,
+    externalSignal: signal,
+  });
+  const data = await res.json().catch(() => ({}));
+  if (res.status === 409) {
+    // The retake was a DIFFERENT receipt — the message tells the user to upload it separately.
+    throw new ProcessingError("post_failed", i18n.t("retake.differentReceipt"));
+  }
+  if (!res.ok) throw new ProcessingError("post_failed", i18n.t("retake.healFailed"));
+  return { receiptId, mandatorySwipesRequired: data?.mandatorySwipesRequired ?? 0 };
+}
+
+/** DEV-ONLY: overwrite an existing receipt's parse ENTIRELY with this fresh re-parse (bypasses the
+ *  conservative heal-merge), so the dev re-run button shows exactly what the parser now produces.
+ *  Server refuses in production. */
+async function devReplaceReceipt(
+  receiptId: number,
+  parsedData: object,
+  signal: AbortSignal,
+): Promise<{ receiptId: number; mandatorySwipesRequired: number }> {
+  const userId = await getUserId();
+  const res = await fetchWithTimeout(`${API_BASE_URL}/api/receipts/${receiptId}/dev-replace`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-User-Id": userId },
+    body: JSON.stringify({ parsedData }),
+    timeoutMs: TIMEOUT_HEAVY_MS,
+    externalSignal: signal,
+  });
+  if (!res.ok) throw new ProcessingError("post_failed", i18n.t("retake.healFailed"));
+  return { receiptId, mandatorySwipesRequired: 0 };
+}
+
 async function postReceipt(
   parsedData: object,
   signal: AbortSignal,
@@ -365,6 +486,13 @@ async function postReceipt(
       return { receiptId: Number(data.existingReceiptId), mandatorySwipesRequired: 0, duplicate: true };
     }
     throw new ProcessingError("post_failed", "Kvitas jau įkeltas");
+  }
+  // Re-upload of a previously user-hidden receipt: the server un-hid + re-linked
+  // the existing row (HTTP 200, no fresh `id`). Reuse its id and mark it a
+  // duplicate so the caller RE-RUNS the image upload — restoring the photo that
+  // was wiped when it was hidden.
+  if (data?.reactivated && Number.isFinite(data?.receiptId)) {
+    return { receiptId: Number(data.receiptId), mandatorySwipesRequired: data.mandatorySwipesRequired ?? 0, duplicate: true };
   }
   if (!res.ok || !data?.id) {
     throw new ProcessingError("post_failed", data?.error || `HTTP ${res.status}`);
@@ -438,19 +566,14 @@ async function processRimi(
   allLines: LineWithFrame[],
   signal: AbortSignal,
   onProgress?: (done: number, total: number) => void,
+  resolvedStore?: ResolvedStoreInput,
 ): Promise<object> {
   const chainId = 2;
   const parsed = parseRimiReceipt(allLines);
-  // Headless pipeline: NO interactive store-resolution here. The old prompt
-  // pushed /receipt/store-resolution — a route DELETED in the scan-session
-  // refactor — leaving a forever-dangling await that wedged the entire queue
-  // at "Recognising" (and surfaced a not-found screen). An unmatched store now
-  // fails the item visibly; the interactive scan flow has the map modal.
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
-  if (!store) {
-    await logFail("store_unrecognized", { detectedChainName: "RIMI", extractedStoreAddress: parsed.header.storeAddress || null });
-    throw new ProcessingError("store_unrecognized", "Rimi parduotuvė neatpažinta");
-  }
+  // Store: a user-picked store (map resolution on re-process) wins; else auto-match
+  // by address. Unmatched → store_unrecognized with chain context so the trip card
+  // can offer the "Rasti parduotuvę" map.
+  const store = await resolveStore(chainId, "Rimi", parsed.header.storeAddress, signal, resolvedStore);
   const products = await matchProducts(chainId, parsed.products, signal, onProgress);
   return {
     version: 1, image: null,
@@ -464,19 +587,11 @@ async function processMaxima(
   allLines: LineWithFrame[],
   signal: AbortSignal,
   onProgress?: (done: number, total: number) => void,
+  resolvedStore?: ResolvedStoreInput,
 ): Promise<object> {
   const chainId = 1;
   const parsed = parseMaximaReceipt(allLines, PARSER_OPTS);
-  // Headless pipeline: NO interactive store-resolution here. The old prompt
-  // pushed /receipt/store-resolution — a route DELETED in the scan-session
-  // refactor — leaving a forever-dangling await that wedged the entire queue
-  // at "Recognising" (and surfaced a not-found screen). An unmatched store now
-  // fails the item visibly; the interactive scan flow has the map modal.
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
-  if (!store) {
-    await logFail("store_unrecognized", { detectedChainName: "MAXIMA", extractedStoreAddress: parsed.header.storeAddress || null });
-    throw new ProcessingError("store_unrecognized", "Maxima parduotuvė neatpažinta");
-  }
+  const store = await resolveStore(chainId, "Maxima", parsed.header.storeAddress, signal, resolvedStore);
   const rawProds = parsed.products.map((mp: MaximaProduct) => ({
     name: mp.name,
     price: mp.price,
@@ -503,19 +618,11 @@ async function processNorfa(
   allLines: LineWithFrame[],
   signal: AbortSignal,
   onProgress?: (done: number, total: number) => void,
+  resolvedStore?: ResolvedStoreInput,
 ): Promise<object> {
   const chainId = 4;
   const parsed = parseNorfaReceipt(allLines);
-  // Headless pipeline: NO interactive store-resolution here. The old prompt
-  // pushed /receipt/store-resolution — a route DELETED in the scan-session
-  // refactor — leaving a forever-dangling await that wedged the entire queue
-  // at "Recognising" (and surfaced a not-found screen). An unmatched store now
-  // fails the item visibly; the interactive scan flow has the map modal.
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
-  if (!store) {
-    await logFail("store_unrecognized", { detectedChainName: "NORFA", extractedStoreAddress: parsed.header.storeAddress || null });
-    throw new ProcessingError("store_unrecognized", "Norfa parduotuvė neatpažinta");
-  }
+  const store = await resolveStore(chainId, "Norfa", parsed.header.storeAddress, signal, resolvedStore);
   const rawProds = parsed.products.map((np: NorfaProduct) => ({
     name: np.name,
     price: np.price,
@@ -542,19 +649,11 @@ async function processLidl(
   allLines: LineWithFrame[],
   signal: AbortSignal,
   onProgress?: (done: number, total: number) => void,
+  resolvedStore?: ResolvedStoreInput,
 ): Promise<object> {
   const chainId = 5;
   const parsed = parseLidlReceipt(allLines, PARSER_OPTS);
-  // Headless pipeline: NO interactive store-resolution here. The old prompt
-  // pushed /receipt/store-resolution — a route DELETED in the scan-session
-  // refactor — leaving a forever-dangling await that wedged the entire queue
-  // at "Recognising" (and surfaced a not-found screen). An unmatched store now
-  // fails the item visibly; the interactive scan flow has the map modal.
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
-  if (!store) {
-    await logFail("store_unrecognized", { detectedChainName: "LIDL", extractedStoreAddress: parsed.header.storeAddress || null });
-    throw new ProcessingError("store_unrecognized", "Lidl parduotuvė neatpažinta");
-  }
+  const store = await resolveStore(chainId, "Lidl", parsed.header.storeAddress, signal, resolvedStore);
   const rawProds = parsed.products.map((lp: LidlProduct) => ({
     name: lp.name,
     price: lp.price,
@@ -585,19 +684,16 @@ async function processIki(
   mergedLines: LineWithFrame[],
   signal: AbortSignal,
   onProgress?: (done: number, total: number) => void,
+  resolvedStore?: ResolvedStoreInput,
+  page?: { uri: string; pixelWidth: number; pixelHeight: number } | null,
 ): Promise<object> {
   const chainId = 3;
-  const parsed = parseIkiReceipt(mergedLines);
-  // Headless pipeline: NO interactive store-resolution here. The old prompt
-  // pushed /receipt/store-resolution — a route DELETED in the scan-session
-  // refactor — leaving a forever-dangling await that wedged the entire queue
-  // at "Recognising" (and surfaced a not-found screen). An unmatched store now
-  // fails the item visibly; the interactive scan flow has the map modal.
-  const store = await matchStore(chainId, parsed.header.storeAddress, signal);
-  if (!store) {
-    await logFail("store_unrecognized", { detectedChainName: "IKI", extractedStoreAddress: parsed.header.storeAddress || null });
-    throw new ProcessingError("store_unrecognized", "IKI parduotuvė neatpažinta");
-  }
+  const parsed0 = parseIkiReceipt(mergedLines);
+  // Product re-OCR — whole-section (cross-band scrambles) + per-band deskew (within-band garbles),
+  // Android + flag gated, accept-gated on strictly-better reconciliation. SAME sequence the
+  // interactive scan uses (runIkiReocrPasses), so the background/heal queue no longer misses it.
+  const { parsed } = await runIkiReocrPasses(parsed0, mergedLines as unknown as IkiLine[], page ?? null, { report: true });
+  const store = await resolveStore(chainId, "IKI", parsed.header.storeAddress, signal, resolvedStore);
   const rawProds = parsed.products.map((ip: IkiProduct) => ({
     name: ip.name,
     price: ip.price,
@@ -622,11 +718,109 @@ async function processIki(
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
+/**
+ * Fire-and-forget: attach a freshly-created receipt to a shopping list (the
+ * List card flips to "Kvitas pridėtas" on refresh, and the trip's planning
+ * score can then pair list ↔ receipt). Mirrors scanSessionService's private
+ * linkReceiptToList so the background queue links exactly like the live scan.
+ */
+/**
+ * Attach a receipt to its shopping list — AWAITED and RETRIED, never
+ * fire-and-forget.
+ *
+ * This call is what moves the receipt onto the trip (the server relinks it and
+ * drops the churn ad-hoc trip the bare upload minted seconds earlier). It used
+ * to be `.catch(() => {})`, so a failure here detached the receipt from the
+ * user's trip with no error anywhere: the card completed, the trip refetched
+ * without it, and the receipt turned up as a stray "Neplanuotas pirkinys".
+ * Returns whether the link is confirmed; the caller parks the item when false.
+ */
+export async function linkReceiptToList(listId: number, receiptId: number): Promise<boolean> {
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      const res = await fetch(`${API_BASE_URL}/api/shopping-lists/${listId}/link-receipt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ receiptId }),
+      });
+      if (res.ok) return true;
+      // 4xx is deterministic (wrong owner, list gone) — retrying can't help.
+      if (res.status >= 400 && res.status < 500) {
+        console.warn(`[LINK] list ${listId} ← receipt ${receiptId} refused (${res.status})`);
+        return false;
+      }
+    } catch (e) {
+      console.warn(`[LINK] attempt ${attempt + 1} failed:`, e);
+    }
+    if (attempt < 2) await new Promise((r) => setTimeout(r, 400 * (attempt + 1)));
+  }
+  return false;
+}
+
+/** Pick which list a background receipt links to, from its detected chain and
+ *  the enqueued link context. Same precedence as the interactive scan:
+ *  chain-matched map entry → single-store map value → explicit fallback. */
+export function resolveLinkListId(
+  chainId: number | null,
+  linkMap: Record<number, number> | undefined,
+  fallbackLinkId: number | null | undefined,
+): number | null {
+  if (linkMap && chainId != null && linkMap[chainId] != null) return linkMap[chainId];
+  const values = linkMap ? Object.values(linkMap) : [];
+  if (values.length === 1) return values[0];
+  return fallbackLinkId ?? null;
+}
+
+/**
+ * Does this upload need the user to say WHICH planned store it covers?
+ *
+ * The upload carried a trip context (linkMap) but the detected chain matches no
+ * slot — you planned Maxima + Lidl and shopped at IKI. The interactive scan asks
+ * ("chainGate", scanSessionService); the headless queue used to just resolve to
+ * null and let the receipt fall into a fresh ad-hoc trip, which is how a receipt
+ * could parse perfectly and then vanish from the trip it was uploaded for.
+ *
+ * Only fires when there is a real choice to make: no link context (a bare upload
+ * from the Shopping sheet) stays ad-hoc by design, and a single-store trip is
+ * already resolved by resolveLinkListId's single-value rule.
+ */
+export function needsStoreChoice(
+  chainId: number | null,
+  linkMap: Record<number, number> | undefined,
+  fallbackLinkId: number | null | undefined,
+): boolean {
+  const planned = linkMap ? Object.keys(linkMap).length : 0;
+  if (planned === 0) return false;
+  return resolveLinkListId(chainId, linkMap, fallbackLinkId) == null;
+}
+
 export async function processOneReceipt(
   imageUris: string[],
   signal: AbortSignal,
   onProgress?: (step: string, done?: number, total?: number) => void,
-  opts?: { isPdf?: boolean },
+  opts?: {
+    isPdf?: boolean;
+    linkMap?: Record<number, number>;
+    fallbackLinkId?: number | null;
+    /** RETAKE: heal this existing receipt instead of creating a new one. */
+    healReceiptId?: number;
+    /** DEV-ONLY: fully REPLACE healReceiptId's parse with this one (bypass the heal-merge). */
+    devReplace?: boolean;
+    /** User-supplied purchase date (YYYY-MM-DD) for a receipt whose date wouldn't
+     *  parse — set when retrying a queue item parked as `needs_date`. */
+    overrideDate?: string;
+    /** STORE RESOLUTION: user picked a store from the map after a store_unrecognized
+     *  failure — inject it so the parse skips the automatic store match. */
+    resolvedStore?: ResolvedStoreInput;
+    /** The store slot the user picked for an item parked as `needs_store`. */
+    linkChoiceListId?: number | null;
+    /** The user chose "keep it separate" on a `needs_store` park — upload as an
+     *  ad-hoc trip and don't ask again. */
+    linkAdHoc?: boolean;
+    /** The user put it on THIS trip without claiming a planned store slot (the
+     *  receipt's chain matched none of them). */
+    linkTripId?: number;
+  },
 ): Promise<ProcessingResult> {
   try {
     // PDF sources: page conversion is the item's FIRST stage (was a blocking
@@ -674,16 +868,35 @@ export async function processOneReceipt(
       isIkiReceipt(lineTexts) ? 3 :
       (detectChainByVatCode(lineTexts)?.chainId ?? null);
 
+    // CHAIN GATE (queue equivalent of the interactive scan's chainGate prompt).
+    // Asked BEFORE parsing: the answer can't change the parse, and parking here
+    // means the user is asked seconds in rather than after a full parse that the
+    // resume would then have to redo.
+    if (!opts?.healReceiptId && !opts?.linkAdHoc && opts?.linkChoiceListId == null
+        && needsStoreChoice(chainId, opts?.linkMap, opts?.fallbackLinkId)) {
+      throw new ProcessingError(
+        "needs_store",
+        i18n.t("receiptQueue.needsStore"),
+        undefined,
+        {
+          detectedChainId: chainId,
+          options: Object.entries(opts?.linkMap ?? {})
+            .map(([c, listId]) => ({ chainId: Number(c), listId }))
+            .filter((o) => Number.isFinite(o.chainId) && Number.isFinite(o.listId)),
+        },
+      );
+    }
+
     if (chainId === 2) {
-      parsedData = await processRimi(allLines, signal, reportMatch);
+      parsedData = await processRimi(allLines, signal, reportMatch, opts?.resolvedStore);
     } else if (chainId === 1) {
-      parsedData = await processMaxima(allLines, signal, reportMatch);
+      parsedData = await processMaxima(allLines, signal, reportMatch, opts?.resolvedStore);
     } else if (chainId === 4) {
-      parsedData = await processNorfa(allLines, signal, reportMatch);
+      parsedData = await processNorfa(allLines, signal, reportMatch, opts?.resolvedStore);
     } else if (chainId === 5) {
-      parsedData = await processLidl(allLines, signal, reportMatch);
+      parsedData = await processLidl(allLines, signal, reportMatch, opts?.resolvedStore);
     } else if (chainId === 3) {
-      parsedData = await processIki(mergedLines, signal, reportMatch);
+      parsedData = await processIki(mergedLines, signal, reportMatch, opts?.resolvedStore, { uri: firstPageUri, pixelWidth: firstPageWidth, pixelHeight: firstPageHeight });
     } else {
       await logFail("chain_unrecognized", {
         ocrLineCount: lineTexts.length,
@@ -698,11 +911,22 @@ export async function processOneReceipt(
     const maskBands = detectCardMaskBands(allLines);
     console.log(`[MASK] (queue) detected ${maskBands.length} band(s)`);
 
+    // Capture the PII-redacted per-word lines the parser consumed so a
+    // queue-uploaded receipt is reproducible off-device (receipts:reparse) —
+    // the interactive scan already stores this; the queue path did not, which
+    // left every background upload un-reparseable. IKI feeds on `mergedLines`
+    // (the column-engine input); the other chains on `allLines`.
+    const wordsDump = buildWordsDump(
+      (chainId === 3 ? mergedLines : allLines) as unknown as WordsDumpLine[],
+      maskBands,
+    );
+
     // Inject image metadata so loadExistingReceipt can size pageMetas
     // without a separate Image.getSize round-trip. filePath stays null
     // until uploadReceiptImage PATCHes the receipt row below.
     const parsedDataWithImage = {
       ...(redactQueueParsedData(parsedData, maskBands) as Record<string, unknown>),
+      wordsDump,
       image: {
         uri: firstPageUri,
         width: firstPageWidth,
@@ -711,8 +935,75 @@ export async function processOneReceipt(
       },
     };
 
+    // MISSING PURCHASE DATE. The interactive scan asks the user (scanSessionService
+    // → ensureKeyReceiptFields); this background path had no such gate, so an
+    // unparsed date was stored as "" and every downstream view silently fell back
+    // to today — a receipt from last week landed on the wrong day with no hint.
+    // The queue is headless, so instead of blocking it PARKS the item: the card
+    // asks for the date, and the retry re-runs with `overrideDate` injected.
+    // LOYALTY MONEY ("Nurašyta MAXIMOS pinigų 0,12"): part of the bill paid from
+    // an earned balance, deducted AFTER the lines — so the line sum legitimately
+    // exceeds the printed total by that much. Recorded on the footer next to the
+    // set-deal discount, which behaves the same way, so reconciliation and the
+    // savings stats can both account for it.
+    // Geometry included: Rimi prints the loyalty label and its amount as two
+    // separate OCR lines in the same row.
+    const loyaltyLines = (chainId === 3 ? mergedLines : allLines).map((l: any) => ({
+        text: l.text, yTop: l.yTop, yBottom: l.yBottom,
+    }));
+    const loyalty = detectLoyaltyMoney(loyaltyLines);
+    if (loyalty && (parsedData as any)?.footer) (parsedData as any).footer.loyalty = loyalty;
+
+    const parsedFooter = (parsedData as any)?.footer;
+    if (!opts?.overrideDate && !(typeof parsedFooter?.date === "string" && parsedFooter.date.length > 0)) {
+      throw new ProcessingError("needs_date", i18n.t("receiptQueue.needsDate"));
+    }
+    if (opts?.overrideDate && parsedFooter) {
+      parsedFooter.date = opts.overrideDate;
+      if (!parsedFooter.time) parsedFooter.time = "12:00";
+    }
+
     onProgress?.(i18n.t("receiptQueue.saving"));
-    const postResult = await postReceipt(parsedDataWithImage, signal);
+    // RETAKE → heal the existing receipt (merge into its stored parse); otherwise
+    // create a new one. The image is still (re)uploaded below to the SAME id.
+    const postResult = opts?.healReceiptId && opts?.devReplace
+      ? await devReplaceReceipt(opts.healReceiptId, parsedDataWithImage, signal)
+      : opts?.healReceiptId
+      ? await healExistingReceipt(opts.healReceiptId, parsedDataWithImage, signal)
+      : await postReceipt(parsedDataWithImage, signal);
+
+    // Link to the originating shopping list (background scan/upload from a list
+    // or trip). Skipped for a heal (the receipt already has its trip/list).
+    // A failed link is REMEMBERED, not swallowed: the image still uploads (the
+    // receipt exists either way), and the item is parked afterwards so the link
+    // can be retried on its own.
+    let linkedListId: number | null = null;
+    let linkFailure: LinkFailureContext | null = null;
+    // TRIP-ONLY attach: the receipt belongs to this shopping but fulfils no
+    // planned store. Slot membership and trip membership are separate statements
+    // — claiming an unrelated slot just to join the trip is what made a Maxima
+    // receipt read as "the IKI stop is done".
+    if (!opts?.healReceiptId && opts?.linkTripId != null) {
+        const res = await fetch(`${API_BASE_URL}/api/trips/${opts.linkTripId}/attach-receipt`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ receiptId: postResult.receiptId }),
+        }).catch(() => null);
+        if (!res?.ok) {
+            linkFailure = { receiptId: postResult.receiptId, listId: 0 };
+        }
+    } else if (!opts?.healReceiptId) {
+      const linkListId = opts?.linkAdHoc
+        ? null
+        : (opts?.linkChoiceListId ?? resolveLinkListId(chainId, opts?.linkMap, opts?.fallbackLinkId));
+      if (linkListId) {
+        if (await linkReceiptToList(linkListId, postResult.receiptId)) {
+          linkedListId = linkListId;
+        } else {
+          linkFailure = { receiptId: postResult.receiptId, listId: linkListId };
+        }
+      }
+    }
 
     // Burn the black redaction boxes into the image BEFORE upload (via the
     // global off-screen ViewShot host — this service is headless). FAIL-CLOSED:
@@ -734,7 +1025,15 @@ export async function processOneReceipt(
       await uploadReceiptImage(postResult.receiptId, uploadUri, signal);
     }
 
-    return postResult;
+    // The receipt is saved and its image is up, but it never reached the trip —
+    // park it (the card retries just the link) rather than reporting success on
+    // a receipt the user won't find where they put it.
+    if (linkFailure) {
+      throw new ProcessingError(
+        "link_failed", i18n.t("receiptQueue.linkFailed"), undefined, undefined, linkFailure);
+    }
+
+    return { ...postResult, linkedListId };
   } catch (e) {
     if (e instanceof ProcessingError) throw e;
     // Surface network failures distinctly so the queue runner can pause

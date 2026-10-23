@@ -277,7 +277,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // The selection lozenge is centred in the wheel column via this absolute
     // full-bleed, non-interactive container (its child stretches to width).
     bandContainer: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         justifyContent: 'center',
         paddingHorizontal: spacing.lg,
     },

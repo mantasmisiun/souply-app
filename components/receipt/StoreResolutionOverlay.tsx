@@ -3,8 +3,8 @@ import { View, StyleSheet, Platform, Dimensions } from 'react-native';
 import MapView, { type Region } from 'react-native-maps';
 import { useTranslation } from 'react-i18next';
 import { useTheme, type AppTheme } from '../../constants/theme';
-import { GlassIconButton } from '../GlassIconButton';
-import { MapPickerScaffold } from '../map/MapPickerScaffold';
+import { MapBackButton } from '../map/MapBackButton';
+import { MapHost } from '../map/MapHost';
 import {
     useBakedPills, useBakedClusters, MapPillMarker, MapClusterMarker,
     type MapPillSpec, type MapClusterSpec,
@@ -493,18 +493,7 @@ export function StoreResolutionOverlay({ onCancel }: {
                 "Pick the store" title chip and the search all float over the map at the
                 top; the confirm pill floats at the bottom and appears only once a store
                 is tapped. No opaque header bar — the map runs edge to edge. */}
-            <MapPickerScaffold
-                glassChrome
-                headerLeft={
-                    <GlassIconButton
-                        icon="chevron-back"
-                        glass
-                        solid
-                        onPress={() => { completeStoreResolution(null); onCancel?.(); }}
-                        size={22}
-                    />
-                }
-                title={t('storeResolution.title')}
+            <MapHost
                 mapRef={mapRef}
                 initialRegion={initialRegion}
                 mountMap={mountMap}
@@ -518,17 +507,29 @@ export function StoreResolutionOverlay({ onCancel }: {
                     if (selectedId != null) console.log(`[SRO] map tap -> deselect ${selectedId}`);
                     setSelectedId(null);
                 }}
-                searchText={searchText}
-                onSearchTextChange={(v) => { setSearchText(v); setSearchError(null); }}
-                onSearch={onSearch}
-                searching={searching}
-                searchError={searchError}
-                searchPlaceholder={t('storeResolution.searchPlaceholder')}
-                confirmLabel={t('storeResolution.confirm')}
-                confirmEnabled={selectedId != null}
-                onConfirm={onConfirm}
-                mapChildren={
-                    !centered ? null : <>
+                pick={{
+                    kind: 'store',
+                    title: t('storeResolution.title'),
+                    // Confirm appears only once a store is tapped (store-pick behaviour).
+                    confirmAlwaysVisible: false,
+                    headerLeft: (
+                        <MapBackButton onPress={() => { completeStoreResolution(null); onCancel?.(); }} />
+                    ),
+                    confirmLabel: t('storeResolution.confirm'),
+                    confirmEnabled: selectedId != null,
+                    onConfirm,
+                    onCancel: () => { completeStoreResolution(null); onCancel?.(); },
+                    search: {
+                        text: searchText,
+                        onChangeText: (v) => { setSearchText(v); setSearchError(null); },
+                        onSubmit: onSearch,
+                        searching,
+                        error: searchError,
+                        placeholder: t('storeResolution.searchPlaceholder'),
+                    },
+                }}
+            >
+                {!centered ? null : <>
                         {/* Append-only neutral pills (bake-completion order). Keys are
                             STABLE FOREVER — the set only grows, never reorders, never
                             remounts. All selection styling happens on the standalone
@@ -603,9 +604,8 @@ export function StoreResolutionOverlay({ onCancel }: {
                                 />
                             );
                         })()}
-                    </>
-                }
-            />
+                    </>}
+            </MapHost>
             {/* Off-screen bakeries (pills + cluster bubbles) — must live OUTSIDE the map
                 (normal Views, not Markers). Gated on mapReady so the view-shot capture
                 burst doesn't run during map init. */}

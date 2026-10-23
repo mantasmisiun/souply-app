@@ -8,33 +8,38 @@ import {
     Platform,
     Modal,
     KeyboardAvoidingView,
-    Keyboard,
     ScrollView,
 } from "react-native";
-import { MaterialProgress } from '@/components/MaterialProgress';
-import Animated from 'react-native-reanimated';
+import Animated, {
+    useSharedValue, useAnimatedStyle, withSpring, LinearTransition,
+} from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { KeyboardStickyView } from 'react-native-keyboard-controller';
+import { ProgressGlow } from './ProgressGlow';
 import { LiquidGlass } from './LiquidGlass';
 import { SkeletonBox } from './SkeletonBox';
 import { useRouter, useFocusEffect } from 'expo-router';
 import { useCollapsingHeader, CollapsingHeader } from './CollapsingHeader';
 import { ScreenHeading } from './ScreenHeading';
 import { GlassIconButton } from './GlassIconButton';
-import { useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
+import { memo, useState, useCallback, useEffect, useRef, useMemo, type ReactNode } from 'react';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { BrandedQR } from './BrandedQR';
-import { ContextMenu } from './ContextMenu';
+import { ContextMenu, type ContextMenuAction } from './ContextMenu';
+import { SwipeableRow } from './SwipeableRow';
+import { UserAvatar } from './UserAvatar';
+import { ChainLogoChip } from './ChainLogoChip';
 import { API_BASE_URL } from '../config/api';
 import { getUserId } from '../config/user';
+import { useAuthState } from '../state/authState';
+import { setCachedListItems, getCachedListItems, hasCachedListItems } from '../utils/listItemsCache';
 import { ProductImage } from './ProductImage';
 import { useTheme, spacing, radius, elevation, iconSize, avatarSize, typography, type AppTheme } from '../constants/theme';
 import * as Haptics from 'expo-haptics';
 import { formatEuro } from '../utils/formatCurrency';
 import { formatStoreStreet } from '../utils/formatAddress';
-import { isWeighableDisplay } from '../utils/weighable';
+import { formatItemAmount, fmtSize, unitLabel } from '../utils/amountDisplay';
 import { chainBrandName } from '../utils/chainBrandName';
+import { sortItems, mergeServerItems, createDebouncedSearch, type DebouncedSearch } from '../utils/shoppingListSync';
 import { useTranslation } from 'react-i18next';
 
 interface ShoppingList {
@@ -69,43 +74,75 @@ interface ShoppingListItem {
     l1CategoryId?: number | null;
     l2CategoryId?: number | null;
     l2CategoryName?: string | null;
+    /** Who ticked this item (shared lists): null = unchecked or self. */
+    checkedByUserId?: string | null;
+    checkedByName?: string | null;
+    checkedByColor?: string | null;
 }
 
-// Category groups follow the Naršyti sequence — by L1 id, then L2 id (NOT
-// alphabetical). Uncategorised items (no L2) sink to the bottom under "Kita".
+// Category grouping order (sortItems) + the 3s-poll merge with its diff-bail
+// live in utils/shoppingListSync.ts so they're unit-testable.
 const CAT_LAST = Number.MAX_SAFE_INTEGER;
-const sortItems = (arr: ShoppingListItem[]): ShoppingListItem[] =>
-    arr.sort((a, b) => {
-        if (a.isChecked !== b.isChecked) return Number(a.isChecked) - Number(b.isChecked);
-        if (!a.isChecked) {
-            const l1a = a.l2CategoryId == null ? CAT_LAST : (a.l1CategoryId ?? CAT_LAST);
-            const l1b = b.l2CategoryId == null ? CAT_LAST : (b.l1CategoryId ?? CAT_LAST);
-            if (l1a !== l1b) return l1a - l1b;
-            const l2a = a.l2CategoryId ?? CAT_LAST;
-            const l2b = b.l2CategoryId ?? CAT_LAST;
-            if (l2a !== l2b) return l2a - l2b;
-        }
-        return a.productName.localeCompare(b.productName, 'lt');
-    });
 
-function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
+// One flattened list row: a category header or an item card. Flat so the
+// virtualised list can animate a ticked item flying down to the "Atlikta"
+// tray (cross-parent moves don't animate).
+type Row =
+    | { kind: 'header'; key: string; label: string }
+    | { kind: 'item'; key: string; item: ShoppingListItem };
+const rowKey = (r: Row) => r.key;
+
+/** V2 checkbox: a spring-fill circle that pops when ticked. */
+function SpringCheckbox({ checked, styles, colors }: {
+    checked: boolean;
+    styles: ReturnType<typeof makeStyles>;
+    colors: AppTheme;
+}) {
+    const p = useSharedValue(checked ? 1 : 0);
+    useEffect(() => {
+        p.value = withSpring(checked ? 1 : 0, { damping: 12, stiffness: 220, mass: 0.6 });
+    }, [checked]);
+    const boxStyle = useAnimatedStyle(() => ({
+        backgroundColor: p.value > 0.5 ? colors.primary : 'transparent',
+        borderColor: p.value > 0.5 ? colors.primary : colors.border,
+        transform: [{ scale: 1 + 0.14 * Math.sin(Math.min(p.value, 1) * Math.PI) }],
+    }));
+    const tickStyle = useAnimatedStyle(() => ({ opacity: p.value, transform: [{ scale: p.value }] }));
+    return (
+        <Animated.View style={[styles.v2check, boxStyle]}>
+            <Animated.View style={tickStyle}>
+                <Ionicons name="checkmark" size={16} color={colors.onPrimary} />
+            </Animated.View>
+        </Animated.View>
+    );
+}
+
+// memo + stable callbacks from the screen: the 3s poll (when it does commit)
+// and unrelated state flips no longer re-render every row card.
+const ShoppingListItemCard = memo(function ShoppingListItemCard({ item, isMine, onToggle, onRemove, storeBadge, styles, colors }: {
     item: ShoppingListItem;
+    isMine: (uid?: string | null) => boolean;
     onToggle: (item: ShoppingListItem) => void;
     onRemove: (id: number) => void;
+    /** Unified view: the store this item is bought at (logo, top-left of image). */
+    storeBadge?: UnifiedSource | null;
     styles: ReturnType<typeof makeStyles>;
     colors: AppTheme;
 }) {
     const { t } = useTranslation();
+    // Someone ELSE ticked this (shared list): show their avatar so I don't
+    // think I did it myself.
+    const otherChecker = item.isChecked && item.checkedByUserId && !isMine(item.checkedByUserId)
+        ? { name: item.checkedByName ?? null, color: item.checkedByColor ?? null }
+        : null;
     return (
-        <View style={[styles.card, item.isChecked && styles.cardChecked]}>
+        <SwipeableRow onDelete={() => onRemove(item.id)}>
             <TouchableOpacity
-                style={{ flex: 1, flexDirection: 'row', alignItems: 'center', gap: spacing.md }}
+                style={[styles.v2row, item.isChecked && styles.v2rowDone]}
                 onPress={() => onToggle(item)}
                 activeOpacity={0.7}
             >
-                <View style={[styles.checkCircle, item.isChecked && styles.checkCircleChecked]}>
-                    {item.isChecked && <Ionicons name="checkmark" size={iconSize.sm} color={colors.onPrimary} />}
-                </View>
+                <SpringCheckbox checked={item.isChecked} styles={styles} colors={colors} />
                 <View style={styles.imageContainer}>
                     <ProductImage
                         uris={item.imageUrls}
@@ -113,26 +150,23 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
                         placeholderStyle={styles.imagePlaceholder}
                         emojiStyle={styles.imageEmoji}
                     />
+                    {storeBadge && (
+                        <View style={styles.storeBadge}>
+                            <ChainLogoChip chainId={storeBadge.chainId} name={storeBadge.chainName} size={18} />
+                        </View>
+                    )}
                 </View>
                 <View style={styles.cardContent}>
-                    <Text style={[styles.itemName, item.isChecked && styles.itemNameChecked]}>
+                    <Text style={[styles.itemName, item.isChecked && styles.itemNameChecked]} numberOfLines={1}>
                         {item.productName}
                     </Text>
-                    <Text style={styles.itemQuantity}>
-                        {t('shoppingListDetail.quantityLabel')}: {(() => {
-                            // Weighable rows measure in kg/g regardless of anchor.
-                            if (isWeighableDisplay(item.isWeighable, item.quantity)) {
-                                return item.quantity < 10 ? `${item.quantity} kg` : `${item.quantity} g`;
-                            }
-                            // Anchored pack with a known size: "2 × 500 ml" — the
-                            // pack size was being dropped ("qty: 1 vnt" for a
-                            // 500 ml milk pick).
-                            const amt = Number(item.amount);
-                            if (item.storeProductId && Number.isFinite(amt) && amt > 0 && item.unit) {
-                                return `${item.quantity} × ${fmtPackSize(amt, item.unit)}`;
-                            }
-                            return `${item.quantity} ${t('shoppingListDetail.unitPieces')}`;
-                        })()}
+                    <Text style={styles.itemQuantity} numberOfLines={1}>
+                        {formatItemAmount({
+                            quantity: item.quantity,
+                            isWeighable: item.isWeighable,
+                            unit: item.unit,
+                            packAmount: item.storeProductId ? item.amount : null,
+                        }, t)}
                     </Text>
                     {item.requiresCoupon && item.couponLabel && !item.isChecked && (
                         <View style={styles.couponBadge}>
@@ -140,22 +174,18 @@ function ShoppingListItemCard({ item, onToggle, onRemove, styles, colors }: {
                         </View>
                     )}
                 </View>
+                {otherChecker && (
+                    <UserAvatar name={otherChecker.name} color={otherChecker.color} size={22} style={styles.checkerAvatar} />
+                )}
                 {item.price && (
                     <Text style={[styles.itemPrice, item.isChecked && styles.itemPriceChecked]}>
                         {formatEuro(item.price)}
                     </Text>
                 )}
             </TouchableOpacity>
-            <TouchableOpacity
-                style={styles.deleteBtn}
-                onPress={() => onRemove(item.id)}
-                hitSlop={8}
-            >
-                <Ionicons name="trash-outline" size={iconSize.sm} color={colors.textMuted} />
-            </TouchableOpacity>
-        </View>
+        </SwipeableRow>
     );
-}
+});
 
 export interface ShoppingListMeta {
     title: string;
@@ -184,9 +214,31 @@ interface Props {
     headerTitle?: string;
     /** Breadcrumb override — multi-store passes the joined addresses. */
     headerSubtitle?: string;
-    /** Extra pinned content shown above the progress bar (multi-store: the store
+    /** Extra pinned content shown under the header (multi-store: the store
      *  chip selector). */
     pinnedHeader?: ReactNode;
+    /** Trip actions (3-dot menu). Provided by the parent only when the list
+     *  belongs to a trip/basket — omitted for legacy standalone lists. */
+    onInvite?: () => void;
+    onChangeStore?: () => void;
+    /** Unified view: when set (multi-store), items from ALL these lists are
+     *  merged into one list, each card tagged with its store's logo. Replaces
+     *  the per-store chip tabs; add/search is hidden (target store ambiguous). */
+    unifiedSources?: UnifiedSource[];
+    /** View-mode toggle (3-dot) — shown only for multi-store lists. */
+    viewMode?: 'chips' | 'unified';
+    onToggleViewMode?: () => void;
+    /** Receipt actions (3-dot): upload a receipt for the trip; view uploaded
+     *  receipts (shown only when some exist). Trip-scoped only. */
+    onUploadReceipt?: () => void;
+    onViewReceipts?: () => void;
+}
+
+export interface UnifiedSource {
+    listId: number;
+    chainId: number;
+    chainName: string;
+    chainLogoUrl: string | null;
 }
 
 const PIECE_PRESETS = ['1', '2', '3', '5', '10'];
@@ -200,15 +252,11 @@ interface PackOption {
     imageUrl: string | null;
 }
 
-// "350 g", "1 l" — sizes print in their natural unit (never 0.35 kg, never 0.5 l).
+// "350 g", "1 l" — the shared size formatter (grams/ml polish) so pack-pill
+// labels match every other amount surface.
 const fmtPackSize = (amount: number, unit: string): string => {
-    if ((unit === 'g' || unit === 'ml') && amount >= 1000) {
-        return `${Number((amount / 1000).toFixed(3))} ${unit === 'g' ? 'kg' : 'l'}`;
-    }
-    if ((unit === 'kg' || unit === 'l') && amount > 0 && amount < 1) {
-        return `${Number((amount * 1000).toFixed(1))} ${unit === 'kg' ? 'g' : 'ml'}`;
-    }
-    return `${Number(amount.toFixed(3))} ${unit}`;
+    const s = fmtSize(amount, unit);
+    return `${s.value} ${unitLabel(s.unit)}`;
 };
 const packBaseAmount = (amount: number, unit: string): number =>
     unit === 'kg' || unit === 'l' ? amount * 1000 : amount;
@@ -223,6 +271,13 @@ export function ShoppingListDetail({
     headerTitle,
     headerSubtitle,
     pinnedHeader,
+    onInvite,
+    onChangeStore,
+    unifiedSources,
+    viewMode,
+    onToggleViewMode,
+    onUploadReceipt,
+    onViewReceipts,
 }: Props) {
     const colors = useTheme();
     const insets = useSafeAreaInsets();
@@ -235,19 +290,80 @@ export function ShoppingListDetail({
     const router = useRouter();
     const id = String(listId);
 
+    // The list is a ROOT route (not under a tab), so a plain pop lands on
+    // whatever tab was last focused (often Catalog). Shopping lists belong to
+    // the Shopping tab — send back there explicitly.
+    const handleBack = useCallback(() => { router.navigate('/(tabs)/basket' as any); }, [router]);
+
+    // Unified view: items from EVERY source list merged into one, each tagged
+    // with its store logo. Single-source (chip mode / single store) keeps the
+    // one `listId`. Add/search is hidden in unified (no single target store).
+    const unified = !!(unifiedSources && unifiedSources.length > 1);
+    const sourceIds = useMemo(
+        () => (unified ? unifiedSources!.map(s => s.listId) : [Number(listId)]),
+        [unified, unifiedSources, listId],
+    );
+    const chainBySource = useMemo(() => {
+        const m = new Map<number, UnifiedSource>();
+        (unifiedSources ?? []).forEach(s => m.set(s.listId, s));
+        return m;
+    }, [unifiedSources]);
+    // In unified view, search/add target the NEAREST store (the first source);
+    // its chain scopes the product search and new items land on its list.
+    const primarySource = unifiedSources?.[0] ?? null;
+    const addTargetListId = unified ? (primarySource?.listId ?? Number(listId)) : Number(listId);
+
     const [list, setList] = useState<ShoppingList | null>(null);
-    const [items, setItems] = useState<ShoppingListItem[]>([]);
+    // Seed from the shared cache so a tab / view switch paints the right items
+    // immediately (the component remounts on switch); background fetch refreshes.
+    const [items, setItems] = useState<ShoppingListItem[]>(() => sortItems(getCachedListItems(sourceIds) as ShoppingListItem[]));
+    // Which ids count as ME when reading a shared item's `checkedBy`. The server
+    // records the SESSION token's subject: the account id when signed in, else
+    // the anon/device id. authUserId is REACTIVE (updates when auth hydrates —
+    // a non-reactive snapshot locked in the device id and mis-flagged my own
+    // ticks as another member's → stray avatar + uncheck confirm). Both ids are
+    // accepted so pre-sign-in ticks merged into the account still read as mine.
+    const authUserId = useAuthState(s => s.user?.id ?? null);
+    const [deviceId, setDeviceId] = useState<string | null>(null);
+    useEffect(() => { getUserId().then(setDeviceId).catch(() => {}); }, []);
+    const myIds = useMemo(() => [authUserId, deviceId].filter(Boolean) as string[], [authUserId, deviceId]);
+    const isMine = useCallback((uid?: string | null) => !uid || myIds.includes(uid), [myIds]);
     // Multi-store: stream this list's live progress to the parent (load +
     // every add/remove/toggle) so its chip badges and the whole-trip
     // completion check never go stale.
     useEffect(() => {
         if (!isPartOfBasket) return;
-        onItemsProgress?.(listId, items.filter(i => i.isChecked).length, items.length);
+        if (unified) {
+            // Report EACH source list's progress so the parent's chip badges and
+            // whole-trip completion stay correct even while viewing unified.
+            for (const lid of sourceIds) {
+                const own = items.filter(i => i.listId === lid);
+                onItemsProgress?.(lid, own.filter(i => i.isChecked).length, own.length);
+            }
+        } else {
+            onItemsProgress?.(listId, items.filter(i => i.isChecked).length, items.length);
+        }
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [items, isPartOfBasket, listId]);
-    const [loading, setLoading] = useState(true);
+    }, [items, isPartOfBasket, listId, unified, sourceIds]);
+    // Write the current view's items THROUGH the shared cache (split by list) on
+    // every change — so an optimistic tick is reflected instantly if the user
+    // switches views before the next sync.
+    useEffect(() => {
+        const byList = new Map<number, ShoppingListItem[]>();
+        sourceIds.forEach(lid => byList.set(lid, []));
+        for (const it of items) {
+            if (!byList.has(it.listId)) byList.set(it.listId, []);
+            byList.get(it.listId)!.push(it);
+        }
+        byList.forEach((arr, lid) => setCachedListItems(lid, arr));
+    }, [items, sourceIds]);
+    // Only show the skeleton on a genuine cold load — a cached switch is instant.
+    const [loading, setLoading] = useState(() => !hasCachedListItems(sourceIds));
     const [quickAddText, setQuickAddText] = useState('');
-    const [searchQuery, setSearchQuery] = useState('');
+    // Latest items snapshot for stable callbacks (toggle/remove read it instead
+    // of closing over `items`, so the row card's memo isn't defeated).
+    const itemsRef = useRef<ShoppingListItem[]>([]);
+    itemsRef.current = items;
 
     const pendingDeleteRef = useRef<{ item: ShoppingListItem; timer: ReturnType<typeof setTimeout> } | null>(null);
     const [pendingDeleteTick, setPendingDeleteTick] = useState(0);
@@ -258,7 +374,7 @@ export function ShoppingListDetail({
     const markInFlight = (itemId: number) => { inFlightItemsRef.current.set(itemId, Date.now()); };
 
     const [searchResults, setSearchResults] = useState<any[]>([]);
-    const [visibleCount, setVisibleCount] = useState(0);
+    const [visibleCount, setVisibleCount] = useState(() => getCachedListItems(sourceIds).length);
     const [menuVisible, setMenuVisible] = useState(false);
 
     const [quantityModal, setQuantityModal] = useState<{
@@ -275,31 +391,15 @@ export function ShoppingListDetail({
     const [quantityInput, setQuantityInput] = useState('1');
     const [modalIsWeighable, setModalIsWeighable] = useState(false);
 
-    const [shareOpen, setShareOpen] = useState(false);
-    const [shareToken, setShareToken] = useState<string | null>(null);
-    const [shareStatus, setShareStatus] = useState<'pending' | 'claimed' | 'expired' | 'error'>('pending');
-    const [shareLoading, setShareLoading] = useState(false);
-    // "?" toggle in the share sheet — expands the detailed how-it-works text.
-    const [shareHelpOpen, setShareHelpOpen] = useState(false);
-    useEffect(() => { if (!shareOpen) setShareHelpOpen(false); }, [shareOpen]);
+    // Top search reveal: the search icon mounts a top search bar (autoFocus →
+    // keyboard) in place of the old bottom add-bar. Mounting happens BEFORE
+    // focus (no remount while typing) so the Android IME session stays alive.
+    const [searchRevealed, setSearchRevealed] = useState(false);
 
     const shownCouponsRef = useRef<Set<string>>(new Set());
     const [couponQueue, setCouponQueue] = useState<string[]>([]);
     const [couponDontShow, setCouponDontShow] = useState(false);
     const [completionModal, setCompletionModal] = useState(false);
-    const [kbHeight, setKbHeight] = useState(0);
-
-    useEffect(() => {
-        const show = Keyboard.addListener(
-            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
-            e => setKbHeight(e.endCoordinates.height),
-        );
-        const hide = Keyboard.addListener(
-            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
-            () => setKbHeight(0),
-        );
-        return () => { show.remove(); hide.remove(); };
-    }, []);
 
     const dismissCoupon = async () => {
         const label = couponQueue[0];
@@ -310,59 +410,67 @@ export function ShoppingListDetail({
         setCouponQueue(q => q.slice(1));
     };
 
-    const openShare = async () => {
-        setShareOpen(true);
-        setShareToken(null);
-        setShareStatus('pending');
-        setShareLoading(true);
-        try {
-            const userId = await getUserId();
-            const res = await fetch(`${API_BASE_URL}/api/shopping-lists/${id}/share`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId }),
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const data = await res.json();
-            if (typeof data?.token !== 'string') throw new Error('Missing token');
-            setShareToken(data.token);
-        } catch {
-            setShareStatus('error');
-        } finally {
-            setShareLoading(false);
-        }
-    };
-
-    const closeShare = () => {
-        setShareOpen(false);
-        setShareToken(null);
-        setShareStatus('pending');
-    };
-
-    useEffect(() => {
-        if (!shareOpen || !shareToken) return;
-        if (shareStatus === 'claimed' || shareStatus === 'expired') return;
-        let cancelled = false;
-        const poll = async () => {
-            try {
-                const res = await fetch(`${API_BASE_URL}/api/shopping-lists/share/${shareToken}/status`);
-                if (!res.ok) return;
+    // Debounced (300ms) + abortable + seq-guarded product search — the shape
+    // app/search.tsx uses, factored into utils/shoppingListSync. The chain the
+    // search is scoped to can change (list loads async), so the runner reads it
+    // from a ref at fire time.
+    const searchChainIdRef = useRef<number | null>(null);
+    searchChainIdRef.current = unified ? (primarySource?.chainId ?? null) : (list?.chainId ?? null);
+    const searchRunnerRef = useRef<DebouncedSearch | null>(null);
+    if (!searchRunnerRef.current) {
+        searchRunnerRef.current = createDebouncedSearch(
+            async (query, signal) => {
+                const chainId = searchChainIdRef.current;
+                if (!chainId) return [] as any[];
+                const res = await fetch(
+                    `${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(query)}&chainId=${chainId}`,
+                    { signal },
+                );
                 const data = await res.json();
-                if (cancelled) return;
-                if (data.status === 'claimed') setShareStatus('claimed');
-                else if (data.status === 'expired') setShareStatus('expired');
-            } catch {}
-        };
-        poll();
-        const interval = setInterval(poll, 1500);
-        return () => { cancelled = true; clearInterval(interval); };
-    }, [shareOpen, shareToken, shareStatus]);
+                return Array.isArray(data) ? data.slice(0, 12) : [];
+            },
+            results => setSearchResults(results),
+        );
+    }
+    useEffect(() => () => searchRunnerRef.current?.cancel(), []);
+
+    const clearSearch = useCallback(() => {
+        searchRunnerRef.current?.cancel();
+        setQuickAddText('');
+        setSearchResults([]);
+    }, []);
+
+    const closeSearch = useCallback(() => {
+        setSearchRevealed(false);
+        clearSearch();
+        onSearchActiveChange?.(false);
+    }, [onSearchActiveChange, clearSearch]);
+
+    // Fetch + merge items from every source list (one list in single mode).
+    // Each list's result is written through the shared cache so the next switch
+    // seeds instantly.
+    const fetchAllItems = useCallback(async (): Promise<ShoppingListItem[]> => {
+        const perList = await Promise.all(sourceIds.map(async lid => {
+            try {
+                const res = await fetch(`${API_BASE_URL}/api/shopping-lists/${lid}/items`);
+                if (!res.ok) return [];
+                const data = await res.json();
+                const arr = Array.isArray(data) ? (data as ShoppingListItem[]) : [];
+                setCachedListItems(lid, arr);
+                return arr;
+            } catch { return []; }
+        }));
+        return perList.flat();
+    }, [sourceIds]);
 
     useFocusEffect(useCallback(() => {
         let attempts = 0;
         let cancelled = false;
 
         const fetchListMeta = async () => {
+            // Unified mode takes its header from the parent (headerTitle) — no
+            // single list to describe.
+            if (unified) return;
             try {
                 const listRes = await fetch(`${API_BASE_URL}/api/shopping-lists/${id}`);
                 const listData = await listRes.json();
@@ -370,20 +478,18 @@ export function ShoppingListDetail({
             } catch {}
         };
 
-        const expected = expectedCount ?? 0;
+        // Unified merges several lists → the single-list expected-count wait
+        // doesn't apply.
+        const expected = unified ? 0 : (expectedCount ?? 0);
 
         const pollItems = async () => {
             if (cancelled) return;
             try {
-                const res = await fetch(`${API_BASE_URL}/api/shopping-lists/${id}/items`);
-                const data = await res.json();
-                if (Array.isArray(data) && (data.length >= expected || attempts >= 20)) {
+                const data = await fetchAllItems();
+                if (data.length >= expected || attempts >= 20) {
                     setItems(sortItems(data));
                     setLoading(false);
-                    setVisibleCount(0);
-                    for (let i = 0; i <= data.length; i++) {
-                        setTimeout(() => setVisibleCount(i), i * 100);
-                    }
+                    setVisibleCount(data.length);
                 } else {
                     attempts++;
                     setTimeout(pollItems, 500);
@@ -399,40 +505,34 @@ export function ShoppingListDetail({
         const syncItems = async () => {
             if (cancelled) return;
             try {
-                const res = await fetch(`${API_BASE_URL}/api/shopping-lists/${id}/items`);
-                if (!res.ok) return;
-                const server = await res.json();
-                if (!Array.isArray(server) || cancelled) return;
+                const server = await fetchAllItems();
+                if (cancelled) return;
 
                 const now = Date.now();
                 for (const [k, ts] of Array.from(inFlightItemsRef.current.entries())) {
                     if (now - ts > FLIGHT_HOLD_MS) inFlightItemsRef.current.delete(k);
                 }
 
-                setItems(prev => {
-                    const byId = new Map<number, ShoppingListItem>(prev.map(p => [p.id, p]));
-                    const merged: ShoppingListItem[] = server.map((s: any) => {
-                        if (inFlightItemsRef.current.has(s.id)) return byId.get(s.id) ?? s;
-                        return s;
-                    });
-                    const pendDel = pendingDeleteRef.current?.item.id;
-                    const filtered = pendDel != null ? merged.filter(m => m.id !== pendDel) : merged;
-                    sortItems(filtered);
-                    return filtered;
-                });
+                // mergeServerItems DIFF-BAILS: when nothing changed it returns
+                // `prev` itself, so this 3s tick commits no state and the
+                // layout-animated rows don't re-render.
+                setItems(prev => mergeServerItems(prev, server, {
+                    inFlightIds: new Set(inFlightItemsRef.current.keys()),
+                    pendingDeleteId: pendingDeleteRef.current?.item.id ?? null,
+                }));
                 setVisibleCount(c => Math.max(c, server.length));
             } catch {}
         };
         const syncInterval = setInterval(syncItems, 3000);
 
         return () => { cancelled = true; clearInterval(syncInterval); };
-    }, [id]));
+    }, [id, unified, fetchAllItems, expectedCount]));
 
     const checkedCount = items.filter(i => i.isChecked).length;
     const totalCount = items.length;
     const progress = totalCount > 0 ? checkedCount / totalCount : 0;
 
-    const { uncheckedGroups, checkedItems } = useMemo(() => {
+    const { rows } = useMemo(() => {
         const visible = items.slice(0, visibleCount);
         const unchecked = visible.filter(i => !i.isChecked);
         const checked = visible.filter(i => i.isChecked);
@@ -455,15 +555,34 @@ export function ShoppingListDetail({
                 return ka - kb;
             });
 
-        return { uncheckedGroups: groups, checkedItems: checked };
-    }, [items, visibleCount]);
+        // Flatten to a single sequence of header/item rows so each item is one
+        // sibling in ONE list — a ticked item can then FLY down to the
+        // "Atlikta" tray via the list's itemLayoutAnimation (cross-parent moves
+        // don't animate). Stable keys: `h:<name>` / `i:<id>`.
+        const rows: Row[] = [];
+        for (const g of groups) {
+            rows.push({ kind: 'header', key: `h:${g.name ?? '__nocat__'}`, label: g.name ?? t('shoppingListDetail.uncategorised', { defaultValue: 'Kita' }) });
+            for (const it of g.items) rows.push({ kind: 'item', key: `i:${it.id}`, item: it });
+        }
+        if (checked.length > 0) {
+            rows.push({ kind: 'header', key: 'h:__done__', label: t('shoppingListDetail.doneSection', { count: checked.length }) });
+            for (const it of checked) rows.push({ kind: 'item', key: `i:${it.id}`, item: it });
+        }
 
-    const toggleItem = async (item: ShoppingListItem) => {
+        return { uncheckedGroups: groups, checkedItems: checked, rows };
+    }, [items, visibleCount, t]);
+
+    const toggleItem = useCallback(async (item: ShoppingListItem) => {
         const newChecked = !item.isChecked;
         Haptics.impactAsync(newChecked ? Haptics.ImpactFeedbackStyle.Medium : Haptics.ImpactFeedbackStyle.Light);
 
+        // Optimistically record self as the checker (so my own ticks show no
+        // avatar); the 3s sync brings the authoritative checker for others.
+        const before = itemsRef.current;
         const updatedItems = sortItems(
-            items.map(i => i.id === item.id ? { ...i, isChecked: newChecked } : i)
+            before.map(i => i.id === item.id
+                ? { ...i, isChecked: newChecked, checkedByUserId: newChecked ? (myIds[0] ?? null) : null, checkedByName: null, checkedByColor: null }
+                : i)
         );
         setItems(updatedItems);
         markInFlight(item.id);
@@ -473,7 +592,7 @@ export function ShoppingListDetail({
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ isChecked: newChecked }),
         })
-            .catch(() => { setItems(items); })
+            .catch(() => { setItems(before); })
             .finally(() => { inFlightItemsRef.current.delete(item.id); });
 
         if (newChecked && item.requiresCoupon && item.couponLabel) {
@@ -498,7 +617,25 @@ export function ShoppingListDetail({
             await AsyncStorage.setItem(key, '1');
             setCompletionModal(true);
         }
-    };
+    }, [myIds, isPartOfBasket, id]);
+
+    // Tap handler: guard un-ticking an item that ANOTHER member ticked (so a
+    // stray tap doesn't silently undo their work); everything else toggles.
+    const requestToggle = useCallback((item: ShoppingListItem) => {
+        const othersItem = item.isChecked && item.checkedByUserId && !isMine(item.checkedByUserId);
+        if (othersItem) {
+            Alert.alert(
+                t('shoppingListDetail.uncheckOtherTitle'),
+                t('shoppingListDetail.uncheckOtherBody', { name: item.checkedByName ?? t('shoppingListDetail.someone') }),
+                [
+                    { text: t('common.cancel'), style: 'cancel' },
+                    { text: t('shoppingListDetail.uncheckConfirm'), style: 'destructive', onPress: () => void toggleItem(item) },
+                ],
+            );
+            return;
+        }
+        void toggleItem(item);
+    }, [isMine, toggleItem, t]);
 
     const promptQuantity = (
         productId: number | null,
@@ -523,9 +660,10 @@ export function ShoppingListDetail({
      * and receipt matching agree on the pack.
      */
     const pickSearchResult = async (product: any) => {
+        const targetChainId = unified ? (primarySource?.chainId ?? null) : (list?.chainId ?? null);
         const name = product.storeProductName;
         const pickedWeighable = product.isWeighable === 1 || product.isWeighable === true;
-        if (pickedWeighable || !product.productId || !list?.chainId) {
+        if (pickedWeighable || !product.productId || !targetChainId) {
             promptQuantity(product.productId ?? null, name, pickedWeighable, product.id, product.imageUrl);
             return;
         }
@@ -534,7 +672,7 @@ export function ShoppingListDetail({
         try {
             const res = await fetch(`${API_BASE_URL}/api/store-products/product/${product.productId}`);
             const sps = await res.json();
-            const sameChain = (Array.isArray(sps) ? sps : []).filter((sp: any) => sp.chainId === list.chainId);
+            const sameChain = (Array.isArray(sps) ? sps : []).filter((sp: any) => sp.chainId === targetChainId);
             anyWeighable = sameChain.some((sp: any) => sp.isWeighable === 1 || sp.isWeighable === true);
             if (!anyWeighable) {
                 const seen = new Map<string, PackOption>();
@@ -561,8 +699,8 @@ export function ShoppingListDetail({
         promptQuantity(product.productId, name, false, product.id, product.imageUrl, packOptions.length > 0 ? packOptions : undefined);
     };
 
-    const removeItem = (itemId: number) => {
-        const target = items.find(i => i.id === itemId);
+    const removeItem = useCallback((itemId: number) => {
+        const target = itemsRef.current.find(i => i.id === itemId);
         if (!target) return;
         setItems(prev => prev.filter(i => i.id !== itemId));
         if (pendingDeleteRef.current) {
@@ -578,7 +716,7 @@ export function ShoppingListDetail({
         }, 3000);
         pendingDeleteRef.current = { item: target, timer };
         setPendingDeleteTick(t => t + 1);
-    };
+    }, []);
 
     const undoItemDelete = () => {
         if (!pendingDeleteRef.current) return;
@@ -589,15 +727,30 @@ export function ShoppingListDetail({
         setPendingDeleteTick(t => t + 1);
     };
 
-    const handleSearch = async (query: string) => {
-        setSearchQuery(query);
-        if (query.length < 2) { setSearchResults([]); return; }
-        if (!list?.chainId) { setSearchResults([]); return; }
-        try {
-            const res = await fetch(`${API_BASE_URL}/api/store-products/search?name=${encodeURIComponent(query)}&chainId=${list.chainId}`);
-            const data = await res.json();
-            setSearchResults(Array.isArray(data) ? data.slice(0, 12) : []);
-        } catch {}
+    // Virtualised row renderer — header rows are plain labels, item rows are
+    // the memoised card with STABLE callbacks (so a commit only re-renders the
+    // rows whose item object actually changed).
+    const renderRow = useCallback(({ item: row }: { item: Row }) => (
+        row.kind === 'header'
+            ? <Text style={styles.sectionHeader}>{row.label}</Text>
+            : <ShoppingListItemCard
+                item={row.item}
+                isMine={isMine}
+                onToggle={requestToggle}
+                onRemove={removeItem}
+                storeBadge={unified ? chainBySource.get(row.item.listId) : null}
+                styles={styles}
+                colors={colors}
+            />
+    ), [styles, colors, isMine, requestToggle, removeItem, unified, chainBySource]);
+
+    const handleSearch = (query: string) => {
+        if (query.length < 2) {
+            searchRunnerRef.current?.cancel();
+            setSearchResults([]);
+            return;
+        }
+        searchRunnerRef.current?.search(query);
     };
 
     const addProduct = async (
@@ -617,14 +770,14 @@ export function ShoppingListDetail({
             const res = await fetch(`${API_BASE_URL}/api/list-items`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ listId: Number(id), productId, storeProductId, quantity, name, isWeighable }),
+                body: JSON.stringify({ listId: addTargetListId, productId, storeProductId, quantity, name, isWeighable }),
             });
             if (!res.ok) throw new Error(`HTTP ${res.status}`);
             const data = await res.json();
             if (typeof data?.id !== 'number') throw new Error('Response missing id');
             const newItem: ShoppingListItem = {
                 id: data.id,
-                listId: Number(id),
+                listId: addTargetListId,
                 productId,
                 storeProductId,
                 productName: name,
@@ -638,28 +791,9 @@ export function ShoppingListDetail({
             setItems(prev => [...prev, newItem]);
             markInFlight(data.id);
             setVisibleCount(prev => prev + 1);
-            setQuickAddText('');
-            setSearchQuery('');
-            setSearchResults([]);
+            clearSearch();
         } catch {
             Alert.alert(t('shoppingListDetail.errorGeneric'), t('shoppingListDetail.errorAdd'));
-        }
-    };
-
-    const handleDuplicate = async () => {
-        try {
-            const userId = await getUserId();
-            const res = await fetch(`${API_BASE_URL}/api/shopping-lists/${id}/duplicate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ userId }),
-            });
-            const data = await res.json();
-            router.dismissAll();
-            router.replace('/(tabs)/shoppingList' as any);
-            setTimeout(() => { router.push(`/shopping-list/${data.id}` as any); }, 100);
-        } catch {
-            Alert.alert(t('shoppingListDetail.errorGeneric'), t('shoppingListDetail.errorCopy'));
         }
     };
 
@@ -670,10 +804,11 @@ export function ShoppingListDetail({
             <CollapsingHeader
                 controller={header}
                 back
-                collapsing={<ScreenHeading title={headerTitle ?? t('shoppingListDetail.fallbackTitle')} subtitle={headerSubtitle} />}
-                pinned={pinnedHeader}
+                onBack={handleBack}
+                smallTitle={headerTitle ?? t('shoppingListDetail.fallbackTitle')}
             />
-            <View style={[styles.container, { paddingTop: header.paddingTop + spacing.lg, paddingHorizontal: spacing.lg, gap: spacing.sm }]}>
+            <View style={[styles.container, { paddingTop: spacing.lg, paddingHorizontal: spacing.lg, gap: spacing.sm }]}>
+                <ScreenHeading title={headerTitle ?? t('shoppingListDetail.fallbackTitle')} subtitle={headerSubtitle} bleedX={spacing.lg} />
                 {Array.from({ length: 8 }).map((_, i) => (
                     <View key={i} style={{ backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: spacing.lg, flexDirection: 'row', alignItems: 'center', gap: spacing.md }}>
                         <SkeletonBox width={22} height={22} borderRadius={6} />
@@ -690,7 +825,33 @@ export function ShoppingListDetail({
 
     // ── Main render ───────────────────────────────────────────────────────────
 
-    const showSearchResults = list?.status === 'active' && quickAddText.length >= 2;
+    const canSearch = unified || list?.status === 'active';
+    const showSearchResults = canSearch && quickAddText.length >= 2;
+
+    // 3-dot overflow actions. Change-store + Pakviesti + view-mode toggle all
+    // come from the parent (trip-scoped / multi-store only). Active vs completed
+    // only differ in whether change-store is offered.
+    const menuActions: ContextMenuAction[] = [
+        ...(onToggleViewMode
+            ? [{
+                icon: (viewMode === 'unified' ? 'albums-outline' : 'layers-outline') as ContextMenuAction['icon'],
+                label: viewMode === 'unified' ? t('shoppingListDetail.viewByStore') : t('shoppingListDetail.viewUnified'),
+                onPress: () => { setMenuVisible(false); onToggleViewMode(); },
+            }]
+            : []),
+        ...(onChangeStore && (unified || list?.status === 'active')
+            ? [{ icon: 'swap-horizontal-outline' as const, label: t('shoppingListDetail.changeStore'), onPress: () => { setMenuVisible(false); onChangeStore(); } }]
+            : []),
+        ...(onInvite
+            ? [{ icon: 'person-add-outline' as const, label: t('shoppingListDetail.inviteAction'), onPress: () => { setMenuVisible(false); onInvite(); } }]
+            : []),
+        ...(onUploadReceipt
+            ? [{ icon: 'cloud-upload-outline' as const, label: t('shoppingListDetail.uploadReceipt'), onPress: () => { setMenuVisible(false); onUploadReceipt(); } }]
+            : []),
+        ...(onViewReceipts
+            ? [{ icon: 'receipt-outline' as const, label: t('shoppingListDetail.viewReceipts'), onPress: () => { setMenuVisible(false); onViewReceipts(); } }]
+            : []),
+    ];
 
     return (
         <>
@@ -705,37 +866,31 @@ export function ShoppingListDetail({
     <CollapsingHeader
                     controller={header}
                     back
+                    onBack={handleBack}
+                    smallTitle={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
                     right={
-                        list?.status === 'active' ? (
-                            <GlassIconButton icon="share-social-outline" color={colors.textPrimary} onPress={openShare} />
-                        ) : list?.status === 'completed' ? (
+                        <View style={styles.headerActions}>
+                            {canSearch && (
+                                <GlassIconButton icon="search" color={colors.textPrimary} onPress={() => setSearchRevealed(true)} />
+                            )}
                             <GlassIconButton icon="ellipsis-vertical" color={colors.textMuted} onPress={() => setMenuVisible(true)} />
-                        ) : undefined
-                    }
-                    collapsing={
-                        <ScreenHeading
-                            title={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
-                            subtitle={headerSubtitle ?? (formatStoreStreet(list?.address) || list?.storeName || undefined)}
-                        />
-                    }
-                    pinned={
-                        <>
-                            {pinnedHeader}
-                            <View style={styles.progressContainer}>
-                                <View style={styles.progressBar}>
-                                    <View style={[styles.progressFill, { width: `${progress * 100}%` }]} />
-                                </View>
-                                <Text style={styles.progressText}>{t('shoppingListDetail.progress', { checked: checkedCount, total: totalCount })}</Text>
-                            </View>
-                        </>
+                        </View>
                     }
                 />
+
+                    {/* Top-edge progress glow — a thin fill from the left with a
+                        soft downward bloom, pinned over the very top of the screen.
+                        Replaces the old inline progress bar; reflects the ACTIVE
+                        store's fraction (remount resets per store). */}
+                    {(unified || list?.status === 'active') && totalCount > 0 && (
+                        <ProgressGlow fraction={progress} />
+                    )}
 
                     {/* ALWAYS MOUNTED (opacity toggle): the toast unmounting on the
                         3s expiry re-render removed a native sibling above the focused
                         search input — delete an item, start typing, keyboard dies. */}
                     <View
-                        style={[styles.undoToastWrap, { top: header.paddingTop, opacity: pendingDeleteRef.current ? 1 : 0 }]}
+                        style={[styles.undoToastWrap, { bottom: insets.bottom + spacing.lg, opacity: pendingDeleteRef.current ? 1 : 0 }]}
                         pointerEvents={pendingDeleteRef.current ? 'box-none' : 'none'}
                     >
                         <TouchableOpacity style={styles.undoToast} onPress={undoItemDelete} activeOpacity={0.85}>
@@ -744,165 +899,139 @@ export function ShoppingListDetail({
                         </TouchableOpacity>
                     </View>
 
-                    <Animated.ScrollView
-                        {...header.scroll}
-                        style={{ flex: 1 }}
-                        contentContainerStyle={[styles.scrollContent, { paddingTop: header.paddingTop }]}
-                    >
-                        <View style={styles.listInner}>
-                        {uncheckedGroups.map(group => (
-                            <View key={group.name ?? '__no_category__'}>
-                                <Text style={styles.sectionHeader}>{group.name ?? t('shoppingListDetail.uncategorised', { defaultValue: 'Kita' })}</Text>
-                                <View style={styles.listContainer}>
-                                    {group.items.map((item, index) => (
-                                        <View key={item.id}>
-                                            {index > 0 && <View style={styles.divider} />}
-                                            <ShoppingListItemCard item={item} onToggle={toggleItem} onRemove={removeItem} styles={styles} colors={colors} />
-                                        </View>
-                                    ))}
-                                </View>
-                            </View>
-                        ))}
-                        {checkedItems.length > 0 && (
-                            <View style={styles.listContainer}>
-                                {checkedItems.map((item, index) => (
-                                    <View key={item.id}>
-                                        {index > 0 && <View style={styles.divider} />}
-                                        <ShoppingListItemCard item={item} onToggle={toggleItem} onRemove={removeItem} styles={styles} colors={colors} />
-                                    </View>
-                                ))}
-                            </View>
-                        )}
-                        {items.length === 0 && (
-                            <View style={styles.centered}>
-                                <Text style={styles.emptyText}>{t('shoppingListDetail.empty')}</Text>
-                            </View>
-                        )}
-                        </View>
-                    </Animated.ScrollView>
-
-                    {/* Bottom bar group — KeyboardStickyView lifts it above the
-                        keyboard reliably (manual padding under-lifts in Android
-                        edge-to-edge). */}
-                    {/* Search results — a FULL-SCREEN overlay with a CONSTANT
-                        zIndex above the (now-sibling) CollapsingHeader. ALWAYS
-                        MOUNTED, toggled ONLY via opacity/pointerEvents: mounting
-                        it conditionally OR flipping zIndex on an ancestor of the
-                        focused TextInput kills the Android IME session. */}
-                    {(
-                        <View
-                            pointerEvents={showSearchResults ? 'auto' : 'none'}
-                            style={[styles.searchOverlay, { paddingTop: insets.top + spacing.sm, opacity: showSearchResults ? 1 : 0 }]}
-                        >
-                            <ScrollView
-                                keyboardShouldPersistTaps="handled"
-                                contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 140 }}
-                            >
-                                {searchResults.map((product, index) => {
-                                    const alreadyInList = items.some(i => i.productId === product.productId);
-                                    return (
-                                        <TouchableOpacity
-                                            key={`${product.id}-${index}`}
-                                            style={styles.searchResultItem}
-                                            onPress={() => {
-                                                if (alreadyInList) {
-                                                    Alert.alert(t('shoppingListDetail.alreadyInList'), t('shoppingListDetail.alreadyInListBody', { name: product.storeProductName }));
-                                                    return;
-                                                }
-                                                void pickSearchResult(product);
-                                                setQuickAddText('');
-                                                setSearchQuery('');
-                                                setSearchResults([]);
-                                            }}
-                                        >
-                                            {alreadyInList && <Ionicons name="checkmark-circle" size={iconSize.md} color={colors.primary} style={{ marginRight: spacing.sm }} />}
-                                            <Text style={styles.searchResultText}>{product.storeProductName}</Text>
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                                <TouchableOpacity
-                                    style={styles.customItemButton}
-                                    onPress={() => {
-                                        const name = quickAddText.trim();
-                                        if (!name) return;
-                                        promptQuantity(null, name, false);
-                                    }}
-                                >
-                                    <Ionicons name="add-circle-outline" size={iconSize.md} color={colors.primary} />
-                                    <Text style={styles.customItemText}>{t('shoppingListDetail.addCustom', { name: quickAddText })}</Text>
-                                </TouchableOpacity>
-                            </ScrollView>
+                    {/* Multi-store chip selector — ALWAYS-PINNED above the list
+                        (the repo's CollapsingHeader pattern: receipt/index,
+                        receipt-picker, discounts all pin their chip row here;
+                        Fabric mis-hit-tests transformed sticky headers). */}
+                    {pinnedHeader != null && (
+                        <View onLayout={header.onPinnedLayout} style={{ backgroundColor: colors.pageBackground }}>
+                            {pinnedHeader}
                         </View>
                     )}
 
-                    {/* Constant zIndex: the input bar stays above the results
-                        overlay (zIndex 15). Static wrapper — never changes. */}
-                    <View pointerEvents="box-none" style={{ zIndex: 16, elevation: 16 }}>
-                    <KeyboardStickyView>
+                    <Animated.FlatList
+                        {...header.scroll}
+                        style={{ flex: 1 }}
+                        data={rows}
+                        keyExtractor={rowKey}
+                        renderItem={renderRow}
+                        // Drives the done-tray fly-down that the per-row
+                        // LinearTransition wrappers used to provide.
+                        itemLayoutAnimation={LinearTransition.duration(240)}
+                        initialNumToRender={14}
+                        ListHeaderComponent={
+                            <>
+                                <ScreenHeading
+                                    title={headerTitle ?? (list?.chainName ? chainBrandName(list.chainName) : list?.storeName) ?? t('shoppingListDetail.fallbackTitle')}
+                                    subtitle={headerSubtitle ?? (formatStoreStreet(list?.address) || list?.storeName || undefined)}
+                                    onLayout={header.onTitleLayout}
+                                    bleedX={spacing.md}
+                                />
+                                <View style={{ height: spacing.sm }} />
+                            </>
+                        }
+                        ListEmptyComponent={
+                            <View style={styles.centered}>
+                                <Text style={styles.emptyText}>{t('shoppingListDetail.empty')}</Text>
+                            </View>
+                        }
+                        contentContainerStyle={[styles.scrollContent, { paddingTop: 0, paddingHorizontal: spacing.md }]}
+                    />
 
-                    {/* Floating search / add bar — glass on iOS, solid on Android,
-                        detached above the safe area like the tab bar. */}
-                    {list?.status === 'active' && (
-                        <View style={[styles.addBarWrap, { paddingBottom: kbHeight > 0 ? spacing.sm : insets.bottom + spacing.sm }]}>
-                            <View style={styles.addBarShadow}>
-                            <LiquidGlass style={styles.addBar} fallback="solid">
-                                <Ionicons name="search" size={iconSize.md} color={colors.textMuted} />
+                    {/* Search results — a FULL-SCREEN overlay under the top search
+                        bar. ALWAYS MOUNTED, toggled ONLY via opacity/pointerEvents:
+                        mounting it conditionally OR flipping zIndex on an ancestor
+                        of the focused TextInput kills the Android IME session. */}
+                    <View
+                        pointerEvents={showSearchResults ? 'auto' : 'none'}
+                        style={[styles.searchOverlay, { paddingTop: insets.top + 60, opacity: showSearchResults ? 1 : 0 }]}
+                    >
+                        <ScrollView
+                            keyboardShouldPersistTaps="handled"
+                            contentContainerStyle={{ paddingHorizontal: spacing.lg, paddingBottom: 140 }}
+                        >
+                            {searchResults.map((product, index) => {
+                                const alreadyInList = items.some(i => i.productId === product.productId);
+                                return (
+                                    <TouchableOpacity
+                                        key={`${product.id}-${index}`}
+                                        style={styles.searchResultItem}
+                                        onPress={() => {
+                                            if (alreadyInList) {
+                                                Alert.alert(t('shoppingListDetail.alreadyInList'), t('shoppingListDetail.alreadyInListBody', { name: product.storeProductName }));
+                                                return;
+                                            }
+                                            void pickSearchResult(product);
+                                            clearSearch();
+                                        }}
+                                    >
+                                        {alreadyInList && <Ionicons name="checkmark-circle" size={iconSize.md} color={colors.primary} style={{ marginRight: spacing.sm }} />}
+                                        <Text style={styles.searchResultText}>{product.storeProductName}</Text>
+                                    </TouchableOpacity>
+                                );
+                            })}
+                            <TouchableOpacity
+                                style={styles.customItemButton}
+                                onPress={() => {
+                                    const name = quickAddText.trim();
+                                    if (!name) return;
+                                    promptQuantity(null, name, false);
+                                }}
+                            >
+                                <Ionicons name="add-circle-outline" size={iconSize.md} color={colors.primary} />
+                                <Text style={styles.customItemText}>{t('shoppingListDetail.addCustom', { name: quickAddText })}</Text>
+                            </TouchableOpacity>
+                        </ScrollView>
+                    </View>
+
+                    {/* Top search reveal — mounted only when the search icon is
+                        tapped. Mounting happens BEFORE autoFocus (no remount while
+                        typing), so the Android IME session stays alive. Sits above
+                        the results overlay. Same look as the catalog search pill. */}
+                    {searchRevealed && canSearch && (
+                        <View style={[styles.searchBarWrap, { paddingTop: insets.top + spacing.xs }]}>
+                            <LiquidGlass style={styles.searchBar} fallback="solid">
+                                <TouchableOpacity onPress={closeSearch} hitSlop={8}>
+                                    <Ionicons name="arrow-back" size={iconSize.md} color={colors.textPrimary} />
+                                </TouchableOpacity>
                                 <TextInput
-                                    style={styles.addBarInput}
+                                    style={styles.searchBarInput}
+                                    autoFocus
                                     value={quickAddText}
                                     onChangeText={(text) => { setQuickAddText(text); handleSearch(text); }}
                                     placeholder={t('shoppingListDetail.searchPlaceholder')}
                                     placeholderTextColor={colors.textMuted}
+                                    autoCapitalize="none"
+                                    autoCorrect={false}
                                     onFocus={() => onSearchActiveChange?.(true)}
                                     onBlur={() => onSearchActiveChange?.(false)}
                                     onSubmitEditing={() => {
                                         const name = quickAddText.trim();
                                         if (!name) return;
-                                        setQuickAddText('');
-                                        setSearchQuery('');
-                                        setSearchResults([]);
+                                        clearSearch();
                                         addProduct(null, name, 1, false, null, null);
                                     }}
                                     returnKeyType="done"
                                 />
-                                {/* ALWAYS MOUNTED (opacity toggle): conditionally mounting
-                                    this button inserted a native sibling next to the focused
-                                    TextInput on the FIRST keystroke ('' → 'x') and Android
-                                    dropped the keyboard — same trap as the results overlay. */}
+                                {/* ALWAYS MOUNTED (opacity toggle): conditionally
+                                    mounting a sibling next to the focused input drops
+                                    the Android keyboard on the first keystroke. */}
                                 <TouchableOpacity
-                                    onPress={() => { setQuickAddText(''); setSearchQuery(''); setSearchResults([]); }}
-                                    hitSlop={{ top: 8, right: 8, bottom: 8, left: 8 }}
+                                    onPress={clearSearch}
+                                    hitSlop={8}
                                     disabled={quickAddText.length === 0}
                                     style={{ opacity: quickAddText.length > 0 ? 1 : 0 }}
                                 >
                                     <Ionicons name="close-circle" size={iconSize.md} color={colors.textMuted} />
                                 </TouchableOpacity>
-                                <TouchableOpacity
-                                    style={styles.addBarBtn}
-                                    onPress={() => {
-                                        const name = quickAddText.trim();
-                                        if (!name) return;
-                                        setQuickAddText('');
-                                        setSearchQuery('');
-                                        setSearchResults([]);
-                                        addProduct(null, name, 1, false, null, null);
-                                    }}
-                                >
-                                    <Ionicons name="add" size={iconSize.md} color={colors.onPrimary} />
-                                </TouchableOpacity>
                             </LiquidGlass>
-                            </View>
                         </View>
                     )}
-                    </KeyboardStickyView>
-                    </View>
 
                     <ContextMenu
                         visible={menuVisible}
                         onDismiss={() => setMenuVisible(false)}
-                        actions={[
-                            { icon: 'copy-outline', label: t('shoppingListDetail.copyList'), onPress: () => { setMenuVisible(false); handleDuplicate(); } },
-                        ]}
+                        actions={menuActions}
                     />
             </View>
 
@@ -910,7 +1039,7 @@ export function ShoppingListDetail({
             <Modal visible={quantityModal !== null} transparent animationType="fade" onRequestClose={() => setQuantityModal(null)}>
                 {quantityModal && (
                     <KeyboardAvoidingView style={styles.modalOverlay} behavior={Platform.OS === 'ios' ? 'padding' : 'height'}>
-                        <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setQuantityModal(null)} />
+                        <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setQuantityModal(null)} />
                         <View style={styles.modalContainer}>
                             <Text style={styles.modalTitle}>{quantityModal.name}</Text>
 
@@ -1025,7 +1154,7 @@ export function ShoppingListDetail({
             {/* Coupon reminder modal */}
             <Modal visible={couponQueue.length > 0} transparent animationType="slide" onRequestClose={dismissCoupon}>
                 <View style={styles.shareOverlay}>
-                    <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={dismissCoupon} />
+                    <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={dismissCoupon} />
                     <View style={styles.couponModalContainer}>
                         <View style={styles.couponBadgeLarge}>
                             <Text style={styles.couponBadgeLargeText}>{t('shoppingListDetail.couponBadge', { name: couponQueue[0] })}</Text>
@@ -1050,7 +1179,7 @@ export function ShoppingListDetail({
             {/* Completion confirmation — styled to match app, replaces stock Alert */}
             <Modal visible={completionModal} transparent animationType="fade" onRequestClose={() => setCompletionModal(false)}>
                 <View style={styles.shareOverlay}>
-                    <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={() => setCompletionModal(false)} />
+                    <TouchableOpacity style={StyleSheet.absoluteFill} activeOpacity={1} onPress={() => setCompletionModal(false)} />
                     <View style={styles.modalContainer}>
                         <Text style={styles.modalTitle}>{t('shoppingListDetail.completeTitle')}</Text>
                         <Text style={styles.completeModalBody}>{t('shoppingListDetail.completeConfirm')}</Text>
@@ -1077,76 +1206,6 @@ export function ShoppingListDetail({
                 </View>
             </Modal>
 
-            {/* Share modal */}
-            <Modal visible={shareOpen} transparent animationType="fade" onRequestClose={closeShare}>
-                <View style={styles.shareOverlay}>
-                    <TouchableOpacity style={StyleSheet.absoluteFillObject} activeOpacity={1} onPress={closeShare} />
-                    <View style={styles.shareContainer}>
-                        {shareStatus === 'claimed' ? (
-                            <>
-                                <View style={styles.shareCheckCircle}>
-                                    <Ionicons name="checkmark" size={40} color={colors.onPrimary} />
-                                </View>
-                                <Text style={styles.shareTitle}>{t('shoppingListDetail.shareConnected')}</Text>
-                                <Text style={styles.shareSubtitle}>{t('shoppingListDetail.shareConnectedSub')}</Text>
-                                <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
-                                    <Text style={styles.shareCloseBtnText}>{t('shoppingListDetail.shareClose')}</Text>
-                                </TouchableOpacity>
-                            </>
-                        ) : shareStatus === 'expired' ? (
-                            <>
-                                <Text style={styles.shareTitle}>{t('shoppingListDetail.shareExpiredTitle')}</Text>
-                                <Text style={styles.shareSubtitle}>{t('shoppingListDetail.shareCreateForShare')}</Text>
-                                <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
-                                    <Text style={styles.shareCloseBtnText}>{t('shoppingListDetail.shareClose')}</Text>
-                                </TouchableOpacity>
-                            </>
-                        ) : shareStatus === 'error' ? (
-                            <>
-                                <Text style={styles.shareTitle}>{t('shoppingListDetail.shareErrorTitle')}</Text>
-                                <Text style={styles.shareSubtitle}>{t('shoppingListDetail.shareErrorBody')}</Text>
-                                <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
-                                    <Text style={styles.shareCloseBtnText}>{t('shoppingListDetail.shareClose')}</Text>
-                                </TouchableOpacity>
-                            </>
-                        ) : (
-                            <>
-                                <View style={styles.shareTitleRow}>
-                                    <Text style={styles.shareTitle}>{t('shoppingListDetail.shareTitle')}</Text>
-                                    <TouchableOpacity
-                                        onPress={() => setShareHelpOpen(o => !o)}
-                                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                        accessibilityLabel="?"
-                                        style={{ marginBottom: 6 }}
-                                    >
-                                        <Ionicons
-                                            name="help-circle-outline"
-                                            size={20}
-                                            color={shareHelpOpen ? colors.primary : colors.textMuted}
-                                        />
-                                    </TouchableOpacity>
-                                </View>
-                                <Text style={styles.shareSubtitle}>{t('shoppingListDetail.shareSubtitle')}</Text>
-                                {shareHelpOpen && (
-                                    <View style={styles.shareHelpBox}>
-                                        <Text style={styles.shareHelpText}>{t('shoppingListDetail.shareHelpBody')}</Text>
-                                    </View>
-                                )}
-                                <View style={styles.shareQrWrap}>
-                                    {shareLoading || !shareToken ? (
-                                        <MaterialProgress size="large" color={colors.primary} />
-                                    ) : (
-                                        <BrandedQR value={shareToken} size={220} />
-                                    )}
-                                </View>
-                                <TouchableOpacity style={styles.shareCloseBtn} onPress={closeShare}>
-                                    <Text style={styles.shareCloseBtnText}>{t('shoppingListDetail.shareClose')}</Text>
-                                </TouchableOpacity>
-                            </>
-                        )}
-                    </View>
-                </View>
-            </Modal>
         </>
     );
 }
@@ -1155,40 +1214,39 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
     centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: spacing.xxl },
 
-    progressContainer: {
-        flexDirection: 'row', alignItems: 'center', padding: spacing.md,
-        backgroundColor: c.cardBackground, borderBottomWidth: 1, borderBottomColor: c.border, gap: spacing.sm,
-    },
-    progressBar: { flex: 1, height: 8, backgroundColor: c.border, borderRadius: radius.pill, overflow: 'hidden' },
-    progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: radius.pill },
-    progressText: { ...typography.label, fontWeight: '400', color: c.textSecondary, minWidth: 50, textAlign: 'right' },
+    // Search + 3-dot sit side by side in the header's right slot.
+    headerActions: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
 
     scrollContent: { paddingBottom: spacing.xxxl },
-    listInner: { paddingTop: spacing.lg, paddingHorizontal: spacing.md },
 
     sectionHeader: {
         ...typography.labelSmall, fontWeight: '700', color: c.textMuted,
         textTransform: 'uppercase', letterSpacing: 0.6,
-        paddingHorizontal: spacing.xs, paddingTop: spacing.lg, paddingBottom: 6,
+        paddingHorizontal: spacing.xs, paddingTop: spacing.md, paddingBottom: 6,
     },
-    listContainer: {
-        backgroundColor: c.cardBackground, marginBottom: spacing.sm,
-        borderRadius: radius.lg, overflow: 'hidden',
-        ...elevation.level1,
+
+    // ── V2 item card — each item is its own rounded card (spring checkbox +
+    // done-tray fly-down via LinearTransition). ──
+    v2row: {
+        flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+        backgroundColor: c.cardBackground,
+        borderRadius: radius.lg, borderWidth: 1, borderColor: c.border,
+        paddingHorizontal: spacing.md, paddingVertical: spacing.md,
+        marginBottom: spacing.sm,
     },
-    card: {
-        backgroundColor: c.cardBackground, flexDirection: 'row',
-        alignItems: 'center', paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.md,
-    },
-    divider: { height: 0.5, backgroundColor: c.border, marginLeft: spacing.lg },
-    cardChecked: { opacity: 0.5 },
-    checkCircle: {
-        width: 22, height: 22, borderRadius: radius.pill,
-        borderWidth: 2, borderColor: c.border,
+    v2rowDone: { backgroundColor: c.surfaceMuted, borderColor: 'transparent' },
+    v2check: {
+        width: 26, height: 26, borderRadius: 13, borderWidth: 2,
         alignItems: 'center', justifyContent: 'center', flexShrink: 0,
     },
-    checkCircleChecked: { backgroundColor: c.primary, borderColor: c.primary },
+    checkerAvatar: { marginLeft: spacing.xs },
     imageContainer: { width: avatarSize.md, height: avatarSize.md, flexShrink: 0 },
+    // Store logo overlaid on the top-left of the product image (unified view).
+    storeBadge: {
+        position: 'absolute', top: -5, left: -5,
+        borderRadius: 11, padding: 1.5, backgroundColor: c.cardBackground,
+        ...elevation.level1,
+    },
     productImage: { width: avatarSize.md, height: avatarSize.md, borderRadius: radius.sm },
     imagePlaceholder: {
         width: avatarSize.md, height: avatarSize.md, borderRadius: radius.sm,
@@ -1222,27 +1280,31 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     customItemButton: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, padding: spacing.md },
     customItemText: { ...typography.bodySmall, color: c.primary },
 
-    // ── Floating search / add bar ─────────────────────────────────────────────
-    // Wrapper holds the margins; the shadow lives on a non-clipped layer so the
-    // glass pill (overflow hidden) can still cast it (same trick as the map).
-    addBarWrap: { paddingHorizontal: spacing.lg },
-    addBarShadow: { borderRadius: radius.pill, ...elevation.level3 },
-    addBar: {
-        flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
-        paddingLeft: spacing.lg, paddingRight: spacing.xs, paddingVertical: spacing.xs,
+    // ── Top search reveal bar ─────────────────────────────────────────────────
+    // Above the results overlay (zIndex 15) so it stays visible/tappable; sits
+    // at the very top like the catalog search pill.
+    searchBarWrap: {
+        position: 'absolute', top: 0, left: 0, right: 0,
+        paddingHorizontal: spacing.lg, paddingBottom: spacing.sm,
+        backgroundColor: c.pageBackground,
+        zIndex: 20, elevation: 20,
+    },
+    searchBar: {
+        flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+        paddingHorizontal: spacing.lg, paddingVertical: spacing.sm,
         backgroundColor: c.cardBackground,
         borderRadius: radius.pill, overflow: 'hidden',
         borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+        ...elevation.level2,
     },
-    addBarInput: { flex: 1, ...typography.bodySmall, color: c.textPrimary, paddingVertical: 2 },
-    addBarBtn: { width: 36, height: 36, borderRadius: radius.pill, backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center' },
+    searchBarInput: { flex: 1, ...typography.bodySmall, color: c.textPrimary, paddingVertical: 2 },
 
     // ── Undo toast ────────────────────────────────────────────────────────────
     undoToastWrap: { position: 'absolute', left: 0, right: 0, zIndex: 60, alignItems: 'center' },
     undoToast: {
         flexDirection: 'row', alignItems: 'center', gap: spacing.sm,
         backgroundColor: c.textPrimary,
-        marginHorizontal: spacing.lg, marginTop: spacing.md,
+        marginHorizontal: spacing.lg,
         paddingVertical: spacing.sm, paddingHorizontal: spacing.lg,
         borderRadius: radius.md, alignSelf: 'center', zIndex: 50,
     },
@@ -1308,37 +1370,8 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     presetBtnText: { ...typography.label, fontWeight: '500', color: c.textSecondary },
     presetBtnTextActive: { color: c.onPrimary, fontWeight: '700' },
 
-    // ── Share modal ───────────────────────────────────────────────────────────
+    // Shared modal backdrop (coupon + completion confirm).
     shareOverlay: { flex: 1, backgroundColor: c.overlayBackdrop, alignItems: 'center', justifyContent: 'center' },
-    shareContainer: {
-        backgroundColor: c.cardBackground, borderRadius: radius.lg,
-        paddingVertical: spacing.xl, paddingHorizontal: spacing.xl, width: '85%', alignItems: 'center',
-        ...elevation.level3,
-    },
-    shareTitle: { ...typography.subheading, color: c.textPrimary, marginBottom: 6, textAlign: 'center' },
-    // Title + the "?" help toggle side by side (the icon rides the title's
-    // 6px bottom margin via its own offset).
-    shareTitleRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6 },
-    shareSubtitle: { ...typography.label, fontWeight: '400', color: c.textSecondary, marginBottom: spacing.lg, textAlign: 'center' },
-    shareHelpBox: {
-        backgroundColor: c.surfaceMuted,
-        borderRadius: radius.md,
-        paddingVertical: spacing.sm,
-        paddingHorizontal: spacing.md,
-        marginTop: -spacing.sm,
-        marginBottom: spacing.lg,
-    },
-    shareHelpText: { ...typography.caption, color: c.textSecondary, lineHeight: 17 },
-    shareQrWrap: {
-        marginBottom: spacing.lg,
-        minWidth: 244, minHeight: 244, alignItems: 'center', justifyContent: 'center',
-    },
-    shareCloseBtn: { paddingHorizontal: spacing.xl, paddingVertical: spacing.md, backgroundColor: c.primary, borderRadius: radius.pill },
-    shareCloseBtnText: { ...typography.bodySmallStrong, color: c.onPrimary },
-    shareCheckCircle: {
-        width: 72, height: 72, borderRadius: radius.pill, backgroundColor: c.success,
-        alignItems: 'center', justifyContent: 'center', marginBottom: spacing.lg,
-    },
 
     // ── Coupon modals (brand yellow/blue colours kept literal) ────────────────
     couponBadge: {

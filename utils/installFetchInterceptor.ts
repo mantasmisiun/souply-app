@@ -1,6 +1,7 @@
 import i18n from '../i18n';
 import { API_BASE_URL } from '../config/api';
 import { getActiveSessionToken } from '../config/session';
+import { reclaimAnonSessionToken } from '../config/user';
 import { CLIENT_PLATFORM, CLIENT_VERSION, useVersionGate } from '../state/versionGate';
 
 /**
@@ -24,6 +25,38 @@ import { CLIENT_PLATFORM, CLIENT_VERSION, useVersionGate } from '../state/versio
 
 const TAG = '__souplyFetchLocalePatched__';
 
+/**
+ * Single-flight anon-token reclaim.
+ *
+ * A tab switch fires several per-user calls at once (basket, profile, trips).
+ * Without this they would each POST /users and the last writer would win,
+ * leaving the others holding a token that was already replaced.
+ */
+let reclaimInFlight: Promise<boolean> | null = null;
+function reclaimOnce(): Promise<boolean> {
+    if (!reclaimInFlight) {
+        reclaimInFlight = reclaimAnonSessionToken().finally(() => {
+            reclaimInFlight = null;
+        });
+    }
+    return reclaimInFlight;
+}
+
+/** Version-gate signals. Never allowed to break the request it inspects. */
+function inspectVersionGate(res: Response): void {
+    try {
+        if (res.status === 426) {
+            res.clone().json().then((b: any) => {
+                useVersionGate.getState().triggerHard(b?.storeUrl ?? null, b?.message ?? null);
+            }).catch(() => {
+                useVersionGate.getState().triggerHard(null, null);
+            });
+        } else if (res.headers.get('X-Client-Update') === 'recommended') {
+            useVersionGate.getState().triggerSoft(res.headers.get('X-Client-Store-Url'), null);
+        }
+    } catch { /* never break the request over gate detection */ }
+}
+
 export function installFetchInterceptor(): void {
     const g = globalThis as any;
     if (g.fetch?.[TAG]) return;
@@ -44,7 +77,8 @@ export function installFetchInterceptor(): void {
                 // Session bearer for the now-authenticated per-user routes (receipts,
                 // swipe votes). Verified token wins, else the anonymous token. Never
                 // overwrite an Authorization the caller set explicitly (e.g. authedFetch).
-                if (!headers.has('authorization') && !headers.has('Authorization')) {
+                const callerOwnsAuth = headers.has('authorization') || headers.has('Authorization');
+                if (!callerOwnsAuth) {
                     const token = getActiveSessionToken();
                     if (token) headers.set('Authorization', `Bearer ${token}`);
                 }
@@ -54,22 +88,35 @@ export function installFetchInterceptor(): void {
                     headers.set('X-Client-Platform', CLIENT_PLATFORM);
                     headers.set('X-Client-Version', CLIENT_VERSION);
                 }
-                // Inspect the response for the gate signals WITHOUT consuming the body the
-                // caller will read (clone for the 426 body). Fail-safe: any error here is
-                // swallowed so gate-detection can never break a real request.
-                return original(input, { ...init, headers }).then((res: Response) => {
-                    try {
-                        if (res.status === 426) {
-                            res.clone().json().then((b: any) => {
-                                useVersionGate.getState().triggerHard(b?.storeUrl ?? null, b?.message ?? null);
-                            }).catch(() => {
-                                useVersionGate.getState().triggerHard(null, null);
-                            });
-                        } else if (res.headers.get('X-Client-Update') === 'recommended') {
-                            useVersionGate.getState().triggerSoft(res.headers.get('X-Client-Store-Url'), null);
-                        }
-                    } catch { /* never break the request over gate detection */ }
-                    return res;
+                // A 401 here means the session token we injected is stale — it predates the
+                // auth hardening, expired, or was invalidated by a server secret rotation.
+                // Reclaim once and replay. Before this existed only profileStore recovered,
+                // so a stale token left the basket permanently dead in production while the
+                // rest of the app looked fine (2026-08-28).
+                //
+                // Retry only when ALL of these hold, so the replay is safe:
+                //   - we own the Authorization header (a caller-set one is theirs to manage)
+                //   - the request is replayable: a string/URL input with no body, or a
+                //     string body. A Request object or a stream cannot be sent twice.
+                // reclaimAnonSessionToken() itself returns false for verified users, so a
+                // signed-in user whose OAuth session died is never silently downgraded to a
+                // fresh anonymous identity.
+                const replayable =
+                    !callerOwnsAuth &&
+                    (typeof input === 'string' || input instanceof URL) &&
+                    (init.body === undefined || init.body === null || typeof init.body === 'string');
+
+                return original(input, { ...init, headers }).then(async (res: Response) => {
+                    inspectVersionGate(res);
+                    if (res.status !== 401 || !replayable) return res;
+                    if (!(await reclaimOnce())) return res;
+                    const fresh = getActiveSessionToken();
+                    if (!fresh) return res;
+                    const retryHeaders = new Headers(headers);
+                    retryHeaders.set('Authorization', `Bearer ${fresh}`);
+                    const retried = await original(input, { ...init, headers: retryHeaders });
+                    inspectVersionGate(retried);
+                    return retried;
                 });
             }
         } catch {

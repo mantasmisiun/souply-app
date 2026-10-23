@@ -586,7 +586,10 @@ export default function ReceiptDetailScreen() {
                         // page's content x-bounds.
                         const bandPage = snap.pages[pageIdxFor(bandResult.band.yTop, snap.pages)];
                         const region: SnapshotRegion =
-                            (productIdx >= 0 ? effRegions.products[productIdx] ?? null : null)
+                            // No inner `?? null`: the outer `??` already coalesces both a
+                            // null products[] entry and an out-of-range undefined into the
+                            // flat fallback (TS 6.0 flags the redundant form as TS2871).
+                            (productIdx >= 0 ? effRegions.products[productIdx] : null)
                             ?? {
                                 yTop: bandResult.band.yTop,
                                 yBottom: bandResult.band.yBottom,

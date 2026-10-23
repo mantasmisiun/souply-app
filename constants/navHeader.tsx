@@ -1,5 +1,7 @@
 import type { ReactNode } from 'react';
-import type { NativeStackNavigationOptions } from '@react-navigation/native-stack';
+// SDK 57: expo-router forked react-navigation; @react-navigation/native-stack is
+// no longer installed — the options type is exported by expo-router itself.
+import type { NativeStackNavigationOptions } from 'expo-router';
 import type { AppTheme } from './theme';
 import { ScreenBackButton } from '../components/ScreenBackButton';
 
@@ -56,3 +58,8 @@ export const glassHeaderOptions = (
         ...(opts.right ? { headerRight: () => opts.right } : {}),
     };
 };
+// NOTE: CollapsingHeader screens no longer use the native bar at all — it
+// renders its own back/right chip row over the gradient fade (headerShown:
+// false). A `headerTransparent` native bar was tried and abandoned: on Android
+// react-native-screens renders the whole pushed screen semi-transparent when
+// the header background is a translucent color.

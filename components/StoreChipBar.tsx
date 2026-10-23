@@ -1,6 +1,7 @@
 import React, { useMemo } from 'react';
 import { ScrollView, TouchableOpacity, Text, StyleSheet, View } from 'react-native';
 import { useTheme, type AppTheme } from '../constants/theme';
+import { PinnedChipsBar } from './PinnedChipsBar';
 import { chainIdByName } from '../utils/chainBrandName';
 import { ChainLogoChip } from './ChainLogoChip';
 
@@ -8,8 +9,10 @@ export interface StoreChip {
     id: string | number;
     label: string;
     logoUrl?: string | null;
-    /** Remaining/total item count shown as a small badge on the chip */
+    /** A single count shown as a small badge on the chip. */
     count?: number;
+    /** A pre-formatted badge string (e.g. "1/2" checked/total) — wins over count. */
+    countLabel?: string;
 }
 
 interface Props {
@@ -26,7 +29,7 @@ export function StoreChipBar({ chips, selectedId, onSelect, allLabel }: Props) {
     const hasAll = allLabel !== undefined;
 
     return (
-        <View style={styles.bar}>
+        <PinnedChipsBar>
             <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
@@ -56,10 +59,10 @@ export function StoreChipBar({ chips, selectedId, onSelect, allLabel }: Props) {
                             <Text style={[styles.chipText, active && styles.chipTextActive]}>
                                 {chip.label}
                             </Text>
-                            {chip.count != null && (
+                            {(chip.countLabel != null || chip.count != null) && (
                                 <View style={[styles.countBadge, active && styles.countBadgeActive]}>
                                     <Text style={[styles.countBadgeText, active && styles.countBadgeTextActive]}>
-                                        {chip.count}
+                                        {chip.countLabel ?? chip.count}
                                     </Text>
                                 </View>
                             )}
@@ -67,18 +70,11 @@ export function StoreChipBar({ chips, selectedId, onSelect, allLabel }: Props) {
                     );
                 })}
             </ScrollView>
-        </View>
+        </PinnedChipsBar>
     );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
-    bar: {
-        backgroundColor: c.cardBackground,
-        borderBottomWidth: 0.5,
-        borderBottomColor: c.border,
-        flexGrow: 0,
-        flexShrink: 0,
-    },
     scroll: { paddingHorizontal: 12, paddingVertical: 10, gap: 8 },
     chip: {
         flexDirection: 'row', alignItems: 'center', gap: 6,

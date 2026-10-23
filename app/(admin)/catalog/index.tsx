@@ -14,6 +14,7 @@ import { useRouter } from 'expo-router';
 import { useTheme, type AppTheme } from '../../../constants/theme';
 import { API_BASE_URL } from '../../../config/api';
 import { SkeletonBox } from '../../../components/SkeletonBox';
+import { ScrapeReviewFilterBar, ScrapeReviewList } from '../../../components/admin/ScrapeReviewPanel';
 
 interface Category {
     id: number;
@@ -108,6 +109,13 @@ export default function CatalogIndexScreen() {
     const [l2Map, setL2Map] = useState<Record<number, Category[]>>({});
     const [loadingL1, setLoadingL1] = useState(true);
 
+    // Scrape-review filters — chain + day selected ⇒ cross-category results
+    // replace the category browser.
+    const [reviewChain, setReviewChain] = useState<number | null>(null);
+    const [reviewDate, setReviewDate] = useState<Date | null>(null);
+    const [verifyMode, setVerifyMode] = useState(false);
+    const reviewActive = reviewChain != null && reviewDate != null;
+
     useEffect(() => {
         fetch(`${API_BASE_URL}/api/categories`)
             .then(r => r.json())
@@ -144,9 +152,21 @@ export default function CatalogIndexScreen() {
         <View style={styles.container}>
             <View style={[styles.listHeader, { paddingTop: top + 4 }]}>
                 <Text style={styles.listHeaderTitle}>Katalogas</Text>
-                <Text style={styles.listHeaderSub}>Pasirinkite kategoriją</Text>
+                <Text style={styles.listHeaderSub}>
+                    {reviewActive ? 'Scrape peržiūra' : 'Pasirinkite kategoriją'}
+                </Text>
             </View>
-            {loadingL1 ? (
+            <ScrapeReviewFilterBar
+                chainId={reviewChain}
+                onChain={setReviewChain}
+                date={reviewDate}
+                onDate={setReviewDate}
+                verifyMode={verifyMode}
+                onVerifyMode={setVerifyMode}
+            />
+            {reviewActive ? (
+                <ScrapeReviewList chainId={reviewChain!} date={reviewDate!} verifyMode={verifyMode} />
+            ) : loadingL1 ? (
                 <View style={styles.skeletonList}>
                     {Array.from({ length: 6 }).map((_, i) => (
                         <View key={i} style={styles.skeletonListItem}>

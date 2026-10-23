@@ -284,7 +284,7 @@ describe("pipeline — duplicate detection", () => {
 });
 
 describe("pipeline — session persistence across app restart", () => {
-  it("processing item is restored as pending; awaiting_network item stays", async () => {
+  it("processing item is restored as pending; awaiting_network item stays; errored item is dropped", async () => {
     // Seed AsyncStorage as if an earlier session was interrupted.
     await AsyncStorage.setItem(
       "receipt_queue_v1",
@@ -320,15 +320,17 @@ describe("pipeline — session persistence across app restart", () => {
 
     expect(items.find((i) => i.id === "p1")?.status).toBe("pending");
     expect(items.find((i) => i.id === "p2")?.status).toBe("awaiting_network");
-    expect(items.find((i) => i.id === "p3")?.status).toBe("error");
+    // p3 (error) is dropped on cold start: a failure can only be cleared by a
+    // fresh re-upload, so a persisted error is a dead, un-actionable card.
+    expect(items.find((i) => i.id === "p3")).toBeUndefined();
 
     // Subsequent run completes p1 successfully
     simulateSuccess("p1", 500);
     const state = useReceiptQueueStore.getState();
     expect(state.recentIds).toEqual([500]);
-    // p2 (awaiting_network) and p3 (error) remain — they're not part of
-    // the same "session" the runner is sequentially walking through.
-    expect(state.items.map((i) => i.id).sort()).toEqual(["p2", "p3"]);
+    // Only p2 (awaiting_network) remains alongside — it resumes when the
+    // network returns; the errored p3 was already pruned at init.
+    expect(state.items.map((i) => i.id).sort()).toEqual(["p2"]);
   });
 });
 

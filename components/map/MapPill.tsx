@@ -23,11 +23,13 @@ import { useTheme, type AppTheme } from '../../constants/theme';
  *     left/top/bottom borders (badge height == the two-row text height).
  */
 
-export type MapPillVariant = 'neutral' | 'cheapest' | 'selected';
+export type MapPillVariant = 'neutral' | 'cheapest' | 'selected' | 'progress';
 
 export interface MapPillSpec {
   /** Identity for caching the baked image — re-bakes only when this changes
-   *  (include everything that affects the pixels: id + content + variant). */
+   *  (include everything that affects the pixels: id + content + variant).
+   *  Progress pills (stage-3 check counts like "2/10") MUST fold the count
+   *  into the key, or the baked image goes stale as items get checked. */
   key: string;
   chainId: number;
   /** 1 entry → price pill; 2 entries → address pill (street, number/flat). */
@@ -47,9 +49,13 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
   const ref = useRef<View>(null);
   const badge = chainBadgeImage(spec.chainId);
   const twoRow = spec.lines.length >= 2;
-  const ringStyle = spec.variant === 'selected' || spec.variant === 'cheapest' ? styles.ringAccent : styles.ringNeutral;
+  const ringStyle = spec.variant === 'neutral' ? styles.ringNeutral : styles.ringAccent;
   const fillStyle = spec.variant === 'selected' ? styles.fillPrimary : styles.fillCard;
-  const primaryColor = spec.variant === 'selected' ? '#FFFFFF' : colors.textPrimary;
+  // 'progress' (stage-3 check counts): accent ring + card fill with the count
+  // in brand colour — reads as "yours, in progress" without shouting selected.
+  const primaryColor = spec.variant === 'selected' ? '#FFFFFF'
+    : spec.variant === 'progress' ? colors.primary
+    : colors.textPrimary;
   const secondaryColor = spec.variant === 'selected' ? 'rgba(255,255,255,0.85)' : colors.textSecondary;
 
   // GATE the rounded background on a real layout. RN 0.81's new-arch BackgroundDrawable
@@ -116,21 +122,20 @@ function PillShot({ spec, onShot, onFail }: { spec: MapPillSpec; onShot: (key: s
     >
       <View style={[styles.pillInner, twoRow ? styles.pillInnerTwoRow : styles.pillInnerOneRow, ready && (twoRow ? styles.pillInnerRadiusTwoRow : styles.pillInnerRadiusOneRow), fillStyle]}>
         {badge != null && (() => {
-          // COMBO logo stack: own badge on top-left; each split partner's badge
-          // behind it, offset a further 14px right (2-store → 1 partner,
-          // 3-store → 2). Render deepest partner first so z-order = stack order.
-          const partners = !twoRow
-            ? (spec.partnerChainIds ?? []).map((id) => chainBadgeImage(id)).filter((b): b is NonNullable<typeof b> => b != null)
-            : [];
-          if (partners.length === 0) {
-            return <Image source={badge} style={twoRow ? styles.badgeTwoRow : styles.badgeOneRow} onLoad={() => setBadgeLoaded(true)} onError={() => setBadgeLoaded(true)} />;
-          }
+          // COMBO marker: the pill shows ONLY this store's own logo; a small "+N"
+          // circle flags that it's part of a cheaper split, N = the OTHER stores
+          // in the combo (2-store → +1, 3-store → +2). partnerChainIds is [] for
+          // the selected/active member, so the badge disappears the moment the
+          // pill is tapped — one logo, no "+N", exactly as before.
+          const partnerCount = !twoRow ? (spec.partnerChainIds?.length ?? 0) : 0;
           return (
-            <View style={[styles.badgeStackOneRow, { width: 28 + 14 * partners.length }]}>
-              {[...partners].reverse().map((src, i) => (
-                <Image key={i} source={src} style={[styles.badgeOneRow, { position: 'absolute', top: 0, left: 14 * (partners.length - i) }]} />
-              ))}
-              <Image source={badge} style={[styles.badgeOneRow, styles.badgePrimary]} onLoad={() => setBadgeLoaded(true)} onError={() => setBadgeLoaded(true)} />
+            <View>
+              <Image source={badge} style={twoRow ? styles.badgeTwoRow : styles.badgeOneRow} onLoad={() => setBadgeLoaded(true)} onError={() => setBadgeLoaded(true)} />
+              {partnerCount > 0 && (
+                <View style={[styles.comboCount, ready && styles.comboCountRadius]}>
+                  <Text style={styles.comboCountText} allowFontScaling={false}>{`+${partnerCount}`}</Text>
+                </View>
+              )}
             </View>
           );
         })()}
@@ -178,7 +183,6 @@ export function useBakedPills(specs: MapPillSpec[]): {
   // `done` (captured OR failed) drives the throttle window so it advances even on a failed capture.
   const [done, setDone] = useState<Record<string, true>>({});
   const onShot = useCallback((key: string, uri: string, w: number, h: number) => {
-    if (__DEV__) console.log(`[BAKERY] baked key=${key} → …${uri.slice(-14)} ${Math.round(w)}x${Math.round(h)}dp`);
     setUris((prev) => (prev[key]?.uri === uri ? prev : { ...prev, [key]: { uri, w, h } }));
     setDone((prev) => (prev[key] ? prev : { ...prev, [key]: true }));
   }, []);
@@ -562,18 +566,26 @@ const makeStyles = (c: AppTheme) =>
     pillInnerRadiusTwoRow: { borderRadius: 22 },
 
     // Ring (outer) colours + fill (inner) colours per variant.
-    ringNeutral: { backgroundColor: '#FFFFFF' },
+    ringNeutral: { backgroundColor: c.pillOutline },            // warm edge (light) / white halo (dark)
     ringAccent: { backgroundColor: c.primary },                  // cheapest + selected
     fillCard: { backgroundColor: c.cardBackground },             // neutral + cheapest
     fillPrimary: { backgroundColor: c.primary },                 // selected → solid primary
 
     badgeOneRow: { width: 28, height: 28, borderRadius: 14 },
     badgeTwoRow: { width: 30, height: 30, borderRadius: 15 },
-    // Combo stack: own badge at left ON TOP of the partners', each peeking a
-    // further 14px right (half a badge — enough to recognise the chain).
-    // Width is set inline (28 + 14 × partner count).
-    badgeStackOneRow: { height: 28 },
-    badgePrimary: { position: 'absolute', left: 0, top: 0 },
+    // Combo "+N" circle — tucked at the logo's top-right corner (within the pill's
+    // top/right padding so captureRef doesn't clip it). Primary fill, thin ring in
+    // the pill-fill colour so it separates from the logo. borderRadius is applied
+    // only once `ready` (RN 0.81 bake-crash guard, same as the pill background).
+    comboCount: {
+        position: 'absolute', top: -3, right: -3,
+        minWidth: 16, height: 16, paddingHorizontal: 2.5,
+        alignItems: 'center', justifyContent: 'center',
+        backgroundColor: c.primary,
+        borderWidth: 1.5, borderColor: c.cardBackground,
+    },
+    comboCountRadius: { borderRadius: 8 },
+    comboCountText: { color: '#FFFFFF', fontSize: 8.5, fontWeight: '800' },
 
     textColTwoRow: { justifyContent: 'center' },
     valueText: { fontSize: 13, fontWeight: '800' },

@@ -1,5 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { create } from "zustand";
+import { devLog } from "../utils/devLog";
 
 const STORAGE_KEY = "receipt_queue_v1";
 
@@ -7,7 +8,16 @@ export type QueueStatus =
   | "pending"
   | "processing"
   | "error"
-  | "awaiting_network";
+  | "awaiting_network"
+  /** Parked: the receipt parsed, but its purchase date didn't. The card asks
+   *  the user for it; supplying one re-runs the item with the date injected. */
+  | "needs_date"
+  /** Parked: the upload came from a trip whose planned stores don't include this
+   *  receipt's chain. The card asks which store slot it covers (or "separately"). */
+  | "needs_store"
+  /** Parked: the receipt saved but attaching it to its list failed. The card
+   *  retries the LINK only — the receipt already exists server-side. */
+  | "needs_link";
 
 export interface QueueItem {
   id: string;
@@ -17,8 +27,45 @@ export interface QueueItem {
   isPdf?: boolean;
   /** Original filename for display in error/awaiting cards. */
   name?: string;
+  /** Trip/list linking (background scan/upload from a shopping list): the
+   *  detected chain's list is linked after the receipt is created. `linkMap`
+   *  is chainId→listId; `fallbackLinkId` links a single-store list whose chain
+   *  we can't gate on. Mirrors the interactive scan-session link logic. */
+  linkMap?: Record<number, number>;
+  fallbackLinkId?: number | null;
+  /** RETAKE: when set, this capture HEALS the given existing receipt (POST
+   *  /receipts/:id/heal) instead of creating a new one — a second observation
+   *  merged into the stored parse. */
+  healReceiptId?: number;
+  /** DEV-ONLY: with healReceiptId, fully REPLACE that receipt's parse instead of merging. */
+  devReplace?: boolean;
+  /** User-entered purchase date (YYYY-MM-DD) for an item parked as `needs_date`. */
+  overrideDate?: string;
+  /** needs_store answer: the store slot the user assigned this receipt to. */
+  linkChoiceListId?: number;
+  /** needs_store answer: keep it as its own (ad-hoc) trip — don't ask again. */
+  linkAdHoc?: boolean;
+  /** needs_store answer: this shopping, but no planned store slot — the
+   *  "I shopped somewhere the plan didn't include" case. */
+  linkTripId?: number;
+  /** needs_store context: detected chain + the trip's planned {chainId,listId}
+   *  slots, so the card can label one button per planned store. */
+  linkDetectedChainId?: number | null;
+  linkOptions?: { chainId: number; listId: number }[];
+  /** needs_link context: the saved receipt and the list it failed to attach to. */
+  linkReceiptId?: number;
+  linkListId?: number;
   status: QueueStatus;
   error?: string;
+  /** Failure reason (e.g. "store_unrecognized") — drives the error card's CTA. */
+  errorReason?: string;
+  /** store_unrecognized context: lets the "Rasti parduotuvę" CTA open the
+   *  chain-scoped store map pre-seeded on the OCR address. */
+  storeChainId?: number;
+  storeChainName?: string;
+  storeOcrAddress?: string | null;
+  /** STORE RESOLUTION: user-picked store to inject on a re-process. */
+  resolvedStore?: { storeId: number; storeName: string | null; storeAddress: string | null };
   /** Human-readable progress line ("Nuskaitoma...", "3/8 prekės", "Išsaugoma..."). */
   progress?: string;
   /** When the progress is "matching products", how many done. Drives the bottom bar. */
@@ -36,10 +83,46 @@ interface ReceiptQueueState {
    */
   recentIds: number[];
   lastCompletedAt: number | null;
+  /**
+   * What the LAST completed item was linked to, vs what it was uploaded for.
+   * The trip screen uses this as a backstop: an upload aimed at this trip that
+   * finished attached elsewhere used to just make its progress card disappear.
+   */
+  lastCompleted: {
+    receiptId: number;
+    /** Lists the upload was aimed at (its linkMap values + fallback). */
+    intendedListIds: number[];
+    /** List it actually attached to; null = it became its own ad-hoc trip. */
+    linkedListId: number | null;
+  } | null;
   initialized: boolean;
 
   initialize: () => Promise<void>;
-  addItems: (entries: { uris: string[]; name?: string; isPdf?: boolean }[]) => void;
+  addItems: (entries: {
+    uris: string[];
+    name?: string;
+    isPdf?: boolean;
+    linkMap?: Record<number, number>;
+    fallbackLinkId?: number | null;
+    healReceiptId?: number;
+    devReplace?: boolean;
+    overrideDate?: string;
+    resolvedStore?: { storeId: number; storeName: string | null; storeAddress: string | null };
+  }[]) => void;
+  /** Park an item awaiting a purchase date from the user. */
+  markNeedsDate: (id: string, message: string) => void;
+  /** Supply the date and re-queue the item so the runner picks it up. */
+  resolveDate: (id: string, date: string) => void;
+  /** Park an item awaiting "which planned store is this receipt from?". */
+  markNeedsStore: (id: string, message: string, ctx: { detectedChainId: number | null; options: { chainId: number; listId: number }[] }) => void;
+  /** Answer it: a listId attaches to that store slot, null keeps it ad-hoc.
+   *  Either way the item re-queues and the gate won't fire again. */
+  resolveStoreLink: (id: string, listId: number | null) => void;
+  /** Answer it with "this shopping, no particular store slot" — the receipt
+   *  joins the trip without pretending to fulfil someone else's plan. */
+  resolveStoreTrip: (id: string, tripId: number) => void;
+  /** Park an item whose receipt saved but never attached to its list. */
+  markNeedsLink: (id: string, message: string, ctx: { receiptId: number; listId: number }) => void;
   markProcessing: (id: string, progress?: string) => void;
   updateProgress: (
     id: string,
@@ -49,9 +132,9 @@ interface ReceiptQueueState {
   ) => void;
   markAwaitingNetwork: (id: string) => void;
   resumeAwaitingNetwork: () => void;
-  markDone: (id: string, receiptId: number) => void;
+  markDone: (id: string, receiptId: number, linkedListId?: number | null) => void;
   noteReceiptCreated: (receiptId: number) => void;
-  markError: (id: string, error: string) => void;
+  markError: (id: string, error: string, ctx?: { reason?: string; chainId?: number; chainName?: string; storeAddress?: string | null }) => void;
   removeItem: (id: string) => void;
   pruneRecentIds: (idsToKeep: number[]) => void;
 }
@@ -72,6 +155,7 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
   items: [],
   recentIds: [],
   lastCompletedAt: null,
+  lastCompleted: null,
   initialized: false,
 
   initialize: async () => {
@@ -82,11 +166,17 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
       // Items that were mid-processing when the app was killed get reset
       // to pending so the runner picks them up. `awaiting_network` stays
       // — the network resumer flips it back when connectivity returns.
-      const restored = saved.map((item) =>
-        item.status === "processing"
-          ? { ...item, status: "pending" as const, progress: undefined, progressDone: undefined, progressTotal: undefined }
-          : item,
-      );
+      // Errored items are dropped: a failure can only be cleared by a fresh
+      // re-upload, so persisting it across cold starts just leaves a dead,
+      // un-actionable card sitting around forever.
+      const restored = saved
+        // needs_date / needs_store / needs_link SURVIVE: they are actionable.
+        .filter((item) => item.status !== "error")
+        .map((item) =>
+          item.status === "processing"
+            ? { ...item, status: "pending" as const, progress: undefined, progressDone: undefined, progressTotal: undefined }
+            : item,
+        );
       set({ items: restored, initialized: true });
     } catch (e) {
       console.warn("[receiptQueue] load failed:", e);
@@ -100,11 +190,109 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
       uris: e.uris,
       isPdf: e.isPdf,
       name: e.name,
+      linkMap: e.linkMap,
+      fallbackLinkId: e.fallbackLinkId,
+      healReceiptId: e.healReceiptId,
+      devReplace: e.devReplace,
+      overrideDate: e.overrideDate,
+      resolvedStore: e.resolvedStore,
       status: "pending",
       addedAt: Date.now(),
     }));
     set((state) => {
       const items = [...state.items, ...newItems];
+      persist(items);
+      return { items };
+    });
+  },
+
+  markNeedsDate: (id, message) => {
+    devLog('queue.park.date', { id });
+    set((state) => {
+      const items = state.items.map((item) =>
+        item.id === id
+          ? { ...item, status: "needs_date" as const, error: message, errorReason: "needs_date",
+              progress: undefined, progressDone: undefined, progressTotal: undefined }
+          : item,
+      );
+      persist(items);
+      return { items };
+    });
+  },
+
+  resolveDate: (id, date) => {
+    devLog('queue.resolve.date', { id, date });
+    set((state) => {
+      const items = state.items.map((item) =>
+        item.id === id
+          ? { ...item, overrideDate: date, status: "pending" as const, error: undefined, errorReason: undefined }
+          : item,
+      );
+      persist(items);
+      return { items };
+    });
+  },
+
+  markNeedsStore: (id, message, ctx) => {
+    devLog('queue.park.store', { id });
+    set((state) => {
+      const items = state.items.map((item) =>
+        item.id === id
+          ? { ...item, status: "needs_store" as const, error: message, errorReason: "needs_store",
+              linkDetectedChainId: ctx.detectedChainId, linkOptions: ctx.options,
+              progress: undefined, progressDone: undefined, progressTotal: undefined }
+          : item,
+      );
+      persist(items);
+      return { items };
+    });
+  },
+
+  resolveStoreLink: (id, listId) => {
+    devLog('queue.resolve.store', { id, listId });
+    set((state) => {
+      const items = state.items.map((item) =>
+        item.id === id
+          ? {
+              ...item,
+              // listId → attach to that slot; null → the user wants it standalone.
+              linkChoiceListId: listId ?? undefined,
+              linkAdHoc: listId == null,
+              status: "pending" as const,
+              error: undefined,
+              errorReason: undefined,
+            }
+          : item,
+      );
+      persist(items);
+      return { items };
+    });
+  },
+
+  resolveStoreTrip: (id, tripId) => {
+    devLog('queue.resolve.trip', { id, tripId });
+    set((state) => {
+      const items = state.items.map((item) =>
+        item.id === id
+          ? { ...item, linkTripId: tripId, linkChoiceListId: undefined, linkAdHoc: false,
+              status: "pending" as const, error: undefined, errorReason: undefined }
+          : item,
+      );
+      persist(items);
+      return { items };
+    });
+  },
+
+  markNeedsLink: (id, message, ctx) => {
+    devLog('queue.park.link', { id });
+    set((state) => {
+      const items = state.items.map((item) =>
+        item.id === id
+          ? { ...item, status: "needs_link" as const, error: message, errorReason: "link_failed",
+              linkReceiptId: ctx.receiptId, linkListId: ctx.listId,
+              progress: undefined, progressDone: undefined, progressTotal: undefined }
+          : item,
+      );
       persist(items);
       return { items };
     });
@@ -131,6 +319,21 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
   updateProgress: (id, progress, done, total) => {
     // Progress updates are high-frequency; skip the AsyncStorage write
     // to avoid hammering the disk during product matching.
+    //
+    // Guarded — the root layout's queue runner subscribes to this store, so
+    // an unconditional set() would rebuild the items array (new identity) and
+    // re-render the app root on EVERY matched product line, even when the
+    // visible progress text/counters haven't changed. Same pattern as
+    // templateAddState.setLeaveInstant.
+    const cur = get().items.find((item) => item.id === id);
+    if (!cur) return;
+    if (
+      cur.progress === progress &&
+      cur.progressDone === done &&
+      cur.progressTotal === total
+    ) {
+      return;
+    }
     set((state) => ({
       items: state.items.map((item) =>
         item.id === id
@@ -174,14 +377,34 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
     });
   },
 
-  markDone: (id, receiptId) => {
+  markDone: (id, receiptId, linkedListId) => {
     set((state) => {
+      const done = state.items.find((item) => item.id === id);
       const items = state.items.filter((item) => item.id !== id);
       const recentIds = state.recentIds.includes(receiptId)
         ? state.recentIds
         : [...state.recentIds, receiptId];
+      // Record where it was AIMED vs where it LANDED, for the trip screen's
+      // backstop notice (a card that just vanishes teaches the user nothing).
+      //
+      // A HEAL aims at a RECEIPT, not a list: it re-parses one that already
+      // belongs to its trip, and the link step is skipped by design — so
+      // linkedListId is always null and treating that as "landed elsewhere"
+      // fires the notice on a receipt sitting right there on screen (reported:
+      // "Kvitas priskirtas kitur" straight after a dev re-scan that visibly
+      // updated Prekės). Heals therefore declare no intent at all.
+      const intendedListIds = done?.healReceiptId != null ? [] : [
+        ...Object.values(done?.linkMap ?? {}),
+        ...(done?.fallbackLinkId != null ? [done.fallbackLinkId] : []),
+        ...(done?.linkChoiceListId != null ? [done.linkChoiceListId] : []),
+      ];
       persist(items);
-      return { items, lastCompletedAt: Date.now(), recentIds };
+      return {
+        items,
+        lastCompletedAt: Date.now(),
+        lastCompleted: { receiptId, intendedListIds, linkedListId: linkedListId ?? null },
+        recentIds,
+      };
     });
   },
 
@@ -200,7 +423,7 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
     }));
   },
 
-  markError: (id, error) => {
+  markError: (id, error, ctx) => {
     set((state) => {
       const items = state.items.map((item) =>
         item.id === id
@@ -208,6 +431,10 @@ export const useReceiptQueueStore = create<ReceiptQueueState>((set, get) => ({
               ...item,
               status: "error" as const,
               error,
+              errorReason: ctx?.reason,
+              storeChainId: ctx?.chainId,
+              storeChainName: ctx?.chainName,
+              storeOcrAddress: ctx?.storeAddress,
               progress: undefined,
               progressDone: undefined,
               progressTotal: undefined,

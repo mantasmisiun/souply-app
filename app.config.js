@@ -8,10 +8,10 @@ const BUNDLE_ID = IS_DEV ? 'lt.souply.app.dev' : IS_STAGING ? 'lt.souply.app.sta
 const APP_NAME = IS_DEV ? 'Souply (DEV)' : IS_STAGING ? 'Souply (staging)' : 'Souply';
 const ICON = IS_DEV ? './assets/images/DEV.png' : IS_STAGING ? './assets/images/STAGING.png' : './assets/images/icon.png';
 // Universal/App Link host per environment. The dev build (testers) deep-links
-// against the test web stack; prod against souply.lt. localhost can't host
-// universal links, so dev points at the reachable test domain. The matching
+// against the staging web stack; prod against souply.lt. localhost can't host
+// universal links, so dev points at the reachable staging domain. The matching
 // apple-app-site-association / assetlinks.json must be served from each host.
-const LINK_HOST = (IS_DEV || IS_STAGING) ? 'souply.manofoto.dpdns.org' : 'souply.lt';
+const LINK_HOST = (IS_DEV || IS_STAGING) ? 'staging.souply.lt' : 'souply.lt';
 
 // Google's native Android OAuth redirect comes back on the reversed-DNS scheme
 // of the Android client ID (com.googleusercontent.apps.<id>:/oauth2redirect).
@@ -104,6 +104,7 @@ export default {
           data: [
             { scheme: 'https', host: LINK_HOST, pathPrefix: '/t/' },
             { scheme: 'https', host: LINK_HOST, pathPrefix: '/@' },
+            { scheme: 'https', host: LINK_HOST, pathPrefix: '/join/' },
           ],
           category: ['BROWSABLE', 'DEFAULT'],
         },
@@ -111,6 +112,11 @@ export default {
       edgeToEdgeEnabled: true,
       predictiveBackGestureEnabled: false,
       package: BUNDLE_ID,
+      // FCM identity for push notifications. ONE file covers all three
+      // variants — Firebase bundles every registered app (dev/staging/prod
+      // packages) into the same google-services.json and the Android build
+      // picks the client matching `package`. Client-side keys, not secrets.
+      googleServicesFile: './google-services.json',
       // Android Maps SDK key — set via Expo's native android config because
       // react-native-maps 1.20.x ships no config plugin (free key: Google Cloud
       // Console → enable "Maps SDK for Android" → GOOGLE_MAPS_API_KEY_ANDROID).
@@ -145,11 +151,17 @@ export default {
     },
     plugins: [
       '@react-native-community/datetimepicker',
+      // Push notifications (Souply 2.0 invites/trips). Android delivery
+      // additionally needs the per-variant Firebase google-services.json
+      // (android.googleServicesFile) before FCM pushes arrive — local
+      // notifications and the permission flow work without it.
+      'expo-notifications',
       [
         'expo-build-properties',
         {
           ios: {
-            deploymentTarget: '16.0',
+            // SDK 57 floor — expo-build-properties rejects anything below 16.4.
+            deploymentTarget: '16.4',
             // GoogleSignIn 9.x pulls AppCheckCore (a Swift pod) whose deps
             // GoogleUtilities + RecaptchaInterop are Obj-C pods that don't define
             // a module map — so a static-library build fails ("Swift pods cannot
@@ -168,6 +180,14 @@ export default {
             // cleartext by default. Production stays HTTPS-only (false) —
             // Play Store requires it and prod talks to https://api.souply.lt.
             usesCleartextTraffic: IS_DEV,
+            // R8 code shrinking + resource shrinking for release builds
+            // (perf audit finding 18): smaller APK, dead code stripped.
+            // Release-only flags — debug/dev-client builds are unaffected.
+            // NOTE: R8 can break libraries lacking consumer keep rules —
+            // verify ML Kit text recognition, react-native-maps and Sentry
+            // on a local staging build before promoting.
+            enableProguardInReleaseBuilds: true,
+            enableShrinkResourcesInReleaseBuilds: true,
           },
         },
       ],

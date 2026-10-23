@@ -82,6 +82,22 @@ export function chainBrandColorById(chainId: number): string {
     return CHAIN_BRAND_COLORS_BY_ID[chainId] ?? '#9E9E9E';
 }
 
+/** Brand label by chain id — for surfaces that only have the id (e.g. a queue
+ *  item's linkMap, whose keys are chain ids and whose store names live server-
+ *  side). Returns null for chains outside the bundled set. */
+const CHAIN_NAME_BY_ID: Record<number, string> = {
+    1: 'Maxima',
+    2: 'Rimi',
+    3: 'IKI',
+    4: 'Norfa',
+    5: 'Lidl',
+};
+
+export function chainNameById(chainId: number | null | undefined): string | null {
+    if (chainId == null) return null;
+    return CHAIN_NAME_BY_ID[chainId] ?? null;
+}
+
 const CHAIN_ID_BY_NAME: { match: RegExp; id: number }[] = [
     { match: /maxima/i,  id: 1 },
     { match: /rimi/i,    id: 2 },

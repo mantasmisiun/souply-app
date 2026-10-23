@@ -14,15 +14,18 @@ export interface AwaitableList {
     basketId?: number | null;
     status: string;
     receiptCount?: number;
+    /** "Nepirkau čia" (2.0 mini-cycles): slot explicitly closed without a
+     *  receipt — no longer awaiting. */
+    receiptSkippedAt?: string | null;
 }
 
 /** Group key: shared basketId for a split, else the standalone row id. */
 const groupKey = (l: AwaitableList): string =>
     l.basketId != null ? `b${l.basketId}` : `l${l.id}`;
 
-/** A completed row with no linked receipt yet. */
+/** A completed row with no linked receipt yet (and not skipped). */
 export const isAwaitingReceipt = (l: AwaitableList): boolean =>
-    l.status === 'completed' && (Number(l.receiptCount) || 0) === 0;
+    l.status === 'completed' && (Number(l.receiptCount) || 0) === 0 && l.receiptSkippedAt == null;
 
 /** Distinct completed groups that still have ≥1 store awaiting a receipt. */
 export const countAwaitingReceiptGroups = (lists: AwaitableList[]): number => {
@@ -36,6 +39,8 @@ export const groupReceiptProgress = (
     lists: AwaitableList[],
 ): { have: number; total: number } => {
     const total = lists.length;
-    const have = lists.filter((l) => (Number(l.receiptCount) || 0) > 0).length;
+    // A skipped slot counts as CLOSED (the "2/2" reads as "handled", not
+    // "receipts collected" — matches the trip stage derivation).
+    const have = lists.filter((l) => (Number(l.receiptCount) || 0) > 0 || l.receiptSkippedAt != null).length;
     return { have, total };
 };

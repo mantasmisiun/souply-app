@@ -45,13 +45,30 @@ export async function loadCachedCoords(): Promise<UserCoords | null> {
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         if (!Number.isFinite(parsed?.lat) || !Number.isFinite(parsed?.lng)) return null;
-        // TTL check: if the cached coords are older than CACHE_TTL_MS,
-        // discard them so the caller falls through to a fresh GPS query.
+        // TTL check: past CACHE_TTL_MS this is no longer "where you are", so the
+        // caller falls through to a fresh GPS query. The value is KEPT on disk —
+        // an expired fix is still the best guess for a map's fallback camera
+        // (see loadLastKnownCoords); deleting it left the map with nothing but a
+        // hardcoded Vilnius.
         const cachedAt = Number(parsed?.cachedAt);
-        if (!Number.isFinite(cachedAt) || Date.now() - cachedAt > CACHE_TTL_MS) {
-            await clearCachedCoords();
-            return null;
-        }
+        if (!Number.isFinite(cachedAt) || Date.now() - cachedAt > CACHE_TTL_MS) return null;
+        return { lat: parsed.lat, lng: parsed.lng, label: parsed.label, source: 'cache' };
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * The last position we ever recorded, TTL ignored. NOT for calculations — an
+ * hours-old fix must never silently price a basket — only for framing a map when
+ * nothing better is available yet.
+ */
+export async function loadLastKnownCoords(): Promise<UserCoords | null> {
+    try {
+        const raw = await AsyncStorage.getItem(CACHE_KEY);
+        if (!raw) return null;
+        const parsed = JSON.parse(raw);
+        if (!Number.isFinite(parsed?.lat) || !Number.isFinite(parsed?.lng)) return null;
         return { lat: parsed.lat, lng: parsed.lng, label: parsed.label, source: 'cache' };
     } catch {
         return null;
@@ -76,17 +93,32 @@ export async function clearCachedCoords(): Promise<void> {
 }
 
 /**
- * Try to get GPS coordinates. Returns null (and DOESN'T throw) if
- * permission is denied, timeout, or any other failure — caller routes
- * to the address-modal fallback.
+ * How long we'll wait for a hardware fix before giving up. `getCurrentPositionAsync`
+ * takes NO timeout option, so without racing it the call can sit there for 30+
+ * seconds on a cold/indoor fix — and every caller `await`s it. That is exactly
+ * how opening a shopping list came to take half a minute: the screen blocked on
+ * GPS purely to sort its store tabs by distance. Past this budget we return null
+ * and callers fall back to cached coords / a preset / the address prompt.
+ */
+const GPS_TIMEOUT_MS = 6000;
+
+/**
+ * Try to get GPS coordinates. Returns null (and DOESN'T throw) if permission is
+ * denied, the fix takes longer than GPS_TIMEOUT_MS, or any other failure —
+ * caller routes to cached coords or the address-modal fallback.
+ *
+ * NEVER call this on a path that blocks a render without a cached fallback: it
+ * is best-effort by design.
  */
 export async function tryGpsCoords(): Promise<UserCoords | null> {
     try {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') return null;
-        const pos = await Location.getCurrentPositionAsync({
-            accuracy: Location.Accuracy.Balanced,
-        });
+        const pos = await Promise.race([
+            Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+            new Promise<null>(resolve => setTimeout(() => resolve(null), GPS_TIMEOUT_MS)),
+        ]);
+        if (!pos) return null;               // timed out — don't strand the caller
         return {
             lat: pos.coords.latitude,
             lng: pos.coords.longitude,

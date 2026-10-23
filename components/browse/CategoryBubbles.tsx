@@ -1,6 +1,7 @@
 import { memo, useMemo } from 'react';
 import { ScrollView, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { useTheme, type AppTheme } from '../../constants/theme';
+import { PinnedChipsBar } from '../PinnedChipsBar';
 
 interface Category {
     id: number;
@@ -21,6 +22,7 @@ function CategoryBubbles({ categories, selectedId, onSelect, allLabel }: Props) 
     if (categories.length === 0) return null;
 
     return (
+        <PinnedChipsBar>
         <ScrollView
             horizontal
             showsHorizontalScrollIndicator={false}
@@ -47,16 +49,16 @@ function CategoryBubbles({ categories, selectedId, onSelect, allLabel }: Props) 
                 </TouchableOpacity>
             ))}
         </ScrollView>
+        </PinnedChipsBar>
     );
 }
 
 export default memo(CategoryBubbles);
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
+    // No banner background — the chips float on the page; the header's fade
+    // gradient handles items passing beneath.
     row: {
-        backgroundColor: c.cardBackground,
-        borderBottomWidth: 0.5,
-        borderBottomColor: c.border,
         flexGrow: 0,
         flexShrink: 0,
     },

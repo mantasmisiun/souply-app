@@ -1,4 +1,9 @@
-import { capVoluntaryQueue, capMandatoryQueue, type CapCardLike } from '../utils/swipeQueueCap';
+import {
+    capVoluntaryQueue,
+    capMandatoryQueue,
+    composeVoluntaryReceiptDeck,
+    type CapCardLike,
+} from '../utils/swipeQueueCap';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -244,6 +249,104 @@ describe('capVoluntaryQueue — dedupes by cardId', () => {
         for (const id of globalIds) {
             expect(id.startsWith('g-')).toBe(true);
         }
+    });
+});
+
+// ---------------------------------------------------------------------------
+// Voluntary mode — RECEIPT-SCOPED (relevance-only, no global fill)
+// ---------------------------------------------------------------------------
+
+describe('capVoluntaryQueue — receiptScoped kills the global fill', () => {
+    it('never tags any card fromGlobalFill even with a plentiful global pool', () => {
+        const { items } = capVoluntaryQueue({
+            receiptItems: makeReceiptCards({ s1: 5, s2: 5, s3: 5 }),
+            globalItems: makeGlobalCards({ s1: 5, s2: 5, s3: 5 }),
+            receiptScoped: true,
+        });
+        expect(items).toHaveLength(10);
+        expect(fromGlobalCount(items)).toBe(0);
+        // Every card is a receipt card, never a global one.
+        for (const c of items) expect(c.cardId.startsWith('r-')).toBe(true);
+    });
+
+    it('fills all 10 from the receipt (no reserved global slot)', () => {
+        const { items } = capVoluntaryQueue({
+            receiptItems: makeReceiptCards({ s2: 20 }),
+            globalItems: makeGlobalCards({ s2: 20 }),
+            receiptScoped: true,
+        });
+        expect(items).toHaveLength(10);
+        expect(fromGlobalCount(items)).toBe(0);
+        expect(slotCount(items, 2)).toBe(10);
+    });
+
+    it('returns an HONEST short deck when the receipt is short — never pads with globals', () => {
+        const { items } = capVoluntaryQueue({
+            receiptItems: makeReceiptCards({ s2: 4 }),
+            globalItems: makeGlobalCards({ s1: 10, s2: 10, s3: 10 }),
+            receiptScoped: true,
+        });
+        expect(items).toHaveLength(4);
+        expect(fromGlobalCount(items)).toBe(0);
+    });
+
+    it('preserves slot priority (2 → 1 → 3) within the receipt-only deck', () => {
+        const { items } = capVoluntaryQueue({
+            receiptItems: makeReceiptCards({ s1: 1, s2: 1, s3: 1 }),
+            globalItems: makeGlobalCards({ s1: 5, s2: 5, s3: 5 }),
+            receiptScoped: true,
+        });
+        expect(items.map((c) => c.slot)).toEqual([2, 1, 3]);
+        expect(fromGlobalCount(items)).toBe(0);
+    });
+
+    it('community path (receiptScoped=false) still gets a global card — unchanged', () => {
+        const { items } = capVoluntaryQueue({
+            receiptItems: makeReceiptCards({ s1: 5, s2: 5, s3: 5 }),
+            globalItems: makeGlobalCards({ s1: 5, s2: 5, s3: 5 }),
+        });
+        expect(fromGlobalCount(items)).toBe(1);
+    });
+});
+
+// ---------------------------------------------------------------------------
+// composeVoluntaryReceiptDeck — crops fill first up to the comfort cap
+// ---------------------------------------------------------------------------
+
+describe('composeVoluntaryReceiptDeck — crops ahead of slots, capped', () => {
+    const crop = (i: number) => ({ cardId: `crop-${i}`, cardKind: 'receipt' as const });
+    const crops = (n: number) => range(n).map(crop);
+
+    it('places crops FIRST, then slot cards', () => {
+        const deck = composeVoluntaryReceiptDeck(crops(2), makeReceiptCards({ s2: 5 }), 7);
+        expect(deck.slice(0, 2).map((c) => c.cardId)).toEqual(['crop-0', 'crop-1']);
+        expect(deck.slice(2).every((c) => c.cardId.startsWith('r-'))).toBe(true);
+    });
+
+    it('caps crops at the comfort cap and gives the rest to slot cards', () => {
+        // 9 crops available but cap 7 → 7 crops + 3 slot cards = 10.
+        const deck = composeVoluntaryReceiptDeck(crops(9), makeReceiptCards({ s2: 8 }), 7);
+        expect(deck).toHaveLength(10);
+        const cropCount = deck.filter((c) => (c as any).cardKind === 'receipt').length;
+        expect(cropCount).toBe(7);
+        expect(deck.length - cropCount).toBe(3);
+    });
+
+    it('when few crops, slot rescues take the remaining room (up to 10)', () => {
+        const deck = composeVoluntaryReceiptDeck(crops(2), makeReceiptCards({ s2: 20 }), 7);
+        expect(deck).toHaveLength(10);
+        expect(deck.filter((c) => (c as any).cardKind === 'receipt')).toHaveLength(2);
+    });
+
+    it('never exceeds the 10-card cap', () => {
+        const deck = composeVoluntaryReceiptDeck(crops(7), makeReceiptCards({ s2: 20 }), 7);
+        expect(deck).toHaveLength(10);
+    });
+
+    it('no crops → the slot deck straight through (cap 10)', () => {
+        const deck = composeVoluntaryReceiptDeck([], makeReceiptCards({ s2: 12 }), 7);
+        expect(deck).toHaveLength(10);
+        expect(deck.every((c) => c.cardId.startsWith('r-'))).toBe(true);
     });
 });
 

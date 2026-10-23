@@ -1,11 +1,10 @@
 import { memo, useMemo } from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 import { useTranslation } from 'react-i18next';
-import * as Haptics from 'expo-haptics';
 import { ProductImage } from '../ProductImage';
 import { ChainLogoStrip } from '../ChainLogoStrip';
 import { ScalePressable } from '../ScalePressable';
-import { QuantityControl } from '../QuantityControl';
+import { AddOrStepper, type SteppableProduct } from '../AddOrStepper';
 import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
 import { chainBrandColorById } from '../../utils/chainBrandName';
 import { formatEuro } from '../../utils/formatCurrency';
@@ -22,26 +21,36 @@ export type UnitPriceBadge = {
     showLogo: boolean;
 };
 
+/** A generic top-right pill: an optional chain logo + a text (per-unit price on
+ *  browse/search; a "-30%" discount on the discounts screen). The visual is the
+ *  same half-pill either way. */
+export type CardBadge = {
+    showLogo: boolean;
+    chainId?: number | null;
+    logoUrl?: string | null;
+    text: string;
+};
+
 type Props = {
     name: string;
     imageUrls?: ImageUrlList;
     chainLogos?: ChainLogo[] | string | null;
     amountText?: string;
     quantity: number;
+    /** The product itself — drives AddOrStepper's canonical stepping + picker. */
+    product: SteppableProduct;
+    /** Persist the new quantity (0 = remove). AddOrStepper owns the stepping. */
+    onCommit: (qty: number) => void;
     isAdding?: boolean;
     /** Overrides the default "Į krepšelį" label on the add CTA. Used by
      *  the template-add flow to render "Į šabloną" instead. */
     addLabel?: string;
     onOpen?: () => void;
-    onAdd: () => void;
-    onDec: () => void;
-    onInc: () => void;
-    /** Tap on the quantity itself → re-open the amount picker prefilled. */
-    onQuantityPress?: () => void;
-    /** Canonical unit shown muted next to the number (kg / l / vnt). */
-    quantityUnit?: string | null;
-    /** Cheapest-per-unit badge; omit (e.g. discounts screen) to hide. */
+    /** Cheapest-per-unit badge (browse / search). */
     badge?: UnitPriceBadge | null;
+    /** Top-right discount badge (discounts screen) — rendered in the SAME slot
+     *  as `badge`; use one or the other. */
+    discountBadge?: CardBadge | null;
 };
 
 function BasketProductCard({
@@ -50,19 +59,23 @@ function BasketProductCard({
     chainLogos,
     amountText,
     quantity,
+    product,
+    onCommit,
     isAdding = false,
     addLabel,
     onOpen,
-    onAdd,
-    onDec,
-    onInc,
-    onQuantityPress,
-    quantityUnit,
     badge,
+    discountBadge,
 }: Props) {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+
+    // ONE top-right pill: the per-unit price (browse/search) OR a discount
+    // (discounts) — same half-pill visual, just different content.
+    const topBadge: CardBadge | null = badge
+        ? { showLogo: badge.showLogo, chainId: badge.chainId, logoUrl: badge.logoUrl, text: `${formatEuro(badge.unitPrice)}/${badge.unit}` }
+        : discountBadge ?? null;
 
     return (
         <View style={styles.productCard}>
@@ -82,18 +95,18 @@ function BasketProductCard({
                     <ChainLogoStrip chainLogos={chainLogos} style={{ position: 'absolute', top: 6, left: 6 }} />
                 )}
             </ScalePressable>
-            {badge && (
-                <View style={[styles.unitBadge, !badge.showLogo && styles.unitBadgeNoLogo]} pointerEvents="none">
-                    {badge.showLogo && (
-                        <View style={[styles.unitBadgeLogoWrap, { backgroundColor: chainBrandColorById(badge.chainId) }]}>
-                            {badge.logoUrl ? (
-                                <Image source={{ uri: badge.logoUrl }} style={styles.unitBadgeLogo} resizeMode="contain" />
+            {topBadge && (
+                <View style={[styles.unitBadge, !topBadge.showLogo && styles.unitBadgeNoLogo]} pointerEvents="none">
+                    {topBadge.showLogo && (
+                        <View style={[styles.unitBadgeLogoWrap, { backgroundColor: chainBrandColorById(topBadge.chainId ?? 0) }]}>
+                            {topBadge.logoUrl ? (
+                                <Image source={{ uri: topBadge.logoUrl }} style={styles.unitBadgeLogo} resizeMode="contain" />
                             ) : (
-                                <Text style={styles.unitBadgeLogoFallback}>{badge.chainId}</Text>
+                                <Text style={styles.unitBadgeLogoFallback}>{topBadge.chainId}</Text>
                             )}
                         </View>
                     )}
-                    <Text style={styles.unitBadgeText}>{`${formatEuro(badge.unitPrice)}/${badge.unit}`}</Text>
+                    <Text style={styles.unitBadgeText}>{topBadge.text}</Text>
                 </View>
             )}
 
@@ -102,27 +115,15 @@ function BasketProductCard({
                 {!!amountText && <Text style={styles.amountText}>{amountText}</Text>}
             </View>
 
-            {quantity === 0 ? (
-                <ScalePressable
-                    style={[styles.addButton, isAdding && { opacity: 0.5 }]}
-                    disabled={isAdding}
-                    onPress={() => {
-                        Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-                        onAdd();
-                    }}
-                >
-                    <Text style={styles.addButtonText}>{addLabel ?? t('browse.addToBasket')}</Text>
-                </ScalePressable>
-            ) : (
-                <QuantityControl
-                    quantity={quantity}
-                    onDecrement={onDec}
-                    onIncrement={onInc}
-                    onCenterPress={onQuantityPress}
-                    unit={quantityUnit}
-                    style={{ width: '100%' }}
-                />
-            )}
+            <AddOrStepper
+                product={product}
+                quantity={quantity}
+                onCommit={onCommit}
+                busy={isAdding}
+                addLabel={addLabel ?? t('catalog.addToBasket')}
+                fullWidth
+                noIcon
+            />
         </View>
     );
 }
@@ -159,14 +160,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     productInfo: { flex: 1, width: '100%', marginBottom: 10 },
     productName: { fontSize: 13, color: c.textPrimary, lineHeight: 18 },
     amountText: { fontSize: 12, color: c.textMuted, marginTop: 2 },
-    addButton: {
-        width: '100%',
-        backgroundColor: c.primary,
-        borderRadius: radius.pill,
-        paddingVertical: 10,
-        alignItems: 'center',
-    },
-    addButtonText: { color: c.onPrimary, fontSize: 13, fontWeight: '600' },
     // Half-pill: rounded on the left, flat on the right, flush with the
     // card's right edge (right: 0 escapes the card's 12px padding). Top
     // aligns its centre with the chain-logo strip on the left (strip sits

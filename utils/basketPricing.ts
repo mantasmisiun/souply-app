@@ -61,12 +61,13 @@ export async function fetchStorePrices(
     basketId: string | number,
     storeIds: number[],
     coords: { lat: number; lng: number } | null,
+    saver = false,
 ): Promise<StoreResult[]> {
     const ids = Array.from(new Set(storeIds.filter(n => Number.isFinite(n) && n > 0))).slice(0, STORE_PRICE_BATCH_CAP);
     if (ids.length === 0) return [];
 
     const locPart = coords ? `${coords.lat.toFixed(3)},${coords.lng.toFixed(3)}` : '';
-    const key = `${basketId}:${[...ids].sort((a, b) => a - b).join(',')}:${locPart}`;
+    const key = `${basketId}:${[...ids].sort((a, b) => a - b).join(',')}:${locPart}:${saver ? 's' : '_'}`;
     const existing = inFlight.get(key);
     if (existing) return existing;
 
@@ -75,7 +76,7 @@ export async function fetchStorePrices(
             const res = await fetch(`${API_BASE_URL}/api/baskets/${basketId}/store-prices`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ storeIds: ids, lat: coords?.lat, lng: coords?.lng }),
+                body: JSON.stringify({ storeIds: ids, lat: coords?.lat, lng: coords?.lng, saver }),
             });
             if (!res.ok) throw new Error(`store-prices ${res.status}`);
             return (await res.json()) as StoreResult[];

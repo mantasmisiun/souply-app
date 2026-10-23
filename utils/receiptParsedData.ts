@@ -7,6 +7,7 @@
  * server persists. Any divergence here would mean the background pipeline
  * saves a different shape than the interactive screen re-saves on edit.
  */
+import { type LoyaltyMoney } from '@shared/parsers/loyaltyMoney';
 import type { Region, LabeledRegion } from "@shared/parsers/rimiParser";
 import type { ItemConfidence } from "@shared/recognitionConfig";
 import { redactReceiptText, type MaskBand } from "@shared/parsers/cardMaskDetection";
@@ -164,6 +165,11 @@ export interface FooterData {
    *  adjustment row on the Prekės tab; rides parsedData.footer to the server
    *  (savings + store comparison subtract it from the visited basket). */
   comboDiscount: number | null;
+  /** Loyalty money moved by this receipt ("Nurašyta MAXIMOS pinigų 0,12"): the
+   *  redeemed part is paid from an earned balance AFTER the lines, so the line
+   *  sum legitimately exceeds the printed total by that much — reconciliation
+   *  and the savings stats both read it. See @shared/parsers/loyaltyMoney. */
+  loyalty?: LoyaltyMoney | null;
   rawText: string;
   region: Region;
   lineRegions?: LabeledRegion[];

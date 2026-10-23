@@ -1,19 +1,27 @@
-import { Tabs } from 'expo-router';
-import { NativeTabs, Icon, Label, Badge } from 'expo-router/unstable-native-tabs';
-import { Ionicons } from '@expo/vector-icons';
+import { Redirect, useFocusEffect } from 'expo-router';
+// SDK 57: `Tabs` moved to the js-tabs entry (the main-entry export is deprecated),
+// and the type must come from the SAME entry — expo-router forked react-navigation,
+// so `BottomTabBarProps` from the standalone @react-navigation/bottom-tabs package
+// is a different (incompatible) type identity.
+import { Tabs, type BottomTabBarProps } from 'expo-router/js-tabs';
+import { NativeTabs } from 'expo-router/unstable-native-tabs';
 import { BlurView } from 'expo-blur';
 import { Component, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
-import { Platform, View, Text, StyleSheet } from 'react-native';
+import { AppState, Platform, View, Text, StyleSheet } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../config/api';
 import { getUserId } from '../../config/user';
 import { useTheme, type AppTheme } from '../../constants/theme';
-import { useProfileStore } from '../../state/profileStore';
+import { fetchProfileIfStale } from '../../state/profileStore';
+import { useAdminModeStore } from '../../state/adminModeStore';
 import { HapticTab } from '../../components/haptic-tab';
-import { countAwaitingReceiptGroups } from '../../utils/awaitingReceipts';
 import { FloatingPillTabBar } from '../../components/FloatingPillTabBar';
-import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { BeetrootIcon, BasketGlyph, ChefToqueGlyph, PiggyBankGlyph } from '../../components/icons/tabGlyphs';
 import { devLog } from '../../utils/devLog';
+
+// SDK 57: Icon/Label/Badge are no longer standalone exports of
+// expo-router/unstable-native-tabs — they live under NativeTabs.Trigger.
+const { Icon, Label, Badge } = NativeTabs.Trigger;
 
 class NativeTabsBoundary extends Component<{ fallback: ReactNode; children: ReactNode }, { hasError: boolean }> {
     state = { hasError: false };
@@ -38,58 +46,76 @@ function TabBadge({ count, styles }: { count: number; styles: ReturnType<typeof 
     );
 }
 
-export default function TabLayout() {
+// Declarative mode guard: while admin mode is active this group is
+// unreachable — pressing BACK out of (admin) lands here and bounces straight
+// back, so mode switching needs no app reload. Lives in a WRAPPER component
+// so the guarded early-return never changes the inner layout's hook order
+// ("Rendered more hooks than during the previous render").
+export default function TabLayoutGuard() {
+    const adminMode = useAdminModeStore(st => st.mode);
+    const adminHydrated = useAdminModeStore(st => st.hydrated);
+    if (adminHydrated && adminMode === 'admin') {
+        return <Redirect href={'/(admin)/catalog' as any} />;
+    }
+    return <TabLayout />;
+}
+
+function TabLayout() {
+
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
-    const [basketCount, setBasketCount] = useState(0);
-    const [listCount, setListCount] = useState(0);
+    const [tripCount, setTripCount] = useState(0);
     const [pendingSwipeCount, setPendingSwipeCount] = useState(0);
 
-    const fetchCounts = async () => {
+    // ONE badge endpoint (2.0): trips ≈ non-archived trips in stages 1-4
+    // (server-side grouping of baskets + lists until Phase 4 goes Trip-native);
+    // pendingSwipes moved to the Profilis tab badge.
+    const fetchCounts = useCallback(async () => {
         try {
             const userId = await getUserId();
-            const [basketRes, listRes, profileRes] = await Promise.all([
-                fetch(`${API_BASE_URL}/api/baskets/user/${userId}`),
-                fetch(`${API_BASE_URL}/api/shopping-lists/user/${userId}`),
-                fetch(`${API_BASE_URL}/api/users/${userId}/profile`),
-            ]);
-            const baskets = await basketRes.json();
-            const lists = await listRes.json();
-            const profile = await profileRes.json();
-
-            setBasketCount(Array.isArray(baskets)
-                ? baskets.filter((b: any) => b.status !== 'completed').length
-                : 0
-            );
-            // List badge = active list groups + completed groups still
-            // awaiting a receipt (both grouped by basket so a split counts once).
-            const activeGroups = Array.isArray(lists)
-                ? new Set(
-                    lists
-                        .filter((l: any) => l.status === 'active')
-                        .map((l: any) => l.basketId != null ? `b-${l.basketId}` : `l-${l.id}`)
-                ).size
-                : 0;
-            const awaitingGroups = Array.isArray(lists) ? countAwaitingReceiptGroups(lists) : 0;
-            setListCount(activeGroups + awaitingGroups);
-            setPendingSwipeCount(profile?.pendingSwipeCount ?? (profile?.pendingSwipes ? 1 : 0));
+            const res = await fetch(`${API_BASE_URL}/api/users/${userId}/tab-badges`);
+            const badges = await res.json();
+            setTripCount(Number(badges?.trips) || 0);
+            setPendingSwipeCount(Number(badges?.pendingSwipes) || 0);
         } catch (error) {
             console.error('Failed to fetch counts:', error);
         }
-    };
-
-    useEffect(() => {
-        fetchCounts();
-        const interval = setInterval(fetchCounts, 10000);
-        return () => clearInterval(interval);
     }, []);
 
+    // Refetch when the tab group (re)gains navigation focus — covers mount and
+    // every return from a root-stack push (receipt flows, settings, ...).
+    useFocusEffect(useCallback(() => { fetchCounts(); }, [fetchCounts]));
+
+    // Poll gated on the app actually being in the FOREGROUND, at 60s. The old
+    // 10s always-on interval kept firing while backgrounded (~360 req/h);
+    // AppState pauses it entirely, and a foreground return refetches at once.
     useEffect(() => {
-        useProfileStore.getState().fetchProfile();
+        let interval: ReturnType<typeof setInterval> | null = null;
+        const start = () => { if (interval == null) interval = setInterval(fetchCounts, 60_000); };
+        const stop = () => { if (interval != null) { clearInterval(interval); interval = null; } };
+        if (AppState.currentState === 'active') start();
+        const sub = AppState.addEventListener('change', (state) => {
+            if (state === 'active') { fetchCounts(); start(); }
+            else stop();
+        });
+        return () => { stop(); sub.remove(); };
+    }, [fetchCounts]);
+
+    // Stale-guarded (state/profileStore.ts) — the store already knows when its
+    // data is fresh; the previous unconditional fetchProfile() bypassed that
+    // and refetched profile+stats on every tab-layout mount.
+    useEffect(() => {
+        fetchProfileIfStale();
     }, []);
 
     const renderTabBar = useCallback((props: BottomTabBarProps) => <FloatingPillTabBar {...props} />, []);
+
+    // Mount diagnostic, ONCE — this used to sit in the render body of the iOS
+    // branch, POSTing to /api/dev-log on every re-render of the tab layout.
+    useEffect(() => {
+        if (Platform.OS === 'ios') devLog('tabs.iosLayoutMount', {});
+    }, []);
 
     const jsTabs = (
         <Tabs
@@ -99,9 +125,19 @@ export default function TabLayout() {
                 freezeOnBlur: true,
                 tabBarActiveTintColor: colors.primary,
                 tabBarInactiveTintColor: colors.textSecondary,
+                // The real bar visuals live in the DockedGlassSheet (glass pill).
+                // React Navigation's own tab-bar container must be a transparent
+                // ABSOLUTE overlay so it floats ABOVE the tab's content — incl.
+                // screens pushed inside a tab's nested native stack. Without
+                // position:absolute the container sits in normal flow and an
+                // Android native-stack push paints over the pill (it vanishes on
+                // catalog sub-screens). Screens already pad for a floating bar via
+                // FLOATING_TAB_BAR_CLEARANCE, so reserving no space is correct.
                 tabBarStyle: {
-                    backgroundColor: colors.cardBackground,
-                    borderTopColor: colors.borderSubtle,
+                    position: 'absolute',
+                    backgroundColor: 'transparent',
+                    borderTopWidth: 0,
+                    elevation: 0,
                 },
                 // Each tab is a folder with its own nested Stack (see
                 // tabStackOptions), which provides the native glass header.
@@ -110,47 +146,32 @@ export default function TabLayout() {
             }}
         >
             <Tabs.Screen
-                name="browse"
+                name="catalog"
                 options={{
-                    title: t('tabs.browse'),
+                    title: t('tabs.catalog'),
                     tabBarIcon: ({ focused, color, size }) => (
-                        <Ionicons name={focused ? 'search' : 'search-outline'} size={size} color={color} />
+                        <BeetrootIcon size={size} color={color} filled={focused} />
                     ),
                 }}
             />
             <Tabs.Screen
                 name="basket"
                 options={{
-                    title: t('tabs.basket'),
-                    tabBarIcon: ({ focused, color, size }) => (
+                    title: t('tabs.trips'),
+                    tabBarIcon: ({ color, size }) => (
                         <View>
-                            <Ionicons name={focused ? 'cart' : 'cart-outline'} size={size} color={color} />
-                            <TabBadge count={basketCount} styles={styles} />
+                            <BasketGlyph size={size} color={color} />
+                            <TabBadge count={tripCount} styles={styles} />
                         </View>
                     ),
                 }}
             />
             <Tabs.Screen
-                name="shoppingList"
+                name="templates"
                 options={{
-                    title: t('tabs.shoppingList'),
-                    tabBarIcon: ({ focused, color, size }) => (
-                        <View>
-                            <Ionicons name={focused ? 'list' : 'list-outline'} size={size} color={color} />
-                            <TabBadge count={listCount} styles={styles} />
-                        </View>
-                    ),
-                }}
-            />
-            <Tabs.Screen
-                name="receipts"
-                options={{
-                    title: t('tabs.receipts'),
-                    tabBarIcon: ({ focused, color, size }) => (
-                        <View>
-                            <Ionicons name={focused ? 'receipt' : 'receipt-outline'} size={size} color={color} />
-                            {pendingSwipeCount > 0 && <TabBadge count={pendingSwipeCount} styles={styles} />}
-                        </View>
+                    title: t('tabs.templates'),
+                    tabBarIcon: ({ color, size }) => (
+                        <ChefToqueGlyph size={size} color={color} />
                     ),
                 }}
             />
@@ -158,8 +179,11 @@ export default function TabLayout() {
                 name="menu"
                 options={{
                     title: t('tabs.profilis'),
-                    tabBarIcon: ({ focused, color, size }) => (
-                        <Ionicons name={focused ? 'person' : 'person-outline'} size={size} color={color} />
+                    tabBarIcon: ({ color, size }) => (
+                        <View>
+                            <PiggyBankGlyph size={size} color={color} />
+                            {pendingSwipeCount > 0 && <TabBadge count={pendingSwipeCount} styles={styles} />}
+                        </View>
                     ),
                 }}
             />
@@ -167,36 +191,29 @@ export default function TabLayout() {
     );
 
     if (Platform.OS === 'ios') {
-        devLog('tabs.iosLayoutMount', { basketCount, listCount, pendingSwipeCount });
         const fmt = (n: number) => (n > 0 ? (n > 9 ? '9+' : String(n)) : undefined);
-        const basketBadge = fmt(basketCount);
-        const listBadge = fmt(listCount);
+        const tripBadge = fmt(tripCount);
         const swipeBadge = fmt(pendingSwipeCount);
         return (
             <NativeTabsBoundary fallback={jsTabs}>
                 <NativeTabs tintColor={colors.primary}>
-                    <NativeTabs.Trigger name="browse">
-                        <Icon sf="magnifyingglass" />
-                        <Label>{t('tabs.browse')}</Label>
+                    <NativeTabs.Trigger name="catalog">
+                        <Icon src={require('../../assets/icons/beet-filled.png')} />
+                        <Label>{t('tabs.catalog')}</Label>
                     </NativeTabs.Trigger>
                     <NativeTabs.Trigger name="basket">
-                        <Icon sf={{ default: 'cart', selected: 'cart.fill' }} />
-                        <Label>{t('tabs.basket')}</Label>
-                        {basketBadge ? <Badge>{basketBadge}</Badge> : null}
+                        <Icon src={require('../../assets/icons/tab-basket.png')} />
+                        <Label>{t('tabs.trips')}</Label>
+                        {tripBadge ? <Badge>{tripBadge}</Badge> : null}
                     </NativeTabs.Trigger>
-                    <NativeTabs.Trigger name="shoppingList">
-                        <Icon sf="list.bullet" />
-                        <Label>{t('tabs.shoppingList')}</Label>
-                        {listBadge ? <Badge>{listBadge}</Badge> : null}
-                    </NativeTabs.Trigger>
-                    <NativeTabs.Trigger name="receipts">
-                        <Icon sf={{ default: 'doc.text', selected: 'doc.text.fill' }} />
-                        <Label>{t('tabs.receipts')}</Label>
-                        {swipeBadge ? <Badge>{swipeBadge}</Badge> : null}
+                    <NativeTabs.Trigger name="templates">
+                        <Icon src={require('../../assets/icons/tab-chef.png')} />
+                        <Label>{t('tabs.templates')}</Label>
                     </NativeTabs.Trigger>
                     <NativeTabs.Trigger name="menu">
-                        <Icon sf={{ default: 'person', selected: 'person.fill' }} />
+                        <Icon src={require('../../assets/icons/tab-piggy.png')} />
                         <Label>{t('tabs.profilis')}</Label>
+                        {swipeBadge ? <Badge>{swipeBadge}</Badge> : null}
                     </NativeTabs.Trigger>
                 </NativeTabs>
             </NativeTabsBoundary>

@@ -77,7 +77,7 @@ export function SwipeableRow({ children, onDelete, onComplete, isCompleted }: Pr
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { overflow: 'hidden' },
     bg: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         alignItems: 'center',
         justifyContent: 'center',
     },

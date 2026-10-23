@@ -70,11 +70,29 @@ export function nameGarbleCount(parsed: IkiParseResult): number {
     return parsed.products.reduce((n, p) => n + (isNameGarbled(p) ? 1 : 0), 0);
 }
 
+/** A product band's full quad (per-corner Y + x bounds) — lets a deskewing ReOcrFn straighten it. */
+export interface BandQuad {
+    xLeft: number; xRight: number;
+    yLeftTop: number; yRightTop: number; yLeftBottom: number; yRightBottom: number;
+}
+
+/** Build a BandQuad from a product region, or null when the region lacks per-corner geometry. */
+export function regionQuad(p: IkiProduct): BandQuad | null {
+    const r = p.region;
+    if (!r || !(r.xRight > r.xLeft)) return null;
+    const yLT = r.yLeftTop ?? r.yTop, yRT = r.yRightTop ?? r.yTop;
+    const yLB = r.yLeftBottom ?? r.yBottom, yRB = r.yRightBottom ?? r.yBottom;
+    if (yLT == null || yRT == null || yLB == null || yRB == null) return null;
+    return { xLeft: r.xLeft, xRight: r.xRight, yLeftTop: yLT, yRightTop: yRT, yLeftBottom: yLB, yRightBottom: yRB };
+}
+
 export interface SuspectStrip {
     index: number;
     reason: SuspectReason;
     /** Source-image y-span of the product's band — the strip to crop+re-OCR + splice. */
     ySpan: [number, number];
+    /** The band quad (per-corner) so a deskewing ReOcrFn can straighten this band. */
+    quad: BandQuad | null;
 }
 
 /** Per-product failure gate. Clean receipts return [] → the caller does nothing (zero cost). */
@@ -83,7 +101,20 @@ export function detectSuspectProducts(parsed: IkiParseResult): SuspectStrip[] {
     parsed.products.forEach((p, index) => {
         const reason = suspectReason(p);
         if (reason && p.region && p.region.yBottom > p.region.yTop) {
-            out.push({ index, reason, ySpan: [p.region.yTop, p.region.yBottom] });
+            out.push({ index, reason, ySpan: [p.region.yTop, p.region.yBottom], quad: regionQuad(p) });
+        }
+    });
+    return out;
+}
+
+/** EVERY product with a real band — used when the receipt won't reconcile but no single product is
+ *  individually flaggable (a mis-attributed discount leaves each product "clean"): sweep them all
+ *  and let the accept gate keep only the band whose re-read shrinks the reconciliation gap. */
+export function allProductBands(parsed: IkiParseResult): SuspectStrip[] {
+    const out: SuspectStrip[] = [];
+    parsed.products.forEach((p, index) => {
+        if (p.region && p.region.yBottom > p.region.yTop) {
+            out.push({ index, reason: 'reconciliation', ySpan: [p.region.yTop, p.region.yBottom], quad: regionQuad(p) });
         }
     });
     return out;
@@ -163,11 +194,14 @@ export function acceptReocr(
     return improved && !reconWorse;
 }
 
-/** Injected device re-OCR: given a strip's source y-span, return clean fresh IkiLines (or null on failure). */
+/** Injected device re-OCR: given a strip's source y-span, return clean fresh IkiLines (or null on
+ *  failure). An optional `quad` (present only for single-band calls) lets a deskewing implementation
+ *  straighten that band before OCR; whole-section/header/footer calls pass no quad (rect crop). */
 export type ReOcrFn = (
     ySpan: [number, number],
     reason: string,            // a label for logging (the trigger reason / section)
     productIndex: number,
+    quad?: BandQuad | null,
 ) => Promise<IkiLine[] | null>;
 
 /**
@@ -287,9 +321,11 @@ async function runSectionReocr(
     span: [number, number],
     label: string,
     accept: (orig: IkiParseResult, cand: IkiParseResult) => boolean,
+    quad: BandQuad | null = null,
+    productIndex = -1,
 ): Promise<ReocrOutcome> {
     let fresh: IkiLine[] | null = null;
-    try { fresh = await reOcr(span, label, -1); } catch { fresh = null; }
+    try { fresh = await reOcr(span, label, productIndex, quad); } catch { fresh = null; }
     const freshInSpan = fresh ? linesInSpan(fresh, span) : [];
     if (freshInSpan.length === 0) return { parsed, lines: mergedLines, accepted: false, detail: `${label}:re-ocr-empty` };
 
@@ -330,6 +366,53 @@ export async function maybeReocrProducts(
     const span = productSectionSpan(parsed);
     if (!span) return { parsed, lines: mergedLines, accepted: false, detail: 'no-span' };
     return runSectionReocr(parsed, mergedLines, reOcr, span, `products(${trigger})`, (o, c) => acceptReocr(o, c, epsilon));
+}
+
+/**
+ * PER-BAND product re-OCR (Tier 1/2): re-OCR EACH suspect product's OWN band in isolation — not the
+ * whole section — threading every accepted splice forward so later bands see the improved line
+ * stream. Isolating a single product's rows removes the cross-product ambiguity that makes the
+ * whole-section pass reproduce the same mis-read of a garbled name (e.g. MAGIJA "-0, 0.65 84 A A"),
+ * and — paired with a DESKEWING ReOcrFn (the `quad` is passed through) — straightens that band's
+ * rows so its name/price/discount line up and re-parse cleanly. Complements maybeReocrProducts: the
+ * whole-section pass fixes CROSS-band scrambles (content displaced into a neighbour), this fixes
+ * WITHIN-band garbles. Each band is kept only if it strictly improves the parse (acceptReocr), so
+ * the worst case is a no-op. Fail-safe throughout.
+ *
+ * Trigger: per-product suspects (optionally filtered by `reasons`); OR — when `reconcileThreshold`
+ * is set and nothing is individually flagged — every band (a mis-attributed discount leaves each
+ * product individually clean yet the receipt won't reconcile, so sweep them all).
+ */
+export async function maybeReocrProductBands(
+    parsed: IkiParseResult,
+    mergedLines: IkiLine[],
+    reOcr: ReOcrFn,
+    opts: ReocrOptions = {},
+): Promise<ReocrOutcome> {
+    const epsilon = opts.epsilon ?? 0.05;
+    let suspects = detectSuspectProducts(parsed);
+    if (opts.reasons) suspects = suspects.filter((s) => opts.reasons!.includes(s.reason));
+    if (suspects.length === 0 && opts.reconcileThreshold != null) {
+        const gap = reconcileGap(parsed);
+        if (gap != null && gap > opts.reconcileThreshold) suspects = allProductBands(parsed);
+    }
+    if (suspects.length === 0) return { parsed, lines: mergedLines, accepted: false, detail: 'per-band:no-suspects' };
+
+    let curParsed = parsed, curLines = mergedLines, anyAccepted = false, nAccepted = 0;
+    const details: string[] = [];
+    // Snapshot the suspect spans from the ORIGINAL parse — they're SOURCE-image y-ranges, stable
+    // across splices (the image never changes), so a band re-OCR'd later still crops the right pixels.
+    for (const s of suspects) {
+        const out = await runSectionReocr(
+            curParsed, curLines, reOcr, s.ySpan,
+            `band[${s.index}](${s.reason})`,
+            (o, c) => acceptReocr(o, c, epsilon),
+            s.quad, s.index,
+        );
+        details.push(out.detail);
+        if (out.accepted) { curParsed = out.parsed; curLines = out.lines; anyAccepted = true; nAccepted++; }
+    }
+    return { parsed: curParsed, lines: curLines, accepted: anyAccepted, detail: `per-band ${nAccepted}/${suspects.length} accepted | ${details.join(' ; ')}` };
 }
 
 /**

@@ -5,6 +5,7 @@ import {
     TouchableOpacity,
     StyleSheet,
     ScrollView,
+    SectionList,
 } from 'react-native';
 import Animated from 'react-native-reanimated';
 import { Ionicons } from '@expo/vector-icons';
@@ -40,6 +41,8 @@ interface PickableReceipt {
  * chain-scopes the candidates; picking links the receipt to the matching
  * store row and pops back (the list tab refetches on focus).
  */
+const AnimatedSectionList = Animated.createAnimatedComponent(SectionList as typeof SectionList<PickableReceipt>);
+
 export default function ReceiptPickerScreen() {
     const colors = useTheme();
     const insets = useSafeAreaInsets();
@@ -112,33 +115,31 @@ export default function ReceiptPickerScreen() {
 
     return (
         <View style={styles.container}>
-            <CollapsingHeader
-                controller={header}
-                back
-                background={colors.cardBackground}
-                collapsing={<ScreenHeading title={t('shoppingListTab.selectExistingTitle')} />}
-                pinned={
-                    <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        keyboardShouldPersistTaps="handled"
-                        contentContainerStyle={styles.filterRow}
-                    >
-                        <DateFilterButton
-                            value={selectedDate}
-                            onChange={setSelectedDate}
-                            label={t('receipts.filterDate')}
-                            markedDates={receiptDots}
-                        />
-                    </ScrollView>
-                }
-            />
-            <Animated.FlatList
+            <CollapsingHeader controller={header} back smallTitle={t('shoppingListTab.selectExistingTitle')} />
+            {/* Always-pinned filter row: Fabric mis-hit-tests transformed
+                sticky headers (touches fall through to the list). */}
+                    <View onLayout={header.onPinnedLayout} style={{ backgroundColor: colors.pageBackground, marginHorizontal: -spacing.lg }}>
+                        <ScrollView
+                            horizontal
+                            showsHorizontalScrollIndicator={false}
+                            keyboardShouldPersistTaps="handled"
+                            contentContainerStyle={styles.filterRow}
+                        >
+                            <DateFilterButton
+                                value={selectedDate}
+                                onChange={setSelectedDate}
+                                label={t('receipts.filterDate')}
+                                markedDates={receiptDots}
+                            />
+                        </ScrollView>
+                    </View>
+            <AnimatedSectionList
                 {...header.scroll}
-                data={filtered}
+                ListHeaderComponent={<ScreenHeading title={t('shoppingListTab.selectExistingTitle')} onLayout={header.onTitleLayout} />}
+                sections={[{ data: filtered }]}
                 keyExtractor={(r: PickableReceipt) => `pick-${r.id}`}
                 contentInsetAdjustmentBehavior="never"
-                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: insets.bottom + 24 }]}
+                contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: insets.bottom + 24 }]}
                 ListEmptyComponent={
                     <View style={styles.empty}>
                         <Ionicons name="receipt-outline" size={44} color={colors.textMuted} />

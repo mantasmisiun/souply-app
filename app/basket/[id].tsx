@@ -9,10 +9,12 @@ import {
     Modal,
     Platform,
     Dimensions,
+    Share,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
-import { SkeletonBox } from '../../components/SkeletonBox';
+import CalcLoadingModal from '../../components/CalcLoadingModal';
 import { isWeighableDisplay } from '../../utils/weighable';
+import { formatItemAmount } from '../../utils/amountDisplay';
 import { useSafeAreaInsets, initialWindowMetrics } from 'react-native-safe-area-context';
 import { useMemo, useRef, useState, useCallback, useEffect } from 'react';
 import { useLocalSearchParams, useRouter, Stack, useFocusEffect } from 'expo-router';
@@ -24,18 +26,27 @@ import { ScreenBackButton } from '../../components/ScreenBackButton';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { API_BASE_URL } from '../../config/api';
 import { ProductImage } from '../../components/ProductImage';
-import { useTheme, radius, elevation, type AppTheme } from '../../constants/theme';
-import ProductLineCard from '../../components/ProductLineCard';
+import { useTheme, radius, elevation, DIVIDER_ITEM_HEIGHT, type AppTheme } from '../../constants/theme';
 import { useBasketState } from '../../state/basketState';
 import { useDisplayMode } from '../../contexts/DisplayPreferenceContext';
 import LocationPromptModal from '../../components/LocationPromptModal';
-import LocationSettingsPanel from '../../components/LocationSettingsPanel';
-import { GlassStageSheet, SHEET_HANDLE_H, type GlassStageSheetRef } from '../../components/GlassStageSheet';
+import { DockedGlassSheet, type DockedSheetControls } from '../../components/DockedGlassSheet';
+import { AddOrStepper } from '../../components/AddOrStepper';
+import { BrandedQR } from '../../components/BrandedQR';
+import { ChefToqueGlyph } from '../../components/icons/tabGlyphs';
+import { SheetCard } from '../../components/SheetCard';
+import { DockActionRow } from '../../components/dock/DockActionRow';
+import { SheetTitle } from '../../components/dock/SheetTitle';
+import { ConfirmModal } from '../../components/ConfirmModal';
+import { useBasketSession } from '../../state/basketSession';
+import { useBasketQuantitiesStore } from '../../state/basketQuantities';
+import { useShoppingSheet } from '../../state/shoppingSheet';
+import { fetchTrips, createTripInviteUrl } from '../../utils/tripsApi';
 import * as Haptics from 'expo-haptics';
 import { ScalePressable } from '../../components/ScalePressable';
 import { formatDate } from '../../utils/formatCurrency';
-import { loadCachedCoords, persistCoords, tryGpsCoords, type UserCoords, VILNIUS_FALLBACK } from '../../utils/location';
-import { buildCandidatePool } from '../../utils/candidatePool';
+import { loadCachedCoords, tryGpsCoords, type UserCoords } from '../../utils/location';
+import { compareBasket } from '../../utils/basketCalc';
 import { getLocationSettings, type LocationSettings } from '../../utils/locationStorage';
 import { useTranslation } from 'react-i18next';
 import { GlassIconButton } from '../../components/GlassIconButton';
@@ -60,6 +71,9 @@ interface BasketItem {
      *  quantity must label as l, not the old hardcoded kg (Rokiškio pienas
      *  0,5 l rendered "0,5 kg"). */
     canonicalUnit?: string | null;
+    /** Canonical family + step — the weight-vs-count signal (utils/amountDisplay). */
+    canonicalFamily?: 'fluid' | 'count' | string | null;
+    canonicalStep?: number | null;
     imageUrls?: (string | null | undefined)[] | string | null;
 }
 
@@ -103,7 +117,6 @@ export default function BasketDetailScreen() {
     const [basket, setBasket] = useState<Basket | null>(null);
     const [items, setItems] = useState<BasketItem[]>([]);
     const [loading, setLoading] = useState(true);
-    const [quantityInputs, setQuantityInputs] = useState<{[key: number]: string}>({});
     const [basketName, setBasketName] = useState('');
     const [editingName, setEditingName] = useState(false);
     const nameInputRef = useRef<any>(null);
@@ -142,10 +155,14 @@ export default function BasketDetailScreen() {
     // stage 1 = the expanded settings panel. The settings squircle toggles it;
     // dragging the pill does the same. Bar/panel heights are measured by the
     // sheet and drive the snap points.
-    const settingsSheetRef = useRef<GlassStageSheetRef>(null);
-    const sheetStageRef = useRef(0);
-    const [barH, setBarH] = useState(74);
-    const [panelH, setPanelH] = useState(0);
+    const settingsSheetRef = useRef<DockedSheetControls>(null);
+    const [barRowH, setBarRowH] = useState(44);
+    const [dockClearance, setDockClearance] = useState(120);
+    // List-sheet parity: tap a long name to reveal the full name.
+    const [expandedNames, setExpandedNames] = useState<Set<number>>(new Set());
+    // Invite-to-trip QR (resolved via the basket's trip).
+    const [inviteOpen, setInviteOpen] = useState(false);
+    const [inviteUrl, setInviteUrl] = useState<string | null>(null);
     // Save-as-template flow: bookmark icon in the nav bar opens a name
     // prompt → POST /api/basket-templates/from-basket/:id → toast.
     // Save-as-template: the bookmark opens the shared identity sheet
@@ -171,11 +188,16 @@ export default function BasketDetailScreen() {
 
     // 3-dots actions for template-derived baskets.
     const [actionsOpen, setActionsOpen] = useState(false);
+    // Copy/instantiate both await the server before navigating — without a
+    // busy overlay the tap felt dead (and a second tap fired a second copy).
+    const [actionBusy, setActionBusy] = useState(false);
 
     // Copy the basket as it is now. If it was edited, the server returns a
     // "plain" copy (no template identity) — navigate into it.
     const handleCopyBasket = useCallback(async () => {
+        if (actionBusy) return;
         setActionsOpen(false);
+        setActionBusy(true);
         try {
             const userId = await getUserId();
             const res = await fetch(`${API_BASE_URL}/api/baskets/${Number(id)}/copy`, {
@@ -186,24 +208,29 @@ export default function BasketDetailScreen() {
             if (data?.id) router.push(`/basket/${data.id}` as any);
         } catch {
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
+        } finally {
+            setActionBusy(false);
         }
-    }, [id, router, t]);
+    }, [actionBusy, id, router, t]);
 
     // Copy the creator's original (re-instantiate the source template) —
     // keeps the inherited emoji/colour/@attribution + the original items.
     const handleCopyOriginal = useCallback(async () => {
+        if (actionBusy) return;
         setActionsOpen(false);
         const tplId = basket?.sourceTemplateId;
         if (!tplId) return;
+        setActionBusy(true);
         try {
             const userId = await getUserId();
             const res = await instantiateTemplate(tplId, userId, { force: true });
             if (res?.basketId) router.push(`/basket/${res.basketId}` as any);
         } catch {
             Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorInstantiate'));
+        } finally {
+            setActionBusy(false);
         }
-    }, [basket?.sourceTemplateId, router, t]);
-    const [settingsRefreshKey, setSettingsRefreshKey] = useState(0);
+    }, [actionBusy, basket?.sourceTemplateId, router, t]);
     const [activeSettings, setActiveSettings] = useState<LocationSettings | null>(null);
     // Snapshot of the settings used at the time of the most recent calculation.
     // Loaded from AsyncStorage `basket_calc_meta_${id}` whenever the basket
@@ -242,14 +269,6 @@ export default function BasketDetailScreen() {
                 isWeighable: Number(item.isWeighable) === 1,
             })) : [];
             setItems(parsedItems);
-
-            const inputs: {[key: number]: string} = {};
-            parsedItems.forEach((item: any) => {
-                inputs[item.id] = parseFloat(item.quantity) % 1 === 0
-                    ? String(parseInt(item.quantity))
-                    : parseFloat(item.quantity).toFixed(1);
-            });
-            setQuantityInputs(inputs);
         } catch (error) {
             console.error('Failed to fetch basket:', error);
         } finally {
@@ -280,11 +299,9 @@ export default function BasketDetailScreen() {
 
     useFocusEffect(useCallback(() => {
         fetchBasket();
-        setSettingsRefreshKey(k => k + 1);
-        getLocationSettings().then(setActiveSettings);
-        // Returning from the preset map: the sheet stayed mounted (and
-        // expanded) through the push — the refreshKey bump above reloads the
-        // presets, so the new address is already in the panel.
+        // Store-search settings moved to the MAP surface — this screen only
+        // reads them (storeCount / route completeness gate the Stores pill).
+        getLocationSettings(String(id)).then(setActiveSettings);
         // Hydrate the calc-time settings snapshot for the
         // "settings changed" branch. Missing key → leave null and the
         // button falls back to "Rodyti parduotuves".
@@ -356,8 +373,48 @@ export default function BasketDetailScreen() {
         // user must re-run the comparison before viewing results again.
         await revertToDraftIfCompared();
         setDraftBasketId(Number(id));
-        router.navigate('/(tabs)/browse' as any);
+        // Target the SESSION at this basket too, so every catalog surface
+        // (cards, list sheet) reads and writes THIS basket.
+        useBasketSession.getState().setTarget({ kind: 'basket', basketId: Number(id), isFamily: false }, items.length);
+        router.navigate('/(tabs)/catalog' as any);
     };
+
+    // Invite a friend: baskets belong to trips — resolve the trip and show
+    // its invite QR (same join flow as everywhere else).
+    const openInvite = useCallback(async () => {
+        setInviteOpen(true);
+        setInviteUrl(null);
+        try {
+            const trips = await fetchTrips();
+            const trip = trips.find(tr => tr.basket?.id === Number(id));
+            if (!trip) { setInviteOpen(false); return; }
+            setInviteUrl(await createTripInviteUrl(trip.id));
+        } catch { setInviteOpen(false); }
+    }, [id]);
+
+    // Remove the whole basket — a souply-styled confirm (not the stock
+    // Android alert). Deletes the server row, clears any session targeting
+    // it and leaves the screen.
+    const [removeConfirmOpen, setRemoveConfirmOpen] = useState(false);
+    // Tap Remove → collapse the sheet, THEN raise the confirm modal over it.
+    const removeBasket = useCallback(() => {
+        settingsSheetRef.current?.collapse();
+        setRemoveConfirmOpen(true);
+    }, []);
+    const doRemoveBasket = useCallback(async () => {
+        setRemoveConfirmOpen(false);
+        fetch(`${API_BASE_URL}/api/baskets/${id}`, { method: 'DELETE' }).catch(() => {});
+        const sess = useBasketSession.getState();
+        if (sess.target?.kind === 'basket' && sess.target.basketId === Number(id)) {
+            useBasketSession.setState({ target: null, barVisible: false, itemCount: 0 });
+        }
+        clearSessionBasket();
+        router.back();
+        // Fire the card's exit animation just AFTER the back transition, so the
+        // user is looking at the Shopping list when the card animates away.
+        const removeSignal = useShoppingSheet.getState().removeTripByBasket;
+        setTimeout(() => removeSignal?.(Number(id)), 320);
+    }, [id, router, clearSessionBasket]);
 
     // Changing location/store-count settings while compared is also an edit:
     // drop back to draft so the bottom button retargets to "Rasti parduotuves".
@@ -390,14 +447,27 @@ export default function BasketDetailScreen() {
 
         // Optimistic update + rollback on failure.
         const previousQty = existing.quantity;
-        const previousInput = quantityInputs[itemId];
         setItems(prev => prev.map(item =>
             item.id === itemId ? { ...item, quantity: rounded } : item
         ));
-        setQuantityInputs(prev => ({ ...prev, [itemId]: String(rounded) }));
 
         try {
             await revertToDraftIfCompared();
+            // COALESCED PATH: when the shared quantities store is bound to
+            // THIS basket (it follows the session target), route the write
+            // through it — a burst of ± taps becomes ONE debounced by-product
+            // PUT with supersede/abort semantics, exactly like the catalog
+            // stepper, instead of a PUT per tap. The store also owns the
+            // rollback (server-truth fallback + add-failed notice) and bumps
+            // basketRev on success, so every surface stays in step.
+            const qStore = useBasketQuantitiesStore.getState();
+            if (qStore.basketId === Number(id)) {
+                qStore.commit(existing.productId, rounded);
+                markEditedLocally();
+                return;
+            }
+            // Not the session target (opened from the baskets list with no
+            // active session) — keep the direct per-item write.
             const res = await fetch(`${API_BASE_URL}/api/basket-items/${itemId}`, {
                 method: 'PUT',
                 headers: { 'Content-Type': 'application/json' },
@@ -411,7 +481,6 @@ export default function BasketDetailScreen() {
             setItems(prev => prev.map(item =>
                 item.id === itemId ? { ...item, quantity: previousQty } : item
             ));
-            setQuantityInputs(prev => ({ ...prev, [itemId]: previousInput }));
             Alert.alert('Klaida', 'Nepavyko atnaujinti kiekio');
         }
     };
@@ -447,54 +516,20 @@ export default function BasketDetailScreen() {
         setCalcError(null);
         setCalcing(true);
         try {
-            // Build candidate pool from location settings (non-blocking on failure)
-            const [pool, settings] = await Promise.all([
-                buildCandidatePool({ lat: coords.lat, lng: coords.lng }),
-                getLocationSettings(),
-            ]);
-
-            // The calculate origin must be the SETTINGS-RESOLVED centre (the
-            // chosen place/bus centre), not the device position: the server
-            // derives every store's `distance` from these coords, and the
-            // combo scorer optimises travel from them. Posting raw GPS in
-            // place mode skewed recommendations toward the user's CURRENT
-            // location (candidates around the place, distances from the GPS).
-            // Route mode has no single centre (searchCenter null) → resolved
-            // coords remain the fallback origin.
-            const origin = pool.searchCenter ?? coords;
-            const body: Record<string, any> = { lat: origin.lat, lng: origin.lng };
-            if (pool.storeIds.length > 0) body.storeIds = pool.storeIds;
-
-            const res = await fetch(`${API_BASE_URL}/api/baskets/${id}/calculate`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(body),
-            });
-            if (!res.ok) throw new Error(`HTTP ${res.status}`);
-            const newResults = await res.json();
-
-            // Persist results + location context so the results screen can score combos.
-            // The full `settings` snapshot is also written so the basket-detail
-            // screen can detect "user changed settings since the last calc" and
-            // swap the button text from "view results" to "re-find stores".
-            await Promise.all([
-                AsyncStorage.setItem(`basket_results_${id}`, JSON.stringify(newResults)),
-                AsyncStorage.setItem(`basket_calc_meta_${id}`, JSON.stringify({
-                    storeCount: settings.storeCount,
-                    searchCenter: pool.searchCenter,
-                    settings,
-                })),
-            ]);
+            // THE shared comparison path (utils/basketCalc) — candidate pool,
+            // settings-resolved origin, POST /calculate, both cache keys, and
+            // persisting the coords that produced these results. This screen
+            // used to carry its own inline copy of all of that; the recipe
+            // screen's one-tap "Parduotuvės" now runs the same compareBasket,
+            // so the two entrances cannot drift apart.
+            await compareBasket(String(id), coords);
 
             setBasket(prev => prev ? { ...prev, status: 'compared' } : prev);
             // This basket is no longer a draft: subsequent "add to basket"
             // taps from product screens should create a new draft instead
             // of attaching here.
             setDraftBasketId(null);
-            // Persist the coords that actually produced these results so
-            // re-calcs use the same viewpoint by default.
-            await persistCoords(coords);
-            router.push(`/basket/results/${id}`);
+            router.replace(`/basket/results/${id}`);
         } catch {
             setCalcError(t('basketDetail.errorCalculate'));
         } finally {
@@ -517,18 +552,9 @@ export default function BasketDetailScreen() {
         && (!activeSettings.routeFrom || !activeSettings.routeTo);
 
     // Bar-sheet snap points: collapsed = pill + action bar; expanded = the
-    // settings panel, content-sized and capped so the list stays visible
-    // behind the float. Read-only baskets get a fixed bar (no expansion).
+    // settings live INSIDE the expanded dock now. Read-only baskets keep a
+    // bar-only dock (no sheet).
     const sheetExpandable = basket?.status !== 'inProgress' && basket?.status !== 'completed';
-    const sheetSnaps = useMemo(() => {
-        const bar = SHEET_HANDLE_H + barH;
-        if (!sheetExpandable || panelH <= 0) return [bar];
-        const expanded = Math.min(bar + panelH, Dimensions.get('window').height * 0.62);
-        return expanded > bar + 40 ? [bar, expanded] : [bar];
-    }, [barH, panelH, sheetExpandable]);
-    const toggleSettingsSheet = () => {
-        settingsSheetRef.current?.snapTo(sheetStageRef.current > 0 ? 0 : 1);
-    };
 
     const handleCalculate = async () => {
         if (calcInFlight.current || calcing) return;
@@ -563,33 +589,14 @@ export default function BasketDetailScreen() {
 
     if (loading) return (
         <View style={styles.container}>
-            {/* Match the loaded header: white bg + pink back chevron + an
-                emoji-tile/name placeholder, so nothing flashes on load. */}
-            <Stack.Screen options={{
-                headerStyle: { backgroundColor: colors.cardBackground },
-                headerShadowVisible: false,
-                headerLeft: () => <ScreenBackButton />,
-                headerTitle: () => (
-                    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-                        <SkeletonBox width={34} height={34} borderRadius={10} />
-                        <SkeletonBox width={120} height={15} borderRadius={6} />
-                    </View>
-                ),
-            }} />
-            <View style={styles.list}>
-                {Array.from({ length: 5 }).map((_, i) => (
-                    <View key={i} style={styles.card}>
-                        <SkeletonBox width={56} height={56} borderRadius={8} />
-                        <View style={{ flex: 1, marginLeft: 12, gap: 10 }}>
-                            <SkeletonBox width={150} height={14} borderRadius={6} />
-                            <View style={{ flexDirection: 'row', gap: 8, marginTop: 2, alignItems: 'center' }}>
-                                <SkeletonBox width={28} height={28} borderRadius={14} />
-                                <SkeletonBox width={40} height={24} borderRadius={6} />
-                                <SkeletonBox width={28} height={28} borderRadius={14} />
-                            </View>
-                        </View>
-                    </View>
-                ))}
+            {/* A plain centered spinner on the page background — no boxed
+                placeholders (the skeleton read as a floating "loading card"). */}
+            <Stack.Screen options={{ headerShown: false }} />
+            <View style={{ paddingTop: 54, paddingHorizontal: 16 }}>
+                <ScreenBackButton />
+            </View>
+            <View style={styles.centered}>
+                <MaterialProgress size="large" color={colors.primary} />
             </View>
         </View>
     );
@@ -619,42 +626,22 @@ export default function BasketDetailScreen() {
         <>
             <CollapsingHeader
                 controller={header}
-                background={headerColor}
                 back
-                headerOptions={{
-                    headerShown: true,
-                    title: '',
-                    headerTitle: () => null,
-                    headerStyle: { backgroundColor: headerColor },
-                    headerTintColor: onCover,
-                    headerShadowVisible: false,
-                    headerLeft: () => <ScreenBackButton color={fromTemplate && basket?.templateCoverColor ? '#FFFFFF' : colors.primary} />,
-                    // Bookmark icon → save-as-template modal. Only meaningful
-                    // when the basket has at least one item; hide otherwise
-                    // so the user isn't prompted to save an empty template.
-                    // Template-derived baskets get a 3-dots menu (copy / copy
-                    // original); manual + plain baskets keep the save-as-template
-                    // bookmark.
-                    headerRight: items.length === 0
-                        ? undefined
-                        : fromTemplate
-                        ? () => (
-                            <GlassIconButton
-                                icon="ellipsis-horizontal"
-                                color={onCover}
-                                onPress={() => setActionsOpen(true)}
-                            />
-                        )
-                        : () => (
-                            <GlassIconButton
-                                icon="bookmark-outline"
-                                color={onCover}
-                                onPress={() => setSaveTplVisible(true)}
-                            />
-                        ),
-                }}
-                collapsing={
-                    fromTemplate ? (
+                smallTitle={titleText}
+                right={fromTemplate && items.length > 0
+                    ? <GlassIconButton icon="ellipsis-horizontal" onPress={() => setActionsOpen(true)} />
+                    : undefined}
+            />
+            <View style={styles.container}>
+                <Animated.FlatList
+                    {...header.scroll}
+                    style={{ flex: 1 }}
+                    data={items}
+                    keyExtractor={(item: any) => item.id.toString()}
+                    contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: dockClearance + 28 }]}
+                    ListHeaderComponent={
+                        <View onLayout={header.onTitleLayout}>
+                        {fromTemplate ? (
                         <View style={styles.titleRow}>
                             <View style={[styles.titleEmoji, {
                                 backgroundColor: basket?.templateCoverColor ? 'rgba(255,255,255,0.22)' : (colors.surfaceMuted ?? colors.cardBackground),
@@ -717,27 +704,8 @@ export default function BasketDetailScreen() {
                                 {titleText}
                             </Text>
                         </TouchableOpacity>
-                    )
-                }
-            />
-            <View style={styles.container}>
-                <Animated.FlatList
-                    {...header.scroll}
-                    style={{ flex: 1 }}
-                    data={items}
-                    keyExtractor={(item: any) => item.id.toString()}
-                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: sheetSnaps[0] + 28 }]}
-                    ListHeaderComponent={
-                        isEditable ? (
-                            <TouchableOpacity
-                                style={styles.addItemBtn}
-                                onPress={handleAddItem}
-                                activeOpacity={0.7}
-                            >
-                                <Ionicons name="add" size={18} color={colors.primary} />
-                                <Text style={styles.addItemBtnText}>{t('basketDetail.addItem')}</Text>
-                            </TouchableOpacity>
-                        ) : null
+                    )}
+                        </View>
                     }
                     ListEmptyComponent={
                         <View style={styles.centered}>
@@ -745,203 +713,196 @@ export default function BasketDetailScreen() {
                             <Text style={styles.emptySubText}>{t('basketDetail.emptyBody')}</Text>
                         </View>
                     }
+                    ItemSeparatorComponent={() => <View style={styles.rowSep} />}
                     renderItem={({ item }) => {
-                        // inProgress/completed = read-only: user is shopping or
-                        // done, basket is locked. compared = editable but edits
-                        // auto-revert to draft. draft = freely editable.
+                        // inProgress/completed = read-only (locked while
+                        // shopping / after the trip).
                         const readOnly = basket?.status === 'inProgress' || basket?.status === 'completed';
                         const weighable = isWeighableItem(item);
-                        // Measured items label by the product's CANONICAL unit —
-                        // fluids are litres, not the old hardcoded kg.
-                        const measuredUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
-                        const step = weighable ? 0.1 : 1;
-                        const inputValueDefault = weighable
-                            ? Number(item.quantity).toFixed(1).replace('.', ',')
-                            : String(item.quantity);
                         return (
-                            <ProductLineCard
-                                name={item.productName}
-                                imageUrls={item.imageUrls}
-                                readOnly={readOnly}
-                                readOnlyQtyText={`${item.quantity}${weighable ? ` ${measuredUnit}` : ' vnt.'}`}
-                                quantityText={quantityInputs[item.id] ?? inputValueDefault}
-                                unit={weighable ? measuredUnit : 'vnt.'}
-                                weighable={weighable}
-                                onChangeQuantity={(v) => {
-                                    if (!weighable && (v.includes('.') || v.includes(','))) return;
-                                    const dotIndex = v.indexOf('.');
-                                    const commaIndex = v.indexOf(',');
-                                    const separatorIndex = dotIndex !== -1 ? dotIndex : commaIndex;
-                                    if (separatorIndex !== -1 && v.length - separatorIndex > 2) return;
-                                    setQuantityInputs(prev => ({ ...prev, [item.id]: v }));
-                                }}
-                                onCommitQuantity={async (text) => {
-                                    const val = parseFloat(text.replace(',', '.'));
-                                    if (!val || val <= 0) { removeItem(item.id); return; }
-                                    await updateQuantity(item.id, val);
-                                    setQuantityInputs(prev => ({ ...prev, [item.id]: String(val) }));
-                                }}
-                                onDecrement={() => updateQuantity(item.id, Number(item.quantity) - step)}
-                                onIncrement={() => updateQuantity(item.id, Number(item.quantity) + step)}
-                                onRemove={() => removeItem(item.id)}
-                            />
+                            <View style={styles.itemRow}>
+                                <ProductImage
+                                    uris={item.imageUrls}
+                                    imageStyle={styles.itemImage}
+                                    placeholderStyle={styles.itemImage}
+                                    emojiStyle={{ fontSize: 22 }}
+                                />
+                                <View style={{ flex: 1, gap: 6 }}>
+                                    <Text
+                                        style={styles.itemName}
+                                        numberOfLines={expandedNames.has(item.id) ? undefined : 1}
+                                        suppressHighlighting
+                                        onPress={() => setExpandedNames(prev => {
+                                            const next = new Set(prev);
+                                            if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+                                            return next;
+                                        })}
+                                    >
+                                        {item.productName}
+                                    </Text>
+                                    <View style={styles.itemActionRow}>
+                                        {readOnly ? (
+                                            <Text style={styles.itemQtyText}>
+                                                {formatItemAmount({ quantity: item.quantity, isWeighable: weighable, canonicalUnit: item.canonicalUnit, unit: item.canonicalUnit, canonicalFamily: item.canonicalFamily, canonicalStep: item.canonicalStep }, t)}
+                                            </Text>
+                                        ) : (
+                                            <>
+                                                <AddOrStepper
+                                                    product={{
+                                                        id: item.productId,
+                                                        name: item.productName,
+                                                        canonicalUnit: item.canonicalUnit,
+                                                        canonicalStep: item.canonicalStep,
+                                                        canonicalFamily: item.canonicalFamily,
+                                                        isWeighable: weighable,
+                                                    }}
+                                                    quantity={Number(item.quantity) || 0}
+                                                    onCommit={(qty) => {
+                                                        if (qty <= 0) { removeItem(item.id); return; }
+                                                        void updateQuantity(item.id, qty);
+                                                    }}
+                                                    style={styles.itemStepper}
+                                                />
+                                                <TouchableOpacity onPress={() => removeItem(item.id)} hitSlop={8}>
+                                                    <Ionicons name="trash-outline" size={22} color={colors.textMuted} />
+                                                </TouchableOpacity>
+                                            </>
+                                        )}
+                                    </View>
+                                </View>
+                            </View>
                         );
                     }}
                 />
 
                 {calcError && (
-                    <View style={[styles.errorBanner, { marginBottom: sheetSnaps[0] + 16 }]}>
+                    <View style={[styles.errorBanner, { marginBottom: dockClearance + 16 }]}>
                         <Ionicons name="alert-circle" size={16} color={colors.error} />
                         <Text style={styles.errorBannerText}>{calcError}</Text>
                     </View>
                 )}
 
-                {items.length > 0 && (
-                    <GlassStageSheet
+                {basket != null && (
+                    <DockedGlassSheet
                         ref={settingsSheetRef}
-                        snaps={sheetSnaps}
                         colors={colors}
-                        bottomInset={bottomInset}
-                        onStageChange={(st) => { sheetStageRef.current = st; }}
-                        onBarHeight={setBarH}
-                        onContentHeight={setPanelH}
-                        contentContainerStyle={styles.sheetPanelContent}
-                        bar={
-                    <View style={styles.barRow}>
-                        {basket?.status === 'inProgress' || basket?.status === 'completed' ? (
-                            // Read-only states: basket is locked because the
-                            // user is actively shopping (inProgress) or the
-                            // trip is done (completed). Only affordance is
-                            // viewing the calculated store comparison.
-                            <ScalePressable
-                                style={styles.showResultsButton}
-                                onPress={() => router.push(`/basket/results/${id}`)}
+                        onCollapsedClearance={setDockClearance}
+                        barRowHeight={barRowH}
+                        barRow={
+                            <View
+                                style={styles.barRow}
+                                onLayout={e => { const h = Math.round(e.nativeEvent.layout.height); if (h > 0) setBarRowH(h); }}
                             >
-                                <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
-                                <Text style={styles.showResultsText}>
-                                    {basket?.status === 'inProgress' ? t('basketDetail.viewInProgress') : t('basketDetail.viewCompleted')}
-                                </Text>
-                            </ScalePressable>
-                        ) : basket?.status === 'compared' ? (
-                            <>
-                                {/* Settings squircle stays available while compared
-                                    so the user can tweak storeCount / location
-                                    and have the main button retarget to "Rasti
-                                    parduotuves" (re-find). Without this, there'd
-                                    be no surface to change the inputs. */}
-                                <ScalePressable
-                                    style={[
-                                        styles.settingsSquircle,
-                                        activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
-                                            && styles.settingsSquircleActive,
-                                    ]}
-                                    onPress={toggleSettingsSheet}
-                                    disabled={busy}
-                                    scaleTo={0.92}
-                                >
-                                    <Ionicons
-                                        name={
-                                            activeSettings?.mode === 'specific' ? 'location-outline'
-                                            : activeSettings?.mode === 'route' ? 'git-commit-outline'
-                                            : 'locate-outline'
-                                        }
-                                        size={20}
-                                        color={
-                                            activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
-                                                ? colors.primary
-                                                : colors.textSecondary
-                                        }
-                                    />
-                                    {activeSettings && (routeIncomplete || activeSettings.storeCount > 1) && (
-                                        <View style={[styles.settingsBadge, routeIncomplete && styles.settingsBadgeAlert]}>
-                                            <Text style={styles.settingsBadgeText}>
-                                                {routeIncomplete ? '!' : activeSettings.storeCount}
-                                            </Text>
-                                        </View>
-                                    )}
-                                </ScalePressable>
-                                <ScalePressable
-                                    style={styles.showResultsButton}
-                                    onPress={() => router.push(`/basket/results/${id}`)}
-                                >
-                                    <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
-                                    <Text style={styles.showResultsText}>
-                                        {t((activeSettings?.storeCount ?? 1) > 1 ? 'basketDetail.viewStores' : 'basketDetail.viewStore')}
-                                    </Text>
-                                </ScalePressable>
-                            </>
-                        ) : (
-                            <>
-                                <ScalePressable
-                                    style={[
-                                        styles.settingsSquircle,
-                                        activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
-                                            && styles.settingsSquircleActive,
-                                    ]}
-                                    onPress={toggleSettingsSheet}
-                                    disabled={busy}
-                                    scaleTo={0.92}
-                                >
-                                    <Ionicons
-                                        name={
-                                            activeSettings?.mode === 'specific' ? 'location-outline'
-                                            : activeSettings?.mode === 'route' ? 'git-commit-outline'
-                                            : 'locate-outline'
-                                        }
-                                        size={20}
-                                        color={
-                                            activeSettings && !(activeSettings.mode === 'current' && activeSettings.storeCount === 1)
-                                                ? colors.primary
-                                                : colors.textSecondary
-                                        }
-                                    />
-                                    {activeSettings && (routeIncomplete || activeSettings.storeCount > 1) && (
-                                        <View style={[styles.settingsBadge, routeIncomplete && styles.settingsBadgeAlert]}>
-                                            <Text style={styles.settingsBadgeText}>
-                                                {routeIncomplete ? '!' : activeSettings.storeCount}
-                                            </Text>
-                                        </View>
-                                    )}
-                                </ScalePressable>
-                                <ScalePressable
-                                    style={[styles.showResultsButton, busy && styles.buttonCalcing, routeIncomplete && styles.buttonDisabled]}
-                                    onPress={handleCalculate}
-                                    disabled={busy || routeIncomplete}
-                                    scaleTo={busy || routeIncomplete ? 1 : 0.95}
-                                >
-                                    {busy ? (
-                                        <>
-                                            <MaterialProgress size="small" color={colors.onPrimary} />
-                                            <Text style={styles.showResultsText}>{t('basketDetail.calculating')}</Text>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <Ionicons name="storefront-outline" size={20} color={colors.onPrimary} />
-                                            <Text style={styles.showResultsText}>
-                                                {t((activeSettings?.storeCount ?? 1) > 1 ? 'basketDetail.findStores' : 'basketDetail.findStore')}
-                                            </Text>
-                                        </>
-                                    )}
-                                </ScalePressable>
-                            </>
-                        )}
-                    </View>
+                                {basket?.status === 'inProgress' || basket?.status === 'completed' ? (
+                                    <ScalePressable
+                                        style={[styles.storesPill, { flex: 1 }]}
+                                        onPress={() => router.replace(`/basket/results/${id}`)}
+                                    >
+                                        <Text style={styles.storesPillText}>
+                                            {basket?.status === 'inProgress' ? t('basketDetail.viewInProgress') : t('basketDetail.viewCompleted')}
+                                        </Text>
+                                    </ScalePressable>
+                                ) : (
+                                    <>
+                                        <TouchableOpacity style={styles.addMoreBtn} onPress={handleAddItem} activeOpacity={0.7}>
+                                            <Ionicons name="add" size={20} color={colors.primary} />
+                                            <Text style={styles.addMoreText}>{t('basketDetail.addMore')}</Text>
+                                        </TouchableOpacity>
+                                        <ScalePressable
+                                            style={[styles.storesPill, busy && styles.buttonCalcing, (routeIncomplete || items.length === 0) && styles.buttonDisabled]}
+                                            onPress={basket?.status === 'compared'
+                                                ? () => router.replace(`/basket/results/${id}`)
+                                                : handleCalculate}
+                                            disabled={busy || routeIncomplete || items.length === 0}
+                                            scaleTo={busy || routeIncomplete ? 1 : 0.95}
+                                        >
+                                            {busy
+                                                ? <MaterialProgress size="small" color={colors.onPrimary} />
+                                                : (
+                                                    <>
+                                                        <Text style={styles.storesPillText}>{t('basketDetail.stores')}</Text>
+                                                        <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
+                                                    </>
+                                                )}
+                                        </ScalePressable>
+                                    </>
+                                )}
+                            </View>
                         }
-                    >
-                        <LocationSettingsPanel
-                            refreshKey={settingsRefreshKey}
-                            onChanged={setActiveSettings}
-                            onOpenPresetMap={(key, label, existing) => {
-                                // The sheet stays mounted (and expanded) through
-                                // the push; the focus effect's refreshKey bump
-                                // reloads presets on return.
-                                router.push(
-                                    `/preset/${key}/map?label=${encodeURIComponent(label)}${existing ? `&lat=${existing.lat}&lng=${existing.lng}` : ''}` as any,
-                                );
-                            }}
-                        />
-                    </GlassStageSheet>
+                        sheet={sheetExpandable ? {
+                            maxStage: 2,
+                            content: (
+                                <View style={styles.sheetPanelContent}>
+                                    <SheetTitle colors={colors}>{t('basketDetail.actionsTitle')}</SheetTitle>
+                                    {/* iOS-style big actions, two per row — SheetCards,
+                                        the same surface as the Settings section. */}
+                                    <DockActionRow
+                                        colors={colors}
+                                        gap={14}
+                                        actions={[
+                                            !fromTemplate && {
+                                                iconNode: <ChefToqueGlyph size={24} color={colors.primary} />,
+                                                title: t('basketDetail.saveTitle'),
+                                                subtitle: t('basketDetail.saveSub'),
+                                                onPress: () => setSaveTplVisible(true),
+                                            },
+                                            {
+                                                icon: 'person-add',
+                                                title: t('basketDetail.inviteTitle'),
+                                                subtitle: t('basketDetail.inviteSub'),
+                                                onPress: () => void openInvite(),
+                                            },
+                                        ]}
+                                    />
+                                    {/* Settings section — same SheetCard system as the
+                                        catalog chooser's sections; the row with the gear
+                                        is the section TITLE, not an action. */}
+                                    <SheetCard>
+                                        <View style={styles.sectionTitleRow}>
+                                            <Ionicons name="settings" size={20} color={colors.primary} />
+                                            <Text style={styles.sectionTitleText}>{t('basketDetail.settings')}</Text>
+                                        </View>
+                                        <View style={styles.sectionSep} />
+                                        <TouchableOpacity
+                                            style={styles.sheetRow}
+                                            onPress={() => {
+                                                settingsSheetRef.current?.collapse();
+                                                setEditingName(true);
+                                            }}
+                                        >
+                                            <Text style={[styles.sheetRowTextRegular, { color: colors.textPrimary }]}>{t('basketDetail.renameBasket')}</Text>
+                                        </TouchableOpacity>
+                                        <View style={styles.sectionSep} />
+                                        <TouchableOpacity style={styles.sheetRow} onPress={removeBasket}>
+                                            <Text style={[styles.sheetRowTextRegular, { color: colors.error }]}>{t('basketDetail.removeBasket')}</Text>
+                                        </TouchableOpacity>
+                                    </SheetCard>
+                                </View>
+                            ),
+                        } : undefined}
+                    />
                 )}
+
+                {/* Trip invite QR. */}
+                <Modal visible={inviteOpen} transparent animationType="fade" onRequestClose={() => setInviteOpen(false)}>
+                    <TouchableOpacity style={styles.qrBackdrop} activeOpacity={1} onPress={() => setInviteOpen(false)}>
+                        <View style={styles.qrCard} onStartShouldSetResponder={() => true}>
+                            <Text style={styles.sheetRowText}>{t('trips.tripQrTitle')}</Text>
+                            {inviteUrl
+                                ? <BrandedQR value={inviteUrl} size={200} />
+                                : <MaterialProgress size="large" color={colors.primary} />}
+                            {inviteUrl && (
+                                <TouchableOpacity
+                                    style={styles.storesPill}
+                                    onPress={() => { void Share.share({ message: inviteUrl }); }}
+                                >
+                                    <Ionicons name="share-outline" size={18} color={colors.onPrimary} />
+                                    <Text style={styles.storesPillText}>{t('basketDetail.shareLink')}</Text>
+                                </TouchableOpacity>
+                            )}
+                        </View>
+                    </TouchableOpacity>
+                </Modal>
 
                 {calcing && (
                     <View style={styles.calcProgressOverlay} pointerEvents="none">
@@ -950,27 +911,11 @@ export default function BasketDetailScreen() {
                 )}
             </View>
 
-            {/* Full-screen calc progress modal so rapid back-taps can't
-                leave the user with a half-calculated basket. Shown for the
-                WHOLE busy window (location resolving + calculating), not just
-                `calcing` — otherwise GPS acquisition (seconds) passes with no
-                modal and the press feels dead. */}
-            <Modal
-                visible={busy}
-                transparent
-                animationType="fade"
-                statusBarTranslucent
-            >
-                <View style={styles.calcModalBackdrop}>
-                    <View style={styles.calcModalCard}>
-                        <MaterialProgress size="large" color={colors.primary} />
-                        <Text style={styles.calcModalTitle}>{t('basketDetail.calculating')}</Text>
-                        <Text style={styles.calcModalSub}>
-                            {t('basketDetail.calcModalSub')}
-                        </Text>
-                    </View>
-                </View>
-            </Modal>
+            {/* Full-screen calc progress modal so rapid back-taps can't leave the
+                user with a half-calculated basket. Shown for the WHOLE busy window
+                (location resolving + calculating) — the same spinner + rotating
+                messages the map shows, so the hop to the results map is seamless. */}
+            <CalcLoadingModal visible={busy} />
 
             <TemplateCoverEditor
                 visible={saveTplVisible}
@@ -991,12 +936,30 @@ export default function BasketDetailScreen() {
                 ]}
             />
 
+            {/* Copy / copy-original in flight: block the screen with a spinner
+                so the tap visibly "took" and can't be double-fired. */}
+            <Modal visible={actionBusy} transparent animationType="fade">
+                <View style={styles.busyOverlay}>
+                    <MaterialProgress size="large" color={colors.primary} />
+                </View>
+            </Modal>
+
             <LocationPromptModal
                 visible={locationPromptVisible}
                 onResolved={handleLocationResolved}
                 onCancel={() => setLocationPromptVisible(false)}
             />
 
+            <ConfirmModal
+                visible={removeConfirmOpen}
+                title={t('basketDetail.removeTitle')}
+                body={t('basketDetail.removeBody')}
+                confirmLabel={t('basketDetail.removeConfirm')}
+                cancelLabel={t('common.cancel')}
+                destructive
+                onConfirm={doRemoveBasket}
+                onClose={() => setRemoveConfirmOpen(false)}
+            />
 
             <Toast ref={toastRef} />
         </>
@@ -1010,12 +973,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     titleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10 },
     titleEmoji: { width: 40, height: 40, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
     titleText: { fontSize: 22, fontWeight: '700' },
-    addItemBtn: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        gap: 6, paddingVertical: 12, borderRadius: radius.lg, marginBottom: 12,
-        borderWidth: 1, borderColor: c.primary, borderStyle: 'dashed',
-    },
-    addItemBtnText: { fontSize: 14, fontWeight: '600', color: c.primary },
     controlButton: {
         width: 28, height: 28, borderRadius: 14,
         borderWidth: 1, borderColor: c.primary,
@@ -1054,14 +1011,41 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     // Action row inside the floating glass bar-sheet (the sheet owns the
     // surface, pill and radii — this is just the row layout).
     barRow: {
-        flexDirection: 'row',
-        gap: 10,
-        paddingHorizontal: 12,
-        paddingBottom: 12,
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+        gap: 12, paddingHorizontal: 4,
     },
+    addMoreBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, paddingVertical: 8, paddingHorizontal: 6 },
+    addMoreText: { fontSize: 15, fontWeight: '700', color: c.primary },
+    storesPill: {
+        flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 4,
+        backgroundColor: c.primary, borderRadius: radius.pill,
+        paddingHorizontal: 20, paddingVertical: 10,
+    },
+    storesPillText: { fontSize: 15, fontWeight: '700', color: c.onPrimary },
+    itemRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 12, paddingVertical: 10 },
+    itemImage: { width: 56, height: 56, borderRadius: 8, backgroundColor: c.surfaceMuted, alignItems: 'center', justifyContent: 'center' },
+    itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
+    itemActionRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+    itemQtyText: { fontSize: 14, fontWeight: '600', color: c.textSecondary },
+    itemStepper: { alignSelf: 'flex-start', minWidth: 150 },
+    // Separator: from the title start (past the image) to the trash end.
+    rowSep: { height: StyleSheet.hairlineWidth, backgroundColor: c.border, marginLeft: 56 + 12 },
+    sheetRow: { flexDirection: 'row', alignItems: 'center', gap: 12, paddingVertical: 12 },
+    sheetRowText: { fontSize: 15, fontWeight: '600', color: c.textPrimary },
+    sheetRowTextRegular: { fontSize: 15, fontWeight: '400' },
+    sectionSep: { height: DIVIDER_ITEM_HEIGHT, backgroundColor: c.dividerItem },
+    sectionTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 14 },
+    sectionTitleText: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
+    qrBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center' },
+    busyOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.35)', alignItems: 'center', justifyContent: 'center' },
+    qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: 24, alignItems: 'center', gap: 16 },
     sheetPanelContent: {
-        paddingHorizontal: 16,
-        paddingBottom: 8,
+        // Inset + shadow halo come from DockedGlassSheet's SheetContent wrapper —
+        // re-declaring them here stacked on top and made this sheet's content sit
+        // further in than every other dock sheet's.
+        // ONE gap: between the Save|Invite cards, and between that row and
+        // the Settings section below.
+        gap: 14,
     },
     showResultsButton: {
         flex: 1,
@@ -1138,33 +1122,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         width: '60%',
         backgroundColor: c.primary,
     },
-    calcModalBackdrop: {
-        flex: 1,
-        backgroundColor: c.overlayBackdrop,
-        alignItems: 'center',
-        justifyContent: 'center',
-    },
-    calcModalCard: {
-        backgroundColor: c.cardBackground,
-        borderRadius: radius.xl,
-        paddingHorizontal: 32,
-        paddingVertical: 28,
-        alignItems: 'center',
-        gap: 10,
-        minWidth: 220,
-        ...elevation.level3,
-    },
-    calcModalTitle: {
-        fontSize: 15,
-        fontWeight: '700',
-        color: c.textPrimary,
-        marginTop: 4,
-    },
-    calcModalSub: {
-        fontSize: 12,
-        color: c.textSecondary,
-        textAlign: 'center',
-    },
     card: {
         backgroundColor: c.cardBackground, borderRadius: 12, padding: 12, marginBottom: 10,
         flexDirection: 'row', alignItems: 'center',
@@ -1183,7 +1140,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         opacity: 0.4,
     },
     cardContent: { flex: 1, justifyContent: 'space-between' },
-    itemName: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
     controls: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 8 },
     removeButton: {
         width: 36,

@@ -15,6 +15,7 @@ import {
     ActivityIndicator,
     Alert,
     FlatList,
+    Platform,
     ScrollView,
     StyleSheet,
     Text,
@@ -22,22 +23,25 @@ import {
     TouchableOpacity,
     View,
 } from "react-native";
+import { LiquidGlass } from "@/components/LiquidGlass";
 import { MaterialProgress } from '@/components/MaterialProgress';
+import { useBasketQuantities } from '@/hooks/useBasketQuantities';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
 import { API_BASE_URL } from "../config/api";
 import { useReceiptPickerState , useBasketState } from "../state/basketState";
-import { addProductToBasket } from '../utils/basketUtils';
-import BasketProductCard, { type UnitPriceBadge } from '../components/browse/BasketProductCard';
-import { TemplateReturnBanner } from '../components/template/TemplateReturnBanner';
-import { useTemplateAddState } from '../state/templateAddState';
+import { useBasketSession } from "../state/basketSession";
+import { addProductToBasket } from '@/utils/basketUtils';
+import { type UnitPriceBadge } from '@/components/browse/BasketProductCard';
+import { ConnectedProductCard } from '@/components/browse/ConnectedProductCard';
+import { useTemplateAddState } from '@/state/templateAddState';
 import { ProductImage } from "../components/ProductImage";
 import CreateStoreProductModal, {
   CreatedStoreProductPayload,
 } from "../components/receipt/CreateStoreProductModal";
 import { useTheme, radius, elevation, type AppTheme } from "../constants/theme";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import AmountPickerModal from '../components/AmountPickerModal';
-import { Toast, type ToastHandle } from '../components/Toast';
-import { resolveCanonicalStep, resolveDisplayUnit } from '../utils/canonicalStep';
+import { useSafeBottomTabBarHeight } from "@/hooks/useSafeBottomTabBarHeight";
+import { Toast, type ToastHandle } from '@/components/Toast';
 
 // Pick the first URL from the API's imageUrls (string | array | null) for
 // places that only support a single imageUrl field (e.g. pendingPick).
@@ -121,10 +125,11 @@ export default function SearchScreen() {
         source?: string;
         templateId?: string;
     }>();
-    const templateIdNum = typeof params.templateId === 'string' && params.templateId.length > 0
-        ? Number(params.templateId)
-        : null;
-    const isTemplateMode = templateIdNum != null && Number.isFinite(templateIdNum);
+    // Template vs basket is driven by the SESSION target (not a route param).
+    const sessionTarget = useBasketSession(s => s.target);
+    const templateIdNum = sessionTarget?.kind === 'template' ? sessionTarget.templateId : null;
+    const isTemplateMode = templateIdNum != null;
+    useEffect(() => { if (templateIdNum != null) useTemplateAddState.getState().hydrate(templateIdNum); }, [templateIdNum]);
     const templateItems = useTemplateAddState(s => s.items);
     const templateAdd = useTemplateAddState(s => s.add);
     const templateSetQty = useTemplateAddState(s => s.setQuantity);
@@ -136,9 +141,13 @@ export default function SearchScreen() {
     }, [templateItems, isTemplateMode]);
     const router = useRouter();
     const insets = useSafeAreaInsets();
+    const barClearance = useSafeBottomTabBarHeight();
     const { setPendingPick } = useReceiptPickerState();
     const { draftBasketId, setDraftBasketId } = useBasketState();
-    const [basketQuantities, setBasketQuantities] = useState<Record<number, number>>({});
+    // ONE target-aware source (session basket → draft fallback, basketRev-reactive).
+    // Actions only — no quantities-map subscription (cards self-subscribe per
+    // product; a map subscription here re-rendered the screen on every ± tap).
+    const { commit: commitBasketQty, refresh: refreshBasketQuantities } = useBasketQuantities();
     const chainId =
         typeof params.chainId === "string" ? Number(params.chainId) : NaN;
     const productIndex =
@@ -151,8 +160,6 @@ export default function SearchScreen() {
         typeof params.ocrName === "string" ? params.ocrName : "",
     ).trim();
     const [createModalVisible, setCreateModalVisible] = useState(false);
-    const [amountModal, setAmountModal] = useState<{ visible: boolean; product: ProductRow | null; editQty?: number | null }>({ visible: false, product: null });
-    const [basketItemCount, setBasketItemCount] = useState(0);
     const toastRef = useRef<ToastHandle>(null);
 
     // BROWSE PARITY: hydrate quantities from the draft basket on every focus.
@@ -167,51 +174,27 @@ export default function SearchScreen() {
             if (!useBasketState.getState().draftBasketId) {
                 await useBasketState.getState().initDraftBasket();
             }
-            const currentDraftId = useBasketState.getState().draftBasketId;
-            if (!currentDraftId) {
-                setBasketQuantities({});
-                setBasketItemCount(0);
-                return;
-            }
-            const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
-            const items = await res.json();
-            if (!Array.isArray(items)) return;
-            const quantities: { [productId: number]: number } = {};
-            items.forEach((item: any) => { quantities[item.productId] = parseFloat(item.quantity); });
-            setBasketQuantities(quantities);
-            setBasketItemCount(items.filter((i: any) => parseFloat(i.quantity) > 0).length);
+            await refreshBasketQuantities();
         } catch {}
-    }, []);
+    }, [refreshBasketQuantities]);
     useFocusEffect(useCallback(() => { void hydrateBasket(); }, [hydrateBasket]));
 
-    // Absolute quantity set for an already-added product — used by the amount
-    // picker's edit-reopen (tap the quantity on a card). Same server sync as
-    // the per-card syncQty stepper.
-    const setBasketQtyAbsolute = useCallback(async (productId: number, newQty: number) => {
-        setBasketQuantities(prev => ({ ...prev, [productId]: Math.max(0, newQty) }));
-        try {
-            const currentDraftId = useBasketState.getState().draftBasketId;
-            if (!currentDraftId) return;
-            const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
-            const items = await res.json();
-            const basketItem = items.find((i: any) => i.productId === productId);
-            if (!basketItem) return;
-            if (newQty <= 0) {
-                await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
-                setBasketItemCount(prev => Math.max(0, prev - 1));
-                return;
-            }
-            await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ quantity: newQty }),
-            });
-        } catch {}
-    }, []);
+    const commitCardQty = useCallback((productId: number, currentQty: number, qty: number) => {
+        if (isTemplateMode) {
+            if (qty <= 0) { templateSetQty(productId, 0).catch(() => {}); return; }
+            if (currentQty === 0) { templateAdd(productId, qty).catch(() => {}); return; }
+            templateSetQty(productId, qty).catch(() => {});
+            return;
+        }
+        commitBasketQty(productId, currentQty, qty);
+    }, [isTemplateMode, templateSetQty, templateAdd, commitBasketQty]);
     const [query, setQuery] = useState("");
     const [searching, setSearching] = useState(false);
     const [inputKey, setInputKey] = useState(0);
     const searchInputRef = useRef<TextInput>(null);
+    // Measured height of the floating search header (pill + chips) — the lists
+    // pad by it and scroll UNDER it, fading via the gradient.
+    const [headerH, setHeaderH] = useState(0);
     const clearQuery = useCallback(() => {
         searchInputRef.current?.clear();
         setQuery("");
@@ -341,12 +324,25 @@ export default function SearchScreen() {
                 chainLogos: p.chainLogos ?? null,
                 minAmount: p.minAmount ?? null,
                 maxAmount: p.maxAmount ?? null,
+                unit: p.unit ?? null,
                 canonicalUnit: p.canonicalUnit ?? null,
+                canonicalStep: p.canonicalStep ?? null,
+                canonicalFamily: p.canonicalFamily ?? null,
+                hasWeighable: p.hasWeighable ?? p.isWeighable ?? 0,
+                // Cheapest-per-unit badge — same payload browse gets; without this
+                // the search card rendered no €/unit while categories did.
+                badge: p.badge ?? null,
             }));
+
+        // Dedup by id: list keys are now pure product ids (no index
+        // suffix), so a server row repeated across search branches must
+        // not produce duplicate keys.
+        const seen = new Set<number>();
+        const deduped = cleaned.filter(p => (seen.has(p.id) ? false : (seen.add(p.id), true)));
 
         if (!cancelled) {
                 setSelectedCategoryId(null);
-                setProductResults(cleaned);
+                setProductResults(deduped);
                 setLocalResults([]);
                 setOtherResults([]);
                 }
@@ -532,31 +528,104 @@ export default function SearchScreen() {
   // On Android, calling setOptions for headerRight rebuilds the entire
   // header — the TextInput inside headerTitle remounts and the keyboard
   // dismisses. Keeping the input inside the screen tree avoids that.
-  return (
+  const headerTop = headerH || insets.top + 64;
+  // ONE input instance (the keyboard dies if this remounts — see inputKey note),
+  // wrapped by the platform pill below.
+  const pillInner = (
     <>
-      <Stack.Screen options={{ headerShown: false }} />
+      <Ionicons name="search" size={20} color={colors.textMuted} />
+      <TextInput
+        ref={searchInputRef}
+        key={inputKey}
+        autoFocus
+        placeholder={t('search.searchPlaceholder')}
+        placeholderTextColor={colors.textMuted}
+        defaultValue={query}
+        onChangeText={setQuery}
+        style={styles.searchInput}
+        autoCorrect={false}
+        autoCapitalize="none"
+      />
+      {/* M3: the clear affordance is a PLAIN trailing icon, not a chip. */}
+      {query.length > 0 ? (
+        <TouchableOpacity onPress={clearQuery} hitSlop={10}>
+          <Ionicons name="close" size={20} color={colors.textMuted} />
+        </TouchableOpacity>
+      ) : null}
+    </>
+  );
+    const renderProductCard = useCallback(({ item }: { item: ProductRow }) => {
+                if (!Number.isFinite(item.id) || item.id <= 0 || !Number.isFinite(item.categoryId) || !item.name?.trim()) return null;
+                const isVolume = item.unit === 'ml' || item.canonicalUnit === 'l';
+                const bigUnit = isVolume ? 'l' : 'kg';
+                const smallUnit = isVolume ? 'ml' : 'g';
+                const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
+                const amountText = item.minAmount != null && item.maxAmount != null
+                    ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
+                    : '';
+                const templateQty = isTemplateMode ? (templateMap[item.id]?.quantity ?? 0) : 0;
+                return (
+                    <ConnectedProductCard
+                    name={item.name}
+                    imageUrls={item.imageUrls}
+                    chainLogos={item.chainLogos}
+                    badge={item.badge}
+                    amountText={amountText}
+                    product={item}
+                    isTemplateMode={isTemplateMode}
+                    templateQuantity={templateQty}
+                    addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
+                    onOpen={() => router.push(`/catalog/product/${item.id}` as any)}
+                    onCommit={commitCardQty}
+                    />
+                );
+    }, [isTemplateMode, templateMap, commitCardQty, router, t]);
+
+  const searchHeader = (
+    <View
+      style={styles.headerOverlay}
+      pointerEvents="box-none"
+      onLayout={(e) => setHeaderH(Math.round(e.nativeEvent.layout.height))}
+    >
+      {/* Fade wash: transparent at the header's bottom edge, strengthening
+          toward the screen top but never fully hiding results — they dim as
+          they slide under the pill/chips and clip at the screen edge (same
+          spec as CollapsingHeader). */}
+      <View pointerEvents="none" style={[styles.headerFade, { height: headerTop }]}>
+        <Svg width="100%" height="100%">
+          <Defs>
+            <SvgLinearGradient id="searchTopFade" x1="0" y1="0" x2="0" y2="1">
+              <Stop offset="0" stopColor={colors.pageBackground} stopOpacity="0.75" />
+              <Stop offset="1" stopColor={colors.pageBackground} stopOpacity="0" />
+            </SvgLinearGradient>
+          </Defs>
+          <Rect x="0" y="0" width="100%" height="100%" fill="url(#searchTopFade)" />
+        </Svg>
+      </View>
+      {/* Two rows (M3-Expressive layout: controls OUTSIDE the search pill):
+          back chip on its own row, then the full-width search pill. */}
       <View style={[styles.topBar, { paddingTop: insets.top + 8 }]}>
-        <GlassIconButton icon="chevron-back" onPress={closeAndBack} size={24} glass />
-        <TextInput
-          ref={searchInputRef}
-          key={inputKey}
-          autoFocus
-          placeholder={t('search.searchPlaceholder')}
-          placeholderTextColor={colors.textMuted}
-          defaultValue={query}
-          onChangeText={setQuery}
-          style={[styles.searchInput, styles.topBarInput]}
-          autoCorrect={false}
-          autoCapitalize="none"
-        />
-        {query.length > 0 ? (
-          <GlassIconButton icon="close" onPress={clearQuery} size={22} glass />
-        ) : null}
+        <View style={styles.topBarRow}>
+          <GlassIconButton icon="chevron-back" onPress={closeAndBack} size={24} glass />
+        </View>
+        {Platform.OS === 'ios' ? (
+          // iOS 26: search lives in its own Liquid Glass capsule.
+          <LiquidGlass style={styles.searchPill}>{pillInner}</LiquidGlass>
+        ) : (
+          // Android: M3 docked search pill. SOLID card-white with a hairline
+          // outline + soft elevation — the tonal translucent fill had no
+          // contrast against the cream page; white-on-cream is the app's
+          // established card language and keeps the input clearly findable.
+          <View style={[styles.searchPill, styles.searchPillSolid]}>
+            {pillInner}
+          </View>
+        )}
       </View>
       {effectiveMode === 'products' && categoryChips.length > 1 && (
           <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
               style={styles.bubblesRow}
               contentContainerStyle={styles.bubblesContainer}
           >
@@ -565,7 +634,7 @@ export default function SearchScreen() {
                   onPress={() => setSelectedCategoryId(null)}
               >
                   <Text style={[styles.bubbleText, selectedCategoryId === null && styles.bubbleTextActive]}>
-                      {t('browse.allProducts')}
+                      {t('catalog.allProducts')}
                   </Text>
               </TouchableOpacity>
               {categoryChips.map(chip => (
@@ -581,24 +650,33 @@ export default function SearchScreen() {
               ))}
           </ScrollView>
       )}
+    </View>
+  );
+
+  return (
+    <>
+      <Stack.Screen options={{ headerShown: false }} />
       <View style={styles.container}>
         {searching ? (
           // Centering must live on a WRAPPER: styles.centered on the spinner
           // itself stretches the native view full-screen while the drawable
           // renders at its own size in the top-left corner.
-          <View style={styles.centered}>
+          <View style={[styles.centered, { paddingTop: headerTop }]}>
             <MaterialProgress size="large" color={colors.primary} />
           </View>
         ) : effectiveMode === "store-products" ? (
           <FlatList<StoreGridItem>
             key="store-products-search-grid"
             data={storeGridData}
-            keyExtractor={(item, idx) => {
-                if (item.kind === "create") return `create-${idx}`;
-                if (item.kind === "local") return `local-${item.data.id}-${idx}`;
-                return `other-${item.data.productId}-${idx}`;
+            keyboardDismissMode="on-drag"
+            keyboardShouldPersistTaps="handled"
+            onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
+            keyExtractor={(item) => {
+                if (item.kind === "create") return "create";
+                if (item.kind === "local") return `local-${item.data.id}`;
+                return `other-${item.data.productId}`;
             }}
-            contentContainerStyle={styles.list}
+            contentContainerStyle={[styles.list, { paddingTop: headerTop + 12 }]}
             numColumns={2}
             columnWrapperStyle={styles.row}
             ListEmptyComponent={
@@ -606,6 +684,13 @@ export default function SearchScreen() {
                 {query.trim() ? t('search.notFound') : t('search.enterQuery')}
               </Text>
             }
+            // Same windowing as the products grid below — identical 2-up
+            // image-card cost, so identical mount/batch limits.
+            initialNumToRender={8}
+            maxToRenderPerBatch={6}
+            updateCellsBatchingPeriod={50}
+            windowSize={7}
+            removeClippedSubviews={Platform.OS === 'android'}
             renderItem={({ item }) => {
                 if (item.kind === "create") return renderCreateCard();
                 if (item.kind === "other") return renderOtherCard(item.data);
@@ -616,12 +701,15 @@ export default function SearchScreen() {
           <FlatList<ProductRow>
             key="products-search-grid"
             data={filteredProductResults}
-            keyExtractor={(item, idx) => `p-${item.id}-${idx}`}
+            keyboardDismissMode="on-drag"
+            keyboardShouldPersistTaps="handled"
+            onScrollBeginDrag={() => { useBasketSession.getState().collapseDock?.(); }}
+            keyExtractor={(item) => `p-${item.id}`}
             contentContainerStyle={[
               styles.list,
-              // Reserve room for the absolute "Šablonas" banner so the
-              // last row's "Į šabloną" CTA isn't hidden under it.
-              isTemplateMode && { paddingBottom: 96 + insets.bottom },
+              // Under the floating search header; clear the floating bottom bar
+              // so the last row is fully visible.
+              { paddingTop: headerTop + 12, paddingBottom: barClearance },
             ]}
             numColumns={2}
             columnWrapperStyle={styles.row}
@@ -630,176 +718,23 @@ export default function SearchScreen() {
                 {query.trim() ? t('search.notFound') : t('search.enterQuery')}
               </Text>
             }
-            renderItem={({ item }) => {
-                if (!Number.isFinite(item.id) || item.id <= 0 || !Number.isFinite(item.categoryId) || !item.name?.trim()) return null;
-const quantity = basketQuantities[item.id] ?? 0;
-
-                const syncQty = async (newQty: number) => {
-                    setBasketQuantities(prev => ({ ...prev, [item.id]: Math.max(0, newQty) }));
-                    try {
-                    const currentDraftId = useBasketState.getState().draftBasketId;
-                    if (!currentDraftId) return;
-
-                    const res = await fetch(`${API_BASE_URL}/api/baskets/${currentDraftId}/items`);
-                    const items = await res.json();
-                    const basketItem = items.find((i: any) => i.productId === item.id);
-
-                    if (newQty <= 0) {
-                        if (basketItem) {
-                        await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, { method: 'DELETE' });
-                        setBasketItemCount(prev => Math.max(0, prev - 1));
-                        }
-                        return;
-                    }
-
-                    if (basketItem) {
-                        await fetch(`${API_BASE_URL}/api/basket-items/${basketItem.id}`, {
-                        method: 'PUT',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ quantity: newQty }),
-                        });
-                    }
-                    } catch {}
-                };
-
-                const bigUnit = item.canonicalUnit === 'l' ? 'l' : 'kg';
-                const smallUnit = item.canonicalUnit === 'l' ? 'ml' : 'g';
-                const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${bigUnit}` : `${v} ${smallUnit}`;
-                const amountText = item.minAmount != null && item.maxAmount != null
-                    ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
-                    : '';
-                const templateQty = isTemplateMode ? (templateMap[item.id]?.quantity ?? 0) : 0;
-                const cardQty = isTemplateMode ? templateQty : quantity;
-                return (
-                    <BasketProductCard
-                    name={item.name}
-                    imageUrls={item.imageUrls}
-                    chainLogos={item.chainLogos}
-                    badge={item.badge}
-                    amountText={amountText}
-                    quantity={cardQty}
-                    addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
-                    onOpen={() => router.push(
-                        isTemplateMode
-                            ? `/product/${item.id}?templateId=${templateIdNum}`
-                            : `/product/${item.id}` as any
-                    )}
-                    onAdd={() => {
-                        const hasRange = item.minAmount != null && item.maxAmount != null && item.minAmount !== item.maxAmount;
-                        if (hasRange || !!item.hasWeighable) {
-                            setAmountModal({ visible: true, product: item });
-                            return;
-                        }
-                        const qty = resolveCanonicalStep(item);
-                        if (isTemplateMode && templateIdNum != null) {
-                            templateAdd(item.id, qty).catch(() => {});
-                            return;
-                        }
-                        setBasketQuantities(prev => ({ ...prev, [item.id]: qty }));
-                        addProductToBasket(item.id, draftBasketId, setDraftBasketId, qty).then(result => {
-                            if (!result.success) {
-                                // Adopt server truth instead of rolling back to "Add" —
-                                // a 409 means the product IS in the basket; show its real qty.
-                                void hydrateBasket();
-                                toastRef.current?.show(result.message);
-                            } else {
-                                setBasketItemCount(prev => prev + 1);
-                                toastRef.current?.show(t('browse.addedToast'));
-                            }
-                        });
-                    }}
-                    onDec={() => {
-                        if (isTemplateMode) {
-                            const step = resolveCanonicalStep(item);
-                            const next = Math.max(0, Math.round((templateQty - step) / step) * step);
-                            templateSetQty(item.id, next).catch(() => {});
-                            return;
-                        }
-                        syncQty(Number((quantity - 1).toFixed(1)));
-                    }}
-                    onInc={() => {
-                        if (isTemplateMode) {
-                            const step = resolveCanonicalStep(item);
-                            const next = Math.round((templateQty + step) / step) * step;
-                            templateSetQty(item.id, next).catch(() => {});
-                            return;
-                        }
-                        syncQty(Number((quantity + 1).toFixed(1)));
-                    }}
-                    onQuantityPress={() => setAmountModal({ visible: true, product: item, editQty: cardQty })}
-                    quantityUnit={resolveDisplayUnit(item)}
-                    />
-                );
-                }}
+            // Windowing: render a screen or two, not the whole result set. With
+            // 2-up cards the defaults (10 initial / 21 window) mount ~40 image
+            // cards up front and re-batch aggressively mid-fling.
+            initialNumToRender={8}
+            maxToRenderPerBatch={6}
+            updateCellsBatchingPeriod={50}
+            windowSize={7}
+            removeClippedSubviews={Platform.OS === 'android'}
+            renderItem={renderProductCard}
           />
         )}
       </View>
-      {/* Bottom basket bar — browse parity: live item count + jump to basket. */}
-      {!isTemplateMode && basketItemCount > 0 && draftBasketId && (
-          <View style={[styles.basketBar, { paddingBottom: Math.max(12, insets.bottom) }]}>
-              <View style={styles.basketBarLeft}>
-                  <Ionicons name="cart" size={20} color={colors.primary} />
-                  <Text style={styles.basketBarCount}>{t('items.count', { count: basketItemCount })}</Text>
-              </View>
-              <TouchableOpacity
-                  style={styles.basketBarButton}
-                  activeOpacity={0.85}
-                  onPress={() => router.push(`/basket/${draftBasketId}` as any)}
-              >
-                  <Text style={styles.basketBarButtonText}>{t('browse.basketShortcut')}</Text>
-                  <Ionicons name="chevron-forward" size={16} color={colors.onPrimary} />
-              </TouchableOpacity>
-          </View>
-      )}
-      <AmountPickerModal
-        visible={amountModal.visible}
-        productName={amountModal.product?.name ?? ''}
-        canonicalUnit={amountModal.product?.canonicalUnit}
-        canonicalStep={amountModal.product?.canonicalStep}
-        canonicalFamily={amountModal.product?.canonicalFamily}
-        minAmount={amountModal.product?.minAmount ?? 0}
-        maxAmount={amountModal.product?.maxAmount ?? 0}
-        unit={amountModal.product?.unit ?? 'g'}
-        isWeighable={!!amountModal.product?.hasWeighable}
-        initialAmount={amountModal.editQty ?? null}
-        onCancel={() => setAmountModal({ visible: false, product: null })}
-        onConfirm={async (amount) => {
-          const product = amountModal.product!;
-          const isEdit = amountModal.editQty != null;
-          setAmountModal({ visible: false, product: null });
-          if (!isTemplateMode && isEdit) {
-            // Edit-reopen: SET the amount on the existing basket row.
-            await setBasketQtyAbsolute(product.id, amount);
-            return;
-          }
-          if (isTemplateMode && templateIdNum != null) {
-            try {
-              // Picker = set-absolute; override existing row rather than
-              // incrementing so the new amount matches what the user just
-              // dialed in.
-              if (templateMap[product.id]) {
-                await templateSetQty(product.id, amount);
-              } else {
-                await templateAdd(product.id, amount);
-              }
-            } catch {}
-            return;
-          }
-          setBasketQuantities(prev => ({ ...prev, [product.id]: amount }));
-          const result = await addProductToBasket(product.id, draftBasketId, setDraftBasketId, amount);
-          if (!result.success) {
-              void hydrateBasket();
-              toastRef.current?.show(result.message);
-          } else {
-              setBasketItemCount(prev => prev + 1);
-              toastRef.current?.show(t('browse.addedToast'));
-          }
-
-        }}
-      />
-      {isTemplateMode && templateIdNum != null && (
-        <TemplateReturnBanner templateId={templateIdNum} />
-      )}
+      {searchHeader}
+      {/* The bottom basket indicator is now the universal, root-level
+          BasketListSheet (the "collecting items" session sheet) — the old
+          per-screen basketBar here was redundant and fought it on Android
+          (elevation z-order), so it's removed. */}
       <CreateStoreProductModal
         visible={createModalVisible}
         onClose={() => setCreateModalVisible(false)}
@@ -854,19 +789,45 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     basketBarButtonText: { fontSize: 14, fontWeight: '700', color: c.onPrimary },
   container: { flex: 1, backgroundColor: c.pageBackground },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
-  searchInput: { fontSize: 16, flex: 1, color: c.textPrimary },
+  searchInput: { fontSize: 16, flex: 1, color: c.textPrimary, paddingVertical: 0 },
+  // Floating header overlay — NO bar background; the gradient fade behind it
+  // (headerFade) is the only surface, so items dissolve as they pass under.
+  headerOverlay: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, elevation: 10 },
+  headerFade: { position: 'absolute', top: 0, left: 0, right: 0 },
+  // Two stacked rows (M3-Expressive: controls OUTSIDE the pill): back chip
+  // row, then the full-width search pill. 16dp side margins per M3.
   topBar: {
+    gap: 8,
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  topBarRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingBottom: 8,
+    // GlassIconButton carries its own 4dp margins — pull back to the edge.
+    marginLeft: -4,
+  },
+  // M3(E) docked search pill: full-width, 52dp tall, full-pill corners, icon +
+  // input + plain clear icon inside. Fill comes per-platform at the call site
+  // (translucent tonal on Android, LiquidGlass capsule on iOS).
+  searchPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    height: 52,
+    borderRadius: radius.pill,
+    paddingHorizontal: 16,
+    overflow: 'hidden',
+  },
+  // Android fill: solid white + hairline outline + soft lift (opaque, so the
+  // elevation shadow renders cleanly — no translucent-view gray-border artifact).
+  searchPillSolid: {
     backgroundColor: c.cardBackground,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: c.border,
+    elevation: 2,
   },
   bubblesRow: {
-    backgroundColor: c.cardBackground,
-    borderBottomWidth: 0.5,
-    borderBottomColor: c.border,
     flexGrow: 0,
     flexShrink: 0,
   },
@@ -894,11 +855,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
   bubbleTextActive: {
     color: c.onPrimary,
     fontWeight: '600',
-  },
-  topBarInput: {
-    flex: 1,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
   },
   list: { padding: 12 },
   row: { gap: 12, marginBottom: 12 },

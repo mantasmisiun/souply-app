@@ -1,6 +1,6 @@
 import { useEffect, useReducer, useRef } from 'react';
 import { Image, PixelRatio, Platform, View } from 'react-native';
-import ViewShot, { captureRef } from 'react-native-view-shot';
+import ViewShot, { captureRef, type ViewShotRef } from 'react-native-view-shot';
 import Svg, { Polygon } from 'react-native-svg';
 import type { MaskBand } from '@shared/parsers/cardMaskDetection';
 import { bandsForUploadedImage, maskQuadPercentPoints, maskRenderSize } from '../utils/maskRedaction';
@@ -98,7 +98,8 @@ export function redactImageViaHost(
 
 export function MaskRedactionHost() {
     const [, force] = useReducer((x: number) => x + 1, 0);
-    const shotRef = useRef<ViewShot>(null);
+    // view-shot 5: ViewShot is a function component; the ref handle type is ViewShotRef.
+    const shotRef = useRef<ViewShotRef>(null);
     const capturedRef = useRef(false);
 
     useEffect(() => {

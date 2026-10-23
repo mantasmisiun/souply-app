@@ -1,0 +1,1002 @@
+import {
+    View, SectionList, ScrollView, TouchableOpacity, Text, TextInput,
+    StyleSheet, ActivityIndicator, RefreshControl, Keyboard, Modal, Pressable
+} from 'react-native';
+import { useDeferredValue, useEffect, useMemo, useState, useCallback, useRef, memo, Fragment } from 'react';
+import { useRouter, useFocusEffect, useLocalSearchParams } from 'expo-router';
+import { ScreenHeading } from '@/components/ScreenHeading';
+import { useCollapsingHeader, CollapsingHeader } from '@/components/CollapsingHeader';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useSafeBottomTabBarHeight } from '@/hooks/useSafeBottomTabBarHeight';
+import Animated, { FadeInDown, FadeOutDown } from 'react-native-reanimated';
+import { Ionicons } from '@expo/vector-icons';
+import { API_BASE_URL } from '@/config/api';
+import { useBasketState } from '@/state/basketState';
+import { useBasketSession } from '@/state/basketSession';
+import { addProductToBasket } from '@/utils/basketUtils';
+import { type CardBadge } from '@/components/browse/BasketProductCard';
+import { ConnectedProductCard } from '@/components/browse/ConnectedProductCard';
+import { useTheme, radius, elevation, type AppTheme } from '@/constants/theme';
+import { getUserId } from '@/config/user';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import ComparedBasketChoiceModal, { type ComparedBasketChoice } from '@/components/ComparedBasketChoiceModal';
+import { Toast, type ToastHandle } from '@/components/Toast';
+import { ScalePressable } from '@/components/ScalePressable';
+import { SkeletonBox } from '@/components/SkeletonBox';
+import { useBasketQuantities } from '@/hooks/useBasketQuantities';
+import { ChainLogoChip } from '@/components/ChainLogoChip';
+import { FilterDropdownModal, type FilterOption } from '@/components/FilterDropdownModal';
+import { StoreFilterButton } from '@/components/StoreFilterButton';
+import { categoryIcon } from '@/constants/categoryIcons';
+import { useTranslation } from 'react-i18next';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchWithTimeout, TIMEOUT_HEAVY_MS } from '@/utils/fetchWithTimeout';
+import { foldTokens, fuzzyMatchesPrepared, type FoldedTokens } from '@/utils/fuzzyMatch';
+import { useTemplateAddState } from '@/state/templateAddState';
+
+interface L2Category {
+    id: number;
+    name: string;
+    parentCategoryId: number;
+    l1Id: number;
+    l1Name: string;
+    /** Canonical Lithuanian L1 name — stable emoji-lookup key across UI locales. */
+    l1NameKey?: string;
+}
+
+interface DiscountedProduct {
+    id: number;
+    name: string;
+    categoryId: number;
+    l2CategoryId: number | null;
+    imageUrls?: (string | null | undefined)[] | string | null;
+    chainLogos?: { chainId: number; logoUrl: string | null }[] | string | null;
+    minAmount: number | null;
+    maxAmount: number | null;
+    unit: string | null;
+    hasWeighable: boolean;
+    bestDiscountPct: number;
+    /** Cross-store real discount (badge v2): cheapest chain's unit price vs the
+     *  market average. NULL → single-store / unit-incomparable → 🔥 + bestDiscountPct. */
+    realDiscountPct?: number | null;
+    cheapestChainId?: number | null;
+    /** Canonical-unit fields populated server-side (productCanonical.ts). */
+    canonicalUnit: string | null;
+    canonicalStep: number | null;
+    canonicalFamily: 'fluid' | 'count' | null;
+}
+
+const CHAIN_NAME_BY_ID: Record<number, string> = { 1: 'Maxima', 2: 'Rimi', 3: 'Iki', 4: 'Norfa', 5: 'Lidl' };
+
+/**
+ * Last ETag the discounts endpoint gave us, kept per app session (module
+ * scope survives screen remounts). Sent back as If-None-Match so an
+ * unchanged catalog revalidates as a bodiless 304 instead of re-downloading
+ * the full payload on every pull-to-refresh / stale refetch. Cold start
+ * pays one full 200 (the persisted react-query cache still paints
+ * instantly) — the etag is locale- and filter-keyed server-side, so a
+ * language switch simply misses and refetches in full.
+ */
+let discountsEtag: string | null = null;
+
+/** chainLogos can arrive as an array, or a single/double-encoded JSON string
+ *  from MariaDB — always normalise to an array before reading chainId. */
+function parseChainLogos(raw: DiscountedProduct['chainLogos']): { chainId: number; logoUrl: string | null }[] {
+    if (!raw) return [];
+    let v: unknown = raw;
+    for (let i = 0; i < 2 && typeof v === 'string'; i++) {
+        try { v = JSON.parse(v); } catch { return []; }
+    }
+    return Array.isArray(v) ? (v as { chainId: number; logoUrl: string | null }[]) : [];
+}
+
+/** A dropdown-trigger pill (store / category / subcategory) with a ▾ caret. */
+const FilterChip = memo(({ label, active, onPress, styles, colors }: {
+    label: string;
+    active: boolean;
+    onPress: () => void;
+    styles: ReturnType<typeof makeStyles>;
+    colors: AppTheme;
+}) => (
+    <TouchableOpacity
+        style={[styles.bubble, styles.filterChip, active && styles.bubbleActive]}
+        onPress={onPress}
+        activeOpacity={0.7}
+    >
+        <Text style={[styles.bubbleText, active && styles.bubbleTextActive]} numberOfLines={1}>{label}</Text>
+        <Ionicons name="chevron-down" size={14} color={active ? colors.onPrimary : colors.textSecondary} />
+    </TouchableOpacity>
+));
+FilterChip.displayName = 'FilterChip';
+
+
+// SectionList (not FlatList) gives us a NATIVE sticky section header for the
+// search/filter chips while the large title scrolls away above it. Reanimated
+// has no prebuilt animated SectionList, so wrap it once.
+const AnimatedSectionList = Animated.createAnimatedComponent(SectionList as typeof SectionList<DiscountedProduct[]>);
+
+export default function DiscountsScreen() {
+    const colors = useTheme();
+    const { t } = useTranslation();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
+    const { bottom: bottomInset } = useSafeAreaInsets();
+    const barClearance = useSafeBottomTabBarHeight();
+    // Collapsing header: "Nuolaidos" title hides on scroll, L2 filter stays pinned.
+    const header = useCollapsingHeader();
+    const router = useRouter();
+    // Template vs basket is driven by the SESSION target (not a route param).
+    const sessionTarget = useBasketSession(s => s.target);
+    const templateId = sessionTarget?.kind === 'template' ? sessionTarget.templateId : null;
+    const isTemplateMode = templateId != null;
+    useEffect(() => { if (templateId != null) useTemplateAddState.getState().hydrate(templateId); }, [templateId]);
+    const templateItems = useTemplateAddState(s => s.items);
+    const templateAddFn = useTemplateAddState(s => s.add);
+    const templateSetQty = useTemplateAddState(s => s.setQuantity);
+    const templateMap = useMemo(() => {
+        const m: Record<number, { quantity: number }> = {};
+        if (!isTemplateMode) return m;
+        for (const it of templateItems) m[it.productId] = { quantity: it.quantity };
+        return m;
+    }, [templateItems, isTemplateMode]);
+
+    const [selectedL2, setSelectedL2] = useState<number | null>(null);
+    const [selectedL1, setSelectedL1] = useState<number | null>(null);
+    /** null = all stores (the default); a Set is the explicit checked subset. */
+    const [selectedChainIds, setSelectedChainIds] = useState<Set<number> | null>(null);
+    // Store filter now lives in <StoreFilterButton> (self-contained dropdown);
+    // this shared dropdown only drives the L1/L2 category filters.
+    const [openFilter, setOpenFilter] = useState<null | 'l1' | 'l2'>(null);
+    const [anchorY, setAnchorY] = useState(0);
+    const filterRowRef = useRef<View>(null);
+    /** Filters the in-screen list live (no navigation) via the ALWAYS-VISIBLE
+     *  search pill pinned under the title — keeps React Query's cached data
+     *  and freshness indicator on screen. */
+    const [search, setSearch] = useState('');
+    const searchInputRef = useRef<TextInput>(null);
+    const [addingIds, setAddingIds] = useState<Set<number>>(() => new Set());
+    const [infoOpen, setInfoOpen] = useState(false);
+    const toastRef = useRef<ToastHandle>(null);
+
+    // L2 categories — small, never changes during a session. Cached
+    // alongside the discounts payload so the bubble row paints from
+    // disk on cold start.
+    const { data: l2Categories = [] } = useQuery<L2Category[]>({
+        queryKey: ['l2-categories'],
+        queryFn: async () => {
+            const res = await fetchWithTimeout(`${API_BASE_URL}/api/categories/l2`);
+            const data = await res.json();
+            return Array.isArray(data) ? data : [];
+        },
+        staleTime: 24 * 60 * 60 * 1000,
+    });
+
+    // Discounts — React Query handles stale-while-revalidate, persistence
+    // (via PersistQueryClientProvider in _layout.tsx), retry/backoff, and
+    // request dedup. The queryFn echoes the server's weak ETag back as
+    // If-None-Match: a 304 keeps the cached body (no multi-hundred-KB
+    // re-download when nothing changed). The server's l2CategoryId/search/
+    // limit/offset params stay deliberately unused: this screen filters the
+    // ONE cached full list locally (instant, offline-capable) — server-side
+    // filtering would fragment the cache per filter combination.
+    const queryClient = useQueryClient();
+    const {
+        data: allProducts = [],
+        isLoading,
+        isFetching,
+        isError,
+        refetch,
+    } = useQuery<DiscountedProduct[]>({
+        queryKey: ['discounts'],
+        queryFn: async () => {
+            const cached = queryClient.getQueryData<DiscountedProduct[]>(['discounts']);
+            const headers: Record<string, string> = {};
+            // Only revalidate when we still HAVE a body to keep — a 304
+            // with an evicted cache would leave the screen empty.
+            if (discountsEtag && cached && cached.length > 0) headers['If-None-Match'] = discountsEtag;
+            const res = await fetchWithTimeout(
+                `${API_BASE_URL}/api/products/discounted`,
+                { timeoutMs: TIMEOUT_HEAVY_MS, headers },
+            );
+            if (res.status === 304 && cached) return cached;
+            discountsEtag = res.headers.get('etag');
+            const data = await res.json();
+            return Array.isArray(data) ? data : [];
+        },
+        staleTime: 30 * 60 * 1000,
+    });
+    const refreshing = isFetching && !isLoading;
+
+    const activeL2Ids = useMemo(
+        () => new Set(allProducts.map(p => p.l2CategoryId).filter(id => id != null)),
+        [allProducts],
+    );
+
+    // The /api/categories/l2 payload already carries l1Id/l1Name per row, so the
+    // L1 "Kategorijos" list, the per-L1 "Subkategorijos" list, and the l2->l1
+    // lookup all derive from it — no extra endpoint.
+    const l2ToL1 = useMemo(() => {
+        const m = new Map<number, number>();
+        for (const c of l2Categories) m.set(c.id, c.l1Id);
+        return m;
+    }, [l2Categories]);
+
+    const activeL1Ids = useMemo(() => {
+        const s = new Set<number>();
+        for (const c of l2Categories) if (activeL2Ids.has(c.id)) s.add(c.l1Id);
+        return s;
+    }, [l2Categories, activeL2Ids]);
+
+    const l1Options = useMemo<FilterOption[]>(() => {
+        const seen = new Map<number, { label: string; icon: string }>();
+        for (const c of l2Categories) {
+            if (activeL1Ids.has(c.l1Id) && !seen.has(c.l1Id)) {
+                // Same emoji + lookup rule as Naršyti's category list (shared map).
+                seen.set(c.l1Id, { label: c.l1Name, icon: categoryIcon(c.l1NameKey, c.l1Name) });
+            }
+        }
+        return [...seen.entries()].map(([id, { label, icon }]) => ({
+            id, label,
+            leading: <Text style={{ fontSize: 18 }}>{icon}</Text>,
+        }));
+    }, [l2Categories, activeL1Ids]);
+
+    const l2Options = useMemo<FilterOption[]>(() => {
+        if (selectedL1 == null) return [];
+        return l2Categories
+            .filter(c => c.l1Id === selectedL1 && activeL2Ids.has(c.id))
+            .map(c => ({ id: c.id, label: c.name }));
+    }, [l2Categories, selectedL1, activeL2Ids]);
+
+    // STORE filter: a discount item has no scalar chainId — its stores live in
+    // chainLogos[] (a product can be in several). Derive the selectable chains
+    // from the union present in the loaded discounts.
+    const availableChainIds = useMemo(() => {
+        const set = new Set<number>();
+        for (const p of allProducts) {
+            for (const cl of parseChainLogos(p.chainLogos)) {
+                if (cl && typeof cl.chainId === 'number') set.add(cl.chainId);
+            }
+        }
+        return [...set].sort((a, b) => a - b);
+    }, [allProducts]);
+
+    const storeOptions = useMemo<FilterOption[]>(
+        () => availableChainIds.map(id => ({
+            id,
+            label: CHAIN_NAME_BY_ID[id] ?? `#${id}`,
+            leading: <ChainLogoChip chainId={id} size={24} />,
+        })),
+        [availableChainIds],
+    );
+
+    // First logoUrl seen per chain — the selected-store logo strip (inside
+    // StoreFilterButton) renders these (same ChainLogoStrip rules as the cards).
+    const chainLogoUrlById = useMemo(() => {
+        const m = new Map<number, string | null>();
+        for (const p of allProducts) {
+            for (const cl of parseChainLogos(p.chainLogos)) {
+                if (cl && typeof cl.chainId === 'number' && !m.has(cl.chainId)) m.set(cl.chainId, cl.logoUrl ?? null);
+            }
+        }
+        return m;
+    }, [allProducts]);
+
+    useEffect(() => {
+        if (selectedL2 != null && !activeL2Ids.has(selectedL2)) setSelectedL2(null);
+    }, [activeL2Ids, selectedL2]);
+
+    // If the chosen L1 vanishes from the loaded discounts, drop it (and its L2).
+    useEffect(() => {
+        if (selectedL1 != null && !activeL1Ids.has(selectedL1)) { setSelectedL1(null); setSelectedL2(null); }
+    }, [activeL1Ids, selectedL1]);
+
+    // Deferred query: typing updates the TextInput at input priority while the
+    // full-catalog filter below lags a beat behind — keystrokes never block on
+    // the match pass.
+    const deferredSearch = useDeferredValue(search);
+
+    // Folded/tokenised names, computed ONCE per dataset. The matcher used to
+    // re-fold + re-tokenise every product name on every keystroke — that, not
+    // the edit distance, was the per-keystroke cost.
+    const foldedNameById = useMemo(() => {
+        const m = new Map<number, FoldedTokens>();
+        for (const p of allProducts) m.set(p.id, foldTokens(p.name));
+        return m;
+    }, [allProducts]);
+
+    const products = useMemo(() => {
+        let list = allProducts;
+        // STORE: keep items offered by at least one checked chain. Skipped when
+        // all chains are selected (default) so items survive even if their
+        // chainLogos is empty/unparseable.
+        if (selectedChainIds && selectedChainIds.size < availableChainIds.length) {
+            list = list.filter(p => parseChainLogos(p.chainLogos).some(cl => selectedChainIds.has(cl.chainId)));
+        }
+        // L1 category, derived per item via l2CategoryId -> l1Id.
+        if (selectedL1 != null) {
+            list = list.filter(p => p.l2CategoryId != null && l2ToL1.get(p.l2CategoryId) === selectedL1);
+        }
+        // L2 subcategory.
+        if (selectedL2 != null) list = list.filter(p => p.l2CategoryId === selectedL2);
+        const trimmed = deferredSearch.trim();
+        if (trimmed) {
+            // Diacritic-fold + token-AND + per-token Levenshtein so
+            // "zvake" hits "žvakė", "kapu zvake" finds "Kapų raudona
+            // žvakė" (missed middle word), and small typos like "zkae"
+            // still resolve. The query folds ONCE per filter run and the
+            // names come pre-folded from the memo above.
+            const qTokens = foldTokens(trimmed);
+            list = list.filter((p) =>
+                fuzzyMatchesPrepared(foldedNameById.get(p.id) ?? foldTokens(p.name), qTokens));
+        }
+        return list;
+    }, [allProducts, selectedChainIds, availableChainIds, selectedL1, selectedL2, l2ToL1, deferredSearch, foldedNameById]);
+
+    // 2-up rows for the SectionList (no numColumns) — pair up the filtered
+    // products; a lone last item renders half-width (the card is flex:1/50%).
+    const rows = useMemo(() => {
+        const out: DiscountedProduct[][] = [];
+        for (let i = 0; i < products.length; i += 2) out.push(products.slice(i, i + 2));
+        return out;
+    }, [products]);
+
+    const toggleChain = useCallback((id: number) => {
+        setSelectedChainIds(prev => {
+            // From "All stores": the first tap selects ONLY the tapped store — the
+            // one-tap narrowing start (never "all minus one").
+            if (prev == null) return new Set([id]);
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id); else next.add(id);
+            // Auto-collapse both edges back to "All stores": an empty selection would
+            // show zero products, and a full selection IS all stores.
+            if (next.size === 0 || next.size >= availableChainIds.length) return null;
+            return next;
+        });
+    }, [availableChainIds]);
+
+    const selectAllStores = useCallback(() => setSelectedChainIds(null), []);
+
+    const selectL1 = useCallback((id: number | null) => {
+        setSelectedL1(id);
+        setSelectedL2(null); // changing the L1 resets the subcategory to "Visi"
+    }, []);
+
+    const openDropdown = useCallback((which: 'l1' | 'l2') => setOpenFilter(which), []);
+
+    const l1Label = selectedL1 != null
+        ? (() => {
+            const label = l1Options.find(o => o.id === selectedL1)?.label;
+            if (!label) return t('discounts.filterCategories');
+            // Same emoji as the dropdown option (and Naršyti) — carried into the chip.
+            const c = l2Categories.find(c => c.l1Id === selectedL1);
+            return `${categoryIcon(c?.l1NameKey, c?.l1Name)} ${label}`;
+        })()
+        : t('discounts.filterCategories');
+    const l2Label = selectedL2 != null
+        ? (l2Options.find(o => o.id === selectedL2)?.label ?? t('discounts.filterSubcategories'))
+        : t('discounts.filterSubcategories');
+    const hasFilters = storeOptions.length > 1 || l1Options.length > 0;
+
+    const { draftBasketId, setDraftBasketId } = useBasketState();
+    // ONE target-aware source (session basket → draft fallback, basketRev-reactive).
+    // Actions only — no quantities-map subscription (cards self-subscribe per
+    // product; a map subscription here re-rendered the screen on every ± tap).
+    const { commit: commitBasketQty, refresh: refreshBasketQuantities } = useBasketQuantities();
+    const [latestCompared, setLatestCompared] = useState<ComparedBasketChoice | null>(null);
+    type ComparedChoice = 'use-existing' | 'new' | 'cancel';
+    const [comparedModal, setComparedModal] = useState<{
+        visible: boolean;
+        resolve: (c: ComparedChoice) => void;
+    }>({ visible: false, resolve: () => {} });
+    // Stale `discounts_cache_v2` data lived in AsyncStorage from before the
+    // React Query rollout. Drop it once so the old bytes don't sit forever
+    // on devices that have upgraded.
+    useEffect(() => {
+        AsyncStorage.removeItem('discounts_cache_v2').catch(() => {});
+    }, []);
+
+    useFocusEffect(useCallback(() => {
+        if (!draftBasketId) void useBasketState.getState().initDraftBasket();
+        void refreshBasketQuantities();
+    }, [draftBasketId, refreshBasketQuantities]));
+
+    useEffect(() => {
+        if (draftBasketId) { setLatestCompared(null); return; }
+        (async () => {
+            try {
+                const userId = await getUserId();
+                const res = await fetch(`${API_BASE_URL}/api/baskets/user/${userId}`);
+                const baskets = await res.json();
+                if (!Array.isArray(baskets)) return;
+                const compared = baskets.find((b: any) => b.status === 'compared');
+                setLatestCompared(compared ? { id: compared.id, name: compared.name, itemCount: compared.itemCount ?? 0, updatedAt: compared.updatedAt } : null);
+            } catch { setLatestCompared(null); }
+        })();
+    }, [draftBasketId]);
+
+    const resolveBasketForAdd = async () => {
+        let validatedDraftId: number | null = null;
+        let compared = latestCompared;
+        try {
+            const userId = await getUserId();
+            const res = await fetch(`${API_BASE_URL}/api/baskets/user/${userId}`);
+            const baskets = await res.json();
+            if (Array.isArray(baskets)) {
+                const draftHit = baskets.find((b: any) => b.status === 'draft');
+                const comparedHit = baskets.find((b: any) => b.status === 'compared');
+                validatedDraftId = draftHit ? Number(draftHit.id) : null;
+                compared = comparedHit ? { id: comparedHit.id, name: comparedHit.name, itemCount: comparedHit.itemCount ?? 0, updatedAt: comparedHit.updatedAt } : null;
+                if (validatedDraftId !== draftBasketId) setDraftBasketId(validatedDraftId);
+                setLatestCompared(compared);
+            }
+        } catch { validatedDraftId = draftBasketId; }
+
+        if (validatedDraftId) return { kind: 'draft' as const, id: validatedDraftId };
+        if (!compared) return { kind: 'new' as const };
+        const choice = await new Promise<ComparedChoice>(resolve => {
+            setComparedModal({ visible: true, resolve: c => { setComparedModal({ visible: false, resolve: () => {} }); resolve(c); } });
+        });
+        if (choice === 'use-existing') return { kind: 'revert' as const, id: compared!.id };
+        if (choice === 'new') return { kind: 'new' as const };
+        return { kind: 'cancel' as const };
+    };
+
+    const commitAdd = async (productId: number, quantity: number) => {
+        const target = await resolveBasketForAdd();
+        if (target.kind === 'cancel') return { success: false };
+        if (target.kind === 'revert') {
+            try {
+                await fetch(`${API_BASE_URL}/api/baskets/${target.id}/status`, {
+                    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ status: 'draft' }),
+                });
+                await AsyncStorage.removeItem(`basket_results_${target.id}`);
+                setDraftBasketId(target.id);
+                setLatestCompared(null);
+            } catch {}
+            return addProductToBasket(productId, target.id, setDraftBasketId, quantity, 'sku');
+        }
+        const existing = target.kind === 'draft' ? target.id : null;
+        return addProductToBasket(productId, existing, setDraftBasketId, quantity, 'sku');
+    };
+
+    const commitAddRef = useRef(commitAdd);
+    useEffect(() => { commitAddRef.current = commitAdd; }, [commitAdd]);
+
+    const onNavigate = useCallback((id: number) => {
+        router.push(`/catalog/product/${id}` as any);
+    }, [router]);
+
+    // Fresh add (non-picker path; the weighable/range picker is owned by
+    // AddOrStepper and also lands here via onCommit). One canonical step as the
+    // quantity so server pack-math lands on exactly one pack.
+    const commitTemplateAdd = useCallback((productId: number, qty: number) => {
+        setAddingIds(prev => { const n = new Set(prev); n.add(productId); return n; });
+        templateAddFn(productId, qty)
+            .then(() => toastRef.current?.show(t('basketTab.templates.addedToTemplateToast')))
+            .catch(() => {})
+            .finally(() => {
+                setAddingIds(prev => { const n = new Set(prev); n.delete(productId); return n; });
+            });
+    }, [templateAddFn, t]);
+
+    // Single commit for AddOrStepper: add / set / remove — or the template store.
+    // The basket side is now ONE call into the shared quantities store: it paints
+    // immediately, coalesces a burst of taps and writes once, so no card waits on
+    // (or gets reverted by) a round trip. `currentQty` is the card's qty now.
+    const commitCardQty = useCallback((productId: number, currentQty: number, qty: number) => {
+        if (isTemplateMode) {
+            if (qty <= 0) { templateSetQty(productId, 0).catch(() => {}); return; }
+            if (currentQty === 0) { commitTemplateAdd(productId, qty); return; }
+            templateSetQty(productId, qty).catch(() => {});
+            return;
+        }
+        // The screen's own add resolves a COMPARED basket first (use it / start
+        // new); steps skip it and go straight to the by-product write.
+        commitBasketQty(productId, currentQty, qty, commitAddRef.current);
+    }, [isTemplateMode, templateSetQty, commitTemplateAdd, commitBasketQty]);
+
+    const renderCard = useCallback(({ item }: { item: DiscountedProduct }) => {
+        const templateQuantity = isTemplateMode ? (templateMap[item.id]?.quantity ?? 0) : 0;
+        // Amount range caption (250 g – 500 g), same shape as browse/search.
+        const isVolume = item.unit === 'ml' || item.canonicalUnit === 'l';
+        const big = isVolume ? 'l' : 'kg';
+        const small = isVolume ? 'ml' : 'g';
+        const fmt = (v: number) => v >= 1000 ? `${v / 1000} ${big}` : `${v} ${small}`;
+        const amountText = item.minAmount != null && item.maxAmount != null
+            ? (() => { const mn = Number(item.minAmount); const mx = Number(item.maxAmount); return mn === mx ? fmt(mn) : `${fmt(mn)} - ${fmt(mx)}`; })()
+            : '';
+        // The top-right badge = the discount. Cross-store real discount shows the
+        // cheapest chain's logo; otherwise the 🔥 best-single-store discount.
+        const discountBadge: CardBadge = item.realDiscountPct != null && item.cheapestChainId != null
+            ? {
+                showLogo: true,
+                chainId: item.cheapestChainId,
+                logoUrl: parseChainLogos(item.chainLogos).find(c => c.chainId === item.cheapestChainId)?.logoUrl ?? null,
+                text: `-${item.realDiscountPct}%`,
+            }
+            : { showLogo: false, text: `🔥 -${item.bestDiscountPct}%` };
+        return (
+            <ConnectedProductCard
+                name={item.name}
+                imageUrls={item.imageUrls}
+                chainLogos={item.chainLogos}
+                amountText={amountText}
+                product={item}
+                isTemplateMode={isTemplateMode}
+                templateQuantity={templateQuantity}
+                onCommit={commitCardQty}
+                // Basket adds are optimistic (the card flips on tap); only a
+                // template add still waits on the server, so only it spins.
+                isAdding={isTemplateMode && addingIds.has(item.id)}
+                addLabel={isTemplateMode ? t('basketTab.templates.addToTemplate') : undefined}
+                onOpen={() => onNavigate(item.id)}
+                discountBadge={discountBadge}
+            />
+        );
+    }, [addingIds, onNavigate, commitCardQty, isTemplateMode, templateMap, t]);
+
+    const clearSearch = useCallback(() => {
+        setSearch('');
+        searchInputRef.current?.clear();
+    }, []);
+
+    // The search pill + filter bubbles — now the SectionList's NATIVE sticky
+    // section header (scrolls up with the list, then pins under the bar). Opaque
+    // page background so rows disappear behind it as they scroll under.
+    const filterChips = (
+        <View style={{ backgroundColor: colors.pageBackground }}>
+            <View style={styles.searchFieldWrap}>
+                <View style={styles.searchPill}>
+                    <Ionicons name="search" size={18} color={colors.textMuted} />
+                    <TextInput
+                        ref={searchInputRef}
+                        defaultValue={search}
+                        onChangeText={setSearch}
+                        placeholder={t('catalog.searchPlaceholder')}
+                        placeholderTextColor={colors.textMuted}
+                        returnKeyType="search"
+                        onSubmitEditing={() => Keyboard.dismiss()}
+                        style={styles.searchField}
+                    />
+                    {search.length > 0 ? (
+                        <TouchableOpacity onPress={clearSearch} hitSlop={10}>
+                            <Ionicons name="close" size={18} color={colors.textMuted} />
+                        </TouchableOpacity>
+                    ) : null}
+                </View>
+            </View>
+            {hasFilters && (
+                <View ref={filterRowRef} style={styles.bubblesRow}>
+                    <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.bubblesContainer}
+                    >
+                        {storeOptions.length > 1 && (
+                            <StoreFilterButton
+                                storeOptions={storeOptions}
+                                selectedIds={selectedChainIds}
+                                onToggle={toggleChain}
+                                onAll={selectAllStores}
+                                logoUrlById={chainLogoUrlById}
+                                label={t('discounts.filterStores')}
+                                allLabel={t('discounts.filterAllStores')}
+                                title={t('discounts.filterStores')}
+                            />
+                        )}
+                        {l1Options.length > 0 && (
+                            <FilterChip
+                                styles={styles} colors={colors}
+                                label={l1Label} active={selectedL1 != null}
+                                onPress={() => openDropdown('l1')}
+                            />
+                        )}
+                        {selectedL1 != null && l2Options.length > 0 && (
+                            <FilterChip
+                                styles={styles} colors={colors}
+                                label={l2Label} active={selectedL2 != null}
+                                onPress={() => openDropdown('l2')}
+                            />
+                        )}
+                    </ScrollView>
+                </View>
+            )}
+        </View>
+    );
+
+    return (
+        <>
+            {/* "Nuolaidos" collapses on scroll; the search pill + L2 filter stay
+                pinned. The search pill is ALWAYS visible under the title and
+                filters the list live — no toggle icon. */}
+            <CollapsingHeader controller={header} back smallTitle={t('discounts.title')} />
+            <View style={{ flex: 1 }}>
+                <View style={styles.container}>
+                    <View style={{ flex: 1 }}>
+                        {isLoading ? (
+                            <View style={{ flex: 1, padding: 12, gap: 12 }}>
+                                <ScreenHeading title={t('discounts.title')} bleedX={12} />
+                                {Array.from({ length: 6 }).map((_, i) => (
+                                    <View key={i} style={{ flexDirection: 'row', gap: 12 }}>
+                                        {[0, 1].map(j => (
+                                            <View key={j} style={{ flex: 1, backgroundColor: colors.cardBackground, borderRadius: radius.lg, padding: 12, gap: 8, ...elevation.level2 }}>
+                                                <SkeletonBox height={110} borderRadius={radius.md} />
+                                                <SkeletonBox height={12} borderRadius={6} />
+                                                <SkeletonBox width={80} height={12} borderRadius={6} />
+                                                <SkeletonBox height={36} borderRadius={radius.pill} />
+                                            </View>
+                                        ))}
+                                    </View>
+                                ))}
+                            </View>
+                        ) : isError && allProducts.length === 0 ? (
+                            <View style={[styles.coldError, { paddingTop: 24 }]}>
+                                <Ionicons name="cloud-offline-outline" size={48} color={colors.textMuted} />
+                                <Text style={styles.coldErrorTitle}>{t('discounts.loadFailed')}</Text>
+                                <ScalePressable style={styles.coldErrorButton} onPress={() => refetch()}>
+                                    <Text style={styles.coldErrorButtonText}>{t('discounts.retry')}</Text>
+                                </ScalePressable>
+                            </View>
+                        ) : (
+                            <>
+                            {/* Always-pinned chips: Fabric mis-hit-tests transformed
+                                sticky headers (touches fall through to the list). */}
+                            <View onLayout={header.onPinnedLayout}>{filterChips}</View>
+                            <AnimatedSectionList
+                                {...header.scroll}
+                                sections={[{ data: rows }]}
+                                // Key rows by their PRODUCT IDS: with index keys
+                                // every filter/search change reshuffled content
+                                // under stable keys and force-rebound every
+                                // mounted image cell.
+                                keyExtractor={(row) => 'r-' + row.map(p => p.id).join('-')}
+                                contentContainerStyle={{ paddingTop: 0, paddingBottom: barClearance }}
+                                keyboardDismissMode="on-drag"
+                                keyboardShouldPersistTaps="handled"
+                                ListHeaderComponent={
+                                    <>
+                                        <ScreenHeading
+                                            title={t('discounts.title')}
+                                            onLayout={header.onTitleLayout}
+                                            trailing={
+                                                <TouchableOpacity
+                                                    onPress={() => setInfoOpen(true)}
+                                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                                    accessibilityLabel={t('discounts.infoTitle')}
+                                                >
+                                                    <Ionicons name="help-circle-outline" size={26} color={colors.textSecondary} />
+                                                </TouchableOpacity>
+                                            }
+                                        />
+                                    {isError && allProducts.length > 0 ? (
+                                        <TouchableOpacity style={styles.errorBanner} onPress={() => refetch()} activeOpacity={0.7}>
+                                            <Ionicons name="warning-outline" size={16} color={colors.onPrimary} style={{ marginRight: 6 }} />
+                                            <Text style={styles.errorBannerText} numberOfLines={2}>
+                                                {t('discounts.loadFailedWithCache')}
+                                            </Text>
+                                            <Text style={styles.errorBannerRetry}>{t('discounts.retry')}</Text>
+                                        </TouchableOpacity>
+                                    ) : null}
+                                    </>
+                                }
+                                refreshControl={
+                                    <RefreshControl
+                                        refreshing={refreshing}
+                                        onRefresh={() => refetch()}
+                                        colors={[colors.primary]}
+                                        tintColor={colors.primary}
+                                    />
+                                }
+                                ListEmptyComponent={
+                                    <Text style={styles.emptyText}>
+                                        {search ? t('catalog.noResultsSearch') : t('catalog.noResults')}
+                                    </Text>
+                                }
+                                renderItem={({ item: pair }) => (
+                                    <View style={styles.row}>
+                                        {pair.map(p => (
+                                            <Fragment key={p.id}>{renderCard({ item: p })}</Fragment>
+                                        ))}
+                                    </View>
+                                )}
+                            />
+                            </>
+                        )}
+                    </View>
+                </View>
+
+                {/* Legacy per-screen basket bar removed — the universal
+                    root-level BasketListSheet is the single indicator now. */}
+            </View>
+
+            <ComparedBasketChoiceModal
+                visible={comparedModal.visible}
+                compared={latestCompared}
+                onUseExisting={() => comparedModal.resolve('use-existing')}
+                onCreateNew={() => comparedModal.resolve('new')}
+                onCancel={() => comparedModal.resolve('cancel')}
+            />
+            <FilterDropdownModal
+                visible={openFilter !== null}
+                title={openFilter === 'l1' ? t('discounts.filterCategories') : t('discounts.filterSubcategories')}
+                options={openFilter === 'l1' ? l1Options : l2Options}
+                onClose={() => setOpenFilter(null)}
+                config={openFilter === 'l1'
+                    ? { mode: 'single', selectedId: selectedL1, allLabel: t('discounts.filterAllCategories'), onSelect: selectL1 }
+                    : { mode: 'single', selectedId: selectedL2, allLabel: t('discounts.filterAllSubcategories'), onSelect: setSelectedL2 }}
+            />
+            <Modal visible={infoOpen} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setInfoOpen(false)}>
+                <Pressable style={styles.infoOverlay} onPress={() => setInfoOpen(false)}>
+                    <Pressable style={styles.infoCard} onPress={() => {}}>
+                        <Text style={styles.infoTitle}>{t('discounts.infoTitle')}</Text>
+                        {([
+                            [1, <Text key="i1" style={styles.infoBulletIcon}>🏷️</Text>],
+                            [2, <Text key="i2" style={styles.infoBulletIcon}>🔄</Text>],
+                            // A miniature of the ACTUAL cross-store badge (pink pill, -30%)
+                            // so the reader instantly knows which badge is meant.
+                            [3, <View key="i3" style={styles.infoBadgeSample}><Text style={styles.infoBadgeSampleText}>-30%</Text></View>],
+                            [4, <Text key="i4" style={styles.infoBulletIcon}>🔥</Text>],
+                        ] as const).map(([n, icon]) => (
+                            <View key={n} style={styles.infoBulletRow}>
+                                <View style={styles.infoBulletLead}>{icon}</View>
+                                <Text style={styles.infoBulletText}>{t(`discounts.infoBullet${n}`)}</Text>
+                            </View>
+                        ))}
+                        <ScalePressable style={styles.infoButton} onPress={() => setInfoOpen(false)}>
+                            <Text style={styles.infoButtonText}>{t('common.gotIt')}</Text>
+                        </ScalePressable>
+                    </Pressable>
+                </Pressable>
+            </Modal>
+            <Toast ref={toastRef} />
+        </>
+    );
+}
+
+const makeStyles = (c: AppTheme) => StyleSheet.create({
+    container: { flex: 1, backgroundColor: c.pageBackground },
+    centered: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+    loadingText: {
+        marginTop: 12,
+        fontSize: 14,
+        color: c.textMuted,
+        textAlign: 'center',
+    },
+    searchRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: c.cardBackground,
+        marginHorizontal: 16,
+        marginTop: 8,
+        marginBottom: 4,
+        borderRadius: radius.pill,
+        paddingHorizontal: 14,
+        paddingVertical: 9,
+        gap: 8,
+        borderWidth: 1,
+        borderColor: c.border,
+    },
+    searchIcon: { flexShrink: 0 },
+    searchInput: {
+        flex: 1,
+        fontSize: 14,
+        color: c.textPrimary,
+        padding: 0,
+    },
+    // No banner background — the pill floats on the page like the app's other
+    // search fields (solid white + hairline outline + soft lift).
+    searchFieldWrap: {
+        paddingHorizontal: 16, paddingTop: 2, paddingBottom: 8,
+    },
+    searchPill: {
+        flexDirection: 'row', alignItems: 'center', gap: 8,
+        backgroundColor: c.cardBackground,
+        borderWidth: StyleSheet.hairlineWidth, borderColor: c.border,
+        borderRadius: radius.pill,
+        paddingHorizontal: 14, height: 44,
+        elevation: 2,
+    },
+    searchField: {
+        flex: 1, fontSize: 15, color: c.textPrimary, paddingVertical: 0,
+    },
+    bubblesRow: {
+        flexGrow: 0,
+        flexShrink: 0,
+    },
+    bubblesContainer: {
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        gap: 8,
+    },
+    bubble: {
+        paddingHorizontal: 16,
+        paddingVertical: 8,
+        borderRadius: radius.pill,
+        borderWidth: 1,
+        borderColor: c.border,
+        backgroundColor: c.cardBackground,
+    },
+    bubbleActive: {
+        backgroundColor: c.primary,
+        borderColor: c.primary,
+        ...elevation.level1,
+    },
+    bubbleText: {
+        fontSize: 13,
+        color: c.textPrimary,
+    },
+    bubbleTextActive: {
+        color: c.onPrimary,
+        fontWeight: '600',
+    },
+    filterChip: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        gap: 4,
+    },
+    infoOverlay: {
+        flex: 1,
+        backgroundColor: c.overlayBackdrop,
+        justifyContent: 'center',
+        alignItems: 'center',
+        padding: 24,
+    },
+    infoCard: {
+        backgroundColor: c.cardBackground,
+        borderRadius: radius.xl,
+        padding: 24,
+        width: '100%',
+        maxWidth: 360,
+        ...elevation.level3,
+    },
+    infoTitle: {
+        fontSize: 17,
+        fontWeight: '700',
+        color: c.textPrimary,
+        textAlign: 'center',
+        marginBottom: 16,
+    },
+    infoBulletRow: { flexDirection: 'row', gap: 10, marginBottom: 12, alignItems: 'flex-start' },
+    infoBulletLead: { minWidth: 44, alignItems: 'center', paddingTop: 1 },
+    infoBulletIcon: { fontSize: 17, lineHeight: 21 },
+    infoBadgeSample: {
+        backgroundColor: c.primary,
+        borderRadius: radius.pill,
+        paddingHorizontal: 8,
+        paddingVertical: 3,
+    },
+    infoBadgeSampleText: { color: c.onPrimary, fontSize: 11, fontWeight: '700' },
+    infoBulletText: { flex: 1, fontSize: 14, lineHeight: 21, color: c.textPrimary },
+    infoButton: {
+        marginTop: 8,
+        backgroundColor: c.primary,
+        borderRadius: radius.pill,
+        paddingVertical: 12,
+        alignItems: 'center',
+    },
+    infoButtonText: { color: c.onPrimary, fontSize: 15, fontWeight: '600' },
+    list: { padding: 12 },
+    row: { flexDirection: 'row', gap: 12, marginBottom: 12, paddingHorizontal: 12 },
+    productCard: {
+        backgroundColor: c.cardBackground,
+        borderRadius: radius.lg,
+        padding: 12,
+        alignItems: 'center',
+        ...elevation.level2,
+        flex: 1,
+        maxWidth: '50%',
+    },
+    productImageContainer: {
+        width: '100%',
+        height: 130,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginBottom: 8,
+    },
+    productImage: { width: '100%', height: '100%', borderRadius: radius.md },
+    productImagePlaceholder: {
+        width: '100%', height: '100%',
+        alignItems: 'center', justifyContent: 'center',
+        backgroundColor: c.surfaceMuted, borderRadius: radius.md,
+    },
+    productImageEmoji: { fontSize: 44, opacity: 0.4 },
+    discountBadge: {
+        position: 'absolute',
+        top: 6,
+        right: 6,
+        backgroundColor: c.primary,
+        borderRadius: radius.pill,
+        paddingHorizontal: 9,
+        paddingVertical: 4,
+        ...elevation.level1,
+    },
+    discountBadgeInner: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+    discountBadgeText: {
+        fontSize: 12,
+        fontWeight: '800',
+        color: c.onPrimary,
+        letterSpacing: 0.2,
+    },
+    productInfo: { flex: 1, width: '100%', marginBottom: 10 },
+    productName: { fontSize: 13, color: c.textPrimary, lineHeight: 18 },
+    amountText: { fontSize: 12, color: c.textMuted, marginTop: 2 },
+    addButton: {
+        width: '100%',
+        backgroundColor: c.primary,
+        borderRadius: radius.pill,
+        paddingVertical: 10,
+        alignItems: 'center',
+    },
+    addButtonText: { color: c.onPrimary, fontSize: 13, fontWeight: '600' },
+    emptyText: { textAlign: 'center', padding: 32, fontSize: 15, color: c.textSecondary },
+    freshness: {
+        fontSize: 11,
+        color: c.textMuted,
+        textAlign: 'center',
+        paddingTop: 4,
+        paddingBottom: 2,
+    },
+    errorBanner: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: c.primary,
+        marginHorizontal: 16,
+        marginTop: 8,
+        paddingHorizontal: 12,
+        paddingVertical: 10,
+        borderRadius: 8,
+    },
+    errorBannerText: { flex: 1, fontSize: 13, color: c.onPrimary },
+    errorBannerRetry: { fontSize: 13, fontWeight: '700', color: c.onPrimary, marginLeft: 8 },
+    coldError: {
+        flex: 1,
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 12,
+        padding: 24,
+    },
+    coldErrorTitle: { fontSize: 16, color: c.textPrimary, textAlign: 'center' },
+    coldErrorButton: {
+        backgroundColor: c.primary,
+        paddingHorizontal: 24,
+        paddingVertical: 12,
+        borderRadius: 10,
+        marginTop: 4,
+    },
+    coldErrorButtonText: { color: c.onPrimary, fontSize: 14, fontWeight: '600' },
+    quantityControl: {
+        width: '100%',
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        borderWidth: 1,
+        borderColor: c.primary,
+        borderRadius: radius.pill,
+        paddingVertical: 6,
+        paddingHorizontal: 10,
+    },
+    qtyButton: { padding: 2 },
+    qtyText: {
+        fontSize: 14, fontWeight: '700', color: c.primary,
+        minWidth: 20, textAlign: 'center',
+    },
+    basketBar: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        paddingHorizontal: 16,
+        paddingTop: 12,
+        backgroundColor: c.cardBackground,
+        borderTopWidth: 1,
+        borderTopColor: c.border,
+        gap: 12,
+    },
+    basketBarLeft: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+    basketBarCount: { fontSize: 14, fontWeight: '600', color: c.primary },
+    basketBarButton: {
+        flexDirection: 'row', alignItems: 'center', gap: 4,
+        backgroundColor: c.primary,
+        paddingVertical: 10, paddingHorizontal: 16, borderRadius: 10,
+    },
+    basketBarButtonText: { fontSize: 14, fontWeight: '700', color: c.onPrimary },
+});

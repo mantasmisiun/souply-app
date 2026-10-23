@@ -347,7 +347,7 @@ export default function ReceiptCategoryScreen() {
                             onPress={() => selectL3(null)}
                         >
                             <Text style={[styles.bubbleText, selectedL3 === null && styles.bubbleTextActive]}>
-                                {t('browse.allProducts')}
+                                {t('catalog.allProducts')}
                             </Text>
                         </TouchableOpacity>
                         {l3Categories.map(cat => (
@@ -503,7 +503,7 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         justifyContent: 'center',
     },
     emptyOverlay: {
-        ...StyleSheet.absoluteFillObject,
+        ...StyleSheet.absoluteFill,
         alignItems: 'center',
         justifyContent: 'center',
         zIndex: 0,

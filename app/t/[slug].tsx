@@ -30,6 +30,7 @@ import { useTheme, type AppTheme } from '../../constants/theme';
 import { ScreenBackButton } from '../../components/ScreenBackButton';
 import { ProductImage } from '../../components/ProductImage';
 import { SkeletonBox } from '../../components/SkeletonBox';
+import { useAuthState } from '../../state/authState';
 import { getUserId } from '../../config/user';
 import {
     fetchSharedTemplate,
@@ -47,6 +48,8 @@ export default function SharedTemplatePreviewScreen() {
     // straight to the basket. A direct App-Link/QR open has no flag → preview.
     const { slug, instantiate } = useLocalSearchParams<{ slug: string; instantiate?: string }>();
     const autoInstantiate = instantiate === '1';
+    // Only for the BYLINE branch below — whether the viewer IS the creator.
+    const viewerHandle = useAuthState(s => s.user?.username);
 
     const [data, setData] = useState<SharedTemplate | null>(null);
     const [loading, setLoading] = useState(true);
@@ -210,11 +213,29 @@ export default function SharedTemplatePreviewScreen() {
                     ListHeaderComponent={
                         <View style={{ gap: 12, marginBottom: 4 }}>
                             <Text style={styles.title}>{template.name}</Text>
-                            {template.creatorHandle && (
-                                <Text style={styles.creator}>
-                                    {t('basketTab.templates.shareBranded', { handle: template.creatorHandle })}
-                                </Text>
-                            )}
+                            {/* Byline. An IMPORTED recipe credits its SOURCE SITE to
+                                everyone but the creator — the importer didn't write
+                                lamaistas.lt's recipe, so their handle would claim
+                                authorship they don't have. DISPLAY ONLY: visits/uses/
+                                savings still accrue to the creator server-side. The
+                                creator (and every hand-made recipe) keeps the handle
+                                byline exactly as before. */}
+                            {(() => {
+                                const viewerIsCreator =
+                                    !!template.creatorHandle && viewerHandle === template.creatorHandle;
+                                if (template.sourceSite && !viewerIsCreator) {
+                                    return (
+                                        <Text style={styles.creator}>
+                                            {t('basketTab.templates.shareFromSite', { site: template.sourceSite })}
+                                        </Text>
+                                    );
+                                }
+                                return template.creatorHandle ? (
+                                    <Text style={styles.creator}>
+                                        {t('basketTab.templates.shareBranded', { handle: template.creatorHandle })}
+                                    </Text>
+                                ) : null;
+                            })()}
                             {template.useCount > 0 && (
                                 <Text style={styles.useCount}>
                                     {t('basketTab.templates.shareSocialProof', { count: template.useCount })}

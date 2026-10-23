@@ -58,7 +58,7 @@ export default function SettingsScreen() {
                             await useAuthState.getState().clear();
                             await resetUserId();
                             try { const Updates = await import('expo-updates'); await Updates.reloadAsync(); }
-                            catch { router.replace('/(tabs)/receipts' as any); }
+                            catch { router.replace('/receipt' as any); }
                         } catch { /* best-effort */ }
                     },
                 },
@@ -105,22 +105,22 @@ export default function SettingsScreen() {
         // getUserId() call in any subsequent fetch will mint a fresh UUID
         // and POST /api/users to register it.
         await resetUserId();
-        router.replace('/(tabs)/receipts' as any);
+        router.replace('/receipt' as any);
     };
 
     return (
         <>
         <CollapsingHeader
             controller={header}
-            background={colors.cardBackground}
             back
-            collapsing={<ScreenHeading title={t('settings.title')} />}
+            smallTitle={t('settings.title')}
         />
         <Animated.ScrollView
             {...header.scroll}
             style={styles.page}
-            contentContainerStyle={[styles.pageContent, { paddingTop: header.paddingTop + 16 }]}
+            contentContainerStyle={[styles.pageContent, { paddingTop: 0 }]}
         >
+            <ScreenHeading title={t('settings.title')} onLayout={header.onTitleLayout} />
             {/* ── Language ─────────────────────────────────────────────── */}
             <Section title={t('settings.language.section')} styles={styles}>
                 <TouchableOpacity

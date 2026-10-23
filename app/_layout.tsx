@@ -1,9 +1,9 @@
-import { DarkTheme, DefaultTheme, ThemeProvider } from '@react-navigation/native';
-import { Stack, useRouter } from 'expo-router';
+// SDK 57: expo-router forked react-navigation — theming now comes from expo-router itself.
+import { DarkTheme, DefaultTheme, ThemeProvider, Stack, useRouter } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import 'react-native-reanimated';
 import { useEffect } from 'react';
-import { InteractionManager, Linking, Platform, View } from 'react-native';
+import { Linking, Platform, View } from 'react-native';
 import { ShareIntentProvider, useShareIntentContext } from 'expo-share-intent';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 
@@ -12,17 +12,22 @@ import { GlassIconButton } from '../components/GlassIconButton';
 import { ScreenBackButton } from '../components/ScreenBackButton';
 import { DisplayPreferenceProvider } from '../contexts/DisplayPreferenceContext';
 import { OfflineBanner } from '../components/OfflineBanner';
+import { ReceiptProcessingBanner } from '../components/ReceiptProcessingBanner';
 import { EnvBadge } from '../components/EnvBadge';
 import { MaskRedactionHost } from '../components/MaskRedactionHost';
+import { BasketSessionHost } from '../components/basket/BasketSessionHost';
 import { DevUpdateBanner } from '../components/DevUpdateBanner';
 import { UsernameGate } from '../components/UsernameGate';
 import UpdateGateModal from '../components/UpdateGateModal';
 import { useAppUpdates } from '../hooks/useAppUpdates';
 import { looksLikePdf, normalizeToLocalUri } from '../utils/pdfToImages';
+import { installReanimatedWarnTrace } from '@/utils/reanimatedWarnTrace';
 import { LevelUpModal } from '../components/LevelUpModal';
 import { useBindNetInfo } from '../state/networkStatus';
 import { useSettingsStore } from '../state/settingsStore';
+import { useTemplateAddState } from '../state/templateAddState';
 import { useReceiptQueueRunner } from '../hooks/useReceiptQueueRunner';
+import { usePushNotifications } from '../hooks/usePushNotifications';
 import '../i18n';
 import { useTranslation } from 'react-i18next';
 import { installFetchInterceptor } from '../utils/installFetchInterceptor';
@@ -43,6 +48,10 @@ installFetchInterceptor();
 // Catch any uncaught JS error and ship it to /api/dev-log so we can
 // diagnose iOS crashes without Xcode. Idempotent.
 installCrashReporter();
+
+// DEV: name the component behind Reanimated's "reading .value during render"
+// warning (the warning itself doesn't say). No-op in production builds.
+installReanimatedWarnTrace();
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -84,9 +93,12 @@ function ShareHandler() {
    *  second defer is imperceptible next to the share-sheet handoff itself. */
   const pushSettled = (route: { pathname: string; params: Record<string, string> }) => {
     if (Platform.OS === 'ios') {
-      InteractionManager.runAfterInteractions(() => {
+      // requestIdleCallback (InteractionManager is deprecated in RN 0.86) —
+      // wait for the JS thread to stop being busy with the share-sheet handoff,
+      // then the existing 400ms lets UITabBarController finish its first layout.
+      requestIdleCallback(() => {
         setTimeout(() => router.push(route as any), 400);
-      });
+      }, { timeout: 1000 });
     } else {
       router.push(route as any);
     }
@@ -155,6 +167,13 @@ function RootLayout() {
   // consumers read via `useNetworkStatus(s => s.isOnline)`.
   useBindNetInfo();
   useReceiptQueueRunner();
+  usePushNotifications();
+
+  // One-shot "leave the recipe without a pop transition" flag — flips the
+  // template/[id] declaration below to animation:'none' for the "Pridėti
+  // prekes" leave only. See the comment on that <Stack.Screen> for why the
+  // option must travel through the STATIC options rather than setOptions.
+  const recipeInstantLeave = useTemplateAddState((s) => s.leaveInstant);
 
   // Hydrate the user-settings store once at app boot — pulls the
   // persisted language choice (or detects device locale on first launch)
@@ -247,11 +266,21 @@ function RootLayout() {
       <DevUpdateBanner />
       <ShareHandler />
       <OfflineBanner />
+      <ReceiptProcessingBanner />
       <UsernameGate />
       <LevelUpModal />
       <UpdateGateModal />
       <Stack
         screenOptions={{
+          // Freeze (react-freeze) each screen's React tree while it is fully
+          // covered by a pushed screen — without this the results-map screen
+          // kept its MapView + full-screen Skia canvas + overlay worklets live
+          // under everything pushed above it. The (tabs) layout already sets
+          // this on the tab navigator; this extends it to root-stack pushes.
+          // NOTE the template/[id] leave keeps its static animation:'none'
+          // workaround below — that pop stays immune to the interrupted-close
+          // alpha-wash the freeze/unfreeze load once caused.
+          freezeOnBlur: true,
           headerStyle: { backgroundColor: colors.pageBackground },
           // Pink tint colours the native back chevron consistently across the
           // app. Title colour is pinned to textPrimary via headerTitleStyle so
@@ -282,20 +311,10 @@ function RootLayout() {
         <Stack.Screen name="(tabs)" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="(admin)" options={{ headerShown: false }} />
         <Stack.Screen name="modal" options={{ presentation: 'modal', title: 'Modal' }} />
-        {/* product/[id] lives at the root (no nested stack) so iOS shows a real
-            back item — the native bar reserves the leading area, so the glass
-            back button no longer overlaps the left-aligned title. Same pattern
-            as discounts + browse/[categoryId]. */}
-        <Stack.Screen name="product/[id]" options={{ headerLeft: () => <ScreenBackButton /> }} />
-        {/* discounts + browse/[categoryId] live at the root so the iOS
-            NativeTabs tab bar hides on push (it stays visible when a
-            screen is inside a tab's nested stack). Each screen sets its
-            own <Stack.Screen options/> inline. */}
-        {/* Back button registered at the route-entry level (not in global
-            screenOptions — that caused the iOS phantom-mount bug) so the pink
-            chevron is present on the first frame, with no native-arrow flash. */}
-        <Stack.Screen name="discounts" options={{ headerLeft: () => <ScreenBackButton /> }} />
-        <Stack.Screen name="browse/[categoryId]" options={{ headerLeft: () => <ScreenBackButton /> }} />
+        {/* The catalog tree (product/[id], discounts, browse/[categoryId], the
+            catalog search) now lives INSIDE the Catalog tab's nested stack
+            (app/(tabs)/catalog/*) so the tab bar stays visible while browsing.
+            Only the root-level /search remains here (receipt-matching flow). */}
         <Stack.Screen name="admin/catalog/[categoryId]" options={{ headerShown: false }} />
         <Stack.Screen name="basket/[id]" options={{ title: t('screens.basket') }} />
         {/* basket/results/[id] is the map-only results screen → full-bleed,
@@ -306,8 +325,49 @@ function RootLayout() {
             empty header bar pushing the map down (the "black bar at the top"). */}
         <Stack.Screen name="basket/results/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="shopping-list/[id]" options={{ title: t('screens.shoppingList'), headerLeft: () => <ScreenBackButton /> }} />
+        {/* 2.0 re-homes: the former Sąrašas + Analizė tabs live on as pushed
+            routes (reached from Profilis quick-links and receipt flows). The
+            titleless glass bar comes from each screen's CollapsingHeader;
+            registering the chevron here keeps it on the first frame. */}
+        <Stack.Screen name="shopping-list/index" options={{ title: '', headerLeft: () => <ScreenBackButton /> }} />
+        <Stack.Screen name="receipt/index" options={{ title: '', headerLeft: () => <ScreenBackButton /> }} />
         <Stack.Screen name="receipt-process" options={{ title: t('screens.receiptProcess'), headerLeft: () => <ScreenBackButton /> }} />
-        <Stack.Screen name="profile/vote-history" options={{ title: t('screens.voteHistory') }} />
+        {/* Vote history draws its OWN chrome (CollapsingHeader: back · small
+            title on scroll · help), so the native bar must stay off — with both
+            on, the screen wore two stacked top bars. */}
+        <Stack.Screen name="profile/vote-history" options={{ headerShown: false }} />
+        {/* Recipe-import review — its own CollapsingHeader (back · small title on
+            scroll), so the native bar must stay off from the first frame. */}
+        <Stack.Screen name="recipe-import" options={{ headerShown: false }} />
+        {/* Recipe detail — its own CollapsingHeader (cover-coloured custom bar),
+            native bar off from the first frame like the other dock hosts, so
+            the bottom dock's full detent can cover the chrome to the top.
+            ANIMATION: platform default for the ordinary push/pop — EXCEPT the
+            "Pridėti prekes" leave (startAddingItems, app/template/[id].tsx).
+            That leave is a root-stack POP of this screen running concurrently
+            with a tab switch (Receptai → Katalogas), the catalog's
+            freezeOnBlur unfreeze and the session dock mounting. Under that
+            load the pop's native close transition is interrupted mid-flight
+            and the REVEALED (tabs) screen — the container of the WHOLE tab
+            navigator — is stranded at partial alpha (Android's default close
+            tween fades the revealed screen 0→1; cancelled part-way it leaves
+            the fragment's view semi-transparent). Because every tab scene and
+            every screen pushed inside a tab's nested stack renders INSIDE
+            that container, the root backdrop bleeds through them all — the
+            persistent wash over everything opened from the catalog
+            (device-probe confirmed: the wash sampled as the root backdrop
+            colour). On Android the close animation is chosen from the
+            DISMISSED screen's stackAnimation (rnscreens ScreenStack close
+            branch), and a RUNTIME setOptions({animation:'none'}) demonstrably
+            never survived into that native pop transaction — so the 'none'
+            is declared HERE, in the static options, gated by the one-shot
+            leaveInstant flag that startAddingItems commits one frame before
+            the navigate. Native 'none' maps to a 1→1 alpha tween
+            (rns_no_animation_20), so even an interrupted commit cannot
+            strand a wash. The flag resets in the recipe screen's unmount
+            cleanup, so the next push into a recipe keeps the platform
+            animation. */}
+        <Stack.Screen name="template/[id]" options={{ headerShown: false, animation: recipeInstantLeave ? 'none' : undefined }} />
         <Stack.Screen
           name="settings"
           options={{
@@ -336,6 +396,10 @@ function RootLayout() {
       </Stack>
       {/* Top-layer overlay (last child = highest paint order) so it sits above
           the navigator without ever altering its frame. */}
+      {/* 2.0 basket-session surface: floating bar + preview sheet + target
+          chooser, self-gating to the browse-y routes. Above the navigator,
+          below EnvBadge. */}
+      <BasketSessionHost />
       <EnvBadge />
       {/* Always-mounted off-screen surface used to burn card-masking boxes
           into receipt images before upload (the headless receipt queue has

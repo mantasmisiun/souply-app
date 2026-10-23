@@ -1,6 +1,8 @@
 import { API_BASE_URL } from '../config/api';
 import { getUserId } from '../config/user';
 import type { DisplayMode } from '../contexts/DisplayPreferenceContext';
+import { useBasketSession, discoverOptions, postBasketItem, type AddItemResult } from '../state/basketSession';
+import { addTemplateItem } from './basketTemplatesApi';
 
 /**
  * Module-level in-flight promise: serializes concurrent "create draft
@@ -21,23 +23,29 @@ let createDraftPromise: Promise<number> | null = null;
 async function ensureDraftBasket(
     existingId: number | null,
     setDraftBasketId: (id: number) => void,
-    userId: string
+    userId: string,
+    // Explicit "new basket" pick: mint a fresh draft even if one exists, and
+    // do NOT share the in-flight singleton (each force is its own basket).
+    force: boolean = false,
 ): Promise<number> {
-    if (existingId) return existingId;
-    if (createDraftPromise) return createDraftPromise;
+    if (existingId && !force) return existingId;
+    if (!force && createDraftPromise) return createDraftPromise;
 
-    createDraftPromise = (async () => {
+    const doCreate = async (): Promise<number> => {
         const res = await fetch(`${API_BASE_URL}/api/baskets`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userId }),
+            body: JSON.stringify(force ? { userId, forceNew: true } : { userId }),
         });
         if (!res.ok) throw new Error(`create basket failed: ${res.status}`);
         const data = await res.json();
         setDraftBasketId(data.id);
         return data.id as number;
-    })();
+    };
 
+    if (force) return doCreate();
+
+    createDraftPromise = doCreate();
     createDraftPromise.finally(() => {
         createDraftPromise = null;
     });
@@ -53,7 +61,7 @@ async function ensureDraftBasket(
  * Default 'sku' matches the pre-Phase-1 behavior for call sites that
  * haven't been updated yet.
  */
-export const addProductToBasket = async (
+const addProductToBasketInner = async (
     productId: number,
     draftBasketId: number | null,
     setDraftBasketId: (id: number) => void,
@@ -61,21 +69,188 @@ export const addProductToBasket = async (
     matchMode: DisplayMode = 'sku'
 ) => {
     try {
-        const userId = await getUserId();
-        const basketId = await ensureDraftBasket(draftBasketId, setDraftBasketId, userId);
+        const session = useBasketSession.getState();
 
-        const res = await fetch(`${API_BASE_URL}/api/basket-items`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ basketId, productId, quantity, matchMode }),
-        });
-
-        if (res.status === 409) {
-            return { success: false, message: 'Produktas jau yra krepšelyje' };
+        // 1. Session target already chosen → silent add. The target is a basket
+        //    OR a template (same mechanic, different persistence). Re-summons the
+        //    bar even after an X dismissal (user decision 2026-07-16).
+        if (session.target) {
+            const t = session.target;
+            let r: AddItemResult;
+            if (t.kind === 'pending-new') {
+                // Lazy cart: the first real add mints the basket.
+                const userId = await getUserId();
+                const basketId = await ensureDraftBasket(null, setDraftBasketId, userId, true);
+                r = await postBasketItem(basketId, productId, quantity, matchMode);
+                if (r.success) {
+                    session.setTarget({ kind: 'basket', basketId, isFamily: false }, 0);
+                    session.bumpCount(1);
+                    session.markNewProduct(productId);
+                    session.bumpBasketRev();
+                    session.showBar();
+                }
+                return r;
+            }
+            if (t.kind === 'template') {
+                try {
+                    await addTemplateItem(t.templateId, { productId, quantity });
+                    r = { success: true, message: 'Pridėta į šabloną' };
+                } catch {
+                    r = { success: false, message: 'Nepavyko pridėti produkto' };
+                }
+            } else {
+                r = await postBasketItem(t.basketId, productId, quantity, matchMode);
+            }
+            if (r.success) {
+                // `already` (409): the product was in the basket — count it once,
+                // don't inflate the badge/count for a no-op re-add, and tell the
+                // user (inform-only: existing quantity is kept).
+                if (!r.already) {
+                    session.bumpCount(1);
+                    session.markNewProduct(productId);
+                } else {
+                    session.setAddNotice('basketSession.alreadyInBasket');
+                }
+                session.bumpBasketRev();
+                session.showBar();
+            }
+            return r;
         }
 
-        return { success: true, message: 'Produktas pridėtas į krepšelį' };
-    } catch (error) {
+        // 2. No target yet (cold start / first add). Supersedes the 2026-07-17
+        //    silent-resume (user decision 2026-07-18): DON'T assume the last
+        //    basket. When a resumable basket exists (family and/or previous),
+        //    QUEUE this add and raise the "Baskets" dock sheet so the user
+        //    picks; the pick flushes the queue. Only when there's no ambiguity
+        //    at all do we create a personal draft silently.
+        const options = await discoverOptions();
+        if (options == null) {
+            // options == null ⇒ NO resumable basket (nothing fresh enough / not
+            // archived). Start a FRESH basket — never reuse the passed
+            // draftBasketId, which may point at a stale/abandoned draft from a
+            // previous session (the "banana silently landed in an old basket"
+            // bug). ensureDraftBasket(null) mints a new one.
+            const userId = await getUserId();
+            const basketId = await ensureDraftBasket(null, setDraftBasketId, userId);
+            const r = await postBasketItem(basketId, productId, quantity, matchMode);
+            if (r.success) {
+                // Bar appears COLLAPSED (BasketListSheet no longer auto-expands).
+                useBasketSession.getState().setTarget({ kind: 'basket', basketId, isFamily: false }, 1);
+                useBasketSession.getState().markNewProduct(productId);
+                useBasketSession.getState().bumpBasketRev();
+            }
+            return r;
+        }
+
+        // Ambiguity → publish the options to the dock, mark a resumable basket
+        // exists (so the sheet is available), queue the add and raise the sheet.
+        const resumable = options.find(o => o.key !== 'new') ?? null;
+        useBasketSession.getState().setDockOptions(options);
+        useBasketSession.getState().setDormant({ count: resumable?.itemCount ?? 0 });
+        return await new Promise<{ success: boolean; message: string }>((resolve) => {
+            useBasketSession.getState().queueAdd({ productId, quantity, matchMode, resolve });
+            useBasketSession.getState().requestDockExpand();
+        });
+    } catch {
         return { success: false, message: 'Nepavyko pridėti produkto' };
     }
+};
+
+/**
+ * Public add — wraps the flow above so a FAILED add is never silent. It used to
+ * be: the server refused (e.g. a priced basket rejected the edit), every caller
+ * did `if (r.success) …` with no else, and the card's spinner simply fell back
+ * to "Add" as though nothing had been tapped. Reporting it here covers every
+ * entry point (catalog card, product detail, search, the queued chooser add)
+ * instead of each screen remembering to handle it.
+ */
+export const addProductToBasket = async (
+    productId: number,
+    draftBasketId: number | null,
+    setDraftBasketId: (id: number) => void,
+    quantity: number = 1,
+    matchMode: DisplayMode = 'sku'
+) => {
+    const r = await addProductToBasketInner(productId, draftBasketId, setDraftBasketId, quantity, matchMode);
+    if (!r.success) useBasketSession.getState().setAddNotice('basketSession.addFailed');
+    return r;
+};
+
+/** The chooser's pick handler: resolve the target (basket OR template — creating
+ *  a basket when `new`), set it as the session target and flush every queued add
+ *  into it. */
+export const applyChooserPick = async (
+    option: {
+        key: 'family' | 'previous' | 'new' | 'template';
+        basketId: number | null;
+        templateId?: number | null;
+        name?: string | null;
+        itemCount: number;
+    },
+    setDraftBasketId: (id: number) => void,
+): Promise<void> => {
+    const session = useBasketSession.getState();
+    // CLAIM the queued adds BEFORE collapsing: collapse SYNCHRONOUSLY fires the
+    // dock's stage-0 handler, whose "chooser dismissed without a pick" guard
+    // (target==null && pending) would cancel-and-clear the queue we are about
+    // to flush — the add would silently vanish (bug: pick applied, item lost).
+    const pending = session.takePending();
+    session.closeChooser();
+    // Collapse the raised chooser sheet — the session continues COLLAPSED (just
+    // the bar) so the user keeps browsing; they pull it up to review.
+    session.collapseDock?.();
+
+    // Template pick → the session targets the template; queued adds flush via the
+    // template API rather than the basket-items endpoint.
+    if (option.key === 'template' && option.templateId != null) {
+        const templateId = option.templateId;
+        session.setTarget({ kind: 'template', templateId, name: option.name ?? undefined }, option.itemCount);
+        for (const add of pending) {
+            let r: { success: boolean; message: string };
+            try {
+                await addTemplateItem(templateId, { productId: add.productId, quantity: add.quantity });
+                r = { success: true, message: 'Pridėta į šabloną' };
+            } catch {
+                r = { success: false, message: 'Nepavyko pridėti produkto' };
+            }
+            if (r.success) {
+                useBasketSession.getState().bumpCount(1);
+                useBasketSession.getState().markNewProduct(add.productId);
+            }
+            add.resolve(r);
+        }
+        useBasketSession.getState().bumpBasketRev();
+        return;
+    }
+
+    let basketId = option.basketId;
+    if (basketId == null) {
+        if (pending.length === 0) {
+            // key 'new' picked with NOTHING queued: defer creation (lazy cart
+            // — Shopify/Amazon semantics). The session targets a sentinel; the
+            // first successful add mints the basket. Abandoning leaves no row.
+            session.setTarget({ kind: 'pending-new' }, 0);
+            useBasketSession.getState().bumpBasketRev();
+            return;
+        }
+        // Adds already queued → the basket is non-empty from birth; create it.
+        const userId = await getUserId();
+        basketId = await ensureDraftBasket(null, setDraftBasketId, userId, true);
+    }
+    session.setTarget({ kind: 'basket', basketId, isFamily: option.key === 'family' }, option.itemCount);
+    for (const add of pending) {
+        const r = await postBasketItem(basketId, add.productId, add.quantity, add.matchMode);
+        // `already` (409): product was in the resumed basket — setTarget's
+        // itemCount already counts it, so don't bump again. Still resolve as a
+        // success so the queued Add button settles cleanly (no error toast).
+        // Inform-only (user decision): keep the existing quantity, tell the
+        // user it's already there (the root host toasts the notice).
+        if (r.success && !r.already) {
+            useBasketSession.getState().bumpCount(1);
+            useBasketSession.getState().markNewProduct(add.productId);
+        }
+        if (r.already) useBasketSession.getState().setAddNotice('basketSession.alreadyInBasket');
+        add.resolve(r);
+    }
+    useBasketSession.getState().bumpBasketRev();
 };

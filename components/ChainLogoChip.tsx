@@ -20,6 +20,7 @@ export function ChainLogoChip({
     logoUrl,
     onLogoLoad,
     style,
+    dimmed = false,
 }: {
     chainId: number;
     name?: string;
@@ -30,17 +31,26 @@ export function ChainLogoChip({
     logoUrl?: string | null;
     onLogoLoad?: () => void;
     style?: StyleProp<ViewStyle>;
+    /** Muted "pending" look (planned store with no receipt yet): lowered opacity
+     *  + a grey wash. RN has no true grayscale filter, so this desaturates it. */
+    dimmed?: boolean;
 }) {
     const badge = chainBadgeImage(chainId);
+    const desat = dimmed ? (
+        <View pointerEvents="none" style={[StyleSheet.absoluteFill, styles.desat, { borderRadius: size / 2 }]} />
+    ) : null;
 
     if (badge != null) {
         return (
-            <Image
-                source={badge}
-                onLoad={onLogoLoad}
-                style={[{ width: size, height: size }, style as StyleProp<ImageStyle>]}
-                resizeMode="contain"
-            />
+            <View style={[{ width: size, height: size }, style]}>
+                <Image
+                    source={badge}
+                    onLoad={onLogoLoad}
+                    style={[{ width: size, height: size }, dimmed && { opacity: 0.4 }] as StyleProp<ImageStyle>}
+                    resizeMode="contain"
+                />
+                {desat}
+            </View>
         );
     }
 
@@ -51,6 +61,7 @@ export function ChainLogoChip({
             style={[
                 styles.chip,
                 { width: size, height: size, borderRadius: size / 2, backgroundColor: chainBrandColorById(chainId) },
+                dimmed && { opacity: 0.5 },
                 style,
             ]}
         >
@@ -61,6 +72,7 @@ export function ChainLogoChip({
                     {(name?.[0] ?? '?').toUpperCase()}
                 </Text>
             )}
+            {desat}
         </View>
     );
 }
@@ -75,4 +87,6 @@ const styles = StyleSheet.create({
         borderColor: 'rgba(0,0,0,0.12)',
     },
     fallback: { color: '#FFFFFF', fontWeight: '800' },
+    // Grey wash over a dimmed logo — desaturates it toward the "not uploaded yet" look.
+    desat: { backgroundColor: 'rgba(130,130,130,0.3)' },
 });

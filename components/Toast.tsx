@@ -6,7 +6,7 @@ export interface ToastHandle {
     show: (message: string) => void;
 }
 
-export const Toast = forwardRef<ToastHandle>((_, ref) => {
+export const Toast = forwardRef<ToastHandle, { bottomOffset?: number }>(({ bottomOffset }, ref) => {
     const opacity = useRef(new Animated.Value(0)).current;
     const translateY = useRef(new Animated.Value(12)).current;
     const [message, setMessage] = useState('');
@@ -31,7 +31,7 @@ export const Toast = forwardRef<ToastHandle>((_, ref) => {
     }));
 
     return (
-        <Animated.View pointerEvents="none" style={[styles.toast, { opacity, transform: [{ translateY }] }]}>
+        <Animated.View pointerEvents="none" style={[styles.toast, bottomOffset != null && { bottom: bottomOffset }, { opacity, transform: [{ translateY }] }]}>
             <Ionicons name="checkmark-circle" size={16} color="#fff" style={{ marginRight: 6 }} />
             <Text style={styles.text}>{message}</Text>
         </Animated.View>

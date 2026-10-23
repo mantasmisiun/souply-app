@@ -46,7 +46,13 @@ export const useBasketState = create<BasketState>((set) => ({
       sessionBasketId: id !== null ? id : state.sessionBasketId,
     })),
 
-  clearSessionBasket: () => set({ draftBasketId: null, sessionBasketId: null }),
+  clearSessionBasket: () => {
+    set({ draftBasketId: null, sessionBasketId: null });
+    // The basket session lives in a SEPARATE store — clear its target too, or a
+    // graduated/deleted basket keeps driving catalog steppers + the session
+    // sheet. (Lazy require avoids an import cycle.)
+    try { require('./basketSession').useBasketSession.getState().clearTarget(); } catch {}
+  },
 
   initDraftBasket: async () => {
     try {
@@ -54,7 +60,9 @@ export const useBasketState = create<BasketState>((set) => ({
       const res = await fetch(`${API_BASE_URL}/api/baskets/user/${userId}`);
       const baskets = await res.json();
       const draft = Array.isArray(baskets)
-        ? baskets.find((b: any) => b.status === "draft")
+        // householdId filter: the family SHARED basket is draft-status but
+        // must never become the implicit personal target.
+        ? baskets.find((b: any) => b.status === "draft" && b.householdId == null)
         : null;
       if (draft) {
         set({ draftBasketId: draft.id, sessionBasketId: draft.id });

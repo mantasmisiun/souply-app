@@ -1,258 +1,350 @@
+/**
+ * Apsipirkimai tab (Souply 2.0 Phase 4): the trips list. Each card is one
+ * Apsipirkimas with its DERIVED stage (server: tripListService) and the
+ * stage's single CTA; archived trips live in a collapsed "Archyvas" section
+ * (tap = explicit resume). The "Sukurti šeimos sąrašą" card at the top mints
+ * the household + its invite QR (spec: one household per user).
+ *
+ * Interim navigation: CTAs point at the existing basket/list/receipt
+ * screens until the trip-map surface (MapHost sheet mode) lands.
+ */
 import {
     View,
     Text,
-    FlatList,
-    ScrollView,
     TouchableOpacity,
     StyleSheet,
-    Alert,
     RefreshControl,
     Modal,
-    TextInput,
+    Alert,
+    Platform,
 } from "react-native";
 import { MaterialProgress } from '@/components/MaterialProgress';
-import Animated, { useSharedValue, useAnimatedStyle, withTiming, Easing } from 'react-native-reanimated';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { StoreChipBar } from '../../../components/StoreChipBar';
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback, memo } from 'react';
-import { Stack, useRouter, useFocusEffect } from 'expo-router';
-import { glassHeaderOptions } from '../../../constants/navHeader';
+import Animated, { LinearTransition, Easing } from 'react-native-reanimated';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
+import { useRouter, useFocusEffect } from 'expo-router';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useBackToExit } from '../../../hooks/useBackToExit';
+import { useReceiptQueueStore, type QueueItem } from '../../../state/receiptQueueStore';
+import { useTripSeenStore, isTripNew } from '../../../state/tripSeenStore';
+import { TripCard } from '../../../components/TripCard';
+import { ProgressGlow } from '../../../components/ProgressGlow';
+import { requestStoreResolution } from '../../../utils/storeResolution';
+import { chainNameById, chainBrandColorById } from '../../../utils/chainBrandName';
+import { linkReceiptToList } from '../../../services/receiptProcessingService';
+import { StoreResolutionOverlay } from '../../../components/receipt/StoreResolutionOverlay';
 import { Ionicons } from '@expo/vector-icons';
+import DateTimePicker, { type DateTimePickerEvent } from '@react-native-community/datetimepicker';
 import { useTranslation } from 'react-i18next';
 import { API_BASE_URL } from '../../../config/api';
-import { coverEmoji } from '../../../utils/templateCover';
 import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
-import { TemplateCoverEditor, type CoverDraft } from '../../../components/TemplateCoverEditor';
-import { useAuthState } from '../../../state/authState';
-import { ltPluralSuffix } from '../../../utils/ltPlural';
 import { getUserId } from '../../../config/user';
 import { useBasketState } from '../../../state/basketState';
-import { useTheme, radius, elevation, type AppTheme } from '../../../constants/theme';
+import { useTheme, radius, spacing, type AppTheme } from '../../../constants/theme';
 import { ScalePressable } from '../../../components/ScalePressable';
 import { SkeletonBox } from '../../../components/SkeletonBox';
-import { formatDate, formatEuro } from '../../../utils/formatCurrency';
+import { formatDate } from '../../../utils/formatCurrency';
+import { formatWeekday } from '../../../utils/formatDayDate';
+import { useShoppingSheet } from '../../../state/shoppingSheet';
+import { buildReceiptDotMap, parseLooseDate, sameDay } from '../../../utils/receiptDots';
+import { groupBySection, type TripSection } from '../../../utils/tripSections';
 import {
-    listTemplates,
-    createTemplate,
-    buildDefaultTemplate,
-    type BasketTemplate,
-} from '../../../utils/basketTemplatesApi';
-import { SystemNoticeCard } from '../../../components/SystemNoticeCard';
-import { BuildingTemplateCard } from '../../../components/BuildingTemplateCard';
+    fetchTrips, unarchiveTrip, fetchOwnHousehold,
+    type TripSummary, type HouseholdInfo,
+} from '../../../utils/tripsApi';
+import { tripStageHref } from '../../../utils/tripStageRoute';
+import { ShoppingFilterChips } from '../../../components/basket/ShoppingFilterChips';
+import { shouldRefetchOnFocus } from '../../../utils/focusStaleness';
 
-interface Basket {
-    id: number;
-    userId: string;
-    status: string;
-    name: string | null;
-    createdAt: string;
-    updatedAt: string;
-    itemCount: number;
-    /** Sum of (price × quantity) for the ShoppingList tied to this basket,
-     *  rounded to 2dp. Null for draft / compared baskets that haven't had
-     *  a store selected yet. */
-    selectedStoreTotal: string | number | null;
-    /** Cheapest store's total from the most recent comparison run.
-     *  Drives the "nuo €X" line on compared baskets. */
-    cheapestTotal: string | number | null;
-    /** 1 once the user has changed items/amounts after creation — drives the
-     *  "Redaguota" chip (this basket diverged from the creator's original). */
-    userEditedAfterCreation?: 0 | 1;
-    /** Inherited identity from the source template (null for manual baskets). */
-    templateCoverColor?: string | null;
-    templateCoverImage?: { kind: 'preset'; iconKey: string } | { kind: 'emoji'; emoji: string } | null;
-    templateCreatorHandle?: string | null;
-    templateName?: string | null;
-}
+const STAGE_ICONS: Record<number, keyof typeof Ionicons.glyphMap> = {
+    1: 'cart-outline', 2: 'storefront-outline', 3: 'list-outline', 4: 'receipt-outline', 5: 'stats-chart-outline',
+};
 
-type ViewMode = 'baskets' | 'templates';
-type BasketStatus = 'draft' | 'compared' | 'inProgress' | 'completed';
+/** Flattened, virtualisable rows (same pattern as app/shopping-list/index.tsx
+ *  and ShoppingListDetail): every card used to mount at once inside an
+ *  Animated.ScrollView, which is what made switching to this tab feel slow. */
+type TripRow =
+    | { kind: 'processing'; key: string; item: QueueItem }
+    | { kind: 'sectionHeader'; key: string; section: TripSection }
+    | { kind: 'trip'; key: string; trip: TripSummary; section: TripSection; isLast: boolean }
+    | { kind: 'empty'; key: string }
+    | { kind: 'archiveHeader'; key: string }
+    | { kind: 'archived'; key: string; trip: TripSummary; isLast: boolean };
+const tripRowKey = (r: TripRow) => r.key;
 
-const STATUS_PRIORITY: BasketStatus[] = ['draft', 'compared', 'inProgress', 'completed'];
+/** One list-level transition (FlatList itemLayoutAnimation) replaces the old
+ *  per-card `layout` prop — identical 240ms cubic-out motion, but Reanimated
+ *  no longer snapshots every card on mount. */
+const rowLayout = LinearTransition.duration(240).easing(Easing.out(Easing.cubic));
 
-const INITIAL_PAGE_SIZE = 10;
-const PAGE_INCREMENT = 10;
-
-/**
- * Accordion section with the same animation feel as Narsyti's L1 categories.
- * Mirrors the ghost-view-measures-natural-height pattern from
- * app/(tabs)/browse/index.tsx — Reanimated shared values drive a height
- * tween + chevron rotation, both 220 ms with `Easing.inOut(quad)`.
- */
-const BasketSection = memo(function BasketSection({
-    status, label, count, isExpanded, isEmpty, onToggle, children, styles, colors,
-}: {
-    status: BasketStatus;
-    label: string;
-    count: number;
-    isExpanded: boolean;
-    isEmpty: boolean;
-    onToggle: (status: BasketStatus) => void;
-    children: React.ReactNode;
-    styles: ReturnType<typeof makeStyles>;
-    colors: AppTheme;
-}) {
-    const contentHeightRef = useRef(0);
-    const animatedHeight = useSharedValue(0);
-    const chevronRotation = useSharedValue(0);
-
-    useLayoutEffect(() => {
-        animatedHeight.value = withTiming(isExpanded ? contentHeightRef.current : 0, {
-            duration: 220,
-            easing: Easing.inOut(Easing.quad),
-        });
-        chevronRotation.value = withTiming(isExpanded ? 1 : 0, { duration: 220 });
-    }, [isExpanded]);
-
-    const animatedContentStyle = useAnimatedStyle(() => ({
-        height: animatedHeight.value,
-        overflow: 'hidden',
-    }));
-
-    const chevronStyle = useAnimatedStyle(() => ({
-        transform: [{ rotate: `${chevronRotation.value * 180}deg` }],
-    }));
-
-    // Ghost view measurement — absolutely positioned + invisible. Whenever
-    // its layout fires, we capture the natural content height and, if the
-    // section is currently expanded, retarget the animation to match.
-    const handleLayout = (e: { nativeEvent: { layout: { height: number } } }) => {
-        const h = e.nativeEvent.layout.height;
-        if (h > 0 && h !== contentHeightRef.current) {
-            contentHeightRef.current = h;
-            if (isExpanded) {
-                animatedHeight.value = withTiming(h, { duration: 150 });
-            }
-        }
-    };
-
-    return (
-        <View style={styles.section}>
-            <TouchableOpacity
-                style={[styles.sectionHeader, isExpanded && styles.sectionHeaderOpen]}
-                onPress={() => !isEmpty && onToggle(status)}
-                activeOpacity={isEmpty ? 1 : 0.7}
-            >
-                <Text style={[styles.sectionHeaderTitle, isEmpty && styles.sectionHeaderMuted]}>
-                    {label}
-                </Text>
-                <Text style={[styles.sectionHeaderCount, isEmpty && styles.sectionHeaderMuted]}>
-                    {count}
-                </Text>
-                {!isEmpty && (
-                    <Animated.View style={[chevronStyle, { marginLeft: 8 }]}>
-                        <Ionicons name="chevron-down" size={18} color={colors.textSecondary} />
-                    </Animated.View>
-                )}
-            </TouchableOpacity>
-            {/* Ghost view that the layout pass uses to measure natural content
-                height. Absolutely positioned so its size doesn't push the
-                surrounding layout while it measures. */}
-            <View
-                style={{ position: 'absolute', opacity: 0, left: 0, right: 0 }}
-                pointerEvents="none"
-                onLayout={handleLayout}
-            >
-                {children}
-            </View>
-            <Animated.View style={animatedContentStyle}>
-                {children}
-            </Animated.View>
-        </View>
-    );
-});
-
-export default function BasketScreen() {
+/** In-flight receipt-queue item as a card shaped like a trip card, with a
+ *  bottom-edge progress glow + status line. Only shown on the Shopping screen;
+ *  the work itself runs in the global background queue. */
+function ProcessingCard({ item, onResolveStore }: { item: QueueItem; onResolveStore?: (item: QueueItem) => void }) {
     const colors = useTheme();
     const { t } = useTranslation();
     const styles = useMemo(() => makeStyles(colors), [colors]);
+    const isError = item.status === 'error';
+    // PARKED for a missing purchase date: the scan is fine, only the date didn't
+    // read. Ask for it here rather than defaulting to today — a receipt from last
+    // week would otherwise land on the wrong day with no hint to the user.
+    const needsDate = item.status === 'needs_date';
+    // PARKED because the receipt's chain isn't one of the trip's planned stores
+    // (planned Maxima + Lidl, shopped at IKI). Silently dropping the link is what
+    // made a perfectly parsed receipt vanish into its own ad-hoc trip.
+    const needsStoreChoice = item.status === 'needs_store';
+    // PARKED after saving: the receipt exists but never attached to its list.
+    const needsLink = item.status === 'needs_link';
+    const [linking, setLinking] = useState(false);
+    const [showPicker, setShowPicker] = useState(false);
+    const resolveDate = useReceiptQueueStore.getState().resolveDate;
+    const resolveStoreLink = useReceiptQueueStore.getState().resolveStoreLink;
+    const retryLink = useCallback(async () => {
+        if (item.linkReceiptId == null || item.linkListId == null) return;
+        setLinking(true);
+        const ok = await linkReceiptToList(item.linkListId, item.linkReceiptId);
+        setLinking(false);
+        // Success clears the card; failure leaves it so the user can try again.
+        if (ok) useReceiptQueueStore.getState().removeItem(item.id);
+    }, [item.id, item.linkReceiptId, item.linkListId]);
+    // Recoverable store_unrecognized failure → offer the "Rasti parduotuvę" map.
+    const needsStore = isError && item.errorReason === 'store_unrecognized' && item.storeChainId != null;
+    const fraction = item.progressTotal && item.progressTotal > 0
+        ? Math.max(0.05, Math.min(1, (item.progressDone ?? 0) / item.progressTotal))
+        : 0.08;
+    const title = needsDate ? t('receiptQueue.needsDateTitle')
+        : needsStoreChoice ? t('receiptQueue.needsStoreTitle')
+        : needsLink ? t('receiptQueue.linkFailedTitle')
+        : isError ? (item.error || t('banners.receiptQueue.error'))
+        : t('banners.receiptQueue.processing');
+    const status = item.progress
+        ?? (item.status === 'pending' ? t('banners.receiptQueue.queued', { count: 1 })
+            : item.status === 'awaiting_network' ? t('banners.receiptQueue.awaitingNetwork')
+            : t('banners.receiptQueue.processing'));
+    return (
+        <View style={[styles.card, styles.processingCard]}>
+            <View style={styles.cardMain}>
+                <View style={{ flex: 1, minWidth: 0, gap: 4 }}>
+                    <View style={styles.cardTop}>
+                        <View style={styles.cartChip}>
+                            <Ionicons name="receipt-outline" size={14} color={colors.primary} />
+                        </View>
+                    </View>
+                    <Text style={styles.processingTitle} numberOfLines={2}>{title}</Text>
+                    {needsDate ? (
+                        <Text style={styles.cardMeta} numberOfLines={2}>{t('receiptQueue.needsDate')}</Text>
+                    ) : needsStoreChoice ? (
+                        <>
+                            <Text style={styles.cardMeta} numberOfLines={3}>{t('receiptQueue.needsStore')}</Text>
+                            {chainNameById(item.linkDetectedChainId) != null && (
+                                <Text style={styles.cardMeta} numberOfLines={1}>
+                                    {t('receiptQueue.needsStoreDetected', { chain: chainNameById(item.linkDetectedChainId) })}
+                                </Text>
+                            )}
+                        </>
+                    ) : needsLink ? (
+                        <Text style={styles.cardMeta} numberOfLines={3}>{t('receiptQueue.linkFailed')}</Text>
+                    ) : !isError && <Text style={styles.cardMeta} numberOfLines={1}>{status}</Text>}
+                </View>
+                {needsStoreChoice ? (
+                    <TouchableOpacity
+                        onPress={() => useReceiptQueueStore.getState().removeItem(item.id)}
+                        hitSlop={8}
+                        accessibilityLabel={t('common.close')}
+                    >
+                        <Ionicons name="close" size={20} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                ) : needsLink ? (
+                    <View style={styles.cardActions}>
+                        <TouchableOpacity style={styles.resolveBtn} onPress={retryLink} disabled={linking} hitSlop={6}>
+                            {linking
+                                ? <MaterialProgress size="small" color={colors.onPrimary} />
+                                : <Ionicons name="link-outline" size={14} color={colors.onPrimary} />}
+                            <Text style={styles.resolveBtnText}>{t('receiptQueue.retryLink')}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={() => useReceiptQueueStore.getState().removeItem(item.id)}
+                            hitSlop={8}
+                            accessibilityLabel={t('common.close')}
+                        >
+                            <Ionicons name="close" size={20} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    </View>
+                ) : needsDate ? (
+                    <View style={styles.cardActions}>
+                        <TouchableOpacity style={styles.resolveBtn} onPress={() => setShowPicker(true)} hitSlop={6}>
+                            <Ionicons name="calendar-outline" size={14} color={colors.onPrimary} />
+                            <Text style={styles.resolveBtnText}>{t('receiptQueue.enterDate')}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            onPress={() => useReceiptQueueStore.getState().removeItem(item.id)}
+                            hitSlop={8}
+                            accessibilityLabel={t('common.close')}
+                        >
+                            <Ionicons name="close" size={20} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    </View>
+                ) : isError ? (
+                    <View style={styles.cardActions}>
+                        {needsStore && (
+                            <TouchableOpacity style={styles.resolveBtn} onPress={() => onResolveStore?.(item)} hitSlop={6}>
+                                <Ionicons name="location-outline" size={14} color={colors.onPrimary} />
+                                <Text style={styles.resolveBtnText}>{t('basketDetail.findStore')}</Text>
+                            </TouchableOpacity>
+                        )}
+                        <TouchableOpacity
+                            onPress={() => useReceiptQueueStore.getState().removeItem(item.id)}
+                            hitSlop={8}
+                            accessibilityLabel={t('common.close')}
+                        >
+                            <Ionicons name="close" size={20} color={colors.textSecondary} />
+                        </TouchableOpacity>
+                    </View>
+                ) : (
+                    <MaterialProgress size="small" color={colors.primary} />
+                )}
+            </View>
+            {/* One button per PLANNED store of the trip this receipt was uploaded
+                for, plus the explicit opt-out. Picking a store fulfils that slot
+                (what the interactive scan's chain-gate override does); "keep
+                separate" is today's ad-hoc behaviour, now a choice, not a silent
+                default. */}
+            {needsStoreChoice && (
+                <View style={styles.linkChoices}>
+                    {(item.linkOptions ?? []).map(o => (
+                        <TouchableOpacity
+                            key={o.listId}
+                            style={styles.linkChoiceBtn}
+                            onPress={() => resolveStoreLink(item.id, o.listId)}
+                            hitSlop={6}
+                        >
+                            <View style={[styles.linkChoiceDot, { backgroundColor: chainBrandColorById(o.chainId) }]} />
+                            <Text style={styles.linkChoiceText} numberOfLines={1}>
+                                {chainNameById(o.chainId) ?? t('common.store')}
+                            </Text>
+                        </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity
+                        style={[styles.linkChoiceBtn, styles.linkChoiceGhost]}
+                        onPress={() => resolveStoreLink(item.id, null)}
+                        hitSlop={6}
+                    >
+                        <Text style={[styles.linkChoiceText, { color: colors.textSecondary }]} numberOfLines={1}>
+                            {t('receiptQueue.keepSeparate')}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+            )}
+            {!isError && !needsDate && !needsStoreChoice && !needsLink && <ProgressGlow edge="bottom" fraction={fraction} color={colors.primary} />}
+            {showPicker && (
+                <DateTimePicker
+                    value={new Date()}
+                    mode="date"
+                    display={Platform.OS === 'ios' ? 'inline' : 'calendar'}
+                    // A receipt can't be from the future, and two years back is
+                    // ample — same bounds as the interactive scan's date gate.
+                    maximumDate={new Date()}
+                    minimumDate={new Date(new Date().getFullYear() - 2, new Date().getMonth(), new Date().getDate())}
+                    onChange={(e: DateTimePickerEvent, d?: Date) => {
+                        setShowPicker(false);
+                        if (e.type === 'dismissed' || !d) return;
+                        const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                        resolveDate(item.id, iso);   // re-queues the item with the date injected
+                    }}
+                />
+            )}
+        </View>
+    );
+}
+
+export default function TripsScreen() {
+    const colors = useTheme();
+    const { t, i18n } = useTranslation();
+    const styles = useMemo(() => makeStyles(colors), [colors]);
     const router = useRouter();
     const header = useCollapsingHeader();
-    const insets = useSafeAreaInsets();
     const tabBarHeight = useSafeBottomTabBarHeight();
     const { setDraftBasketId } = useBasketState();
-    // Own/private-template baskets attribute to the current user's handle when
-    // the server hasn't a DB username for the owner yet.
-    const authUsername = useAuthState((s: any) => s.user?.username ?? null);
 
-    const [baskets, setBaskets] = useState<Basket[]>([]);
-    const [templates, setTemplates] = useState<BasketTemplate[]>([]);
-    // Receipt counts power the onboarding gate: 3 receipts × 2 chains.
-    // We track distinct chains client-side rather than asking the server
-    // because the receipt list is already small (<100 typical) and the
-    // computation is trivial.
-    const [receiptCount, setReceiptCount] = useState(0);
-    const [distinctChainCount, setDistinctChainCount] = useState(0);
-    const [gateDismissed, setGateDismissed] = useState(false);
-    const [buildDismissed, setBuildDismissed] = useState(false);
-    const [building, setBuilding] = useState(false);
-    // `loading` = full-screen spinner on FIRST mount only.
-    // `refreshing` = small header pill shown on subsequent focus refetches
-    // so the list doesn't blank out every time the tab regains focus.
+    // Android back: peel the dock sheet first (sub-pane → main → collapse),
+    // then fall through to press-back-again-to-exit.
+    const sheetIntercept = useCallback(() => {
+        const s = useShoppingSheet.getState();
+        if (s.sheetView !== 'main' && s.sheetGoBack) { s.sheetGoBack(); return true; }
+        if (s.sheetStage > 0 && s.collapseSheet) { s.collapseSheet(); return true; }
+        return false;
+    }, []);
+    const { backToExitToast } = useBackToExit(sheetIntercept);
+
+    // In-flight receipt uploads → processing cards at the top of the list.
+    const queueItems = useReceiptQueueStore(s => s.items);
+    const queueInitialize = useReceiptQueueStore(s => s.initialize);
+    const lastCompletedAt = useReceiptQueueStore(s => s.lastCompletedAt);
+    // "New" (pink + badge) until the card is opened — persisted per-trip watermark.
+    const seenTrips = useTripSeenStore(s => s.seen);
+    const seenInit = useTripSeenStore(s => s.initialized);
+    const markTripOpened = useTripSeenStore(s => s.markOpened);
+    useEffect(() => { void useTripSeenStore.getState().initialize(); }, []);
+    useEffect(() => { void queueInitialize(); }, [queueInitialize]);
+    // PARKED statuses belong here too: a park is a QUESTION, and this is the
+    // screen the user lands on. Without them an item waiting for a date / a store
+    // choice / a link retry had no card at all outside the trip screen — it just
+    // sat in the queue, invisible, which is indistinguishable from a silent fail.
+    const processingItems = useMemo(
+        () => queueItems.filter(i => i.status === 'processing' || i.status === 'pending'
+            || i.status === 'awaiting_network' || i.status === 'error'
+            || i.status === 'needs_date' || i.status === 'needs_store' || i.status === 'needs_link'),
+        [queueItems]);
+
+    // Store-unrecognized error → open the chain-scoped store map; on pick, drop the
+    // errored item and re-enqueue with the resolved store injected (skips matchStore).
+    const [resolveOpen, setResolveOpen] = useState(false);
+    const onResolveStore = useCallback((item: QueueItem) => {
+        if (item.storeChainId == null) return;
+        const p = requestStoreResolution(item.storeChainId, item.storeChainName ?? '', item.storeOcrAddress ?? null);
+        setResolveOpen(true);
+        void p.then((picked) => {
+            setResolveOpen(false);
+            if (!picked) return;
+            const store = useReceiptQueueStore.getState();
+            store.removeItem(item.id);
+            store.addItems([{
+                uris: item.uris,
+                isPdf: item.isPdf,
+                resolvedStore: { storeId: picked.storeId, storeName: picked.storeName, storeAddress: picked.storeAddress },
+            }]);
+        });
+    }, []);
+
+    const [trips, setTrips] = useState<TripSummary[]>([]);
+    const [household, setHousehold] = useState<HouseholdInfo | null>(null);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [pullRefreshing, setPullRefreshing] = useState(false);
-
-    // Two top-level chips: baskets / templates. Default depends on what
-    // the user actually has — if there are templates but no baskets, open
-    // on templates so the empty Krepšeliai accordion doesn't dominate.
-    const [view, setView] = useState<ViewMode>('baskets');
-    // Set of expanded section statuses. Multi-expand: users can open all,
-    // close all, or any combination. Initial state is empty; the
-    // auto-expand effect below picks the priority section once baskets
-    // have loaded.
-    const [expandedSet, setExpandedSet] = useState<Set<BasketStatus>>(() => new Set());
-    const [visibleCount, setVisibleCount] = useState(INITIAL_PAGE_SIZE);
-
-    // Blank-template creation: tapping the "+" card opens this modal.
-    // Spec 1.1 path A — for users crafting a list without shopping first.
-    const [coverSheetOpen, setCoverSheetOpen] = useState(false);
-
-    // Announcement card — shown when the server-generated default template
-    // (isDefault=1) appears for the first time. Dismissal is per-template-id
-    // so a fresh auto-update doesn't re-show the card unless it really is
-    // the user's first one. Stored under TEMPLATE_ANNOUNCE_KEY:{id}.
-
+    const [archiveOpen, setArchiveOpen] = useState(false);
     const hasFetchedRef = useRef(false);
-    // Auto-expand the priority section the first time baskets land, but
-    // never again — subsequent fetches must not stomp the user's manual
-    // expand/collapse state. A ref is the simplest way to gate this once.
-    const autoExpandedRef = useRef(false);
-    const initialViewSetRef = useRef(false);
+    // Success timestamp for the focus-staleness gate (profileStore's
+    // `lastFetched` shape). A failed fetch leaves it untouched so the next
+    // focus retries immediately.
+    const lastFetchedAtRef = useRef<number | null>(null);
 
     const fetchAll = useCallback(async (silent: boolean) => {
         if (silent) setRefreshing(true);
         try {
             const userId = await getUserId();
-            const [basketRes, templateRes, receiptRes] = await Promise.all([
+            const [tripRes, hhRes, basketRes] = await Promise.all([
+                fetchTrips().catch(() => [] as TripSummary[]),
+                fetchOwnHousehold().catch(() => null),
+                // Draft-basket sync only (Browse's add-to-basket target).
                 fetch(`${API_BASE_URL}/api/baskets/user/${userId}`).then(r => r.json()).catch(() => []),
-                listTemplates(userId).catch(() => []),
-                fetch(`${API_BASE_URL}/api/users/${userId}/receipts`).then(r => r.json()).catch(() => []),
             ]);
-            const basketList: Basket[] = Array.isArray(basketRes) ? basketRes : [];
-            setBaskets(basketList);
-            setTemplates(templateRes);
-            const receipts: { chainName?: string | null }[] = Array.isArray(receiptRes) ? receiptRes : [];
-            setReceiptCount(receipts.length);
-            const distinctChains = new Set(receipts.map(r => r.chainName).filter(c => !!c));
-            setDistinctChainCount(distinctChains.size);
-            const draft = basketList.find(b => b.status === 'draft');
+            setTrips(tripRes);
+            setHousehold(hhRes);
+            const draft = Array.isArray(basketRes) ? basketRes.find((b: any) => b.status === 'draft' && b.householdId == null) : null;
             setDraftBasketId(draft ? draft.id : null);
-
-            // First successful load only: pick a starting chip. If the user
-            // has zero baskets but ≥1 template, start on Templates so they
-            // see something. Otherwise default to Baskets.
-            if (!initialViewSetRef.current) {
-                initialViewSetRef.current = true;
-                if (basketList.length === 0 && templateRes.length > 0) {
-                    setView('templates');
-                }
-            }
+            lastFetchedAtRef.current = Date.now();
         } catch (error) {
-            console.error('Failed to fetch baskets:', error);
+            console.error('Failed to fetch trips:', error);
         } finally {
             if (silent) setRefreshing(false);
             setLoading(false);
@@ -260,378 +352,269 @@ export default function BasketScreen() {
     }, [setDraftBasketId]);
 
     useFocusEffect(useCallback(() => {
+        // Staleness gate: a tab switch within the TTL reuses state instead of
+        // re-firing all three requests (with freezeOnBlur, EVERY switch used to
+        // pay for them). Explicit refreshes — pull-to-refresh, the
+        // receipt-completed effect, unarchive, the dock sheet's refreshTrips —
+        // call fetchAll directly and always hit the network.
+        if (!shouldRefetchOnFocus(lastFetchedAtRef.current)) return;
         const silent = hasFetchedRef.current;
         hasFetchedRef.current = true;
         fetchAll(silent);
     }, [fetchAll]));
 
-    // Basket lifecycle is exactly four states: draft (editable), compared
-    // (calculated, read-only until reverted), inProgress (shopping list
-    // created, basket locked), completed (shopping wrapped up). The per-
-    // card status badge is gone (status is communicated by accordion
-    // section), but the label lookup stays — section headers reuse it.
-    const getStatusText = (status: string) => {
-        switch (status) {
-            case 'draft': return t('basketTab.statusDraft');
-            case 'compared': return t('basketTab.statusCompared');
-            case 'inProgress': return t('basketTab.statusInProgress');
-            case 'completed': return t('basketTab.statusCompleted');
-            default: return status;
+    // A queued receipt just finished (markDone bumps lastCompletedAt) → silently
+    // refetch so the new ad-hoc trip card appears and the processing card clears.
+    useEffect(() => {
+        if (lastCompletedAt) void fetchAll(true);
+    }, [lastCompletedAt, fetchAll]);
+
+    // Calendar filter (spec): dot per trip on its best-known shopping date,
+    // chain-coloured via the trip's slots; ad-hoc trips dot as "Kita". The
+    // filter UI lives in the Shopping dock sheet now — state comes from the
+    // shared store (shared/SMART_BASKET_SPEC.md §1).
+    const selectedDate = useShoppingSheet(st => st.selectedDate);
+    const tripDotMap = useMemo(() => buildReceiptDotMap(trips.flatMap(tr => {
+        const date = parseLooseDate(tr.anchorDate);
+        const chains = tr.slots.map(sl => sl.chainName).filter((c): c is string => !!c);
+        return (chains.length > 0 ? chains : ['Kita']).map(chainName => ({ date, chainName }));
+    })), [trips]);
+    // Publish sheet inputs.
+    useEffect(() => { useShoppingSheet.getState().setDotMap(tripDotMap); }, [tripDotMap]);
+    useEffect(() => {
+        useShoppingSheet.getState().setHousehold(household);
+    }, [household]);
+
+    const selectedStages = useShoppingSheet(st => st.selectedStages);
+    const byDate = useCallback((tr: TripSummary) => {
+        if (selectedStages != null && !selectedStages.has(tr.stage)) return false;
+        if (!selectedDate) return true;
+        const d = parseLooseDate(tr.anchorDate);
+        return d != null && sameDay(d, selectedDate);
+    }, [selectedDate, selectedStages]);
+
+    // Baskets removed via the detail sheet — hidden by a PERSISTENT filter (not
+    // just dropped from `trips`) so the exit animation plays once and the focus
+    // re-fetch can't momentarily re-add the card before the server DELETE lands.
+    const [hiddenBasketIds, setHiddenBasketIds] = useState<Set<number>>(new Set());
+    const notHidden = useCallback(
+        (tr: TripSummary) => !(tr.basket != null && hiddenBasketIds.has(tr.basket.id)),
+        [hiddenBasketIds]);
+
+    const active = useMemo(() => trips.filter(tr => tr.archivedAt == null && byDate(tr) && notHidden(tr)), [trips, byDate, notHidden]);
+    const archived = useMemo(() => trips.filter(tr => tr.archivedAt != null && byDate(tr) && notHidden(tr)), [trips, byDate, notHidden]);
+
+    // Archyvas expands on tap, or auto-expands when a calendar day filter
+    // matched only archived trips (same condition the old inline JSX used).
+    const archiveExpanded = archiveOpen || (selectedDate != null && active.length === 0);
+
+    // Flattened row model for the virtualised list. Stable keys (never index):
+    // `q:` queue items, `sec:` section headers, `trip:`/`arch:` trips. Active
+    // trips group into recency sections (Šiandien … Anksčiau); like Archyvas,
+    // each section's outline is sliced across its rows so every card stays an
+    // independently virtualised row. A trip's key never changes when it moves
+    // between sections, so itemLayoutAnimation animates the move.
+    const rows = useMemo<TripRow[]>(() => {
+        const out: TripRow[] = [];
+        for (const item of processingItems) out.push({ kind: 'processing', key: `q:${item.id}`, item });
+        if (active.length === 0 && processingItems.length === 0) {
+            out.push({ kind: 'empty', key: 'empty' });
+        } else {
+            for (const g of groupBySection(active, tr => parseLooseDate(tr.anchorDate))) {
+                out.push({ kind: 'sectionHeader', key: `sec:${g.section}`, section: g.section });
+                g.items.forEach((trip, i) => out.push({
+                    kind: 'trip', key: `trip:${trip.id}`, trip,
+                    section: g.section, isLast: i === g.items.length - 1,
+                }));
+            }
+        }
+        if (archived.length > 0) {
+            out.push({ kind: 'archiveHeader', key: 'archiveHeader' });
+            if (archiveExpanded) {
+                archived.forEach((trip, i) => out.push({
+                    kind: 'archived', key: `arch:${trip.id}`, trip, isLast: i === archived.length - 1,
+                }));
+            }
+        }
+        return out;
+    }, [processingItems, active, archived, archiveExpanded]);
+
+    // ONE screen per stage (simplified flow): the card resolves straight to
+    // the stage's screen — basket detail / comparison map / closest
+    // unfinished list / receipts / stats. No trip container in between.
+    const openTrip = useCallback((trip: TripSummary) => {
+        markTripOpened(trip.id, trip.receiptCount); // clears its New/pink state
+        void tripStageHref(trip).then(href => router.push(href as any)).catch(() => {});
+    }, [router, markTripOpened]);
+
+    const onArchivedTap = useCallback((trip: TripSummary) => {
+        Alert.alert(
+            t('trips.resumeTitle'),
+            t('trips.resumeBody'),
+            [
+                { text: t('common.cancel'), style: 'cancel' },
+                {
+                    text: t('trips.resumeConfirm'),
+                    onPress: async () => {
+                        try { await unarchiveTrip(trip.id); await fetchAll(true); } catch {}
+                    },
+                },
+            ],
+        );
+    }, [t, fetchAll]);
+
+    // Register the dock sheet's refresh callback (household/invites live in
+    // the sheet itself now) + the optimistic card-removal used by Remove:
+    // drop the trip that owns a basket so its card plays the exit animation.
+    useEffect(() => {
+        const st = useShoppingSheet.getState();
+        st.setRefreshTrips(() => { void fetchAll(true); });
+        st.setRemoveTripByBasket((basketId: number) => {
+            setHiddenBasketIds(prev => new Set(prev).add(basketId));
+        });
+        return () => { st.setRefreshTrips(null); st.setRemoveTripByBasket(null); };
+    }, [fetchAll]);
+
+    const stageLabel = (s: number) => t(`trips.stage${s}`);
+    const stageCta = (s: number) => t(`trips.cta${s}`);
+
+    // A custom name (trip or basket rename) or the ad-hoc label wins; otherwise the
+    // title is AUTO — derived from the last-activity date, shown as a calendar
+    // badge + full weekday rather than the cryptic "Ket liepos 16" string.
+    const customName = (trip: TripSummary): string | null =>
+        trip.name ?? trip.basket?.name ?? (trip.isAdHoc ? t('trips.adHocName') : null);
+
+    // Title text (ARCHIVE rows only — live cards title themselves in TripCard):
+    // the custom name when renamed, else the full weekday.
+    const tripTitle = (trip: TripSummary) =>
+        customName(trip) ?? formatWeekday(trip.anchorDate, i18n.language);
+
+    const renderRow = ({ item: row }: { item: TripRow }) => {
+        switch (row.kind) {
+            case 'processing':
+                return <ProcessingCard item={row.item} onResolveStore={onResolveStore} />;
+            case 'empty':
+                return (
+                    <View style={styles.centered}>
+                        <Ionicons name="cart-outline" size={56} color={colors.textMuted} />
+                        <Text style={styles.emptyText}>{t('trips.empty')}</Text>
+                        <Text style={styles.emptySubText}>{t('trips.emptyBody')}</Text>
+                        <ScalePressable style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/catalog' as any)}>
+                            <Text style={styles.emptyButtonText}>{t('basketTab.emptyCta')}</Text>
+                        </ScalePressable>
+                    </View>
+                );
+            case 'sectionHeader': {
+                // Recency section header — owns the outline's top edge + corners
+                // (trip rows below carry the sides, the last one the bottom).
+                // Today is pink (the pantrySection treatment), the rest grey.
+                const pink = row.section === 'today';
+                return (
+                    <View style={[styles.sectionHeader, pink ? styles.sectionPink : styles.sectionGrey]}>
+                        <Text style={[styles.sectionTitle, pink ? styles.sectionTitlePink : styles.sectionTitleGrey]}>
+                            {t(`trips.sections.${row.section}`)}
+                        </Text>
+                    </View>
+                );
+            }
+            case 'archiveHeader':
+                // Archyvas — collapsed by default; tap a row = explicit resume.
+                return (
+                    <TouchableOpacity
+                        style={[styles.archiveHeader, archiveExpanded ? styles.archiveHeaderOpen : styles.archiveHeaderClosed]}
+                        onPress={() => setArchiveOpen(v => !v)}
+                    >
+                        <Text style={styles.archiveTitle}>{t('trips.archive')}</Text>
+                        <Text style={styles.archiveCount}>{archived.length}</Text>
+                        <Ionicons name={archiveExpanded ? 'chevron-up' : 'chevron-down'} size={16} color={colors.textSecondary} />
+                    </TouchableOpacity>
+                );
+            case 'archived': {
+                const trip = row.trip;
+                return (
+                    <TouchableOpacity
+                        style={[styles.archiveRow, row.isLast && styles.archiveRowLast]}
+                        onPress={() => onArchivedTap(trip)}
+                    >
+                        <Ionicons name={STAGE_ICONS[trip.stage]} size={18} color={colors.textMuted} />
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.archiveRowTitle} numberOfLines={1}>{tripTitle(trip)}</Text>
+                            <Text style={styles.archiveRowMeta} numberOfLines={1}>
+                                {trip.isAdHoc ? t('trips.adHocMeta', { count: trip.receiptCount }) : stageLabel(trip.stage)}
+                            </Text>
+                        </View>
+                        <Text style={styles.archiveRowDate}>{formatDate(trip.anchorDate)}</Text>
+                    </TouchableOpacity>
+                );
+            }
+            case 'trip': {
+                const trip = row.trip;
+                const isNew = seenInit && isTripNew(seenTrips, trip.id, trip.receiptCount);
+                return (
+                    // Section-outline slice: this wrapper draws the box's side
+                    // edges (+ bottom edge/corners on the last row) so the card
+                    // itself stays a plain virtualised row inside it. The card
+                    // body is the shared TripCard (also the family History tab).
+                    <View
+                        style={[
+                            styles.sectionBody,
+                            row.isLast && styles.sectionBodyLast,
+                            row.section === 'today' ? styles.sectionPink : styles.sectionGrey,
+                        ]}
+                    >
+                        <TripCard
+                            trip={trip}
+                            ctaLabel={stageCta(trip.stage)}
+                            onPress={() => openTrip(trip)}
+                            isNew={isNew}
+                            style={styles.cardInSection}
+                        />
+                    </View>
+                );
+            }
         }
     };
-
-    // ─── Grouping for the Krepšeliai accordion ────────────────────────────
-    const grouped = useMemo<Record<BasketStatus, Basket[]>>(() => {
-        const map: Record<BasketStatus, Basket[]> = {
-            draft: [], compared: [], inProgress: [], completed: [],
-        };
-        baskets.forEach(b => {
-            if (b.status in map) map[b.status as BasketStatus].push(b);
-        });
-        return map;
-    }, [baskets]);
-
-    // On first non-empty load, open the priority section so the user lands on
-    // something meaningful. After that, expand/collapse is manual — including
-    // the option to collapse everything — with ONE correction: a section that
-    // becomes empty (e.g. a draft just got compared) is dropped from the open
-    // set, and if that leaves nothing open we fall back to the topmost
-    // non-empty section. Otherwise the previously-expanded "Drafts" would stay
-    // open showing "0" while the populated "Compared" section sits collapsed.
-    useEffect(() => {
-        if (baskets.length === 0) return;
-        setExpandedSet(prev => {
-            if (!autoExpandedRef.current) {
-                autoExpandedRef.current = true;
-                const first = STATUS_PRIORITY.find(s => grouped[s].length > 0);
-                return first ? new Set([first]) : prev;
-            }
-            // Later loads: keep only sections that still have rows.
-            const pruned = new Set([...prev].filter(s => grouped[s].length > 0));
-            // If pruning emptied a set the user had open (a status transition,
-            // not a manual collapse-all), reopen the topmost non-empty section.
-            if (pruned.size === 0 && prev.size > 0) {
-                const first = STATUS_PRIORITY.find(s => grouped[s].length > 0);
-                if (first) pruned.add(first);
-            }
-            return pruned;
-        });
-    }, [baskets, grouped]);
-
-    const hasAnyBaskets = baskets.length > 0;
-
-    // Two chips at the top — view toggle only, no count badge because the
-    // numbers live on the accordion section headers instead.
-    const chips = useMemo(() => [
-        { id: 'baskets', label: t('basketTab.chipBaskets') },
-        { id: 'templates', label: templates.length > 0 ? `${t('basketTab.chipTemplates')} (${templates.length})` : t('basketTab.chipTemplates') },
-    ], [t, templates.length]);
-
-    // Default (auto-generated) template — what powers the announcement card.
-    const defaultTemplate = useMemo(
-        () => templates.find(t => t.isDefault === 1) ?? null,
-        [templates],
-    );
-
-    // Onboarding gate dismissal persists across sessions. Once the user
-    // taps "Vėliau" we never bring the full-screen card back; the slim
-    // banner replaces it until they hit the 3-receipt × 2-chain bar.
-    useEffect(() => {
-        AsyncStorage.getItem('template_gate_dismissed')
-            .then(v => { if (v === '1') setGateDismissed(true); });
-    }, []);
-
-    const dismissGate = useCallback(async () => {
-        setGateDismissed(true);
-        try { await AsyncStorage.setItem('template_gate_dismissed', '1'); } catch {}
-    }, []);
-
-    // Gate logic: show full-screen card if the user has no template
-    // AND hasn't dismissed AND hasn't met the threshold. Show the slim
-    // banner if dismissed but still short of the threshold. Hide both
-    // once a default template exists.
-    const meetsThreshold = receiptCount >= 3 && distinctChainCount >= 2;
-    const showGate = !defaultTemplate && !meetsThreshold && !gateDismissed;
-    const showGateBanner = !defaultTemplate && !meetsThreshold && gateDismissed;
-
-    // Once the user qualifies, offer to BUILD the default template (user-
-    // initiated, per spec). Dismiss is permanent. Hidden while building or
-    // once the template exists.
-    useEffect(() => {
-        AsyncStorage.getItem('default_build_dismissed')
-            .then(v => { if (v === '1') setBuildDismissed(true); });
-    }, []);
-    const dismissBuild = useCallback(async () => {
-        setBuildDismissed(true);
-        try { await AsyncStorage.setItem('default_build_dismissed', '1'); } catch {}
-    }, []);
-    const showBuildBanner = meetsThreshold && !defaultTemplate && !buildDismissed && !building;
-
-    const handleBuild = useCallback(async () => {
-        if (building) return;
-        setBuilding(true);
-        // Artificial floor so the "AI working" card is visible even if the
-        // server answers instantly (per spec — pretend to think for ~5s).
-        const minDelay = new Promise(resolve => setTimeout(resolve, 5000));
-        try {
-            await Promise.all([buildDefaultTemplate(), minDelay]);
-            await fetchAll(true); // refetch → the new default card appears
-        } catch {
-            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.buildFailed'));
-        } finally {
-            setBuilding(false);
-        }
-    }, [building, t]);
-
-    const handleSectionTap = useCallback((status: BasketStatus) => {
-        if (grouped[status].length === 0) return;
-        setExpandedSet(prev => {
-            const next = new Set(prev);
-            if (next.has(status)) next.delete(status); else next.add(status);
-            return next;
-        });
-    }, [grouped]);
-
-    const handleTemplateTap = (template: BasketTemplate) => {
-        // Tap opens the editor so the user can verify items before
-        // spawning a basket. The "Create basket" CTA inside the editor
-        // (template/[id].tsx) calls POST /instantiate.
-        router.push(`/template/${template.id}` as any);
-    };
-
-    // FAB → identity sheet → create the template with the chosen name/emoji/
-    // colour, then route into the editor to add items.
-    const handleCreateTemplate = useCallback(async (next: CoverDraft) => {
-        try {
-            const userId = await getUserId();
-            const created = await createTemplate({ userId, name: next.name, coverColor: next.coverColor, coverImage: next.coverImage });
-            router.push(`/template/${created.id}` as any);
-        } catch {
-            Alert.alert(t('basketTab.errorGeneric'), t('basketTab.templates.errorSave'));
-        }
-    }, [router, t]);
-
-    // Pinned header for both views: the view chips + (when refetching) the
-    // refreshing banner. The "Krepšelis" title collapses above it on scroll.
-    const pinnedFilter = (
-        <>
-            <StoreChipBar
-                chips={chips}
-                selectedId={view}
-                onSelect={id => id != null && setView(id as ViewMode)}
-            />
-            {refreshing && (
-                <View style={styles.refreshingBanner}>
-                    <MaterialProgress size="small" color={colors.primary} />
-                    <Text style={styles.refreshingText}>{t('basketTab.loading')}</Text>
-                </View>
-            )}
-        </>
-    );
 
     if (loading) return (
         <View style={styles.container}>
-            <Stack.Screen options={glassHeaderOptions()} />
-            <ScreenHeading title={t('tabs.basket')} topInset={insets.top} />
-            <View style={styles.skelChipRow}>
-                {Array.from({ length: 2 }).map((_, i) => (
-                    <SkeletonBox key={i} width={96} height={32} borderRadius={20} />
-                ))}
-            </View>
+            <CollapsingHeader controller={header} smallTitle={t('tabs.trips')} />
+            {backToExitToast}
             <View style={{ padding: 16, gap: 12 }}>
+                <ScreenHeading title={t('tabs.trips')} />
                 {Array.from({ length: 4 }).map((_, i) => (
-                    <SkeletonBox key={i} width="100%" height={48} borderRadius={10} />
+                    <SkeletonBox key={i} width="100%" height={84} borderRadius={14} />
                 ))}
             </View>
         </View>
     );
 
-    // ─── Šablonai view ────────────────────────────────────────────────────
-    if (view === 'templates') {
-        return (
-            <View style={styles.container}>
-                <CollapsingHeader
-                    controller={header}
-                    background={colors.cardBackground}
-                    collapsing={<ScreenHeading title={t('tabs.basket')} />}
-                    pinned={pinnedFilter}
-                />
-                <Animated.FlatList
-                    {...header.scroll}
-                    data={templates}
-                    keyExtractor={(item: any) => `t-${item.id}`}
-                    contentInsetAdjustmentBehavior="never"
-                    contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
-                    refreshControl={
-                        <RefreshControl
-                            refreshing={pullRefreshing}
-                            onRefresh={async () => { setPullRefreshing(true); await fetchAll(false); setPullRefreshing(false); }}
-                            colors={[colors.primary]}
-                            tintColor={colors.primary}
-                        />
-                    }
-                    ListHeaderComponent={
-                        // "Įkelkite kvitus, kad gautumėte savo šabloną" lives here
-                        // (Šablonai) — this is where the auto-generated template
-                        // lands, so the prompt to earn it belongs on this tab.
-                        <>
-                            {showGate && (
-                                <SystemNoticeCard
-                                    variant="info"
-                                    icon="sparkles"
-                                    title={t('basketTab.templates.gateTitle')}
-                                    body={`${t('basketTab.templates.gateBody')}\n\n${t('basketTab.templates.gateBodyDetail')}`}
-                                    onDismiss={dismissGate}
-                                    actions={[
-                                        { label: t('basketTab.templates.gateLater'), onPress: dismissGate, style: 'secondary' },
-                                        { label: t('basketTab.templates.gateUpload'), onPress: () => router.navigate('/(tabs)/receipts' as any), style: 'primary' },
-                                    ]}
-                                />
-                            )}
-                            {showGateBanner && (
-                                <SystemNoticeCard
-                                    layout="banner"
-                                    variant="info"
-                                    icon="receipt-outline"
-                                    title={t('basketTab.templates.gateBannerTitle')}
-                                    body={t('basketTab.templates.gateBannerBody', {
-                                        progress: Math.min(receiptCount, 3),
-                                        chains: Math.min(distinctChainCount, 2),
-                                    })}
-                                    actions={[{ label: t('basketTab.templates.gateBannerCta'), onPress: () => router.navigate('/(tabs)/receipts' as any) }]}
-                                />
-                            )}
-                            {/* Qualified → offer to build the auto template. */}
-                            {showBuildBanner && (
-                                <SystemNoticeCard
-                                    variant="success"
-                                    icon="sparkles"
-                                    title={t('basketTab.templates.buildOfferTitle')}
-                                    body={t('basketTab.templates.buildOfferBody')}
-                                    onDismiss={dismissBuild}
-                                    actions={[
-                                        { label: t('basketTab.templates.buildDismiss'), onPress: dismissBuild, style: 'secondary' },
-                                        { label: t('basketTab.templates.buildCta'), onPress: handleBuild, style: 'primary' },
-                                    ]}
-                                />
-                            )}
-                            {/* While building → AI placeholder card. */}
-                            {building && <BuildingTemplateCard />}
-                        </>
-                    }
-                    ListEmptyComponent={
-                        <View style={styles.centered}>
-                            <Ionicons name="bookmarks-outline" size={56} color={colors.textMuted} />
-                            <Text style={styles.emptyText}>{t('basketTab.templates.emptyTitle')}</Text>
-                            <Text style={styles.emptySubText}>{t('basketTab.templates.emptyBody')}</Text>
-                        </View>
-                    }
-                    renderItem={({ item }) => {
-                        const itemCount = Number(item.itemCount ?? 0);
-                        const visitCount = Number(item.visitCount ?? 0);
-                        const emoji = coverEmoji(item.coverImage);
-                        // Explicit LT plural suffix — RN Intl doesn't resolve LT `few`.
-                        const itemsStr = t(`basketTab.templates.itemCount_${ltPluralSuffix(itemCount)}`, { count: itemCount });
-                        const visitsStr = t(`basketTab.templates.visitCount_${ltPluralSuffix(visitCount)}`, { count: visitCount });
-                        return (
-                            <TouchableOpacity
-                                style={[
-                                    styles.templateCard,
-                                    item.isDefault === 1
-                                        ? styles.smartCard
-                                        : item.coverColor ? { borderWidth: 4, borderColor: 'transparent', borderLeftColor: item.coverColor } : null,
-                                ]}
-                                onPress={() => handleTemplateTap(item)}
-                                activeOpacity={0.75}
-                            >
-                                <View style={styles.cardLeft}>
-                                    {/* Smart template → AI sparkle. Otherwise the server-owned
-                                        cover emoji (shared with web + share page), falling back
-                                        to the bookmark icon when no cover is set. */}
-                                    <View style={styles.templateIcon}>
-                                        {item.isDefault === 1
-                                            ? <Ionicons name="sparkles" size={22} color={colors.primary} />
-                                            : emoji
-                                                ? <Text style={styles.templateCoverEmoji}>{emoji}</Text>
-                                                : <Ionicons name="bookmark" size={22} color={colors.primary} />}
-                                    </View>
-                                </View>
-                                <View style={styles.cardContent}>
-                                    <Text style={styles.cardTitle} numberOfLines={1}>
-                                        {item.isDefault === 1 ? t('basketTab.templates.smartName') : item.name}
-                                    </Text>
-                                    <Text style={styles.cardDate}>
-                                        {itemsStr}
-                                        {visitCount > 0 && ` · ${visitsStr}`}
-                                    </Text>
-                                    {/* Smart template → "auto-renews" pill, shown ONLY while
-                                        learning is on (autoUpdate=1). Otherwise, for creators,
-                                        the neutral visibility pill (mirrors web VisibilityTag). */}
-                                    {item.isDefault === 1 ? (
-                                        item.autoUpdate === 1 ? (
-                                            <View style={styles.autoBadge}>
-                                                <Ionicons name="sync" size={10} color={colors.primary} />
-                                                <Text style={styles.autoBadgeText}>{t('basketTab.templates.autoBadge')}</Text>
-                                            </View>
-                                        ) : null
-                                    ) : authUsername ? (() => {
-                                        const isPriv = ((item as any).visibility ?? 'private') === 'private';
-                                        return (
-                                            <View style={styles.visBadge}>
-                                                <Ionicons
-                                                    name={isPriv ? 'lock-closed' : 'globe-outline'}
-                                                    size={10}
-                                                    color={colors.textPrimary}
-                                                />
-                                                <Text style={styles.visBadgeText}>
-                                                    {isPriv ? t('basketTab.templates.tagPrivate') : t('basketTab.templates.tagPublic')}
-                                                </Text>
-                                            </View>
-                                        );
-                                    })() : null}
-                                </View>
-                                <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-                            </TouchableOpacity>
-                        );
-                    }}
-                />
-                <TemplateCoverEditor
-                    visible={coverSheetOpen}
-                    onClose={() => setCoverSheetOpen(false)}
-                    name=""
-                    coverColor={null}
-                    coverImage={null}
-                    submitLabel={t('basketTab.templates.createConfirm')}
-                    onSubmit={handleCreateTemplate}
-                />
-
-                {/* FAB — pink "+" matching the other tabs (receipts, lists).
-                    Replaces the old inline "Naujas šablonas" list header. */}
-                <TouchableOpacity
-                    style={[styles.fab, { bottom: tabBarHeight + 16 }]}
-                    onPress={() => setCoverSheetOpen(true)}
-                    activeOpacity={0.85}
-                    accessibilityLabel={t('basketTab.templates.addCard')}
-                >
-                    <Ionicons name="add" size={28} color={colors.onPrimary} />
-                </TouchableOpacity>
-            </View>
-        );
-    }
-
-    // ─── Krepšeliai view (accordion) ──────────────────────────────────────
     return (
         <View style={styles.container}>
-            <CollapsingHeader
-                controller={header}
-                background={colors.cardBackground}
-                collapsing={<ScreenHeading title={t('tabs.basket')} />}
-                pinned={pinnedFilter}
-            />
-            <Animated.ScrollView
+            <CollapsingHeader controller={header} smallTitle={t('tabs.trips')} />
+            {backToExitToast}
+            {/* ALWAYS-PINNED filter chips (the repo's CollapsingHeader pinned-row
+                pattern — shopping-list/discounts do the same): a real row ABOVE
+                the list, not stickyHeaderIndices — RN sticky cells don't mix with
+                the FlatList's itemLayoutAnimation cell renderer. The family card
+                deliberately scrolls away with the title: it's a navigation
+                shortcut, not a list control, and pinning it would eat viewport.
+                onPinnedLayout drops the header's dissolve strip below the chips. */}
+            <View onLayout={header.onPinnedLayout} style={{ backgroundColor: colors.pageBackground }}>
+                <ShoppingFilterChips />
+            </View>
+            <Animated.FlatList
                 {...header.scroll}
+                style={styles.container}
+                data={rows}
+                keyExtractor={tripRowKey}
+                renderItem={renderRow}
+                // Cell moves (a trip disappearing, archive expand/collapse)
+                // animate at the list level — same motion the per-card `layout`
+                // prop used to provide.
+                itemLayoutAnimation={rowLayout}
+                initialNumToRender={12}
                 contentInsetAdjustmentBehavior="never"
-                contentContainerStyle={[styles.list, { paddingTop: header.paddingTop + 12, paddingBottom: tabBarHeight + 24 }]}
+                contentContainerStyle={[styles.list, { paddingTop: 0, paddingBottom: tabBarHeight + 24 }]}
                 refreshControl={
                     <RefreshControl
                         refreshing={pullRefreshing}
@@ -640,280 +623,184 @@ export default function BasketScreen() {
                         tintColor={colors.primary}
                     />
                 }
-            >
-                {/* Notification surfaces — the auto-template gate/banner now
-                    live on the Šablonai tab. The "template ready" announcement
-                    was removed: the Build flow already navigates the user to
-                    the new Smart template, so the banner was redundant. */}
-
-                {/* Accordion sections — rendered inline so LayoutAnimation's
-                    parent re-flow drives a real height transition. FlatList's
-                    virtualized item renderer doesn't propagate layout changes
-                    cleanly enough for the animation to show. */}
-                {!hasAnyBaskets ? (
-                    <View style={styles.centered}>
-                        <Ionicons name="cart-outline" size={56} color={colors.textMuted} />
-                        <Text style={styles.emptyText}>{t('basketTab.empty')}</Text>
-                        <Text style={styles.emptySubText}>{t('basketTab.emptyBody')}</Text>
-                        <ScalePressable style={styles.emptyButton} onPress={() => router.navigate('/(tabs)/browse' as any)}>
-                            <Text style={styles.emptyButtonText}>{t('basketTab.emptyCta')}</Text>
-                        </ScalePressable>
-                    </View>
-                ) : (
-                    STATUS_PRIORITY.map(status => {
-                        const rows = grouped[status];
-                        const isOpen = expandedSet.has(status);
-                        const isEmpty = rows.length === 0;
-                        return (
-                            <BasketSection
-                                key={`s-${status}`}
-                                status={status}
-                                label={getStatusText(status)}
-                                count={rows.length}
-                                isExpanded={isOpen}
-                                isEmpty={isEmpty}
-                                onToggle={handleSectionTap}
-                                styles={styles}
-                                colors={colors}
+                ListHeaderComponent={
+                    <>
+                        {/* Large title (scrolls away — the collapsing bar takes over) */}
+                        <ScreenHeading title={t('tabs.trips')} onLayout={header.onTitleLayout} />
+                        {/* Family card (when enabled) — scrolls with the content;
+                            only the chips row above the list stays pinned. */}
+                        {household && (
+                            <TouchableOpacity
+                                style={styles.familyCard}
+                                activeOpacity={0.85}
+                                onPress={() => router.push('/family' as any)}
                             >
-                                {rows.map(b => {
-                                    const selected = b.selectedStoreTotal != null
-                                        ? Number(b.selectedStoreTotal)
-                                        : null;
-                                    const cheapest = b.cheapestTotal != null
-                                        ? Number(b.cheapestTotal)
-                                        : null;
-                                    const showSelected =
-                                        (b.status === 'inProgress' || b.status === 'completed')
-                                        && Number.isFinite(selected) && (selected as number) > 0;
-                                    const showCheapest =
-                                        b.status === 'compared'
-                                        && Number.isFinite(cheapest) && (cheapest as number) > 0;
-                                    const basketEmoji = coverEmoji(b.templateCoverImage ?? null);
-                                    const basketTitle = b.templateName ?? b.name ?? formatDate(b.updatedAt);
-                                    // True only while the title is a real name (template or
-                                    // user-given) rather than the date fallback — so we don't
-                                    // print the date twice on a nameless regular basket.
-                                    const hasExplicitTitle = !!(b.templateName || b.name);
-                                    const fromTpl = !!(b.templateName || b.templateCoverColor);
-                                    const basketHandle = b.templateCreatorHandle ?? (fromTpl ? authUsername : null);
-                                    // "Redaguota" only makes sense while the basket is still tied
-                                    // to a template (diverged from the creator's original). Once
-                                    // the template is gone it's just a regular basket.
-                                    const edited = fromTpl && b.userEditedAfterCreation === 1;
-                                    return (
-                                        <TouchableOpacity
-                                            key={b.id}
-                                            style={[styles.card, b.templateCoverColor ? { borderWidth: 4, borderColor: 'transparent', borderLeftColor: b.templateCoverColor } : null]}
-                                            onPress={() => router.push(`/basket/${b.id}`)}
-                                        >
-                                            <View style={styles.cardLeft}>
-                                                <View style={styles.iconContainer}>
-                                                    {/* Inherited cover emoji (template-derived baskets) or
-                                                        the default cart icon (manual baskets). */}
-                                                    {basketEmoji
-                                                        ? <Text style={styles.basketEmoji}>{basketEmoji}</Text>
-                                                        : <Ionicons name="cart-outline" size={28} color={colors.primary} />}
-                                                    {b.itemCount > 0 && (
-                                                        <View style={styles.badge}>
-                                                            <Text style={styles.badgeText}>{b.itemCount}</Text>
-                                                        </View>
-                                                    )}
-                                                </View>
-                                            </View>
-                                            <View style={styles.cardContent}>
-                                                <View style={styles.titleRow}>
-                                                    <Text style={styles.cardTitle} numberOfLines={1}>{basketTitle}</Text>
-                                                    {edited && (
-                                                        <View style={styles.editedChip}>
-                                                            <Text style={styles.editedChipText}>{t('basketTab.edited')}</Text>
-                                                        </View>
-                                                    )}
-                                                </View>
-                                                {/* Sub-line: @handle for template baskets; the date
-                                                    only when the title is a real name (else it'd repeat
-                                                    the date already shown as the title). */}
-                                                {basketHandle
-                                                    ? <Text style={styles.attrib} numberOfLines={1}>@{basketHandle}</Text>
-                                                    : hasExplicitTitle
-                                                        ? <Text style={styles.cardDate}>{formatDate(b.updatedAt)}</Text>
-                                                        : null}
-                                            </View>
-                                            {showSelected && (
-                                                <Text style={styles.cardTotal}>{formatEuro(selected as number)}</Text>
-                                            )}
-                                            {showCheapest && (
-                                                <Text style={styles.cardTotal}>
-                                                    {t('basketTab.fromPrice', { amount: formatEuro(cheapest as number) })}
-                                                </Text>
-                                            )}
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                            </BasketSection>
-                        );
-                    })
-                )}
-            </Animated.ScrollView>
+                                <View style={styles.familyIcon}>
+                                    <Ionicons name="home" size={22} color={colors.onPrimary} />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.familyCardTitle}>{t('family.cardTitle')}</Text>
+                                    <Text style={styles.familyCardSub}>{t('trips.householdMembers', { count: household.members.length })}</Text>
+                                </View>
+                                <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+                            </TouchableOpacity>
+                        )}
+                    </>
+                }
+            />
+
+            {/* Store-resolution map (chain-scoped pills) for a store_unrecognized upload. */}
+            {resolveOpen && (
+                <Modal visible transparent animationType="slide" onRequestClose={() => setResolveOpen(false)}>
+                    <StoreResolutionOverlay onCancel={() => setResolveOpen(false)} />
+                </Modal>
+            )}
         </View>
     );
 }
 
 const makeStyles = (c: AppTheme) => StyleSheet.create({
     container: { flex: 1, backgroundColor: c.pageBackground },
-    centered: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
-    list: { padding: 16 },
+    centered: { alignItems: 'center', justifyContent: 'center', padding: 32 },
+    // No horizontal pad here: the title + sticky chips span full width; the
+    // cards carry their own side margin (see `card` / `archiveHeader`).
+    list: { paddingBottom: 16 },
 
-    // ── Skeleton ──────────────────────────────────────────────────────────
-    skelChipRow: {
+    filterRow: {
+        flexDirection: 'row', paddingHorizontal: 12, paddingVertical: 8,
         backgroundColor: c.cardBackground,
         borderBottomWidth: 0.5, borderBottomColor: c.border,
-        flexDirection: 'row', gap: 8,
-        paddingHorizontal: 12, paddingVertical: 10,
     },
+    // Pinned family-shopping card — stands out: pink-tinted fill, solid pink
+    // icon disc, pink border. Navigates to the family (Basket/History) screen.
+    familyCard: {
+        flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+        backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderRadius: radius.lg, padding: 14,
+        marginHorizontal: 16, marginTop: 4, marginBottom: 10,
+        borderWidth: 1, borderColor: c.primary,
+    },
+    familyIcon: {
+        width: 40, height: 40, borderRadius: radius.md,
+        backgroundColor: c.primary, alignItems: 'center', justifyContent: 'center',
+    },
+    familyCardTitle: { fontSize: 15, fontWeight: '800', color: c.textPrimary },
+    familyCardSub: { fontSize: 12, color: c.primary, marginTop: 2, fontWeight: '600' },
 
-    // ── Accordion section ─────────────────────────────────────────────────
-    // Outer section: holds the border + corner clipping. Header lives flush
-    // inside the top, expandable content + cards inside the bottom. The
-    // overflow:'hidden' is what gives us the matching bottom rounding the
-    // header has on top.
-    section: {
-        marginBottom: 10,
-        borderRadius: radius.lg, overflow: 'hidden',
-        borderWidth: 1, borderColor: c.border,
-        backgroundColor: c.cardBackground,
-    },
-    sectionHeader: {
-        flexDirection: 'row', alignItems: 'center',
-        paddingHorizontal: 14, paddingVertical: 12,
-        backgroundColor: c.cardBackground,
-    },
-    sectionHeaderOpen: {
-        borderBottomWidth: 0.5, borderBottomColor: c.borderSubtle,
-    },
-    sectionHeaderTitle: { flex: 1, fontSize: 14, fontWeight: '700', color: c.textPrimary },
-    sectionHeaderCount: { fontSize: 13, fontWeight: '600', color: c.textSecondary },
-    sectionHeaderMuted: { color: c.textMuted, fontWeight: '500' },
-
-    // ── Basket card ───────────────────────────────────────────────────────
     card: {
-        backgroundColor: c.cardBackground, padding: 14,
-        flexDirection: 'row', alignItems: 'center',
-        borderBottomWidth: 0.5, borderBottomColor: c.borderSubtle,
-    },
-    cardLeft: { marginRight: 12 },
-    cardContent: { flex: 1, minWidth: 0 },
-    titleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-    cardTitle: { fontSize: 15, fontWeight: '600', color: c.textPrimary, flexShrink: 1 },
-    cardDate: { fontSize: 13, color: c.textSecondary, marginTop: 2 },
-    visBadge: {
-        flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6, alignSelf: 'flex-start',
-        backgroundColor: c.surfaceMuted, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3,
-        elevation: 1, shadowColor: '#000', shadowOffset: { width: 0, height: 1 }, shadowOpacity: 0.05, shadowRadius: 1.5,
-    },
-    visBadgeText: { fontSize: 10, fontWeight: '600', color: c.textPrimary },
-    autoBadge: {
-        flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 6, alignSelf: 'flex-start',
-        backgroundColor: (c as any).primaryMuted ?? c.surfaceMuted, borderRadius: 999, paddingHorizontal: 8, paddingVertical: 3,
-    },
-    autoBadgeText: { fontSize: 10, fontWeight: '700', color: c.primary },
-    cardTotal: { fontSize: 15, fontWeight: '700', color: c.primary, marginLeft: 8 },
-
-    // ── "+ New template" card on the Šablonai list ────────────────────────
-    addTemplateCard: {
-        flexDirection: 'row', alignItems: 'center', gap: 10,
-        backgroundColor: c.cardBackground,
-        borderRadius: radius.lg, padding: 16, marginBottom: 12,
-        borderWidth: 1.5, borderColor: c.primary, borderStyle: 'dashed',
-    },
-    addTemplateCardText: { fontSize: 14, fontWeight: '700', color: c.primary },
-
-    // ── Blank-template create modal ───────────────────────────────────────
-    modalBackdrop: {
-        flex: 1, backgroundColor: 'rgba(0,0,0,0.5)',
-        alignItems: 'center', justifyContent: 'center', padding: 20,
-    },
-    modalCard: {
-        backgroundColor: c.cardBackground, borderRadius: radius.xl,
-        padding: 20, width: '100%', gap: 12,
-        ...elevation.level3,
-    },
-    modalTitle: { fontSize: 16, fontWeight: '700', color: c.textPrimary },
-    modalLabel: { fontSize: 12, color: c.textMuted, marginTop: 4 },
-    modalInput: {
-        borderWidth: 1, borderColor: c.border, borderRadius: radius.md,
-        paddingHorizontal: 12, paddingVertical: 10,
-        fontSize: 15, color: c.textPrimary,
-    },
-    modalActions: { flexDirection: 'row', gap: 10, marginTop: 8 },
-    modalCancel: {
-        flex: 1, paddingVertical: 12, borderRadius: radius.pill,
-        borderWidth: 1, borderColor: c.border, alignItems: 'center',
-    },
-    modalCancelText: { color: c.textPrimary, fontWeight: '600' },
-    modalConfirm: {
-        flex: 1, paddingVertical: 12, borderRadius: radius.pill,
-        backgroundColor: c.primary, alignItems: 'center',
-    },
-    modalConfirmDisabled: { backgroundColor: c.border },
-    modalConfirmText: { color: c.onPrimary, fontWeight: '700' },
-
-    // ── Template card ─────────────────────────────────────────────────────
-    templateCard: {
         backgroundColor: c.cardBackground, borderRadius: radius.lg, padding: 14, marginBottom: 10,
-        flexDirection: 'row', alignItems: 'center',
-        ...elevation.level1,
+        marginHorizontal: 16,
         borderWidth: 3, borderColor: 'transparent', borderLeftColor: c.primary,
+        gap: 6,
     },
-    // Smart (auto) template — full pink fill so it stands out from manual cards.
-    smartCard: {
-        backgroundColor: (c as any).primaryMuted ?? c.surfaceMuted,
-        borderWidth: 1.5, borderColor: c.primary,
-        borderLeftWidth: 1.5, borderLeftColor: c.primary,
+    // Same card shell, clipped so the bottom-edge progress glow follows the corners.
+    processingCard: { overflow: 'hidden' },
+    processingTitle: { fontSize: 15, fontWeight: '800', color: c.textPrimary },
+    cardActions: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+    resolveBtn: { flexDirection: 'row', alignItems: 'center', gap: 5, backgroundColor: c.primary, borderRadius: radius.pill, paddingHorizontal: 12, paddingVertical: 7 },
+    resolveBtnText: { fontSize: 13, fontWeight: '800', color: c.onPrimary },
+    // needs_store: one pill per planned store of the trip + the "keep separate" opt-out.
+    linkChoices: { flexDirection: 'row', flexWrap: 'wrap', alignItems: 'center', gap: 8, paddingTop: 10 },
+    linkChoiceBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: radius.pill, borderWidth: StyleSheet.hairlineWidth, borderColor: c.border, backgroundColor: c.surfaceMuted, paddingHorizontal: 12, paddingVertical: 7 },
+    linkChoiceGhost: { backgroundColor: 'transparent' },
+    linkChoiceDot: { width: 8, height: 8, borderRadius: 4 },
+    linkChoiceText: { fontSize: 13, fontWeight: '700', color: c.textPrimary },
+    // ProcessingCard's slice of the (now extracted) trip-card anatomy — the
+    // full card styles live in components/TripCard.tsx.
+    cardMain: { flexDirection: 'row', alignItems: 'stretch', gap: 10 },
+    cartChip: {
+        flexDirection: 'row', alignItems: 'center', gap: 4,
+        backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderRadius: radius.pill,
+        paddingHorizontal: 10, paddingVertical: 4,
     },
-    templateIcon: {
-        width: 36, height: 36, borderRadius: radius.md,
-        backgroundColor: c.primaryMuted ?? c.surfaceMuted,
-        alignItems: 'center', justifyContent: 'center',
+    cardTop: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: 6 },
+    stageChip: {
+        flexDirection: 'row', alignItems: 'center', gap: 4,
+        backgroundColor: c.primaryMuted ?? c.surfaceMuted, borderRadius: radius.pill,
+        paddingHorizontal: 8, paddingVertical: 3,
     },
-    templateCoverEmoji: { fontSize: 20 },
-    basketEmoji: { fontSize: 26 },
-    attribRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 },
-    attrib: { fontSize: 12, color: c.primary, fontWeight: '600', flexShrink: 1 },
-    editedChip: { backgroundColor: c.surfaceMuted ?? c.border, borderRadius: radius.pill, paddingHorizontal: 7, paddingVertical: 2 },
-    editedChipText: { fontSize: 10, fontWeight: '700', color: c.textSecondary, textTransform: 'uppercase', letterSpacing: 0.4 },
-    fab: {
-        position: 'absolute', right: 20,
-        width: 56, height: 56, borderRadius: 28,
-        backgroundColor: c.primary,
-        alignItems: 'center', justifyContent: 'center',
-        elevation: 4, shadowColor: c.primary,
-        shadowOpacity: 0.35, shadowRadius: 8, shadowOffset: { width: 0, height: 4 },
+    stageChipText: { fontSize: 11, fontWeight: '700', color: c.primary },
+    membersChip: {
+        flexDirection: 'row', alignItems: 'center', gap: 3,
+        backgroundColor: c.surfaceMuted, borderRadius: radius.pill,
+        paddingHorizontal: 7, paddingVertical: 3,
     },
+    membersChipText: { fontSize: 11, fontWeight: '700', color: c.textSecondary },
+    cardMeta: { fontSize: 13, color: c.textSecondary, marginTop: 3 },
 
-    // ── Empty ─────────────────────────────────────────────────────────────
+    // Recency sections (Šiandien/Vakar/…): same row-sliced outline as the
+    // archive box below, but with the pantrySection geometry from the recipe
+    // screen — 1.5 border, radius.xl, 8px inner side padding (concentric with
+    // the cards' radius.lg). Header owns the top edge + corners; every trip
+    // row the sides; the last row the bottom edge + corners. Colour comes from
+    // sectionPink (today) / sectionGrey variants applied alongside.
+    sectionHeader: {
+        marginTop: 12, marginHorizontal: 16,
+        paddingHorizontal: 14, paddingTop: 10, paddingBottom: 8,
+        borderWidth: 1.5, borderBottomWidth: 0,
+        borderTopLeftRadius: radius.xl, borderTopRightRadius: radius.xl,
+    },
+    sectionTitle: { fontSize: 13, fontWeight: '800', textTransform: 'uppercase', letterSpacing: 0.5 },
+    sectionTitlePink: { color: c.primary },
+    sectionTitleGrey: { color: c.textSecondary },
+    sectionPink: { borderColor: c.primary },
+    sectionGrey: { borderColor: c.border },
+    sectionBody: {
+        marginHorizontal: 16, paddingHorizontal: 8,
+        borderLeftWidth: 1.5, borderRightWidth: 1.5,
+    },
+    // No paddingBottom: the last card's own marginBottom closes the gap inside
+    // the border (the pantrySection paddingBottom:0 trick).
+    sectionBodyLast: {
+        borderBottomWidth: 1.5,
+        borderBottomLeftRadius: radius.xl, borderBottomRightRadius: radius.xl,
+    },
+    // Inside a section the wrapper row carries the 16px screen margin.
+    cardInSection: { marginHorizontal: 0 },
+
+    // The archive card is split across FlatList rows (header row + N trip
+    // rows), so each row draws its slice of the old single-container border:
+    // the header owns the top edge + corners, every row the sides, the last
+    // row the bottom edge + corners.
+    archiveHeader: {
+        flexDirection: 'row', alignItems: 'center', gap: 8,
+        paddingHorizontal: 14, paddingVertical: 12,
+        marginTop: 12, marginHorizontal: 16,
+        backgroundColor: c.cardBackground,
+        borderWidth: 1, borderColor: c.border,
+        borderTopLeftRadius: radius.lg, borderTopRightRadius: radius.lg,
+    },
+    archiveHeaderClosed: { borderBottomLeftRadius: radius.lg, borderBottomRightRadius: radius.lg },
+    archiveHeaderOpen: { borderBottomWidth: 0 },
+    archiveTitle: { flex: 1, fontSize: 14, fontWeight: '700', color: c.textPrimary },
+    archiveCount: { fontSize: 13, fontWeight: '600', color: c.textSecondary },
+    archiveRow: {
+        flexDirection: 'row', alignItems: 'center', gap: spacing.md,
+        paddingHorizontal: 14, paddingVertical: 10,
+        marginHorizontal: 16,
+        backgroundColor: c.cardBackground,
+        borderLeftWidth: 1, borderRightWidth: 1,
+        borderLeftColor: c.border, borderRightColor: c.border,
+        borderTopWidth: 0.5, borderTopColor: c.borderSubtle,
+    },
+    archiveRowLast: {
+        borderBottomWidth: 1, borderBottomColor: c.border,
+        borderBottomLeftRadius: radius.lg, borderBottomRightRadius: radius.lg,
+    },
+    archiveRowTitle: { fontSize: 14, fontWeight: '600', color: c.textPrimary },
+    archiveRowMeta: { fontSize: 12, color: c.textMuted, marginTop: 1 },
+    archiveRowDate: { fontSize: 12, color: c.textSecondary },
+
     emptyText: { fontSize: 16, color: c.textSecondary, fontWeight: '600', marginTop: 16, textAlign: 'center' },
     emptySubText: { fontSize: 13, color: c.textMuted, marginTop: 6, textAlign: 'center', lineHeight: 18 },
     emptyButton: { marginTop: 20, backgroundColor: c.primary, paddingHorizontal: 24, paddingVertical: 12, borderRadius: radius.pill },
     emptyButtonText: { color: c.onPrimary, fontWeight: '700', fontSize: 14 },
 
-    // ── Misc ──────────────────────────────────────────────────────────────
-    iconContainer: {
-        position: 'relative',
-        width: 36, height: 36,
-        alignItems: 'center', justifyContent: 'center',
-    },
-    badge: {
-        position: 'absolute', top: -4, right: -6,
-        backgroundColor: c.primary, borderRadius: radius.pill,
-        minWidth: 18, height: 18,
-        alignItems: 'center', justifyContent: 'center', paddingHorizontal: 4,
-    },
-    badgeText: { color: c.onPrimary, fontSize: 10, fontWeight: '700' },
-    refreshingBanner: {
-        flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-        gap: 6, paddingVertical: 4,
-        backgroundColor: c.surfaceSubtle,
-    },
-    refreshingText: { fontSize: 11, color: c.textSecondary, fontWeight: '500' },
+
+    qrBackdrop: { flex: 1, backgroundColor: 'rgba(0,0,0,0.55)', alignItems: 'center', justifyContent: 'center', padding: 28 },
+    qrCard: { backgroundColor: c.cardBackground, borderRadius: radius.xl, padding: 22, gap: 10, alignItems: 'center', maxWidth: 380, width: '100%' },
+    qrTitle: { fontSize: 17, fontWeight: '800', color: c.textPrimary },
+    qrBody: { fontSize: 13, color: c.textSecondary, textAlign: 'center', lineHeight: 18 },
+    qrBox: { padding: 16, alignItems: 'center', justifyContent: 'center', minHeight: 232 },
+    qrClose: { paddingVertical: 10, paddingHorizontal: 24 },
+    qrCloseText: { fontSize: 14, fontWeight: '700', color: c.primary },
 });

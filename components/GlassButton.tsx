@@ -41,9 +41,12 @@ export function GlassButton({
     const tintColor =
         variant === 'danger'
             ? colors.error
+            // Small (14px) white label → use the stronger beet so the text clears
+            // WCAG AA (bright `primary` is ~3:1 with white — fine for fills/icons,
+            // under the 4.5:1 bar for small text). primaryStrong ≈ 4.4:1.
             : variant === 'secondary'
                 ? colors.surfaceMuted
-                : colors.primary;
+                : colors.primaryStrong;
     const labelColor =
         variant === 'secondary'
             ? colors.textPrimary

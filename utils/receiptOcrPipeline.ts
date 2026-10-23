@@ -1,7 +1,7 @@
 import TextRecognition from "@react-native-ml-kit/text-recognition";
 import * as ImageManipulator from "expo-image-manipulator";
 import { Image } from "react-native";
-import { ocrImageEnhanced, type OcrEngine } from "./mlkitOcr";
+import { ocrImageEnhanced, type OcrEngine, type OcrResult } from "./mlkitOcr";
 
 /**
  * SINGLE SOURCE OF TRUTH for turning receipt image/PDF-page URIs into the OCR
@@ -116,10 +116,85 @@ export function computeReceiptXBoundsForPage(
     return { left, right, peak };
 }
 
+/** Lines carrying real content. Useful as a tie-break, but NOT as an orientation
+ *  score on its own: a wrongly-oriented page still yields plenty of lines — they
+ *  are just garbage. (The 90°-rotated capture that failed read 85 of them.) */
+export const legibleLineCount = (lines: { text: string }[]): number =>
+    lines.filter((l) => /[A-Za-zĄČĘĖĮŠŲŪŽąčęėįšųūž0-9]{2,}/.test(l.text ?? '')).length;
+
+/** A money amount — "1,29", "12.90", "-0,50". */
+const PRICE_TOKEN = /\d{1,4}[.,]\s?\d{2}(?!\d)/;
+
 /**
- * Camera photos held sideways arrive as landscape. Rotate to portrait (trying
- * both directions and keeping whichever OCRs to more lines) so the parser sees
- * the receipt upright. No-op for images already in portrait.
+ * RECEIPT-LIKENESS — the orientation score that actually discriminates.
+ *
+ * Every readable receipt is dense with money amounts (each line item, the VAT
+ * block, the total). Read at the wrong orientation the glyphs garble and those
+ * amounts collapse, even while the raw line COUNT stays high — which is exactly
+ * how a mis-rotated page slipped past a count-based check and reached the parser,
+ * where it segmented into one priceless product.
+ */
+export const receiptLikeness = (lines: { text: string }[]): number =>
+    lines.filter((l) => PRICE_TOKEN.test(l.text ?? '')).length;
+
+/** Below this many money amounts a read doesn't look like a receipt at all and is
+ *  worth testing against 180°. Even a two-item receipt clears it (2 items + total
+ *  + VAT). A false trigger only costs one extra OCR pass — the flip can't win
+ *  unless it is decisively better. */
+export const UPSIDE_DOWN_SUSPECT_LINES = 4;
+/** The flipped read must beat the original by this much before we swap — a
+ *  correct read must never lose to noise that happens to score a line higher. */
+export const UPSIDE_DOWN_WIN_RATIO = 1.3;
+/** ...and by this many lines in absolute terms. On very thin reads the ratio
+ *  alone is too easy to clear (3 → 4 lines passes 1.3×), which would let noise
+ *  unseat the original; a real orientation fix wins by dozens of lines. */
+export const UPSIDE_DOWN_MIN_GAIN = 4;
+
+/**
+ * 180° RECOVERY. `rotatePortrait` only rescues LANDSCAPE captures; a receipt
+ * photographed upside down is still portrait, so it sailed through untouched and
+ * ML Kit read almost nothing from it — the upload then failed with "no text" and
+ * the user had to notice, delete and retake.
+ *
+ * Cost is confined to the failure path: we only re-OCR when the first read is
+ * suspiciously thin, and only keep the flip when it is decisively better. Same
+ * shape as the landscape branch (OCR both, score by line count, best wins).
+ *
+ * Returns null when the original read stands — the caller then keeps its own.
+ */
+async function recoverUpsideDown(
+    uri: string,
+    original: OcrResult,
+    engine: OcrEngine,
+    opts: { document?: boolean },
+): Promise<{ uri: string; ocr: OcrResult } | null> {
+    const baseScore = receiptLikeness(original.lines as { text: string }[]);
+    if (baseScore >= UPSIDE_DOWN_SUSPECT_LINES) return null;
+    try {
+        const flipped = await ImageManipulator.manipulateAsync(
+            uri, [{ rotate: 180 }], { compress: 1, format: ImageManipulator.SaveFormat.JPEG },
+        );
+        const ocr = await ocrImageEnhanced(flipped.uri, engine, opts);
+        const flipScore = receiptLikeness(ocr.lines as { text: string }[]);
+        console.log(`[recoverUpsideDown] unreceipt-like read (${baseScore} amounts) → 180° scored ${flipScore}`);
+        if (flipScore > baseScore * UPSIDE_DOWN_WIN_RATIO && flipScore >= baseScore + UPSIDE_DOWN_MIN_GAIN) {
+            return { uri: flipped.uri, ocr };
+        }
+    } catch { /* recovery is best-effort — keep the original read */ }
+    return null;
+}
+
+/**
+ * Camera photos held sideways arrive as landscape. Rotate to portrait — trying
+ * BOTH directions and keeping whichever reads more like a receipt — so the parser
+ * sees it upright. No-op for images already in portrait.
+ *
+ * The two candidates are 180° apart, so picking wrong doesn't yield a slightly
+ * worse page: it yields an UPSIDE-DOWN one. This used to vote on raw line count,
+ * which barely separates them (a flipped page still produces plenty of garbage
+ * lines), so the wrong branch could win and hand the parser an inverted receipt
+ * that OCR'd "fine" and then segmented into a single priceless product. Voting on
+ * money amounts (receiptLikeness) separates them decisively.
  */
 export async function rotatePortrait(uri: string): Promise<string> {
     const dims = await new Promise<{ width: number; height: number }>(
@@ -142,9 +217,15 @@ export async function rotatePortrait(uri: string): Promise<string> {
         TextRecognition.recognize(cw.uri),
         TextRecognition.recognize(ccw.uri),
     ]);
-    const countLines = (r: { blocks: { lines: unknown[] }[] }) =>
-        r.blocks.reduce((s, b) => s + b.lines.length, 0);
-    return countLines(ocrCW) >= countLines(ocrCCW) ? cw.uri : ccw.uri;
+    const flat = (r: { blocks: { lines: { text: string }[] }[] }) =>
+        r.blocks.flatMap((b) => b.lines);
+    const linesCW = flat(ocrCW as any), linesCCW = flat(ocrCCW as any);
+    const amtCW = receiptLikeness(linesCW), amtCCW = receiptLikeness(linesCCW);
+    console.log(`[rotatePortrait] landscape ${dims.width}x${dims.height} → CW ${amtCW} amounts / ${linesCW.length} lines, CCW ${amtCCW} amounts / ${linesCCW.length} lines`);
+    // Money amounts decide; only fall back to line count when neither side found
+    // any (an unreadable capture — then the count is all we have).
+    if (amtCW !== amtCCW) return amtCW > amtCCW ? cw.uri : ccw.uri;
+    return linesCW.length >= linesCCW.length ? cw.uri : ccw.uri;
 }
 
 export interface CropResult {
@@ -921,8 +1002,14 @@ export async function ocrReceiptPages(
     let firstPageHeight = 0;
 
     for (let pageIdx = 0; pageIdx < imageUris.length; pageIdx++) {
-        const pageUri = await rotatePortrait(imageUris[pageIdx]);
-        const ocr = await ocrImageEnhanced(pageUri, engine, opts);
+        let pageUri = await rotatePortrait(imageUris[pageIdx]);
+        let ocr = await ocrImageEnhanced(pageUri, engine, opts);
+        // Upside-down capture → re-read flipped and keep it if decisively better.
+        // pageUri is reassigned too: every downstream consumer (stored image,
+        // band crops, product re-OCR) must work off the SAME pixels we parsed,
+        // or the regions would be drawn 180° out from the image on screen.
+        const flipped = await recoverUpsideDown(pageUri, ocr, engine, opts);
+        if (flipped) { pageUri = flipped.uri; ocr = flipped.ocr as typeof ocr; }
         if (pageIdx === 0) {
             frameScale = ocr.frameScale;
             firstPageUri = pageUri;

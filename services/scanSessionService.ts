@@ -47,15 +47,14 @@ import { useReceiptQueueStore } from "../state/receiptQueueStore";
 import { useProfileStore } from "../state/profileStore";
 import { REGIONS_VERSION } from "./regionsRehydrationService";
 import { RECOGNITION } from "@shared/recognitionConfig";
+import { detectLoyaltyMoney } from "@shared/parsers/loyaltyMoney";
 import { parseProductName } from "@shared/parsers/productNameParser";
 import {
   detectCardMaskBands,
   clampMaskBandsToProtected,
-  redactReceiptText,
-  wordCentreInMaskBand,
-  looksLikePiiText,
   type MaskBand,
 } from "@shared/parsers/cardMaskDetection";
+import { buildWordsDump, type WordsDumpLine } from "../utils/receiptWordsDump";
 import type { LabeledRegion } from "@shared/parsers/rimiParser";
 import type { IkiProduct } from "@shared/parsers/ikiParser";
 import type { PageMeta } from "../utils/receiptImage";
@@ -478,11 +477,25 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
       ocrLineCount: ocrLineTexts.length,
       parsedData: JSON.stringify({ footer, lineTexts: ocrLineTexts }),
     });
+    // Old-receipt gate: if the (parsed or entered) purchase date is more than 30
+    // days old, make the uploader confirm it's really this trip's shop before it
+    // saves — a stale receipt slipped into a shared trip is otherwise only caught
+    // by the after-the-fact badge. Unparseable → don't gate.
+    const OLD_RECEIPT_DAYS = 30;
+    const confirmIfOldReceipt = async (dateStr: string): Promise<boolean> => {
+      const d = new Date(dateStr);
+      if (Number.isNaN(d.getTime())) return true;
+      if ((Date.now() - d.getTime()) / 86400000 <= OLD_RECEIPT_DAYS) return true;
+      const proceed = await requestSessionInput<boolean>(sessionId, { kind: "oldDate", date: dateStr });
+      if (proceed) return true;
+      await bailWithLog(sessionId, "ocr_no_text", { ocrPreview: `old receipt (${dateStr}) not confirmed`, ...keyFieldsDiag() });
+      return false;
+    };
     // TIME IS OPTIONAL: some IKI layouts print date+time ONLY in the bottom VMI
     // fiscal line — a slightly short frame loses both. The exact hour only
     // orders same-day receipts, so default to midday rather than dead-ending.
     if (footer?.receiptNo && !footer.time) footer.time = "12:00";
-    if (footer?.receiptNo && footer?.date) return true;
+    if (footer?.receiptNo && footer?.date) return await confirmIfOldReceipt(footer.date);
     if (footer?.receiptNo && !footer?.date) {
       const picked = await requestSessionInput<Date | null>(sessionId, { kind: "date" });
       if (picked) {
@@ -490,7 +503,8 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
         const m = String(picked.getMonth() + 1).padStart(2, "0");
         const d = String(picked.getDate()).padStart(2, "0");
         footer.date = `${y}-${m}-${d}`;
-        return true;
+        // The manually-entered date must clear the same old-receipt gate.
+        return await confirmIfOldReceipt(footer.date);
       }
       // dismissed without a date → can't proceed
       await bailWithLog(sessionId, "ocr_no_text", { ocrPreview: "manual date entry cancelled", ...keyFieldsDiag() });
@@ -585,6 +599,10 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
       });
       return;
     }
+
+    // Loyalty-money lines WITH geometry (Rimi splits label and amount across two
+    // OCR lines in the same row — see @shared/parsers/loyaltyMoney).
+    const loyaltyLines = mergedLines.map((l: any) => ({ text: l.text, yTop: l.yTop, yBottom: l.yBottom }));
 
     // Chain-match gate + auto store-link resolution (list-upload flow only).
     let linkListId: number | null = fallbackLinkId;
@@ -715,31 +733,17 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
         receiptNos: parsed.footer.receiptNos,
         totalSavings: parsed.footer.totalSavings,
         comboDiscount: null,
+        loyalty: detectLoyaltyMoney(loyaltyLines),
         rawText: parsed.footer.rawText,
         region: parsed.footer.region,
         // lineRegions deliberately omitted — see the header note above.
       };
     } else if (chain === "iki") {
       // Capture the exact per-WORD lines the IKI column engine consumes, so a
-      // failing receipt can be reproduced 1:1 in a jest fixture. wordsDump
-      // ships in staging+prod, so it MUST be PII-safe: redact any word inside
-      // a mask band (or that LOOKS like a card/loyalty number) to '[•••]'.
-      const buildWordsDump = (ls: LineWithFrame[]) => ls.map((l) => ({
-        t: redactReceiptText(l.text),
-        x: [Math.round(l.xLeft), Math.round(l.xRight)],
-        y: [Math.round(l.yTop), Math.round(l.yBottom)],
-        c: l.yLeftTop != null
-          ? [Math.round(l.yLeftTop), Math.round(l.yRightTop ?? l.yTop), Math.round(l.yLeftBottom ?? l.yBottom), Math.round(l.yRightBottom ?? l.yBottom)]
-          : undefined,
-        w: l.words?.map((w) => {
-          const pii = wordCentreInMaskBand(w as any, detectedMaskBands) || looksLikePiiText(w.text);
-          return [
-            pii ? "[•••]" : w.text, Math.round(w.xLeft), Math.round(w.xRight), Math.round(w.yTop), Math.round(w.yBottom),
-            w.cornerPoints?.length ? w.cornerPoints.flatMap((pt) => [Math.round(pt.x), Math.round(pt.y)]) : undefined,
-          ];
-        }),
-      }));
-      wordsDump = buildWordsDump(mergedLines);
+      // failing receipt can be reproduced 1:1 in a jest fixture / receipts:reparse.
+      // SHARED with the background queue (utils/receiptWordsDump) so both paths
+      // emit an identical, PII-safe dump.
+      wordsDump = buildWordsDump(mergedLines as unknown as WordsDumpLine[], detectedMaskBands);
       wordsSrc = "scan";
 
       // The user-facing ensure* gates run BETWEEN the ensemble and the
@@ -764,7 +768,7 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
       // A stored wordsDump must reproduce the STORED parse — re-emit it from
       // the winning engine's lines when the ensemble flipped to ML Kit.
       if (flow.secondOcr) {
-        wordsDump = buildWordsDump(flow.secondOcr.mergedLines as any);
+        wordsDump = buildWordsDump(flow.secondOcr.mergedLines as unknown as WordsDumpLine[], detectedMaskBands);
       }
       if (flow.ikiGateFailed || ikiGateBailed) return; // bail already published
 
@@ -820,6 +824,7 @@ async function runPipeline(sessionId: number, opts: StartScanOptions): Promise<v
         receiptNos: parsed.footer.receiptNos,
         totalSavings: parsed.footer.totalSavings,
         comboDiscount: parsed.footer.comboDiscount ?? null,
+        loyalty: detectLoyaltyMoney(loyaltyLines),
         rawText: parsed.footer.rawText,
         region: parsed.footer.region,
         lineRegions: parsed.footer.lineRegions,

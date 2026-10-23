@@ -3,6 +3,7 @@ import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";
 import { Image } from "react-native";
 import { API_BASE_URL } from "../config/api";
+import { devLog } from "./devLog";
 
 /**
  * Per-page OCR context needed to render a band crop correctly for both
@@ -96,6 +97,7 @@ export async function normalizeLoadedImage(
     // TRUE dims — the same measure OCR used), NOT Image.getSize (which can report a
     // decoder-SAMPLED size). Aspect is ~identical so the resize is near-uniform.
     const portraitUri = await ensurePortraitOrientation(uri);
+    devLog('normalizeLoadedImage.in', { uri, parsedW, parsedH, rotated: portraitUri !== uri, portraitUri });
     if (parsedW > 0 && parsedH > 0) {
       // Fast pre-check: a cheap header read (Image.getSize) that ALREADY reports the
       // parsed dims means no resize is needed — skip the full ImageManipulator measure
@@ -108,6 +110,7 @@ export async function normalizeLoadedImage(
         const gs = await new Promise<{ width: number; height: number }>((resolve, reject) =>
           Image.getSize(portraitUri, (width, height) => resolve({ width, height }), reject),
         );
+        devLog('normalizeLoadedImage.getSize', { portraitUri, gs, parsedW, parsedH, match: Math.abs(gs.width - parsedW) <= 1 && Math.abs(gs.height - parsedH) <= 1 });
         if (Math.abs(gs.width - parsedW) <= 1 && Math.abs(gs.height - parsedH) <= 1) {
           return { uri: portraitUri, width: parsedW, height: parsedH };
         }
@@ -115,12 +118,14 @@ export async function normalizeLoadedImage(
         /* getSize failed → fall through to the authoritative measure */
       }
       const info = await ImageManipulator.manipulateAsync(portraitUri, []);
+      devLog('normalizeLoadedImage.measure', { portraitUri, measured: { w: info.width, h: info.height }, parsedW, parsedH, willResize: Math.abs(info.width - parsedW) > 1 || Math.abs(info.height - parsedH) > 1 });
       if (Math.abs(info.width - parsedW) > 1 || Math.abs(info.height - parsedH) > 1) {
         const r = await ImageManipulator.manipulateAsync(
           portraitUri,
           [{ resize: { width: parsedW, height: parsedH } }],
           { compress: 0.92, format: ImageManipulator.SaveFormat.JPEG },
         );
+        devLog('normalizeLoadedImage.resized', { from: { w: info.width, h: info.height }, to: { w: parsedW, h: parsedH }, out: r.uri });
         return { uri: r.uri, width: parsedW, height: parsedH };
       }
       return { uri: portraitUri, width: info.width, height: info.height };
@@ -205,18 +210,9 @@ export async function buildReceiptPageMeta(
   };
   try {
     const cacheDir = FileSystem.cacheDirectory ?? '';
-    const dest = `${cacheDir}receipt-${receiptId}.jpg`;
     let localUri = '';
     let downloaded = false;
     let lastErr = '';
-    // FAST PATH: the redacted upload (runUpload caches it here right after the PUT) or a
-    // prior download may already sit at the canonical cache path — reuse it instead of a
-    // MinIO round-trip. Makes a same-session reopen instant and guarantees the crop shows
-    // the SAME redacted pixels that were persisted.
-    try {
-      const cached = await FileSystem.getInfoAsync(dest);
-      if (cached.exists && (cached.size ?? 0) > 0) { localUri = dest; downloaded = true; }
-    } catch { /* fall through to download */ }
     // The receipt photo uploads to MinIO ASYNC, and the receipt row's filePath is PATCHed
     // only AFTER that upload finishes — but the swipe screen opens right after the POST.
     // So an early request can hit either (a) GET /image → 404 "image missing" (filePath
@@ -231,6 +227,19 @@ export async function buildReceiptPageMeta(
         const imageData = imageRes.ok ? await imageRes.json().catch(() => null) : null;
         const url = imageData?.url as string | undefined;
         if (url) {
+          // CACHE KEYED BY THE UNIQUE UPLOAD OBJECT KEY (…/<uploadTs>-receipt-<id>.jpg),
+          // NOT receipt-<id>.jpg. Receipt ids are REUSED after a dev DB reset, so a
+          // by-id cache serves a PRIOR session's photo → the wrong receipt's crop with
+          // the right OCR name (receipt-mixing). The object key changes on every upload,
+          // so a re-created receipt (or a retake) can never hit a stale cached file.
+          const objKey = url.split('?')[0].split('/').pop() || `receipt-${receiptId}.jpg`;
+          const dest = `${cacheDir}${objKey}`;
+          try {
+            const cached = await FileSystem.getInfoAsync(dest);
+            const useCache = cached.exists && ((cached as any).size ?? 0) > 0;
+            devLog('buildReceiptPageMeta.cacheCheck', { receiptId, dest, objKey, cachedExists: cached.exists, cachedSize: (cached as any).size, cachedMtime: (cached as any).modificationTime, usedCache: useCache });
+            if (useCache) { localUri = dest; downloaded = true; break; }
+          } catch { /* fall through to download */ }
           const dl = await FileSystem.downloadAsync(url, dest);
           if (dl?.uri && dl?.status === 200) { localUri = dl.uri; downloaded = true; break; }
           lastErr = `photo download HTTP ${dl?.status}`;
@@ -252,6 +261,11 @@ export async function buildReceiptPageMeta(
     const norm = await normalizeLoadedImage(localUri, hasDims ? imageWidth : 0, hasDims ? imageHeight : 0);
     const w = hasDims ? imageWidth : norm.width;
     const h = hasDims ? imageHeight : norm.height;
+    devLog('buildReceiptPageMeta.norm', {
+      receiptId, downloadedFrom: localUri, normUri: norm.uri,
+      normDims: { w: norm.width, h: norm.height }, assumedDims: { w, h },
+      dimsMatch: Math.abs(norm.width - w) <= 1 && Math.abs(norm.height - h) <= 1,
+    });
     const boundsOk =
       regionXBounds != null &&
       Number.isFinite(regionXBounds.left) && Number.isFinite(regionXBounds.right) &&

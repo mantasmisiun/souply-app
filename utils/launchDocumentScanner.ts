@@ -45,6 +45,37 @@ function toFileUri(path: string): string {
 }
 
 /**
+ * Open the native scanner and return the captured page URIs — WITHOUT any
+ * navigation. Callers that want the receipt processed silently in the
+ * background enqueue these into the receipt queue instead of routing to the
+ * full-screen /receipt-process flow. Returns null on cancel/failure.
+ */
+export async function scanDocumentOnly(): Promise<string[] | null> {
+    // iOS: presenting VisionKit while a JS Modal is still dismissing wedges the
+    // view hierarchy — give the modal a beat to fully dismiss first.
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    let scannedImages: string[] | undefined;
+    let status: ScanDocumentResponseStatus | undefined;
+    try {
+        const res = await DocumentScanner.scanDocument({
+            maxNumDocuments: 5,
+            croppedImageQuality: 100,
+            responseType: ResponseType.ImageFilePath,
+        });
+        scannedImages = res.scannedImages;
+        status = res.status;
+    } catch (e) {
+        console.warn('[docScanner] launch failed', e);
+        return null;
+    }
+
+    if (status === ScanDocumentResponseStatus.Cancel) return null;
+    if (!scannedImages || scannedImages.length === 0) return null;
+    return scannedImages.map(toFileUri);
+}
+
+/**
  * Open the scanner; on success route to /receipt-process with the captured
  * page(s). Returns the captured URIs (or null on cancel/failure) in case the
  * caller wants to react.
@@ -53,37 +84,9 @@ export async function launchDocumentScanner(
     router: PushRouter,
     params: ScanRouteParams = {},
 ): Promise<string[] | null> {
-    // iOS: every caller invokes this right after closing a JS Modal/overlay (the
-    // upload menu, the fail-gate "try again", the shopping-list target picker).
-    // Presenting the native VisionKit scanner while that modal is still dismissing
-    // wedges the view hierarchy — a frozen, unresponsive screen, worst on the
-    // first run where the camera-permission prompt stacks on top. Give the modal
-    // a beat to fully dismiss first (the file-picker path already does this).
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    const uris = await scanDocumentOnly();
+    if (!uris) return null;
 
-    let scannedImages: string[] | undefined;
-    let status: ScanDocumentResponseStatus | undefined;
-    try {
-        const res = await DocumentScanner.scanDocument({
-            // A normal receipt is one page; allow a few so a 2-frame receipt
-            // still works. The scanner returns them as ordered pages.
-            maxNumDocuments: 5,
-            croppedImageQuality: 100,
-            responseType: ResponseType.ImageFilePath,
-        });
-        scannedImages = res.scannedImages;
-        status = res.status;
-    } catch (e) {
-        // Native scanner failed to launch (e.g. the Play Services module is
-        // still downloading on first use) — fail soft; the caller's UI stays put.
-        console.warn('[docScanner] launch failed', e);
-        return null;
-    }
-
-    if (status === ScanDocumentResponseStatus.Cancel) return null;
-    if (!scannedImages || scannedImages.length === 0) return null;
-
-    const uris = scannedImages.map(toFileUri);
     const qp = new URLSearchParams();
     if (uris.length === 1) {
         qp.set('uri', uris[0]);

@@ -1,141 +1,256 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useCallback, useId, useState, type ComponentProps, type ReactNode } from 'react';
 import { View, StyleSheet, type LayoutChangeEvent } from 'react-native';
 import Animated, {
-    useSharedValue,
+    runOnJS,
     useAnimatedScrollHandler,
     useAnimatedStyle,
+    useSharedValue,
 } from 'react-native-reanimated';
 import { Stack } from 'expo-router';
-import type { NativeStackNavigationOptions } from '@react-navigation/native-stack';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useTheme } from '../constants/theme';
-import { glassHeaderOptions } from '../constants/navHeader';
+import Svg, { Defs, LinearGradient as SvgLinearGradient, Stop, Rect } from 'react-native-svg';
+import { useTheme, typography } from '../constants/theme';
+import { ScreenBackButton } from './ScreenBackButton';
+import { useBasketSession } from '../state/basketSession';
+
+/** The collapsed bar's row height (below the status-bar inset). Fits the 40dp
+ *  GlassIconButton chrome with breathing room. */
+const BAR_ROW_H = 48;
+
+/** Depth of the dissolve under the pinned chrome. Enough to fade a row of text;
+ *  shallow enough that it never veils content that is still meant to be read. */
+const FADE_H = 20;
+/** The strip is pulled UP by this much so it overlaps the chrome above instead
+ *  of butting against it — fractional insets/pinned heights otherwise round to a
+ *  1px transparent seam. Its top gradient stop is opaque, so the overlap is
+ *  invisible while the gap was not. */
+const FADE_OVERLAP = 1;
+
+function clamp(v: number, lo: number, hi: number) {
+    'worklet';
+    return Math.max(lo, Math.min(hi, v));
+}
 
 /**
- * Collapsing header for the app's list screens — and the single owner of the
- * native bar decision.
+ * The app's unified iOS-26 collapsing header for list screens.
  *
- * A `collapsing` section (e.g. <ScreenHeading/> with title + breadcrumb) hides
- * as the list scrolls up — it translates under the bar — while an optional
- * `pinned` section (e.g. a filter bar) stays put. It's an absolute overlay over
- * the list, driven by the list's NATIVE scroll offset and clamped at 0 on
- * overscroll, so the header never rubber-bands (no jitter).
- *
- * THE BAR RULE: pass `back` / `right`. If either is present, the titleless glass
- * bar is shown (via glassHeaderOptions). If NEITHER is present, the native bar
- * is hidden and this header takes the status-bar inset itself — so an empty bar
- * never wastes space.
+ *  - A DEFINED opaque top bar in real layout: back (if any) · a small title that
+ *    FADES in as the large `ScreenHeading` scrolls off · right action (if any).
+ *    The scrollable sits BELOW the bar, so the large title clips at its bottom
+ *    edge. Filter chips are NATIVE sticky headers INSIDE the scrollable
+ *    (stickyHeaderIndices / SectionList) — not here.
+ *  - The small title is opacity-only off the `offset` shared value (a fade is
+ *    lag-tolerant; a position-synced overlay title lagged on Android Fabric —
+ *    reanimated #6992 / #7460).
+ *  - The bar is ALWAYS this custom in-layout row — never a native header. A
+ *    cover-coloured screen (the recipe detail) passes `background` +
+ *    `titleColor` instead of forking to a native bar; keeping every host on
+ *    the same chrome is what lets a DockedGlassSheet expand over it to the
+ *    very top (the sheet's full detent is the whole window below the status
+ *    bar, and a native bar would sit in the navigator's own container where
+ *    screen content can never paint over it).
  *
  * Usage:
  *   const header = useCollapsingHeader();
- *   <CollapsingHeader controller={header} back right={<GlassIconButton …/>}
- *       collapsing={<ScreenHeading … />} pinned={<FilterBar … />} />
- *   <Animated.ScrollView {...header.scroll}               // or Animated.FlatList
- *       contentContainerStyle={{ paddingTop: header.paddingTop, … }}>
- *       {content}
+ *   <CollapsingHeader controller={header} back right={…} smallTitle={t('…')} />
+ *   <Animated.ScrollView {...header.scroll} stickyHeaderIndices={chips ? [1] : undefined}
+ *       contentContainerStyle={{ paddingTop: 0, … }}>
+ *       <ScreenHeading … onLayout={header.onTitleLayout} />
+ *       {chips}      // index 1 — native sticky
+ *       {…content}
  *   </Animated.ScrollView>
  */
 export function useCollapsingHeader() {
+    // The workletized scroll handler drives the small-title fade off `offset`,
+    // and collapses the basket dock on begin-drag (a plain JS `onScrollBeginDrag`
+    // next to reanimated components would downgrade the event stream).
     const offset = useSharedValue(0);
-    // Drive the offset from the scroll handler (no animated ref) so it never
-    // warns when the scrollable isn't mounted (loading states, inactive tabs).
-    const onScroll = useAnimatedScrollHandler(e => {
-        offset.value = e.contentOffset.y;
+    const collapseDock = () => { useBasketSession.getState().collapseDock?.(); };
+    const onScroll = useAnimatedScrollHandler({
+        onScroll: e => { offset.value = e.contentOffset.y; },
+        onBeginDrag: () => { runOnJS(collapseDock)(); },
     });
-    const [collapsingHeight, setCollapsingHeight] = useState(0);
+    // The large title's measured height → when to fade the small title in.
+    const [titleHeight, setTitleHeight] = useState(0);
+    // Height of a row PINNED under the bar (filter chips). The dissolve belongs
+    // below it: the pinned row is chrome, and washing it would dim controls the
+    // user is still meant to read and tap.
     const [pinnedHeight, setPinnedHeight] = useState(0);
-    const [topInset, setTopInset] = useState(0);
+    const onPinnedLayout = useCallback((e: LayoutChangeEvent) => {
+        const h = Math.round(e.nativeEvent.layout.height);
+        if (h > 0) setPinnedHeight(h);
+    }, []);
+    const onTitleLayout = useCallback((e: LayoutChangeEvent) => {
+        const h = Math.round(e.nativeEvent.layout.height);
+        if (h > 0) setTitleHeight(h);
+    }, []);
     return {
         offset,
         /** Spread onto the scrollable: `<Animated.FlatList {...header.scroll} … />`. */
         scroll: { onScroll, scrollEventThrottle: 16 },
-        collapsingHeight,
+        titleHeight,
+        setTitleHeight,
+        onTitleLayout,
+        /** Spread onto a row pinned under the bar so the dissolve clears it. */
         pinnedHeight,
-        topInset,
-        /** Reserve this as the scroll content's paddingTop (overlay sits over it). */
-        paddingTop: topInset + collapsingHeight + pinnedHeight,
-        setCollapsingHeight,
-        setPinnedHeight,
-        setTopInset,
+        onPinnedLayout,
     };
 }
 
 export type CollapsingHeaderController = ReturnType<typeof useCollapsingHeader>;
 
+/**
+ * THE nav-bar title text — one identity (typography.barTitle, single line
+ * with a tail ellipsis, textPrimary ink) for every screen's top bar.
+ * Screens must not hand-roll a bar title: the font drifting apart per screen
+ * is exactly the bug this component exists to prevent.
+ *
+ * Optional props cover the covered-bar screens without forking:
+ *   `color` — ink override for a bar whose background is a cover colour
+ *             (CollapsingHeader's `titleColor` — the recipe screen flips
+ *             white/near-black by the cover's contrast);
+ *   `style` — layout constraints and/or an ANIMATED style (the scroll-keyed
+ *             opacity fade). Rendered via Animated.Text so an animated
+ *             opacity is accepted directly.
+ */
+export function BarTitle({
+    title,
+    color,
+    style,
+}: {
+    title?: string;
+    color?: string;
+    style?: ComponentProps<typeof Animated.Text>['style'];
+}) {
+    const colors = useTheme();
+    return (
+        <Animated.Text
+            numberOfLines={1}
+            style={[styles.barTitleText, { color: color ?? colors.textPrimary }, style]}
+        >
+            {title}
+        </Animated.Text>
+    );
+}
+
 export function CollapsingHeader({
     controller,
-    collapsing,
-    pinned,
     background,
     back,
+    onBack,
     right,
-    headerOptions,
+    smallTitle,
+    titleColor,
 }: {
     controller: CollapsingHeaderController;
-    /** Hides on scroll (translates under the bar). */
-    collapsing: ReactNode;
-    /** Stays pinned under the bar (optional). */
-    pinned?: ReactNode;
+    /** Bar colour — defaults to the page background. Supplying one also turns
+     *  the under-bar dissolve strip OFF: a cover-coloured bar over page-coloured
+     *  content would paint the strip as a visible wash across the top of the
+     *  body (it greyed the recipe's cover title); a distinct bar keeps a hard
+     *  bottom edge instead. */
     background?: string;
-    /** Glass back chevron in the bar. */
+    /** Back chip in the top row. */
     back?: boolean;
-    /** Right-side action(s) in the bar. */
+    /** Override the default pop — e.g. return to a specific tab. */
+    onBack?: () => void;
+    /** Right-side action(s) in the top row. */
     right?: ReactNode;
-    /** Full Stack.Screen options override (e.g. a search-mode bar). Forces the
-     *  bar to show. */
-    headerOptions?: NativeStackNavigationOptions;
+    /** The collapsed bar title that fades in as the large title scrolls off. */
+    smallTitle?: string;
+    /** Small-title ink for a bar whose `background` is a cover colour — the
+     *  recipe screen flips white/near-black by the cover's contrast (inkOn).
+     *  The back chip and `right` actions keep their own ink (the chevron sits
+     *  in its own circle, so it stays app-pink regardless of the cover). */
+    titleColor?: string;
 }) {
     const insets = useSafeAreaInsets();
     const colors = useTheme();
-    const bg = background ?? colors.cardBackground;
-    const barShown = !!(back || right || headerOptions);
-    const { offset, collapsingHeight, setCollapsingHeight, setPinnedHeight, setTopInset } = controller;
+    const bg = background ?? colors.pageBackground;
+    const { offset, titleHeight, pinnedHeight } = controller;
+    // Unique per mounted header: during a push two screens are alive at once, and
+    // a shared SVG gradient id makes one of them resolve to the other's def.
+    const fadeId = useId().replace(/:/g, '');
 
-    // Reserve the status-bar inset in the scroll padding only when there's no
-    // native bar to provide it.
-    useEffect(() => {
-        setTopInset(barShown ? 0 : insets.top);
-    }, [barShown, insets.top, setTopInset]);
-
-    const style = useAnimatedStyle(() => {
-        const o = offset.value;
-        // Only collapse while scrolling DOWN into content; clamp at the
-        // collapsing section's height (so the pinned section stays), and at 0
-        // on overscroll (so the header doesn't follow the rubber-band).
-        const collapse = o > 0 ? Math.min(o, collapsingHeight) : 0;
-        return { transform: [{ translateY: -collapse }] };
+    const smallTitleStyle = useAnimatedStyle(() => {
+        const h = titleHeight || 56;
+        return { opacity: clamp((offset.value - (h - 16)) / 24, 0, 1) };
     });
-    const onCollapsingLayout = (e: LayoutChangeEvent) =>
-        setCollapsingHeight(Math.round(e.nativeEvent.layout.height));
-    const onPinnedLayout = (e: LayoutChangeEvent) =>
-        setPinnedHeight(Math.round(e.nativeEvent.layout.height));
 
     return (
         <>
-            <Stack.Screen options={headerOptions ?? glassHeaderOptions({ back, right, background: bg })} />
-            {/* Overlay itself is TRANSPARENT — the background lives on the moving
-                band below, so it travels up with the title/chips on scroll and
-                doesn't leave an empty strip behind. */}
-            <View style={styles.overlay}>
-                {/* When there's no native bar, reserve the status-bar inset so the
-                    title clears the notch/clock. */}
-                <View style={{ paddingTop: barShown ? 0 : insets.top }}>
-                    <Animated.View style={[{ backgroundColor: bg }, style]}>
-                        <View onLayout={onCollapsingLayout}>{collapsing}</View>
-                        {pinned != null ? <View onLayout={onPinnedLayout}>{pinned}</View> : null}
-                    </Animated.View>
+            <Stack.Screen options={{ headerShown: false }} />
+            {/* Flat opaque bar — NO shadow/elevation and NO hairline: content
+                clips at its bottom edge and any sticky chips below read as one
+                continuous pinned zone (no double separators). */}
+            <View style={{ paddingTop: insets.top, backgroundColor: bg }}>
+                <View style={styles.barRow}>
+                    {back ? <ScreenBackButton onPress={onBack} /> : null}
+                    <BarTitle title={smallTitle} color={titleColor} style={[styles.barTitleLayout, smallTitleStyle]} />
+                    {right ?? null}
                 </View>
-                {/* Opaque status-bar cover (no native bar) so the collapsing title
-                    slides up *under* it instead of over the clock. */}
-                {!barShown ? (
-                    <View pointerEvents="none" style={[styles.statusCover, { height: insets.top, backgroundColor: bg }]} />
-                ) : null}
             </View>
+
+            {/* THE DISSOLVE. The bar (and any row pinned under it) is real layout,
+                so a row scrolling up used to be guillotined at an invisible line.
+                This strip sits directly BELOW that chrome and runs from the page
+                colour to transparent, so a row dissolves as it slides behind the
+                bar instead of being cut mid-glyph.
+
+                Deliberately below the chrome, never over it: the bar's title,
+                back button and any pinned filter chips must stay at full
+                strength — they are controls, not content. pointerEvents none so
+                it can never swallow a tap meant for the list.
+
+                DEFAULT (page-coloured) bars only. On those the strip is
+                invisible until content actually slides under it — same colour
+                over same colour. A bar with an explicit `background` (the
+                recipe's cover colour) sits on content of a DIFFERENT colour,
+                so the same strip paints a visible cover-coloured wash over the
+                first 20px of the body — it dimmed the top of the recipe's
+                cover title. Such a bar is a deliberately distinct band; a hard
+                bottom edge IS its design, so it gets no dissolve. */}
+            {background == null && (
+                <View
+                    style={[styles.fade, {
+                        // Overlap the chrome above by 1px. `insets.top` and the
+                        // measured `pinnedHeight` are fractional dp, so the
+                        // chrome's bottom edge and this strip's top edge round to
+                        // DIFFERENT physical pixels — leaving a 1px fully
+                        // transparent seam that the list scrolls through (only
+                        // visible against saturated content, e.g. a red product
+                        // image). The first gradient stop is opaque chrome colour,
+                        // so overlapping is invisible; a gap is not.
+                        top: insets.top + BAR_ROW_H + pinnedHeight - FADE_OVERLAP,
+                        height: FADE_H + FADE_OVERLAP,
+                    }]}
+                    pointerEvents="none"
+                >
+                    <Svg width="100%" height={FADE_H + FADE_OVERLAP}>
+                        <Defs>
+                            <SvgLinearGradient id={fadeId} x1="0" y1="0" x2="0" y2="1">
+                                {/* Starts at the chrome's own colour — no seam. */}
+                                <Stop offset="0" stopColor={bg} stopOpacity="1" />
+                                <Stop offset="0.5" stopColor={bg} stopOpacity="0.6" />
+                                <Stop offset="1" stopColor={bg} stopOpacity="0" />
+                            </SvgLinearGradient>
+                        </Defs>
+                        <Rect x="0" y="0" width="100%" height={FADE_H + FADE_OVERLAP} fill={`url(#${fadeId})`} />
+                    </Svg>
+                </View>
+            )}
         </>
     );
 }
 
 const styles = StyleSheet.create({
-    overlay: { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, elevation: 10 },
-    statusCover: { position: 'absolute', top: 0, left: 0, right: 0 },
+    // Above the scrollable on BOTH platforms: iOS honours zIndex, Android needs
+    // elevation for the same stacking, or the list paints over the dissolve.
+    fade: { position: 'absolute', left: 0, right: 0, height: FADE_H, zIndex: 10, elevation: 10 },
+    barRow: {
+        flexDirection: 'row', alignItems: 'center',
+        paddingHorizontal: 8, height: BAR_ROW_H,
+    },
+    // BarTitle owns the TEXT identity; this is only the custom row's layout.
+    barTitleLayout: { flex: 1, marginHorizontal: 8 },
+    barTitleText: { ...typography.barTitle },
 });

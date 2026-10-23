@@ -1,6 +1,5 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { View, Pressable, Text, StyleSheet, type LayoutChangeEvent } from 'react-native';
-import { BlurView } from 'expo-blur';
 import Animated, {
     Easing,
     useAnimatedStyle,
@@ -9,14 +8,16 @@ import Animated, {
     withSpring,
     withTiming,
 } from 'react-native-reanimated';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
-import type { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+// SDK 57: expo-router forked react-navigation — this type must come from
+// expo-router/js-tabs (same identity as the `Tabs` component in the tab layout).
+import type { BottomTabBarProps } from 'expo-router/js-tabs';
 import { useTabBarOverride } from '../state/tabBarOverride';
+import { tabBlurTargetFor } from '../state/tabBlurTargets';
+import { BasketDockSheet } from './basket/BasketDockSheet';
 import {
     useTheme,
-    useResolvedScheme,
     spacing,
     radius,
     typography,
@@ -29,9 +30,15 @@ import {
 const DESTRUCTIVE_COLOR = '#E53E3E';
 
 // Width/height of the Material-3 "active indicator" pill that sits behind the
-// selected tab's icon and slides between tabs.
+// selected tab's icon and slides between tabs. Compact metrics so the whole
+// tab row measures ~40lp — the same bar size as the session list sheet's.
 const INDICATOR_WIDTH = 56;
-const INDICATOR_HEIGHT = 34;
+const INDICATOR_HEIGHT = 26;
+const ICON_SIZE = 20;
+/** Fallback row height before the first layout measure. The REAL height is
+ *  MEASURED from the row's natural content (icon + label), so resizing icons
+ *  or labels later auto-adjusts the dock — same scheme as the session bar. */
+export const TABS_ROW_H = 40;
 
 /**
  * Bottom clearance (above the safe-area inset) that screens must pad their
@@ -47,44 +54,23 @@ export const FLOATING_TAB_BAR_CLEARANCE = 80;
  * iOS keeps the native glass `NativeTabs`; this is the Android (and JS-fallback)
  * bar, wired via the `tabBar` prop on `<Tabs>`.
  *
- * M3 features applied here (the "test surface" for the modernization pass):
- *   - tonal **active-indicator** pill (`secondaryContainer`) that slides between
- *     tabs and STRETCHES while travelling (expressive motion), then settles;
- *   - **surface-tint** elevated bar (`surfaceContainer` + `outlineVariant`);
- *   - per-tab **state layer + shape-morph**: native ripple, a press scale-down,
- *     and a spring bounce when a tab becomes active;
- *   - active icon/label in `onSecondaryContainer` with a heavier label weight;
- *   - selection haptic on press.
- *
- * Icons + badges are reused from each screen's `tabBarIcon` option so counts
- * stay in sync; this component owns layout, the indicator, motion + haptics.
+ * The GLASS, shadow and expand-into-a-sheet behaviour now live in
+ * `DockedGlassSheet` (one panel, artifact-free). This component only builds the
+ * TAB-BUTTON ROW (indicator, badges, haptics, M3 motion, multi-select override)
+ * and hands it to `BasketDockSheet`, which docks it in the glass panel and adds
+ * the Naršyti basket sheet above it when relevant.
  */
 export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTabBarProps) {
     const colors = useTheme();
-    const isDark = useResolvedScheme() === 'dark';
-    const insets = useSafeAreaInsets();
     const [innerWidth, setInnerWidth] = useState(0);
+    // Natural content height of the row — measured, so the dock's collapsed
+    // padding stays `peek` on every side whatever the icon/label sizes.
+    const [rowH, setRowH] = useState(TABS_ROW_H);
     const tx = useSharedValue(0);
     const stretch = useSharedValue(1);
 
-    // Two stacked shadows (Material's key + ambient light model) give a real
-    // sense of lift that a single capped Android `elevation` can't. The key
-    // shadow is tight, darker and tinted (warm beet in light mode) so the bar
-    // reads as floating ABOVE the page rather than printed on it; the ambient
-    // is wide + faint for the soft penumbra. An inner top highlight rim adds the
-    // convex sheen (lit-from-above) that sells the 3D, iOS-like feel.
-    const keyShadow = isDark
-        ? { shadowColor: '#000000', shadowOpacity: 0.6, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 16 }
-        : { shadowColor: '#5A2233', shadowOpacity: 0.3, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 16 };
-    const ambientShadow = isDark
-        ? { shadowColor: '#000000', shadowOpacity: 0.45, shadowRadius: 28, shadowOffset: { width: 0, height: 16 }, elevation: 8 }
-        : { shadowColor: '#3A1722', shadowOpacity: 0.16, shadowRadius: 28, shadowOffset: { width: 0, height: 16 }, elevation: 8 };
-    const rimColor = isDark ? 'rgba(255,255,255,0.14)' : 'rgba(255,255,255,0.9)';
-
-    // Contextual override (e.g. shopping-list multi-select): the pill KEEPS its
-    // glass/shadow shell but renders action items instead of tabs — no second
-    // bar floating behind this one. The active-indicator is hidden (no tab is
-    // "selected" while actions own the bar).
+    // Contextual override (e.g. shopping-list multi-select): the bar renders
+    // action items instead of tabs. The active-indicator is hidden.
     const overrideActions = useTabBarOverride((s) => s.actions);
 
     const count = state.routes.length;
@@ -109,107 +95,182 @@ export function FloatingPillTabBar({ state, descriptors, navigation }: BottomTab
         transform: [{ translateX: tx.value }, { scaleX: stretch.value }],
     }));
 
-    return (
+    // The tab-button row — laid out edge-to-edge; the glass around it is the
+    // DockedGlassSheet's. `onLayout` measures the indicator track width.
+    const tabsRow = (
         <View
+            style={styles.tabsRow}
+            onLayout={(e: LayoutChangeEvent) => {
+                setInnerWidth(e.nativeEvent.layout.width);
+                const h = Math.round(e.nativeEvent.layout.height);
+                if (h > 0) setRowH(prev => (prev === h ? prev : h));
+            }}
             pointerEvents="box-none"
-            style={[styles.wrap, { paddingBottom: insets.bottom + spacing.sm }]}
         >
-          {/* Ambient (soft, wide) shadow layer — hugs the bar so both shadows
-              share the same rounded silhouette. The bar carries the tighter key
-              shadow; together they fake two-light depth. */}
-          <View style={[styles.shadowLayer, ambientShadow]}>
-            <View
-                onLayout={(e: LayoutChangeEvent) =>
-                    setInnerWidth(e.nativeEvent.layout.width - spacing.sm * 2)
-                }
-                style={[
-                    styles.bar,
-                    keyShadow,
-                    { borderColor: colors.outlineVariant }, // background is now glass (blur + tint), not solid
-                ]}
-            >
-                {/* GLASS: a blurred backdrop of the page behind the bar, plus a
-                    semi-transparent surface tint over it for color identity and so
-                    icons/labels stay legible over busy content. `experimentalBlurMethod`
-                    enables a real blur on Android (iOS ignores it). Both layers are
-                    clipped to the bar's rounded shape via `styles.glass`. */}
-                <BlurView
+            {itemWidth > 0 && !overrideActions && (
+                <Animated.View
                     pointerEvents="none"
-                    intensity={isDark ? 40 : 55}
-                    tint={isDark ? 'dark' : 'light'}
-                    experimentalBlurMethod="dimezisBlurView"
-                    style={styles.glass}
+                    style={[
+                        styles.indicator,
+                        {
+                            left: 0,
+                            width: INDICATOR_WIDTH,
+                            height: INDICATOR_HEIGHT,
+                            borderRadius: radius.pill,
+                            backgroundColor: colors.secondaryContainer,
+                        },
+                        indicatorStyle,
+                    ]}
                 />
-                <View
-                    pointerEvents="none"
-                    style={[styles.glass, { backgroundColor: withAlpha(colors.surfaceContainer, 0.6) }]}
-                />
-                {/* Inner top-highlight rim — only the top edge is lit, giving the
-                    surface a convex, lit-from-above sheen. */}
-                <View
-                    pointerEvents="none"
-                    style={[styles.rim, { borderTopColor: rimColor }]}
-                />
-                {itemWidth > 0 && !overrideActions && (
-                    <Animated.View
-                        pointerEvents="none"
-                        style={[
-                            styles.indicator,
-                            {
-                                left: spacing.sm,
-                                width: INDICATOR_WIDTH,
-                                height: INDICATOR_HEIGHT,
-                                borderRadius: radius.pill,
-                                backgroundColor: colors.secondaryContainer,
-                            },
-                            indicatorStyle,
-                        ]}
-                    />
-                )}
+            )}
 
-                {overrideActions
-                    ? overrideActions.map((a, i) => (
-                        <TabItem
-                            key={`${a.label}-${i}`}
-                            label={a.label}
-                            focused={false}
-                            colors={colors}
-                            tintOverride={a.destructive ? DESTRUCTIVE_COLOR : colors.primary}
-                            renderIcon={(color) => <Ionicons name={a.icon} size={24} color={color} />}
-                            onPress={() => {
-                                Haptics.selectionAsync();
-                                a.onPress();
-                            }}
-                        />
-                    ))
-                    : state.routes.map((route, index) => {
+            {overrideActions
+                ? overrideActions.map((a, i) => (
+                    <TabItem
+                        key={`${a.label}-${i}`}
+                        label={a.label}
+                        focused={false}
+                        colors={colors}
+                        tintOverride={a.destructive ? DESTRUCTIVE_COLOR : colors.primary}
+                        renderIcon={(color) => <Ionicons name={a.icon} size={ICON_SIZE} color={color} />}
+                        onPress={() => { Haptics.selectionAsync(); a.onPress(); }}
+                    />
+                ))
+                : state.routes.map((route, index) => {
                     const { options } = descriptors[route.key];
                     const focused = state.index === index;
                     const label = (options.title ?? route.name) as string;
-
                     const onPress = () => {
                         Haptics.selectionAsync();
-                        const event = navigation.emit({
-                            type: 'tabPress',
-                            target: route.key,
-                            canPreventDefault: true,
-                        });
+                        const event = navigation.emit({ type: 'tabPress', target: route.key, canPreventDefault: true });
                         if (!focused && !event.defaultPrevented) navigation.navigate(route.name);
                     };
-
                     return (
                         <TabItem
                             key={route.key}
                             label={label}
                             focused={focused}
                             colors={colors}
-                            renderIcon={(color) => options.tabBarIcon?.({ focused, color, size: 24 })}
+                            renderIcon={(color) => options.tabBarIcon?.({ focused, color, size: ICON_SIZE })}
                             onPress={onPress}
                         />
                     );
                 })}
-            </View>
-          </View>
+        </View>
+    );
+
+    // ANDROID real blur: the dock blurs the FOCUSED tab's BlurTargetView (each
+    // tab layout wraps its nested Stack in one — state/tabBlurTargets). This
+    // bar re-renders on every focus change, so handing the dock a DIFFERENT
+    // ref object per tab retargets expo-blur's native BlurView in the same
+    // commit as the switch. On iOS the refs stay null and GlassFill ignores
+    // the prop entirely — the native NativeTabs path doesn't render this bar
+    // anyway (only the error-boundary fallback does).
+    const blurTarget = tabBlurTargetFor(state.routes[state.index]?.name ?? '');
+
+    return <BasketDockSheet tabsRow={tabsRow} tabsRowHeight={rowH} blurTarget={blurTarget} />;
+}
+
+/** A generic dock tab item (for docks other than the root tab bar). */
+export interface DockTab {
+    key: string;
+    label: string;
+    icon: keyof typeof Ionicons.glyphMap;
+    /** Dim + ignore taps (e.g. a pane gated until the trip unlocks). */
+    disabled?: boolean;
+    /** Show a small lock glyph beside the label (a gated pane). */
+    locked?: boolean;
+    /** Pink dot on the icon — an attention cue (e.g. a pending mandatory queue). */
+    dot?: boolean;
+}
+
+/**
+ * Reusable dock TAB ROW — the exact visual system of the root tab bar
+ * (M3 indicator, icon+label cells, expressive press morphs) for other
+ * dock surfaces (e.g. the trip-map six-tab bar). Render it as the
+ * `barRow` of a DockedGlassSheet and feed the measured height back via
+ * onHeight (same auto-sizing contract as the root bar).
+ */
+export function DockTabsRow({
+    tabs,
+    activeKey,
+    onSelect,
+    onHeight,
+    hug,
+}: {
+    tabs: DockTab[];
+    activeKey: string;
+    onSelect: (key: string) => void;
+    onHeight?: (h: number) => void;
+    /** HUG layout: cells size to their content (equal, via `item.minWidth`)
+     *  instead of flex-filling the row — for a content-width dock (the compact
+     *  DockedGlassSheet). Default false = fill (the full-width root/map bars). */
+    hug?: boolean;
+}) {
+    const colors = useTheme();
+    const [innerWidth, setInnerWidth] = useState(0);
+    const tx = useSharedValue(0);
+    const stretch = useSharedValue(1);
+    const activeIndex = Math.max(0, tabs.findIndex(t => t.key === activeKey));
+    const itemWidth = innerWidth > 0 ? innerWidth / tabs.length : 0;
+
+    useEffect(() => {
+        if (itemWidth <= 0) return;
+        const target = activeIndex * itemWidth + (itemWidth - INDICATOR_WIDTH) / 2;
+        tx.value = withSpring(target, motion.spring);
+        stretch.value = withSequence(
+            withTiming(1.55, {
+                duration: motion.duration.fast,
+                easing: Easing.bezier(...motion.easing.emphasized),
+            }),
+            withSpring(1, motion.springExpressive),
+        );
+    }, [activeIndex, itemWidth, tx, stretch]);
+
+    const indicatorStyle = useAnimatedStyle(() => ({
+        transform: [{ translateX: tx.value }, { scaleX: stretch.value }],
+    }));
+
+    return (
+        <View
+            style={styles.tabsRow}
+            onLayout={(e: LayoutChangeEvent) => {
+                setInnerWidth(e.nativeEvent.layout.width);
+                const h = Math.round(e.nativeEvent.layout.height);
+                if (h > 0) onHeight?.(h);
+            }}
+            pointerEvents="box-none"
+        >
+            {itemWidth > 0 && (
+                <Animated.View
+                    pointerEvents="none"
+                    style={[
+                        styles.indicator,
+                        {
+                            left: 0,
+                            width: INDICATOR_WIDTH,
+                            height: INDICATOR_HEIGHT,
+                            borderRadius: radius.pill,
+                            backgroundColor: colors.secondaryContainer,
+                        },
+                        indicatorStyle,
+                    ]}
+                />
+            )}
+            {tabs.map((tab) => (
+                <TabItem
+                    key={tab.key}
+                    label={tab.label}
+                    focused={tab.key === activeKey}
+                    colors={colors}
+                    disabled={tab.disabled}
+                    locked={tab.locked}
+                    dot={tab.dot}
+                    hug={hug}
+                    renderIcon={(color) => <Ionicons name={tab.icon} size={ICON_SIZE} color={color} />}
+                    onPress={() => { if (tab.disabled) return; Haptics.selectionAsync(); onSelect(tab.key); }}
+                />
+            ))}
         </View>
     );
 }
@@ -226,6 +287,10 @@ function TabItem({
     renderIcon,
     onPress,
     tintOverride,
+    disabled,
+    locked,
+    dot,
+    hug,
 }: {
     label: string;
     focused: boolean;
@@ -234,9 +299,19 @@ function TabItem({
     onPress: () => void;
     /** Fixed tint for override-action items (primary / destructive red). */
     tintOverride?: string;
+    /** Dim the cell + swallow presses (a gated pane). */
+    disabled?: boolean;
+    /** Show a small lock glyph after the label. */
+    locked?: boolean;
+    /** Pink attention dot on the icon. */
+    dot?: boolean;
+    /** Content-sized cell (for a hugging/content-width dock) instead of flex-fill. */
+    hug?: boolean;
 }) {
     const scale = useSharedValue(1);
-    const tint = tintOverride ?? (focused ? colors.onSecondaryContainer : colors.textSecondary);
+    const tint = disabled
+        ? colors.textMuted
+        : tintOverride ?? (focused ? colors.onSecondaryContainer : colors.textSecondary);
 
     useEffect(() => {
         if (focused) {
@@ -252,91 +327,83 @@ function TabItem({
     return (
         <Pressable
             accessibilityRole="button"
-            accessibilityState={focused ? { selected: true } : {}}
+            accessibilityState={{ selected: focused, disabled: !!disabled }}
             accessibilityLabel={label}
-            android_ripple={{
+            android_ripple={disabled ? undefined : {
                 color: withAlpha(colors.surfaceTint, stateLayer.pressed),
                 borderless: true,
-                radius: 36,
+                radius: 30,
             }}
-            onPress={onPress}
-            onPressIn={() => { scale.value = withSpring(0.86, motion.spring); }}
-            onPressOut={() => { scale.value = withSpring(1, motion.springExpressive); }}
-            style={styles.item}
+            onPress={disabled ? undefined : onPress}
+            onPressIn={() => { if (!disabled) scale.value = withSpring(0.86, motion.spring); }}
+            onPressOut={() => { if (!disabled) scale.value = withSpring(1, motion.springExpressive); }}
+            style={[styles.item, hug && styles.itemHug, disabled && styles.itemDisabled]}
         >
             <Animated.View style={[styles.iconWrap, iconStyle]}>
                 {renderIcon(tint)}
+                {dot && <View style={[styles.tabDot, { backgroundColor: colors.primary, borderColor: colors.surfaceContainerHigh }]} />}
             </Animated.View>
-            <Text
-                numberOfLines={1}
-                style={[
-                    focused ? typography.labelSmall : typography.caption,
-                    styles.label,
-                    { color: tint },
-                ]}
-            >
-                {label}
-            </Text>
+            <View style={styles.labelRow}>
+                <Text
+                    numberOfLines={1}
+                    style={[
+                        focused ? typography.labelSmall : typography.caption,
+                        styles.label,
+                        { color: tint },
+                    ]}
+                >
+                    {label}
+                </Text>
+                {locked && <Ionicons name="lock-closed" size={10} color={colors.textMuted} />}
+            </View>
         </Pressable>
     );
 }
 
 const styles = StyleSheet.create({
-    wrap: {
-        position: 'absolute',
-        left: 0,
-        right: 0,
-        bottom: 0,
-        paddingHorizontal: spacing.lg,
-    },
-    shadowLayer: {
-        borderRadius: radius.xl,
-    },
-    glass: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        borderRadius: radius.xl,
-        overflow: 'hidden', // clip the blur/tint to the bar's rounded corners
-    },
-    rim: {
-        position: 'absolute',
-        top: 0,
-        left: 0,
-        right: 0,
-        bottom: 0,
-        borderRadius: radius.xl,
-        borderWidth: 1.2,
-        borderColor: 'transparent',
-        zIndex: 5,
-    },
-    bar: {
+    tabsRow: {
+        // No padding, no flex, no minHeight — the row keeps its NATURAL content
+        // height (icon + label), which is measured and fed to the dock so its
+        // collapsed padding is `peek` on every side, auto-adjusting to any
+        // future icon/label resize. The DockedGlassSheet centres it.
         flexDirection: 'row',
-        alignItems: 'center',
-        paddingHorizontal: spacing.sm,
-        paddingTop: spacing.sm,
-        paddingBottom: spacing.xs,
-        borderRadius: radius.xl,
-        borderWidth: StyleSheet.hairlineWidth,
+        alignItems: 'flex-start',
     },
     indicator: {
         position: 'absolute',
-        top: spacing.sm,
+        top: 0,
     },
     item: {
         flex: 1,
+        // Equal minimum so a content-width (compact) dock keeps its cells the
+        // same width — the sliding indicator (itemWidth = innerWidth / count)
+        // then lands centred under each. Harmless full-width (flex dominates).
+        minWidth: 72,
         alignItems: 'center',
         justifyContent: 'center',
         gap: 2,
     },
+    itemDisabled: { opacity: 0.55 },
+    // HUG: content-sized cell (row shrinks to its tabs) — the compact dock. The
+    // shared minWidth keeps the two cells equal so the indicator stays centred.
+    itemHug: { flex: 0, paddingHorizontal: spacing.sm },
+    labelRow: { flexDirection: 'row', alignItems: 'center', gap: 3 },
     iconWrap: {
         height: INDICATOR_HEIGHT,
         alignItems: 'center',
         justifyContent: 'center',
     },
+    // Pink attention dot riding the icon's top-right corner (bordered so it lifts
+    // off the glyph). Signals a pending action on the tab (e.g. mandatory swipes).
+    tabDot: {
+        position: 'absolute', top: -2, right: -4,
+        width: 9, height: 9, borderRadius: 5, borderWidth: 1.5,
+    },
     label: {
         textAlign: 'center',
+        // Compact: with the 26lp icon wrap + 2 gap this lands the row at ~41lp —
+        // the session bar's size class.
+        fontSize: 11,
+        lineHeight: 13,
     },
 });

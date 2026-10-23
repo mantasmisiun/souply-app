@@ -36,8 +36,12 @@ const lightTheme = {
   // Surfaces
   pageBackground:  palette.cream as string,
   cardBackground:  '#FFFFFF',
-  surfaceMuted:    '#F3F4F6',
-  surfaceSubtle:   '#FAFAFA',
+  // The opaque backdrop a docked sheet fades into at the FULL detent — WHITE, the
+  // same white as the section cards; at stage 3 the sections are set off from it
+  // only by a very soft, gradual shadow (not a colour difference).
+  sheetSurface:    '#FFFFFF',
+  surfaceMuted:    '#F4F0EB',
+  surfaceSubtle:   '#FBF7F2',
   overlayBackdrop: 'rgba(17, 24, 39, 0.45)',
 
   // Brand / primary (beet — signature šaltibarščiai pink)
@@ -63,9 +67,17 @@ const lightTheme = {
   textInverse:    '#FFFFFF',
 
   // Borders / dividers
-  border:         '#E0E0E0',
-  borderSubtle:   '#F0F0F0',
-  borderMuted:    '#EEEEEE',
+  border:         '#E6DCD5',
+  borderSubtle:   '#F1EBE5',
+  borderMuted:    '#EFE9E3',
+  // Shadow ink — a warm dark plum (occluded light on a warm ground reads more
+  // cohesive than pure black). Theme-aware so dark keeps true black (a warm
+  // shadow would glow on near-black). Use via makeStyles(c) → shadowColor: c.shadow.
+  shadow:         '#3A1A23',
+  // Neutral map-pill ring. Light: a warm-grey edge so white pills separate from
+  // the light map AND from each other when they overlap. (Dark keeps the white
+  // halo — the pill body is dark there, so the ring lifts it off the dark map.)
+  pillOutline:    '#C4B6AE',
 
   // Material-3 tonal roles (Android modernization). Keyed to the beet brand
   // instead of wallpaper dynamic colour, so the identity stays intact while
@@ -76,6 +88,12 @@ const lightTheme = {
   surfaceContainerHigh: '#FBF6F8',              // one elevation step higher
   surfaceTint:          palette.beet as string, // elevation-tint overlay colour
   outlineVariant:       '#E6DDE1',              // tinted hairline divider
+  // The TWO canonical separators (see DIVIDER_ITEM_HEIGHT). `Item` divides rows
+  // inside a section — a clearly-visible gray, readable from a distance/angle.
+  // `Bar` divides the bottom bar from its sheet — very thin, found only if
+  // sought. Use ONLY these two; never invent another divider.
+  dividerItem:          'rgba(60,60,67,0.24)',
+  dividerBar:           'rgba(60,60,67,0.10)',
 
   // Status
   warning:        '#F57C00',
@@ -97,6 +115,9 @@ const darkTheme: typeof lightTheme = {
   // Surfaces
   pageBackground:  '#121214',
   cardBackground:  '#1C1C1E',
+  // Sheet backdrop sits BELOW the cards — near-black so the #1C1C1E cards read
+  // as raised.
+  sheetSurface:    '#0E0E10',
   surfaceMuted:    '#2A2A2C',
   surfaceSubtle:   '#1A1A1C',
   overlayBackdrop: 'rgba(0, 0, 0, 0.6)',
@@ -127,6 +148,10 @@ const darkTheme: typeof lightTheme = {
   border:         '#3A3A3C',
   borderSubtle:   '#2A2A2C',
   borderMuted:    '#222224',
+  // Dark keeps true black — a warm shadow would read as a glow on near-black.
+  shadow:         '#000000',
+  // Dark: white halo (pill body is dark → the ring separates it from the map).
+  pillOutline:    '#FFFFFF',
 
   // Material-3 tonal roles (mirror of light; lifted for dark surfaces).
   secondaryContainer:   '#4A2A34',
@@ -135,6 +160,10 @@ const darkTheme: typeof lightTheme = {
   surfaceContainerHigh: '#2F2A30',
   surfaceTint:          palette.beet,
   outlineVariant:       '#3A3236',
+  // Dark: item divider is a VERY light gray (visible on the dark card); bar
+  // divider stays whisper-thin. See the light-theme note.
+  dividerItem:          'rgba(255,255,255,0.26)',
+  dividerBar:           'rgba(255,255,255,0.10)',
 
   // Status
   warning:        '#F59E0B',
@@ -156,7 +185,13 @@ export type { ThemeMode };
  * scheme. Exported so non-React contexts (e.g., crash reporters, status
  * bar setup) can resolve the same way.
  */
-export function resolveScheme(mode: ThemeMode, systemScheme: 'light' | 'dark' | null | undefined): ResolvedScheme {
+export function resolveScheme(
+  mode: ThemeMode,
+  // RN 0.86: useColorScheme() returns 'light' | 'dark' | 'unspecified' (no more
+  // null); Appearance.getColorScheme() can still yield null/undefined. Anything
+  // that is not exactly 'dark' resolves to 'light' below.
+  systemScheme: 'light' | 'dark' | 'unspecified' | null | undefined
+): ResolvedScheme {
   if (mode === 'light' || mode === 'dark') return mode;
   return systemScheme === 'dark' ? 'dark' : 'light';
 }
@@ -257,6 +292,11 @@ export const radius = {
   pill: 100,
 } as const;
 
+/** Height of the canonical ITEM separator (theme.dividerItem) — thick enough to
+ *  read a section's rows apart at a glance. The BAR separator (theme.dividerBar)
+ *  is always StyleSheet.hairlineWidth. These two are the ONLY dividers. */
+export const DIVIDER_ITEM_HEIGHT = 1;
+
 /** Icon sizes (Ionicons & co). `xs` for inline meta chips, `md` for standard
  *  action icons. Explicit scale so glyphs stay consistent across screens. */
 export const iconSize = {
@@ -282,6 +322,9 @@ export const typography = {
   title:           { fontSize: 24, lineHeight: 30, fontWeight: '700' as const },
   heading:         { fontSize: 20, lineHeight: 26, fontWeight: '600' as const },
   subheading:      { fontSize: 18, lineHeight: 24, fontWeight: '700' as const },
+  // Collapsed nav-bar title (iOS-26 size) — the small title that fades into the
+  // top row when the large ScreenHeading scrolls off.
+  barTitle:        { fontSize: 17, lineHeight: 22, fontWeight: '600' as const },
   body:            { fontSize: 16, lineHeight: 22, fontWeight: '400' as const },
   bodyStrong:      { fontSize: 16, lineHeight: 22, fontWeight: '600' as const },
   bodySmall:       { fontSize: 14, lineHeight: 20, fontWeight: '400' as const },
@@ -323,8 +366,13 @@ export const withAlpha = (hex: string, alpha: number): string => {
  *  Neutral shadow; reads softer on dark surfaces automatically. */
 export const elevation = {
   level0: {},
-  level1: { shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 3,  shadowOffset: { width: 0, height: 1 }, elevation: 1 },
-  level2: { shadowColor: '#000', shadowOpacity: 0.10, shadowRadius: 6,  shadowOffset: { width: 0, height: 2 }, elevation: 3 },
-  level3: { shadowColor: '#000', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
-  level4: { shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10 },
+  level1: { shadowColor: '#180A11', shadowOpacity: 0.06, shadowRadius: 3,  shadowOffset: { width: 0, height: 1 }, elevation: 1 },
+  level2: { shadowColor: '#180A11', shadowOpacity: 0.10, shadowRadius: 6,  shadowOffset: { width: 0, height: 2 }, elevation: 3 },
+  level3: { shadowColor: '#180A11', shadowOpacity: 0.14, shadowRadius: 12, shadowOffset: { width: 0, height: 4 }, elevation: 6 },
+  level4: { shadowColor: '#180A11', shadowOpacity: 0.18, shadowRadius: 18, shadowOffset: { width: 0, height: 8 }, elevation: 10 },
 } as const;
+
+// The canonical glass recipe lives in ONE place — components/DockedGlassSheet.tsx
+// (blur + tint + rim + shadow + corners). Every floating bar renders through that
+// component (its `compact` variant for content-width switchers), so there is no
+// duplicated constant here to drift out of sync.

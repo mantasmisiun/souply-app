@@ -12,18 +12,23 @@ import { GlassIconButton } from '../../../components/GlassIconButton';
 import { useRouter , useFocusEffect, useNavigation } from 'expo-router';
 import { ScreenHeading } from '../../../components/ScreenHeading';
 import { useCollapsingHeader, CollapsingHeader } from '../../../components/CollapsingHeader';
+import { useBackToExit } from '../../../hooks/useBackToExit';
 import { useSafeBottomTabBarHeight } from '../../../hooks/useSafeBottomTabBarHeight';
 import { Ionicons } from '@expo/vector-icons';
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentRef } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { fetchMonthlyPlanningScore, type PlanningScoreMonth } from '../../../utils/tripsApi';
+import { API_BASE_URL } from '../../../config/api';
 import { useTheme, spacing, radius, elevation, iconSize, typography, type AppTheme } from '../../../constants/theme';
 import { getLevelData, getLevelName } from '../../../constants/levels';
 import { DonutChart, type DonutSlice } from '../../../components/DonutChart';
+import { DonutLegend as Legend } from '../../../components/DonutLegend';
 import { BarChart, type BarSlice } from '../../../components/BarChart';
 import { useLevelStore } from '../../../state/levelStore';
 import { useProfileStore, fetchProfileIfStale } from '../../../state/profileStore';
 import { useAuthState } from '../../../state/authState';
-import CreatorProfileHeader from '../../../components/CreatorProfileHeader';
+import { ProfileIdentityHeader } from '../../../components/ProfileIdentityHeader';
+import { CreatorStatsCards } from '../../../components/CreatorStatsCards';
 import { SkeletonBox } from '../../../components/SkeletonBox';
 import { formatEuro } from '../../../utils/formatCurrency';
 import { formatMonthKey, formatMonthRange, monthAbbr, parseMonthKey } from '../../../utils/monthNames';
@@ -51,55 +56,6 @@ const CAROUSEL_WIDTH = SCREEN_WIDTH - 32 - 40;
 // same height so the carousel stays a stable size — extra room on
 // those pages is fine.
 const CHART_PAGE_HEIGHT = 520;
-
-function Legend({
-    items,
-    selectedIndex,
-    formatValue,
-}: {
-    items: { label: string; color: string; value: number; logoUri?: string | null }[];
-    selectedIndex?: number | null;
-    // Per-row value formatter. Defaults to euro; the Stores page passes a
-    // percent-of-month formatter.
-    formatValue?: (value: number) => string;
-}) {
-    const colors = useTheme();
-    const fmtValue = formatValue ?? formatEuro;
-    const anySelected = selectedIndex !== null && selectedIndex !== undefined;
-    return (
-        <Animated.View style={legendStyles.container} layout={LinearTransition.duration(280)}>
-            {items.map((item, i) => {
-                const dimmed = anySelected && i !== selectedIndex;
-                return (
-                    <Animated.View
-                        key={item.label}
-                        entering={FadeIn.duration(280)}
-                        exiting={FadeOut.duration(160)}
-                        layout={LinearTransition.duration(280)}
-                    >
-                        <View style={[legendStyles.row, dimmed && legendStyles.rowDimmed]}>
-                            {item.logoUri ? (
-                                <ChainLogoChip chainId={chainIdByName(item.label) ?? 0} name={item.label} size={20} />
-                            ) : (
-                                <View style={[legendStyles.dot, { backgroundColor: item.color }]} />
-                            )}
-                            <Text style={[legendStyles.label, { color: colors.textSecondary }]} numberOfLines={1}>{item.label}</Text>
-                            <Text style={[legendStyles.value, { color: colors.textPrimary }]}>{fmtValue(item.value)}</Text>
-                        </View>
-                    </Animated.View>
-                );
-            })}
-        </Animated.View>
-    );
-}
-const legendStyles = StyleSheet.create({
-    container: { alignSelf: 'stretch', marginTop: spacing.sm, gap: spacing.xs },
-    row: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-    rowDimmed: { opacity: 0.3 },
-    dot: { width: 10, height: 10, borderRadius: radius.pill, flexShrink: 0 },
-    label: { flex: 1, ...typography.label, fontWeight: '400' },
-    value: { ...typography.label, flexShrink: 0 },
-});
 
 /**
  * Standout CTA at the bottom of Profilis inviting non-creators to make a
@@ -138,6 +94,7 @@ export default function ProfilisScreen() {
     // Collapsing header: "Profilis" title hides on scroll (no pinned filter).
     const header = useCollapsingHeader();
     const tabBarHeight = useSafeBottomTabBarHeight();
+    const { backToExitToast } = useBackToExit();
 
     const triggerIfNewLevel = useLevelStore(s => s.triggerIfNewLevel);
 
@@ -161,7 +118,10 @@ export default function ProfilisScreen() {
     const [monthEndOffset, setMonthEndOffset] = useState(0); // months back from newest that the window END sits
     // Which carousel card's month-picker sheet is open (null = closed).
     const [pickerTarget, setPickerTarget] = useState<null | 'store' | 'category' | 'monthly'>(null);
-    const scrollRef = useRef<ComponentRef<typeof Animated.ScrollView>>(null);
+    // Reanimated 4.5: Animated.ScrollView is a function component (React 19
+    // ref-as-prop), so ComponentRef<> no longer resolves — its ref accepts a
+    // plain Ref<ScrollView>, which also exposes scrollTo().
+    const scrollRef = useRef<ScrollView>(null);
 
     // Per-page measured heights. The carousel wrapper animates to the
     // active page's natural height so the card shrinks when content is
@@ -224,13 +184,25 @@ export default function ProfilisScreen() {
 
     const devItems: { label: string; icon: keyof typeof Ionicons.glyphMap; route: string }[] = [
         { label: t('profilis.devReceiptBatch'), icon: 'flask-outline', route: '/dev/receipt-batch' },
-        { label: 'Admin', icon: 'shield-outline', route: '/dev/admin' },
     ];
 
     const progressPercent = profile ? Math.round(profile.progressFraction * 100) : 0;
     const level = profile?.level ?? 1;
     // "How do I earn points?" explainer for the level card's ? button.
     const [pointsInfoOpen, setPointsInfoOpen] = useState(false);
+    // Which skill card's "how does this work?" modal is open.
+    const [skillInfo, setSkillInfo] = useState<null | 'saving' | 'planning'>(null);
+    // Inbox bell badge — polled on focus (the inbox is the source of truth).
+    const [unread, setUnread] = useState(0);
+    useFocusEffect(useCallback(() => {
+        fetch(`${API_BASE_URL}/api/notifications/unread-count`)
+            .then(r => r.json()).then(d => setUnread(Number(d?.unread) || 0)).catch(() => {});
+    }, []));
+    // Monthly planning score (2.0): current month + Δ vs previous.
+    const [planScore, setPlanScore] = useState<PlanningScoreMonth[] | null>(null);
+    useFocusEffect(useCallback(() => {
+        fetchMonthlyPlanningScore().then(setPlanScore).catch(() => {});
+    }, []));
 
     // Dev/staging test-identity switch: fixed dev UUID ↔ persisted random UUID.
     // The resolved id is memoized + baked into every store, so applying the
@@ -354,58 +326,59 @@ export default function ProfilisScreen() {
         else if (pickerTarget === 'monthly') { setMonthEndOffset(offsetFromEnd); }
     };
 
-    const pages = [
-        {
-            title: t('profilis.carouselStores'),
-            content: (
-                <View style={styles.chartPage}>
-                    <View style={styles.monthNavRow}>
-                        <TouchableOpacity
-                            onPress={() => { setStoreMonthOffset(o => o + 1); setStoreSelected(null); }}
-                            disabled={!storeCanOlder}
-                            hitSlop={10}
-                            style={styles.monthNavBtn}
-                        >
-                            <Ionicons name="chevron-back" size={20}
-                                color={storeCanOlder ? colors.textPrimary : colors.borderSubtle} />
-                        </TouchableOpacity>
-                        <TouchableOpacity onPress={() => openPicker('store')} style={styles.monthLabelBtn} hitSlop={8} activeOpacity={0.6}>
-                            <Text style={styles.monthRangeLabel}>{storeMonthLabel}</Text>
-                            <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            onPress={() => { setStoreMonthOffset(o => Math.max(0, o - 1)); setStoreSelected(null); }}
-                            disabled={!storeCanNewer}
-                            hitSlop={10}
-                            style={styles.monthNavBtn}
-                        >
-                            <Ionicons name="chevron-forward" size={20}
-                                color={storeCanNewer ? colors.textPrimary : colors.borderSubtle} />
-                        </TouchableOpacity>
-                    </View>
-                    {storeMonthSlices.length > 0 ? (
-                        <>
-                            <DonutChart
-                                data={storeMonthSlices}
-                                size={180}
-                                thickness={32}
-                                emptyColor={colors.borderSubtle}
-                                selectedIndex={storeSelected}
-                                onSelect={setStoreSelected}
-                                cardBackground={colors.cardBackground}
-                            />
-                            <Legend
-                                items={storeMonthSlices.map(s => ({ label: s.label, color: s.color, value: s.value, logoUri: s.logoUri }))}
-                                selectedIndex={storeSelected}
-                                formatValue={formatStorePct}
-                            />
-                        </>
-                    ) : (
-                        <Text style={styles.emptyChartText}>{t('profilis.noData')}</Text>
-                    )}
+    // Order: Categories → Monthly → Stores (mirrors the trip stats carousel).
+    const storesPage = {
+        title: t('profilis.carouselStores'),
+        content: (
+            <View style={styles.chartPage}>
+                <View style={styles.monthNavRow}>
+                    <TouchableOpacity
+                        onPress={() => { setStoreMonthOffset(o => o + 1); setStoreSelected(null); }}
+                        disabled={!storeCanOlder}
+                        hitSlop={10}
+                        style={styles.monthNavBtn}
+                    >
+                        <Ionicons name="chevron-back" size={20}
+                            color={storeCanOlder ? colors.textPrimary : colors.borderSubtle} />
+                    </TouchableOpacity>
+                    <TouchableOpacity onPress={() => openPicker('store')} style={styles.monthLabelBtn} hitSlop={8} activeOpacity={0.6}>
+                        <Text style={styles.monthRangeLabel}>{storeMonthLabel}</Text>
+                        <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                        onPress={() => { setStoreMonthOffset(o => Math.max(0, o - 1)); setStoreSelected(null); }}
+                        disabled={!storeCanNewer}
+                        hitSlop={10}
+                        style={styles.monthNavBtn}
+                    >
+                        <Ionicons name="chevron-forward" size={20}
+                            color={storeCanNewer ? colors.textPrimary : colors.borderSubtle} />
+                    </TouchableOpacity>
                 </View>
-            ),
-        },
+                {storeMonthSlices.length > 0 ? (
+                    <>
+                        <DonutChart
+                            data={storeMonthSlices}
+                            size={180}
+                            thickness={32}
+                            emptyColor={colors.borderSubtle}
+                            selectedIndex={storeSelected}
+                            onSelect={setStoreSelected}
+                            cardBackground={colors.cardBackground}
+                        />
+                        <Legend
+                            items={storeMonthSlices.map(s => ({ label: s.label, color: s.color, value: s.value, logoUri: s.logoUri }))}
+                            selectedIndex={storeSelected}
+                            formatValue={formatStorePct}
+                        />
+                    </>
+                ) : (
+                    <Text style={styles.emptyChartText}>{t('profilis.noData')}</Text>
+                )}
+            </View>
+        ),
+    };
+    const pages = [
         {
             title: t('profilis.carouselCategories'),
             content: (
@@ -526,34 +499,150 @@ export default function ProfilisScreen() {
                 </View>
             ),
         },
+        storesPage,
     ];
 
     const settingsGear = (
-        <GlassIconButton icon="settings-outline" onPress={() => router.push('/settings' as any)} />
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+            <View>
+                <GlassIconButton icon="notifications-outline" onPress={() => { setUnread(0); router.push('/notifications' as any); }} />
+                {unread > 0 && (
+                    <View style={{
+                        position: 'absolute', top: -2, right: -2, minWidth: 16, height: 16,
+                        borderRadius: 8, backgroundColor: colors.primary,
+                        alignItems: 'center', justifyContent: 'center', paddingHorizontal: 3,
+                    }}>
+                        <Text style={{ color: colors.onPrimary, fontSize: 9, fontWeight: '700' }}>{unread > 9 ? '9+' : unread}</Text>
+                    </View>
+                )}
+            </View>
+            <GlassIconButton icon="settings-outline" onPress={() => router.push('/settings' as any)} />
+        </View>
     );
 
     return (
         <View style={{ flex: 1, backgroundColor: colors.pageBackground }}>
         <CollapsingHeader
             controller={header}
-            background={colors.cardBackground}
             right={settingsGear}
-            collapsing={<ScreenHeading title={t('tabs.profilis')} />}
+            smallTitle={t('tabs.profilis')}
         />
+        {backToExitToast}
         <Animated.ScrollView
             ref={scrollRef}
             {...header.scroll}
             style={styles.container}
-            contentContainerStyle={[styles.content, { paddingTop: header.paddingTop + 16, paddingBottom: tabBarHeight + 24 }]}
+            contentContainerStyle={[styles.content, { paddingTop: 0, paddingBottom: tabBarHeight + 24 }]}
         >
-            {/* Creator header — avatar (tap to upload) + name + @handle +
-                aggregate template stats. Only once signed in as a creator. */}
-            {authUser && profile && (
-                <CreatorProfileHeader
+            <ScreenHeading title={t('tabs.profilis')} bleedX={spacing.lg} onLayout={header.onTitleLayout} />
+            {/* ONE identity row for every account: avatar + editable name. A
+                creator gets their photo and @handle; everyone else gets the pink
+                initial circle and "Souplyman" until they name themselves. */}
+            {profile && (
+                <ProfileIdentityHeader
                     profile={profile}
-                    onAvatarChanged={() => { invalidateProfile(); fetchProfile(); }}
+                    creator={!!authUser}
+                    onChanged={() => { invalidateProfile(); fetchProfile(); }}
                 />
             )}
+            {/* Aggregate template stats — creator accounts only. */}
+            {authUser && profile && <CreatorStatsCards profile={profile} />}
+
+            {/* SKILLS ROW — Saving skills (left) + Planning skills (right), side by
+                side. Each renders only when it has a figure; a lone card still
+                fills the row, so the pair never leaves a hole. */}
+            {(() => {
+                const saved = stats?.savingsThisMonth ?? 0;
+                const lastMonth = stats?.savingsLastMonth ?? 0;
+                const showSaving = !statsLoading && saved !== 0;
+                const cur = planScore && planScore.length > 0 ? planScore[planScore.length - 1] : null;
+                const prev = planScore && planScore.length > 1 ? planScore[planScore.length - 2] : null;
+                const showPlanning = cur?.score != null;
+                if (!showSaving && !showPlanning) return null;
+
+                const positive = saved > 0;
+                const savingDelta = saved - lastMonth;
+                const savingDeltaUp = savingDelta >= 0;
+                const planDelta = cur?.score != null && prev?.score != null ? cur.score - prev.score : null;
+                const planGood = (cur?.score ?? 0) >= 70;
+
+                return (
+                    <View style={styles.skillsRow}>
+                        {showSaving && (
+                            <View style={styles.skillCard}>
+                                <View style={styles.skillHead}>
+                                    <Ionicons
+                                        name={positive ? 'trending-up-outline' : 'trending-down-outline'}
+                                        size={18}
+                                        color={positive ? colors.success : colors.textSecondary}
+                                    />
+                                    <Text style={styles.skillLabel} numberOfLines={2}>{t('profilis.savingSkills')}</Text>
+                                    <TouchableOpacity
+                                        onPress={() => setSkillInfo('saving')}
+                                        hitSlop={10}
+                                        accessibilityLabel={t('profilis.savingInfoTitle')}
+                                    >
+                                        <Ionicons name="help-circle-outline" size={18} color={colors.textMuted} />
+                                    </TouchableOpacity>
+                                </View>
+                                <Text style={[styles.skillValue, { color: positive ? colors.success : colors.textPrimary }]} numberOfLines={1}>
+                                    {formatEuro(Math.abs(saved))}
+                                </Text>
+                                {lastMonth !== 0 && (
+                                    <View style={styles.skillDeltaRow}>
+                                        <View style={styles.savingsChangeChip}>
+                                            <Ionicons
+                                                name={savingDeltaUp ? 'arrow-up' : 'arrow-down'}
+                                                size={12}
+                                                color={savingDeltaUp ? colors.success : colors.textSecondary}
+                                            />
+                                            <Text style={[styles.savingsChangePct, { color: savingDeltaUp ? colors.success : colors.textSecondary }]}>
+                                                {formatEuro(Math.abs(savingDelta))}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                )}
+                            </View>
+                        )}
+                        {showPlanning && (
+                            <View style={styles.skillCard}>
+                                <View style={styles.skillHead}>
+                                    <Ionicons
+                                        name={planGood ? 'ribbon-outline' : 'compass-outline'}
+                                        size={18}
+                                        color={planGood ? colors.success : colors.textSecondary}
+                                    />
+                                    <Text style={styles.skillLabel} numberOfLines={2}>{t('profilis.planningSkills')}</Text>
+                                    <TouchableOpacity
+                                        onPress={() => setSkillInfo('planning')}
+                                        hitSlop={10}
+                                        accessibilityLabel={t('profilis.planningInfoTitle')}
+                                    >
+                                        <Ionicons name="help-circle-outline" size={18} color={colors.textMuted} />
+                                    </TouchableOpacity>
+                                </View>
+                                <Text style={[styles.skillValue, { color: planGood ? colors.success : colors.textPrimary }]} numberOfLines={1}>
+                                    {cur!.score}/100
+                                </Text>
+                                {planDelta != null && planDelta !== 0 && (
+                                    <View style={styles.skillDeltaRow}>
+                                        <View style={styles.savingsChangeChip}>
+                                            <Ionicons
+                                                name={planDelta > 0 ? 'arrow-up' : 'arrow-down'}
+                                                size={12}
+                                                color={planDelta > 0 ? colors.success : colors.textSecondary}
+                                            />
+                                            <Text style={[styles.savingsChangePct, { color: planDelta > 0 ? colors.success : colors.textSecondary }]}>
+                                                {Math.abs(planDelta)}
+                                            </Text>
+                                        </View>
+                                    </View>
+                                )}
+                            </View>
+                        )}
+                    </View>
+                );
+            })()}
 
             {/* Level card */}
             <View style={styles.levelCard}>
@@ -613,51 +702,32 @@ export default function ProfilisScreen() {
                 </Pressable>
             </Modal>
 
-            {/* Savings card — current month only, with a change-vs-last-month
-                chip. Only shown when this month has a non-zero figure. */}
-            {!statsLoading && (stats?.savingsThisMonth ?? 0) !== 0 && (() => {
-                const saved = stats?.savingsThisMonth ?? 0;
-                const positive = saved > 0;
-                const lastMonth = stats?.savingsLastMonth ?? 0;
-                // € change vs last month's savings figure. Hidden when there's
-                // no last-month baseline. Up = savings improved (delta ≥ 0).
-                const hasBaseline = lastMonth !== 0;
-                const delta = saved - lastMonth;
-                const deltaUp = delta >= 0;
-                return (
-                    <View style={styles.savingsCard}>
-                        <Ionicons
-                            name={positive ? 'trending-up-outline' : 'trending-down-outline'}
-                            size={22}
-                            color={positive ? colors.success : colors.textSecondary}
-                            style={{ marginRight: spacing.md }}
-                        />
-                        <View style={{ flex: 1 }}>
-                            <Text style={styles.savingsLabel}>
-                                {positive ? t('profilis.savedThisMonth') : t('profilis.couldHaveSavedThisMonth')}
-                            </Text>
-                            <Text style={[styles.savingsAmount, { color: positive ? colors.success : colors.textPrimary }]}>
-                                {formatEuro(Math.abs(saved))}
-                            </Text>
-                        </View>
-                        {hasBaseline && (
-                            <View style={styles.savingsChange}>
-                                <View style={styles.savingsChangeChip}>
-                                    <Ionicons
-                                        name={deltaUp ? 'arrow-up' : 'arrow-down'}
-                                        size={12}
-                                        color={deltaUp ? colors.success : colors.textSecondary}
-                                    />
-                                    <Text style={[styles.savingsChangePct, { color: deltaUp ? colors.success : colors.textSecondary }]}>
-                                        {formatEuro(Math.abs(delta))}
-                                    </Text>
-                                </View>
-                                <Text style={styles.savingsChangeCaption}>{t('profilis.vsLastMonth')}</Text>
+            {/* How each skill figure is computed — one line per input, so the
+                number is never a black box. Replaces the caption that used to
+                bleed out of the (now half-width) card. */}
+            <Modal visible={skillInfo !== null} transparent animationType="fade" statusBarTranslucent onRequestClose={() => setSkillInfo(null)}>
+                <Pressable style={styles.infoOverlay} onPress={() => setSkillInfo(null)}>
+                    <Pressable style={styles.infoCard} onPress={() => {}}>
+                        <Text style={styles.infoTitle}>
+                            {skillInfo === 'planning' ? t('profilis.planningInfoTitle') : t('profilis.savingInfoTitle')}
+                        </Text>
+                        {(skillInfo === 'planning'
+                            ? ['✅', '🛒', '📍', '📅']
+                            : ['🧾', '💶', '📅']
+                        ).map((icon, i) => (
+                            <View key={i} style={styles.infoBulletRow}>
+                                <View style={styles.infoBulletLead}><Text style={styles.infoBulletIcon}>{icon}</Text></View>
+                                <Text style={styles.infoBulletText}>
+                                    {t(`profilis.${skillInfo === 'planning' ? 'planning' : 'saving'}InfoBullet${i + 1}`)}
+                                </Text>
                             </View>
-                        )}
-                    </View>
-                );
-            })()}
+                        ))}
+                        <TouchableOpacity style={styles.infoButton} onPress={() => setSkillInfo(null)} activeOpacity={0.85}>
+                            <Text style={styles.infoButtonText}>{t('common.gotIt')}</Text>
+                        </TouchableOpacity>
+                    </Pressable>
+                </Pressable>
+            </Modal>
 
             {/* Stats carousel */}
             <View style={styles.statsCard}>
@@ -677,7 +747,7 @@ export default function ProfilisScreen() {
                             <Text style={styles.carouselTitle}>{pages[activePage].title}</Text>
                         </View>
                         <Animated.ScrollView
-                            ref={scrollRef as any}
+                            ref={scrollRef}
                             horizontal
                             pagingEnabled
                             showsHorizontalScrollIndicator={false}
@@ -729,6 +799,8 @@ export default function ProfilisScreen() {
 
             {/* Quick links */}
             <View style={{ marginTop: spacing.sm }}>
+                {/* Lists and receipts are managed entirely from Apsipirkimai —
+                    they had shortcuts here while the 2.0 trip flow was landing. */}
                 <TouchableOpacity
                     style={styles.row}
                     onPress={() => router.push('/profile/vote-history')}
@@ -747,18 +819,10 @@ export default function ProfilisScreen() {
                         onPress={async () => {
                             const { useAdminModeStore } = await import('../../../state/adminModeStore');
                             await useAdminModeStore.getState().setMode('admin');
-                            // Full reload — cross-group navigation
-                            // doesn't always cleanly tear down the
-                            // (tabs) navigator. Boot effect reads
-                            // 'admin' from AsyncStorage and routes to
-                            // the admin panel. Same pattern as the
-                            // inverse switch in (admin)/menu.tsx.
-                            try {
-                                const Updates = await import('expo-updates');
-                                await Updates.reloadAsync();
-                            } catch {
-                                router.replace('/' as any);
-                            }
+                            // No reload: the group layouts carry declarative
+                            // mode guards (Redirect), so a plain replace is
+                            // clean and BACK cannot leak across groups.
+                            router.replace('/(admin)/catalog' as any);
                         }}
                     >
                         <Ionicons name="shield-checkmark-outline" size={iconSize.lg} color={colors.primary} />
@@ -889,20 +953,24 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
     progressFill: { height: '100%', backgroundColor: c.primary, borderRadius: radius.pill },
     progressLabel: { ...typography.labelSmall, fontWeight: '400', color: c.textMuted },
 
-    savingsCard: {
+    // Two half-width skill cards sitting side by side. Vertical inside (label →
+    // figure → delta) because half the width can't hold the old row layout.
+    skillsRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+    skillCard: {
+        flex: 1,
         backgroundColor: c.cardBackground,
         borderRadius: radius.lg,
         paddingVertical: spacing.lg,
-        paddingHorizontal: spacing.xl,
-        marginBottom: spacing.md,
-        flexDirection: 'row',
-        alignItems: 'center',
+        paddingHorizontal: spacing.lg,
+        gap: 4,
         borderWidth: 1,
         borderColor: c.borderSubtle,
     },
-    savingsLabel: { ...typography.label, fontWeight: '500', color: c.textSecondary, marginBottom: 2 },
-    savingsAmount: { ...typography.heading, fontWeight: '700' },
-    savingsChange: { alignItems: 'flex-end', marginLeft: spacing.sm },
+    skillHead: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+    // The label flexes so the ? button pins to the card's right edge.
+    skillLabel: { ...typography.label, fontWeight: '500', color: c.textSecondary, flex: 1 },
+    skillValue: { ...typography.heading, fontWeight: '700' },
+    skillDeltaRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
     savingsChangeChip: {
         flexDirection: 'row', alignItems: 'center', gap: 2,
         backgroundColor: c.primaryMuted,
@@ -910,7 +978,6 @@ const makeStyles = (c: AppTheme) => StyleSheet.create({
         borderRadius: radius.pill,
     },
     savingsChangePct: { ...typography.labelSmall, fontWeight: '700' },
-    savingsChangeCaption: { ...typography.caption, color: c.textMuted, marginTop: 2 },
 
     statsCard: {
         backgroundColor: c.cardBackground,

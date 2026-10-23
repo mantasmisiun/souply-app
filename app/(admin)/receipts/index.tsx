@@ -2,7 +2,7 @@ import {
     View,
     Text,
     StyleSheet,
-    FlatList,
+    SectionList,
     TouchableOpacity,
     RefreshControl,
     ScrollView,
@@ -24,6 +24,8 @@ import {
 } from '../../../services/adminClient';
 
 const PAGE_SIZE = 20;
+
+const AnimatedSectionList = Animated.createAnimatedComponent(SectionList as typeof SectionList<AdminReceiptRow>);
 
 export default function ReceiptsScreen() {
     const colors = useTheme();
@@ -124,46 +126,44 @@ export default function ReceiptsScreen() {
 
     return (
         <View style={styles.root}>
-            <CollapsingHeader
-                controller={header}
-                background={colors.cardBackground}
-                collapsing={<ScreenHeading title={t('admin.tabReceipts')} />}
-                pinned={
-                    <View style={styles.chipBar}>
-                        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipBarContent}>
-                            {chips.map(chip => {
-                                const active = chip.id === filter;
-                                return (
-                                    <TouchableOpacity
-                                        key={chip.id}
-                                        style={[styles.chip, active && styles.chipActive]}
-                                        onPress={() => onFilterChange(chip.id)}
-                                    >
-                                        <Text style={[styles.chipText, active && styles.chipTextActive]}>
-                                            {chip.label}
-                                        </Text>
-                                    </TouchableOpacity>
-                                );
-                            })}
-                        </ScrollView>
-                    </View>
-                }
-            />
+            <CollapsingHeader controller={header} smallTitle={t('admin.tabReceipts')} />
 
             {loading ? (
                 <View style={styles.centered}>
                     <MaterialProgress size="large" color={colors.primary} />
                 </View>
             ) : (
-                <Animated.FlatList
+                <>
+                {/* Always-pinned filter row: Fabric mis-hit-tests transformed
+                    sticky headers (touches fall through to the list). */}
+                        <View onLayout={header.onPinnedLayout} style={styles.chipBar}>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipBarContent}>
+                                {chips.map(chip => {
+                                    const active = chip.id === filter;
+                                    return (
+                                        <TouchableOpacity
+                                            key={chip.id}
+                                            style={[styles.chip, active && styles.chipActive]}
+                                            onPress={() => onFilterChange(chip.id)}
+                                        >
+                                            <Text style={[styles.chipText, active && styles.chipTextActive]}>
+                                                {chip.label}
+                                            </Text>
+                                        </TouchableOpacity>
+                                    );
+                                })}
+                            </ScrollView>
+                        </View>
+                <AnimatedSectionList
                     {...header.scroll}
-                    data={receipts}
+                    ListHeaderComponent={<ScreenHeading title={t('admin.tabReceipts')} onLayout={header.onTitleLayout} />}
+                    sections={[{ data: receipts }]}
                     keyExtractor={(r: any) => r.id}
                     renderItem={renderItem}
                     refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
                     onEndReached={onLoadMore}
                     onEndReachedThreshold={0.3}
-                    contentContainerStyle={[{ paddingTop: header.paddingTop + 8 }, receipts.length === 0 ? styles.emptyContainer : null]}
+                    contentContainerStyle={[{ paddingTop: 0 }, receipts.length === 0 ? styles.emptyContainer : null]}
                     ListEmptyComponent={
                         <View style={styles.centered}>
                             <Ionicons name="receipt-outline" size={48} color={colors.textMuted} />
@@ -177,6 +177,7 @@ export default function ReceiptsScreen() {
                     ) : null}
                     ItemSeparatorComponent={() => <View style={styles.separator} />}
                 />
+                </>
             )}
         </View>
     );
