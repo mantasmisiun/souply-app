@@ -8,10 +8,10 @@ const BUNDLE_ID = IS_DEV ? 'lt.souply.app.dev' : IS_STAGING ? 'lt.souply.app.sta
 const APP_NAME = IS_DEV ? 'Souply (DEV)' : IS_STAGING ? 'Souply (staging)' : 'Souply';
 const ICON = IS_DEV ? './assets/images/DEV.png' : IS_STAGING ? './assets/images/STAGING.png' : './assets/images/icon.png';
 // Universal/App Link host per environment. The dev build (testers) deep-links
-// against the test web stack; prod against souply.lt. localhost can't host
-// universal links, so dev points at the reachable test domain. The matching
+// against the staging web stack; prod against souply.lt. localhost can't host
+// universal links, so dev points at the reachable staging domain. The matching
 // apple-app-site-association / assetlinks.json must be served from each host.
-const LINK_HOST = (IS_DEV || IS_STAGING) ? 'souply.manofoto.dpdns.org' : 'souply.lt';
+const LINK_HOST = (IS_DEV || IS_STAGING) ? 'staging.souply.lt' : 'souply.lt';
 
 // Google's native Android OAuth redirect comes back on the reversed-DNS scheme
 // of the Android client ID (com.googleusercontent.apps.<id>:/oauth2redirect).
